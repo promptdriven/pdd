@@ -30,6 +30,10 @@ __all__ = [
     "InputRequestMessage",
     "CompleteMessage",
     "FileChangeMessage",
+    "BudgetExceededMessage",
+    "BudgetSettings",
+    "BudgetUpdateRequest",
+    "SlashCommandResult",
     "ServerStatus",
     "ServerConfig",
     "RemoteSessionInfo",
@@ -111,6 +115,9 @@ class CommandRequest(BaseModel):
     command: str = Field(..., description="PDD command name (e.g., 'sync', 'generate')")
     args: Dict[str, Any] = Field(default_factory=dict, description="Positional arguments")
     options: Dict[str, Any] = Field(default_factory=dict, description="Command options/flags")
+    budget_cap: Optional[float] = Field(None, description="Optional total cap (non-issue commands)")
+    node_budget: Optional[float] = Field(None, description="Optional per-node budget (pdd-issue)")
+    max_total_cap: Optional[float] = Field(None, description="Optional tree-wide ceiling (pdd-issue)")
 
 
 class JobStatus(str, Enum):
@@ -120,6 +127,7 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    BUDGET_EXCEEDED = "budget_exceeded"
 
 
 class JobHandle(BaseModel):
@@ -193,6 +201,115 @@ class FileChangeMessage(WSMessage):
     type: Literal["file_change"] = "file_change"
     path: str = Field(..., description="Path of the changed file")
     event: Literal["created", "modified", "deleted"] = Field(..., description="Type of change")
+
+
+class BudgetExceededMessage(WSMessage):
+    """Emitted exactly once when the cost watcher trips the active cap."""
+    type: Literal["budget_exceeded"] = "budget_exceeded"
+    job_id: str = Field(..., description="Identifier of the job that hit the cap")
+    command: str = Field(..., description="Command field of the job (e.g. 'issue', 'bug')")
+    spent: float = Field(..., description="Cumulative spend in USD at the moment of crossing")
+    effective_cap: float = Field(..., description="Active effective cap at the moment of crossing")
+    node_budget: Optional[float] = Field(None, description="Per-node budget if applicable")
+    max_total_cap: Optional[float] = Field(None, description="Tree-wide ceiling if applicable")
+    node_count: Optional[int] = Field(None, description="Current solving-tree node count")
+
+
+# ============================================================================
+# Budget Control Models
+# ============================================================================
+
+class BudgetSettings(BaseModel):
+    """Per-job budget settings snapshot.
+
+    ``effective_cap`` is the single USD ceiling the watcher enforces:
+    for ``pdd-issue`` (``command == "issue"``), it is
+    ``min(node_budget * max(node_count or 1, 1), max_total_cap)`` when both
+    are set (the ``node_count or 1`` guard handles ``node_count is None``
+    before the tree has expanded); for any other command, it is
+    ``budget_cap``. ``None`` for ``effective_cap`` means "no cap".
+    """
+    command: str = Field(..., description="Job command (e.g. 'issue', 'bug', 'change')")
+    node_budget: Optional[float] = Field(None, description="Per-node USD budget for pdd-issue")
+    max_total_cap: Optional[float] = Field(None, description="Tree-wide USD ceiling for pdd-issue")
+    budget_cap: Optional[float] = Field(None, description="Total USD cap for non-issue commands")
+    effective_cap: Optional[float] = Field(None, description="Computed effective cap; None means no cap")
+    spent_so_far: float = Field(0.0, description="Cumulative spend in USD")
+    status: JobStatus = Field(JobStatus.RUNNING, description="Current job status")
+    node_count: Optional[int] = Field(None, description="Current solving-tree node count")
+
+
+class BudgetUpdateRequest(BaseModel):
+    """Request body for POST /commands/jobs/{job_id}/budget.
+
+    At least one of ``budget_cap`` / ``node_budget`` / ``max_total_cap`` MUST
+    be provided. Each numeric field is validated ``> 0`` and ``<= 10000``;
+    string forms (``"$30"``, ``"30.00"``, ``"30"``) are coerced to ``float``.
+    """
+    budget_cap: Optional[float] = Field(None, description="Total cap for non-issue commands")
+    node_budget: Optional[float] = Field(None, description="Per-node budget for pdd-issue")
+    max_total_cap: Optional[float] = Field(None, description="Tree-wide ceiling for pdd-issue")
+
+    @field_validator("budget_cap", "node_budget", "max_total_cap", mode="before")
+    @classmethod
+    def _coerce_amount(cls, v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(f"Invalid budget amount: {v!r}")
+        if isinstance(v, str):
+            stripped = v.strip().lstrip("$").strip()
+            if not stripped:
+                raise ValueError("Empty budget amount")
+            try:
+                value = float(stripped)
+            except ValueError as exc:
+                raise ValueError(f"Non-numeric budget amount: {v!r}") from exc
+        else:
+            value = float(v)
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"Budget amount must be finite: {v!r}")
+        if value <= 0:
+            raise ValueError(f"Budget amount must be > 0: {v!r}")
+        if value > 10000:
+            raise ValueError(f"Budget amount {value} exceeds hard ceiling $10000")
+        return value
+
+    @field_validator("max_total_cap")
+    @classmethod
+    def _at_least_one(cls, v: Optional[float], info: Any) -> Optional[float]:
+        # Pydantic v2: this validator runs last on max_total_cap; check the
+        # combined dict to enforce "at least one set".
+        data = info.data if hasattr(info, "data") else {}
+        if v is None and data.get("budget_cap") is None and data.get("node_budget") is None:
+            raise ValueError(
+                "At least one of budget_cap, node_budget, or max_total_cap must be set"
+            )
+        return v
+
+
+class SlashCommandResult(BaseModel):
+    """Result returned by ``slash_command_parser.parse_comment``.
+
+    The ``metadata`` field is a concrete ``Dict[str, Any]`` (never ``None``)
+    so callers can rely on ``result.metadata.get("amount")`` without
+    extra ``None`` checks. The parser sets ``metadata["amount"]`` for
+    budget-mutating kinds (``budget_set`` / ``budget_node_set`` /
+    ``budget_max_set``) and leaves it empty for the rest.
+    """
+    kind: Literal[
+        "budget_set",
+        "budget_node_set",
+        "budget_max_set",
+        "settings",
+        "stop",
+        "invalid",
+        "ignored",
+    ] = Field(..., description="Parsed verb classification")
+    message: str = Field("", description="Pre-rendered reply body (caller may render via budget_comments)")
+    settings: Optional[BudgetSettings] = Field(None, description="Optional snapshot, e.g. for an ack echo")
+    original_comment_id: Optional[int] = Field(None, description="GitHub comment id for dedupe")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Per-kind data, e.g. {'amount': 30.0}")
 
 
 # ============================================================================

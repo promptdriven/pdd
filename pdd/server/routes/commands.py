@@ -33,8 +33,19 @@ except ImportError:
 
 from pydantic import BaseModel
 
-from ..models import CommandRequest, JobHandle, JobResult, JobStatus
+from ..models import (
+    BudgetSettings,
+    BudgetUpdateRequest,
+    CommandRequest,
+    JobHandle,
+    JobResult,
+    JobStatus,
+)
 from ..jobs import JobManager
+try:
+    from ..budget_settings import pdd_issue_defaults as _pdd_issue_defaults
+except ImportError:  # pragma: no cover - support partial installs
+    _pdd_issue_defaults = None  # type: ignore[assignment]
 from ..click_executor import ClickCommandExecutor, get_pdd_command
 
 # Import construct_paths functions for smart output path detection
@@ -285,11 +296,27 @@ async def execute_command(
             detail=f"Unknown command: {request.command}. Allowed: {list(ALLOWED_COMMANDS.keys())}"
         )
 
+    # Apply pdd-issue defaults when no budget fields were explicitly set.
+    budget_cap = request.budget_cap
+    node_budget = request.node_budget
+    max_total_cap = request.max_total_cap
+    if (
+        request.command == "issue"
+        and budget_cap is None
+        and node_budget is None
+        and max_total_cap is None
+        and _pdd_issue_defaults is not None
+    ):
+        node_budget, max_total_cap = _pdd_issue_defaults()
+
     # Submit job
     job = await manager.submit(
         command=request.command,
         args=request.args,
         options=request.options,
+        budget_cap=budget_cap,
+        node_budget=node_budget,
+        max_total_cap=max_total_cap,
     )
 
     return JobHandle(
@@ -297,6 +324,67 @@ async def execute_command(
         status=job.status,
         created_at=job.created_at,
     )
+
+
+@router.get("/jobs/{job_id}/budget", response_model=BudgetSettings)
+async def get_job_budget(
+    job_id: str,
+    manager: JobManager = Depends(get_job_manager),
+):
+    """Read-only :class:`BudgetSettings` snapshot for ``job_id``.
+
+    Powers the ``/pdd settings`` reply that ``budget_comments.render_settings``
+    formats in the GitHub App.
+    """
+    try:
+        return manager.get_budget(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/jobs/{job_id}/budget", response_model=BudgetSettings)
+async def update_job_budget(
+    job_id: str,
+    request: BudgetUpdateRequest,
+    manager: JobManager = Depends(get_job_manager),
+):
+    """Apply a :class:`BudgetUpdateRequest` to ``job_id``.
+
+    Exception → HTTP mapping (discriminate by type only, NEVER by message):
+      * ``KeyError`` → 404 (unknown job);
+      * ``RuntimeError`` whose message starts with ``"job not active: "`` → 409
+        (job already completed / failed / cancelled / budget_exceeded);
+      * ``ValueError`` → 400 (an amount failed :func:`validate_amount`).
+
+    On success returns the updated :class:`BudgetSettings`. This is the
+    endpoint the GitHub App's webhook calls when ``/pdd budget``,
+    ``/pdd budget node``, or ``/pdd budget max`` is accepted.
+    """
+    # Only pass kwargs the caller actually set. Pydantic absence or None on
+    # the request model means "leave the field alone"; `update_budget`'s own
+    # sentinel-based contract distinguishes "not provided" from "clear".
+    kwargs: Dict[str, Any] = {}
+    if request.budget_cap is not None:
+        kwargs["budget_cap"] = request.budget_cap
+    if request.node_budget is not None:
+        kwargs["node_budget"] = request.node_budget
+    if request.max_total_cap is not None:
+        kwargs["max_total_cap"] = request.max_total_cap
+
+    try:
+        await manager.update_budget(job_id, **kwargs)
+        return manager.get_budget(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        msg = str(exc)
+        if msg.startswith("job not active: "):
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=503, detail=msg)
 
 
 @router.get("/jobs/{job_id}", response_model=JobResult)

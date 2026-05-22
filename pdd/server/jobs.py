@@ -40,11 +40,54 @@ except ImportError:
     def get_pdd_command(name):
         return None
 
-from .models import JobStatus
+from .models import BudgetSettings, JobStatus
+
+try:
+    from .budget_settings import (
+        BudgetStore,
+        effective_cap as _effective_cap_fn,
+        pdd_issue_defaults,
+        validate_amount,
+    )
+    from ..cost_budget_watcher import watch as _watch_csv
+except ImportError:  # pragma: no cover - support partial installs
+    BudgetStore = None  # type: ignore[assignment]
+    _effective_cap_fn = None  # type: ignore[assignment]
+    pdd_issue_defaults = None  # type: ignore[assignment]
+    validate_amount = None  # type: ignore[assignment]
+    _watch_csv = None  # type: ignore[assignment]
 
 
 # Maximum time (seconds) a subprocess job may run before being killed
 JOB_TIMEOUT = 1800
+
+# Nested PDD subprocess commands an autonomous `pdd-issue` run may spawn.
+# Used to build the cost-CSV `commands` filter for the budget watcher;
+# filtering on `{"issue"}` would sum to $0 because the issue command itself
+# never writes a track_cost row — it dispatches into these subcommands.
+PDD_ISSUE_NESTED_COMMANDS = frozenset(
+    {
+        "change",
+        "sync",
+        "bug",
+        "fix",
+        "generate",
+        "test",
+        "example",
+        "update",
+        "verify",
+        "split",
+        "detect",
+        "auto-deps",
+        "conflicts",
+        "preprocess",
+        "crash",
+    }
+)
+
+# Sentinel for `update_budget` keyword arguments: distinguishes "not provided"
+# from "explicitly set to None". `None` semantically means "clear this field".
+_UNSET = object()
 
 # Global options that must be placed BEFORE the subcommand (defined on cli group)
 GLOBAL_OPTIONS = {
@@ -344,6 +387,12 @@ class Job:
     # Live output during execution (updated in real-time)
     live_stdout: str = ""
     live_stderr: str = ""
+    # Budget control fields (None until /pdd budget ... or pdd-issue defaults
+    # are applied; see pdd/server/budget_settings.py).
+    budget_cap: Optional[float] = None
+    node_budget: Optional[float] = None
+    max_total_cap: Optional[float] = None
+    node_count: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -360,6 +409,10 @@ class Job:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "live_stdout": self.live_stdout,
             "live_stderr": self.live_stderr,
+            "budget_cap": self.budget_cap,
+            "node_budget": self.node_budget,
+            "max_total_cap": self.max_total_cap,
+            "node_count": self.node_count,
         }
 
 
@@ -371,6 +424,9 @@ class JobCallbacks:
         self._on_output: List[Callable[[Job, str, str], Awaitable[None]]] = []
         self._on_progress: List[Callable[[Job, int, int, str], Awaitable[None]]] = []
         self._on_complete: List[Callable[[Job], Awaitable[None]]] = []
+        self._on_budget_exceeded: List[
+            Callable[[str, float, float], Awaitable[None]]
+        ] = []
 
     def on_start(self, callback: Callable[[Job], Awaitable[None]]) -> None:
         self._on_start.append(callback)
@@ -383,6 +439,15 @@ class JobCallbacks:
 
     def on_complete(self, callback: Callable[[Job], Awaitable[None]]) -> None:
         self._on_complete.append(callback)
+
+    def on_budget_exceeded(
+        self, callback: Callable[[str, float, float], Awaitable[None]]
+    ) -> None:
+        """Register a callback invoked once when the cost watcher trips.
+
+        Receives ``(job_id, spent, cap)``.
+        """
+        self._on_budget_exceeded.append(callback)
 
     async def emit_start(self, job: Job) -> None:
         for callback in self._on_start:
@@ -411,6 +476,15 @@ class JobCallbacks:
                 await callback(job)
             except Exception as e:
                 console.print(f"[red]Error in on_complete callback: {e}[/red]")
+
+    async def emit_budget_exceeded(self, job_id: str, spent: float, cap: float) -> None:
+        for callback in self._on_budget_exceeded:
+            try:
+                await callback(job_id, spent, cap)
+            except Exception as e:
+                console.print(
+                    f"[red]Error in on_budget_exceeded callback: {e}[/red]"
+                )
 
 
 class JobManager:
@@ -444,23 +518,141 @@ class JobManager:
 
         self._custom_executor = executor
 
+        # Per-job watcher handles (cost_budget_watcher.Watcher) so update_budget
+        # and cleanup can reach them. Keyed by job_id.
+        self._watchers: Dict[str, Any] = {}
+        # Lazy budget settings store; only instantiated when budgets are used,
+        # so projects that never touch the GitHub App control surface don't pay
+        # for the threading.Lock.
+        self._budget_store: Optional["BudgetStore"] = None
+
+    def _ensure_budget_store(self) -> "BudgetStore":
+        if BudgetStore is None:
+            raise RuntimeError(
+                "Budget control modules are unavailable; "
+                "pdd/server/budget_settings.py is missing."
+            )
+        if self._budget_store is None:
+            self._budget_store = BudgetStore()
+        return self._budget_store
+
+    @staticmethod
+    def _commands_filter_for(command: str) -> Optional[frozenset]:
+        if command == "issue":
+            return PDD_ISSUE_NESTED_COMMANDS
+        return frozenset({command})
+
+    def _resolve_cost_csv_path(self, job: Job) -> Optional[Path]:
+        candidate = (job.options or {}).get("output_cost") if job.options else None
+        if candidate is None:
+            candidate = os.environ.get("PDD_OUTPUT_COST_PATH")
+        if candidate:
+            return Path(candidate)
+        return None
+
+    def _start_watcher_for(self, job: Job) -> None:
+        """Wire ``cost_budget_watcher`` around a job that has an effective cap."""
+        if _watch_csv is None or _effective_cap_fn is None:
+            return
+        cap = _effective_cap_fn(
+            job.command,
+            budget_cap=job.budget_cap,
+            node_budget=job.node_budget,
+            max_total_cap=job.max_total_cap,
+            node_count=job.node_count,
+        )
+        csv_path = self._resolve_cost_csv_path(job)
+        if cap is None or csv_path is None:
+            return
+
+        loop = asyncio.get_event_loop()
+        store = self._ensure_budget_store()
+        store.set(
+            job.id,
+            BudgetSettings(
+                command=job.command,
+                node_budget=job.node_budget,
+                max_total_cap=job.max_total_cap,
+                budget_cap=job.budget_cap,
+                effective_cap=cap,
+                spent_so_far=0.0,
+                status=job.status,
+                node_count=job.node_count,
+            ),
+        )
+
+        def _on_exceeded(spent: float) -> None:
+            asyncio.run_coroutine_threadsafe(
+                self._handle_budget_exceeded(job.id, spent, cap), loop
+            )
+
+        try:
+            self._watchers[job.id] = _watch_csv(
+                csv_path,
+                cap,
+                _on_exceeded,
+                commands=self._commands_filter_for(job.command),
+                started_at=job.started_at,
+                poll_interval=2.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Failed to start budget watcher: {exc}[/red]")
+
+    def _stop_watcher_for(self, job_id: str) -> None:
+        watcher = self._watchers.pop(job_id, None)
+        if watcher is not None:
+            try:
+                watcher.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _handle_budget_exceeded(self, job_id: str, spent: float, cap: float) -> None:
+        job = self._jobs.get(job_id)
+        if job is None or job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
+            return
+        job.cost = max(job.cost, spent)
+        try:
+            await self.cancel(job_id)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Cancel after budget exceeded failed: {exc}[/red]")
+        job.status = JobStatus.BUDGET_EXCEEDED
+        if not job.completed_at:
+            job.completed_at = datetime.now(timezone.utc)
+        if self._budget_store is not None:
+            try:
+                self._budget_store.update(
+                    job_id,
+                    spent_so_far=spent,
+                    status=JobStatus.BUDGET_EXCEEDED,
+                )
+            except KeyError:
+                pass
+        await self.callbacks.emit_budget_exceeded(job_id, spent, cap)
+
     async def submit(
         self,
         command: str,
         args: Dict[str, Any] = None,
         options: Dict[str, Any] = None,
+        *,
+        budget_cap: Optional[float] = None,
+        node_budget: Optional[float] = None,
+        max_total_cap: Optional[float] = None,
     ) -> Job:
         job = Job(
             command=command,
             args=args or {},
             options=options or {},
+            budget_cap=budget_cap,
+            node_budget=node_budget,
+            max_total_cap=max_total_cap,
         )
 
         self._jobs[job.id] = job
         self._cancel_events[job.id] = asyncio.Event()
 
         console.print(f"[blue]Job submitted:[/blue] {job.id} ({command})")
-        
+
         task = asyncio.create_task(self._execute_wrapper(job))
         self._tasks[job.id] = task
 
@@ -505,9 +697,14 @@ class JobManager:
             job.started_at = datetime.now(timezone.utc)
             await self.callbacks.emit_start(job)
 
+            # 2b. Start the cost-budget watcher if the job has an effective
+            #     cap. No-op when the budget modules are unavailable, the cap
+            #     is None, or the cost CSV path is unset.
+            self._start_watcher_for(job)
+
             # 3. Execute
             result = None
-            
+
             if self._custom_executor:
                 result = await self._custom_executor(job)
             else:
@@ -545,8 +742,9 @@ class JobManager:
             # 5. Cleanup and Notify
             if not job.completed_at:
                 job.completed_at = datetime.now(timezone.utc)
+            self._stop_watcher_for(job.id)
             await self.callbacks.emit_complete(job)
-            
+
             if job.id in self._cancel_events:
                 del self._cancel_events[job.id]
 
@@ -756,6 +954,131 @@ class JobManager:
             for job_id, job in self._jobs.items()
             if job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
         }
+
+    def get_budget(self, job_id: str) -> BudgetSettings:
+        """Return a :class:`BudgetSettings` snapshot for ``job_id``.
+
+        Raises ``KeyError`` (with ``job_id`` as ``args[0]``) when the job is
+        not known to the manager. The ``commands`` route maps this to
+        HTTP 404.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if _effective_cap_fn is None:
+            raise RuntimeError("budget_settings module unavailable")
+        cap = _effective_cap_fn(
+            job.command,
+            budget_cap=job.budget_cap,
+            node_budget=job.node_budget,
+            max_total_cap=job.max_total_cap,
+            node_count=job.node_count,
+        )
+        spent = job.cost
+        if self._budget_store is not None:
+            existing = self._budget_store.get(job_id)
+            if existing is not None and existing.spent_so_far > spent:
+                spent = existing.spent_so_far
+        # Fall back to the live watcher spent if available; the watcher's
+        # last poll may be slightly fresher than `job.cost`, which is only
+        # set on subprocess exit.
+        watcher = self._watchers.get(job_id)
+        if watcher is not None:
+            try:
+                live = watcher.spent()
+                if live > spent:
+                    spent = live
+            except Exception:  # noqa: BLE001
+                pass
+        return BudgetSettings(
+            command=job.command,
+            node_budget=job.node_budget,
+            max_total_cap=job.max_total_cap,
+            budget_cap=job.budget_cap,
+            effective_cap=cap,
+            spent_so_far=spent,
+            status=job.status,
+            node_count=job.node_count,
+        )
+
+    async def update_budget(
+        self,
+        job_id: str,
+        *,
+        budget_cap: Any = _UNSET,
+        node_budget: Any = _UNSET,
+        max_total_cap: Any = _UNSET,
+    ) -> Job:
+        """Apply a mid-run budget change to ``job_id``.
+
+        Exceptions are part of the public contract — the ``commands`` route
+        maps them to HTTP statuses by type, never by message text:
+          * ``KeyError`` (``args[0] == job_id``) → 404, unknown job;
+          * ``RuntimeError`` with message starting ``"job not active: "`` →
+            409, job is in a terminal status;
+          * ``ValueError`` → 400, an amount failed
+            :func:`budget_settings.validate_amount`.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+            JobStatus.BUDGET_EXCEEDED,
+        ):
+            raise RuntimeError(f"job not active: {job_id}")
+
+        if validate_amount is None or _effective_cap_fn is None:
+            raise RuntimeError("budget_settings module unavailable")
+
+        if budget_cap is not _UNSET and budget_cap is not None:
+            job.budget_cap = validate_amount(budget_cap)
+        elif budget_cap is None and budget_cap is not _UNSET:
+            job.budget_cap = None
+        if node_budget is not _UNSET and node_budget is not None:
+            job.node_budget = validate_amount(node_budget)
+        elif node_budget is None and node_budget is not _UNSET:
+            job.node_budget = None
+        if max_total_cap is not _UNSET and max_total_cap is not None:
+            job.max_total_cap = validate_amount(max_total_cap)
+        elif max_total_cap is None and max_total_cap is not _UNSET:
+            job.max_total_cap = None
+
+        new_cap = _effective_cap_fn(
+            job.command,
+            budget_cap=job.budget_cap,
+            node_budget=job.node_budget,
+            max_total_cap=job.max_total_cap,
+            node_count=job.node_count,
+        )
+        watcher = self._watchers.get(job_id)
+        if watcher is not None:
+            try:
+                watcher.update_cap(new_cap)
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]update_cap failed for {job_id}: {exc}[/red]")
+        elif new_cap is not None:
+            # No watcher running yet (e.g. cap was None at submit and is
+            # being set for the first time). Start one if the job is still
+            # active.
+            self._start_watcher_for(job)
+
+        if self._budget_store is not None:
+            try:
+                self._budget_store.update(
+                    job_id,
+                    budget_cap=job.budget_cap,
+                    node_budget=job.node_budget,
+                    max_total_cap=job.max_total_cap,
+                    node_count=job.node_count,
+                    status=job.status,
+                )
+            except KeyError:
+                # Store snapshot not yet created (watcher never started).
+                pass
+        return job
 
     async def cancel(self, job_id: str) -> bool:
         """

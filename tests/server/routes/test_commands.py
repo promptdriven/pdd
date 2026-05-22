@@ -172,7 +172,12 @@ async def test_execute_command_success(commands_module, mock_job_manager, sample
     assert response.job_id == sample_job.id
     assert response.status == sample_job.status
     mock_job_manager.submit.assert_called_once_with(
-        command="generate", args={"prompt": "hello"}, options={}
+        command="generate",
+        args={"prompt": "hello"},
+        options={},
+        budget_cap=None,
+        node_budget=None,
+        max_total_cap=None,
     )
 
 
