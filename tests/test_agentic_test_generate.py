@@ -919,3 +919,107 @@ def test_alt_path_first_time_generation_does_not_raise(
     assert cost == 0.1
     assert success is True
     assert alt_path.read_text(encoding="utf-8") == rewritten
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_canonical_present_alt_path_rewrite_raises_churn_error(
+    mock_agents, mock_load, mock_run, mock_env
+):
+    """Greg-review regression (PR #1015): when the canonical test file
+    exists with content AND the agent rewrites a separate pre-existing
+    alt-path test file from many tests down to one, the broad churn
+    sweep must fire ``TestChurnError`` for the alt-path file and
+    restore it to its pre-run snapshot. The canonical path stays
+    untouched. Without the sweep this scenario was a false negative:
+    the prior alt-path-only check was gated on the canonical being
+    empty.
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    canonical = mock_env["test"]
+    canonical_content = "it('canonical stays', () => { expect(1).toBe(1); });\n"
+    canonical.write_text(canonical_content, encoding="utf-8")
+
+    alt_path = mock_env["root"] / "__tests__" / "add.test.ts"
+    alt_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_existing_alt = (
+        "\n".join(f"it('case {i}', () => {{}});" for i in range(20)) + "\n"
+    )
+    alt_path.write_text(pre_existing_alt, encoding="utf-8")
+
+    rewritten_alt = "it('case 0', () => {});\n"
+
+    def side_effect(*args, **kwargs):
+        # Agent leaves canonical alone, rewrites only the alt-path.
+        alt_path.write_text(rewritten_alt, encoding="utf-8")
+        return (True, '{"success": true, "message": "Generated tests"}', 0.3, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    from pdd.code_generator_main import TestChurnError
+
+    with pytest.raises(TestChurnError) as excinfo:
+        run_agentic_test_generate(
+            mock_env["prompt"], mock_env["code"], canonical, quiet=True
+        )
+
+    # Alt-path restored to its pre-run snapshot.
+    assert alt_path.read_text(encoding="utf-8") == pre_existing_alt
+    # Canonical never touched by the gate.
+    assert canonical.read_text(encoding="utf-8") == canonical_content
+    # Cost/model attached for the repair-loop budget accounting.
+    assert excinfo.value.total_cost == 0.3
+    assert excinfo.value.model_name == "agentic-anthropic"
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_canonical_present_multiple_alt_paths_all_restored_on_failure(
+    mock_agents, mock_load, mock_run, mock_env
+):
+    """When the agent rewrites multiple pre-existing alt-path test
+    files in one run, the sweep raises on the first violation but
+    restores EVERY pre-run snapshot before raising — so the repair
+    loop's next attempt re-snapshots from the true pre-run baseline
+    rather than treating attempt 1's surviving rewrites as the new
+    baseline (which would permanently weaken the gate)."""
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    canonical = mock_env["test"]
+    canonical.write_text("it('keep', () => {});\n", encoding="utf-8")
+
+    alt_a = mock_env["root"] / "__tests__" / "alpha.test.ts"
+    alt_b = mock_env["root"] / "specs" / "beta.test.ts"
+    alt_a.parent.mkdir(parents=True, exist_ok=True)
+    alt_b.parent.mkdir(parents=True, exist_ok=True)
+
+    pre_a = "\n".join(f"it('a{i}', () => {{}});" for i in range(20)) + "\n"
+    pre_b = "\n".join(f"it('b{i}', () => {{}});" for i in range(20)) + "\n"
+    alt_a.write_text(pre_a, encoding="utf-8")
+    alt_b.write_text(pre_b, encoding="utf-8")
+
+    def side_effect(*args, **kwargs):
+        # Rewrite BOTH alt-path files to a single test each.
+        alt_a.write_text("it('a0', () => {});\n", encoding="utf-8")
+        alt_b.write_text("it('b0', () => {});\n", encoding="utf-8")
+        return (True, '{"success": true, "message": "Generated tests"}', 0.4, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    from pdd.code_generator_main import TestChurnError
+
+    with pytest.raises(TestChurnError):
+        run_agentic_test_generate(
+            mock_env["prompt"], mock_env["code"], canonical, quiet=True
+        )
+
+    # BOTH alt-paths restored — not just the first violator. This is
+    # the repair-loop correctness invariant: re-snapshot must see the
+    # true pre-run state for every test-like file.
+    assert alt_a.read_text(encoding="utf-8") == pre_a
+    assert alt_b.read_text(encoding="utf-8") == pre_b
