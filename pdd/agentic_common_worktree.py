@@ -477,8 +477,14 @@ def revert_out_of_scope_changes_with_dirs(
         for prefix in allowed_dirs:
             if rel.startswith(prefix):
                 return True
-        abs_path = (cwd / rel).resolve()
-        return abs_path in allowed_files
+        abs_path = cwd / rel
+        # Do NOT let a symlink whose target happens to be an allowed file
+        # be treated as in-scope. The guard enforces scope on the path that
+        # Step 9 actually created; a symlink at an out-of-scope path is
+        # itself the out-of-scope change regardless of what it points at.
+        if abs_path.is_symlink():
+            return False
+        return abs_path.resolve() in allowed_files
 
     # Track which pre_snapshot keys we observe in the post-status pass so we
     # can detect deletions afterwards (entries present pre-Step-9 but absent
@@ -568,17 +574,21 @@ def revert_out_of_scope_changes_with_dirs(
                         capture_output=True,
                         timeout=30,
                     )
-                    try:
-                        (cwd / new_rel).unlink()
-                    except FileNotFoundError:
-                        pass
-                    except OSError as exc:
-                        logger.warning(
-                            "Failed to remove rename new-side %s: %s", new_rel, exc
-                        )
-                        if strict:
-                            raise
                     if checkout.returncode == 0:
+                        # Only unlink the new path AFTER checkout succeeds:
+                        # if checkout fails the old path is unrestored, and
+                        # removing the new path as well would leave both sides
+                        # damaged.
+                        try:
+                            (cwd / new_rel).unlink()
+                        except FileNotFoundError:
+                            pass
+                        except OSError as exc:
+                            logger.warning(
+                                "Failed to remove rename new-side %s: %s", new_rel, exc
+                            )
+                            if strict:
+                                raise
                         logger.info(
                             "Reverted out-of-scope rename: %s -> %s", old_rel, new_rel,
                         )

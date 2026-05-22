@@ -1139,7 +1139,7 @@ def test_revert_out_of_scope_changes_with_dirs_staged_addition_reset_failure_str
 
 def test_revert_out_of_scope_changes_with_dirs_copy_reset_failure_strict(tmp_path):
     """Same reset-return check applies to copy-destination revert."""
-    porcelain = b"C100 src.py\x00dest.py\x00"
+    porcelain = b"C  src.py\x00dest.py\x00"
 
     def fake_run(cmd, **kwargs):
         if cmd[:2] == ["git", "reset"]:
@@ -1156,7 +1156,7 @@ def test_revert_out_of_scope_changes_with_dirs_copy_reset_failure_strict(tmp_pat
 def test_revert_out_of_scope_changes_with_dirs_rename_reset_failure_strict(tmp_path):
     """If git reset fails for a rename under strict=True, raise immediately
     and do NOT proceed to checkout/unlink — leaves the index consistent."""
-    porcelain = b"R100 old.py\x00new.py\x00"
+    porcelain = b"R  old.py\x00new.py\x00"
 
     def fake_run(cmd, **kwargs):
         if cmd[:2] == ["git", "reset"]:
@@ -1168,3 +1168,74 @@ def test_revert_out_of_scope_changes_with_dirs_rename_reset_failure_strict(tmp_p
             revert_out_of_scope_changes_with_dirs(
                 tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
             )
+
+
+def test_revert_out_of_scope_changes_with_dirs_symlink_not_bypassed_by_target(tmp_path):
+    """Regression for round-11: a symlink at an out-of-scope path whose
+    target is an allowlisted file must still be treated as out-of-scope.
+    Previously _path_in_scope resolved the symlink, so the symlink appeared
+    in-scope and was left in the worktree."""
+    import os as _os
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+        env={**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
+    allowed = tmp_path / "pdd" / "prompts" / "allowed.prompt"
+    allowed.parent.mkdir(parents=True, exist_ok=True)
+    allowed.write_text("# allowed\n")
+
+    examples_dir = tmp_path / "examples"
+    examples_dir.mkdir()
+    leak = examples_dir / "leak.py"
+    leak.symlink_to(allowed)
+
+    subprocess.run(["git", "add", str(leak)], cwd=str(tmp_path), check=True, capture_output=True)
+
+    allowed_files = {allowed.resolve()}
+    result = revert_out_of_scope_changes_with_dirs(
+        tmp_path, allowed_dirs=set(), allowed_files=allowed_files, strict=True
+    )
+
+    assert Path("examples/leak.py") in result
+    assert not leak.exists()
+
+
+def test_revert_out_of_scope_changes_with_dirs_rename_checkout_failure_does_not_unlink(tmp_path):
+    """Regression for round-11: if checkout of the old path fails for a
+    rename, the new path must NOT be unlinked (both sides would be damaged).
+    Previously unlink ran before the checkout return-code check."""
+    new_file = tmp_path / "new.py"
+    new_file.write_text("content\n")
+    porcelain = b"R  old.py\x00new.py\x00"
+    unlink_called = []
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "status"]:
+            return _cp(stdout=porcelain)
+        if cmd[:2] == ["git", "reset"]:
+            return _cp(returncode=0)
+        if cmd[:2] == ["git", "checkout"]:
+            return _cp(returncode=1, stderr=b"checkout failed")
+        return _cp()
+
+    original_unlink = Path.unlink
+
+    def tracking_unlink(self, *args, **kwargs):
+        unlink_called.append(str(self))
+        return original_unlink(self, *args, **kwargs)
+
+    with patch(f"{MODULE}.subprocess.run", side_effect=fake_run), \
+         patch.object(Path, "unlink", tracking_unlink):
+        with pytest.raises(OSError, match="git checkout HEAD"):
+            revert_out_of_scope_changes_with_dirs(
+                tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
+            )
+
+    assert not any("new.py" in p for p in unlink_called), (
+        "unlink should not be called when checkout fails"
+    )
