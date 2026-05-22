@@ -2307,6 +2307,27 @@ def run_agentic_change_orchestrator(
                         "Stopped at step 9: Scope guard error — "
                         f"{scope_guard_error}"
                     )
+                    # Round-7: build an explicit GitHub-comment body so the
+                    # error surfaces at the TOP of the comment. The legacy
+                    # body=None fallback truncates `output` to 1000 chars,
+                    # which can clip critical context on long Step 9 outputs.
+                    violation_body = (
+                        f"## Step {step_num}/13: {description}\n\n"
+                        f"**Status:** FAILED: SCOPE_VIOLATION "
+                        f"(guard enforcement error)\n\n"
+                        f"### Error\n```\n{scope_guard_error}\n```\n\n"
+                        f"### Why\n"
+                        f"The Step 9 scope guard could not complete (git "
+                        f"status / revert failure under strict mode). "
+                        f"Treating as a workflow-stopping scope "
+                        f"violation.\n\n"
+                        f"### How to resume\n"
+                        f"Investigate the underlying git/worktree issue, "
+                        f"then run `pdd change` again. Step 8.5 will "
+                        f"re-run automatically.\n\n"
+                        f"---\n"
+                        f"*Step 9 scope guard — issue #1123*"
+                    )
                 else:
                     violation_block = (
                         "SCOPE_VIOLATION:\n"
@@ -2317,6 +2338,34 @@ def run_agentic_change_orchestrator(
                     return_msg = (
                         f"Stopped at step 9: Scope violation — agent modified "
                         f"{len(scope_reverted)} file(s) outside allowlist"
+                    )
+                    # Round-7: build an explicit GitHub-comment body that
+                    # puts the reverted-paths list at the TOP. The legacy
+                    # body=None fallback truncates `output` to 1000 chars
+                    # and the SCOPE_VIOLATION block is appended to the END
+                    # of step_output, so long Step 9 outputs can clip the
+                    # list — making README's "comment lists reverted paths"
+                    # a false promise. Bypass the fallback by passing an
+                    # explicit body with the list up front.
+                    violation_body = (
+                        f"## Step {step_num}/13: {description}\n\n"
+                        f"**Status:** FAILED: SCOPE_VIOLATION\n\n"
+                        f"### Reverted files ({len(scope_reverted)})\n"
+                        + "\n".join(f"- `{p}`" for p in scope_reverted)
+                        + "\n\n"
+                        f"### Why\n"
+                        f"The Step 9 agent attempted edits outside the "
+                        f"issue's scope contract (Step 5 docs, Step 6 "
+                        f"prompts/dependencies/integration points/direct-"
+                        f"edit candidates, plus preflight-healed prompts). "
+                        f"Those files have been reverted in the "
+                        f"worktree.\n\n"
+                        f"### How to resume\n"
+                        f"Refine the issue (or the Step 5/6 contract if "
+                        f"it was too narrow), then run `pdd change` "
+                        f"again. Step 8.5 will re-run automatically.\n\n"
+                        f"---\n"
+                        f"*Step 9 scope guard — issue #1123*"
                     )
                 step_output = step_output.rstrip() + "\n\n" + violation_block
                 if not quiet and scope_reverted:
@@ -2331,6 +2380,7 @@ def run_agentic_change_orchestrator(
                     issue_number=issue_number, step_num=step_num,
                     total_steps=13, description=description,
                     output=step_output, cwd=cwd,
+                    body=violation_body,
                 )
                 state["step_outputs"][str(step_num)] = f"FAILED: SCOPE_VIOLATION\n{step_output}"
                 # Do NOT advance last_completed_step — same pattern as the

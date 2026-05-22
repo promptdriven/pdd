@@ -5806,6 +5806,7 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
+      "agentic_common_worktree_python.prompt",
       "git_porcelain_python.prompt"
     ],
     "priority": 168,

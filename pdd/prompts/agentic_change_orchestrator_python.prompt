@@ -13,6 +13,7 @@
 
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_worktree_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.

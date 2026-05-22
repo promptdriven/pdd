@@ -7192,3 +7192,173 @@ def test_parse_step5_doc_paths_strips_markdown_emphasis():
     # No emphasis markers leaked into the parsed paths.
     assert not any("*" in p for p in result)
     assert not any("`" in p for p in result)
+
+
+# -----------------------------------------------------------------------------
+# Round 7 — SCOPE_VIOLATION GitHub comment body must NOT rely on the
+# 1000-char fallback path. Passing an explicit `body` puts the reverted
+# paths at the top of the comment and bypasses output truncation.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_passes_explicit_body_with_reverted_paths(temp_cwd):
+    """Long Step 9 LLM outputs must not clip the reverted-paths list.
+
+    Regression: `post_step_comment` with `body=None` truncates `output`
+    to the first 1000 chars. Because the SCOPE_VIOLATION block is
+    appended to the END of step_output, a long step_output can push
+    the reverted-paths list past 1000 chars, silently dropping it from
+    the issue comment. The orchestrator must now pass an explicit
+    `body` kwarg with the list at the TOP.
+    """
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    # Pad the step 9 output well past the 1000-char fallback cap so any
+    # regression to body=None would clip the list and fail the test.
+    pad = "noise " * 400  # ~2400 chars of filler
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True) as mock_pc, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Drop TWO out-of-scope files so both must survive in the
+                # comment body. Return a long step output that would clip
+                # under the 1000-char fallback path.
+                (worktree / "tests").mkdir(parents=True, exist_ok=True)
+                (worktree / "tests" / "leak_one.py").write_text("nope")
+                (worktree / "tests" / "leak_two.py").write_text("nope")
+                return (
+                    True,
+                    f"FILES_MODIFIED: prompts/foo_python.prompt\n{pad}",
+                    0.5,
+                    "gpt-4",
+                )
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=11237,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    # Locate the Step 9 post_step_comment call.
+    step9_calls = [
+        c for c in mock_pc.call_args_list
+        if c.kwargs.get("step_num") == 9
+    ]
+    assert step9_calls, "Step 9 must post a comment when a violation fires"
+    body = step9_calls[-1].kwargs.get("body")
+    assert body is not None, (
+        "Step 9 violation MUST pass an explicit `body` kwarg so the "
+        "1000-char fallback in post_step_comment does not clip the "
+        "reverted-paths list out of the GitHub comment."
+    )
+    # Both reverted paths must appear verbatim in the body.
+    assert "tests/leak_one.py" in body
+    assert "tests/leak_two.py" in body
+    # And the list should be near the TOP of the comment, ahead of any
+    # narrative — confirm by checking it precedes the "How to resume"
+    # section the template adds at the bottom.
+    assert body.index("tests/leak_one.py") < body.index("How to resume")
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_guard_error_passes_explicit_body_with_error(temp_cwd):
+    """The strict-mode guard-error branch must also pass an explicit body
+    so the underlying exception message is not truncated."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True) as mock_pc, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p), \
+         patch("pdd.agentic_change_orchestrator._enforce_step9_scope",
+               side_effect=OSError("simulated guard failure")):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=11238,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    step9_calls = [
+        c for c in mock_pc.call_args_list
+        if c.kwargs.get("step_num") == 9
+    ]
+    assert step9_calls, "Step 9 must post a comment when guard error fires"
+    body = step9_calls[-1].kwargs.get("body")
+    assert body is not None, (
+        "Step 9 guard-error branch MUST pass an explicit `body` kwarg "
+        "so the underlying exception detail is not clipped by the "
+        "1000-char fallback in post_step_comment."
+    )
+    # Underlying exception must be in the body verbatim so a debugger
+    # can see what actually failed without spelunking the saved state.
+    assert "simulated guard failure" in body
+    # Comment surfaces the violation status near the top.
+    assert "SCOPE_VIOLATION" in body
+    assert body.index("simulated guard failure") < body.index("How to resume")
