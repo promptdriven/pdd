@@ -1,10 +1,17 @@
-# PDD (Prompt-Driven Development) Command Line Interface
+# PDD: The Last Programming Language™
 
 ![PyPI version](https://img.shields.io/pypi/v/pdd-cli.svg) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
-PDD (Prompt-Driven Development) is a toolkit for AI-powered code generation and maintenance.
+PDD (Prompt-Driven Development) is a prompt-native programming system. `.prompt`
+files are the human-authored source language; Python, TypeScript, Go, and other
+traditional languages are generated artifacts.
+
+PDD is the last programming language in this specific sense: developers author
+durable intent, constraints, examples, and tests, then compile that source into
+whatever implementation language the project needs. Code remains real and
+reviewable, but it is no longer the primary source of truth.
 
 **Getting started is simple:**
 
@@ -35,6 +42,8 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
+
+For the positioning essay behind this shift, read [The Last Programming Language](docs/the-last-programming-language.md).
 
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
@@ -2770,6 +2779,7 @@ Arguments:
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--start-step STEP`: Recovery override for the legacy checkup flow; accepted values are `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, and `8`. Not compatible with `--review-loop`.
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 - `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
 - `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
@@ -2803,7 +2813,7 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, `checkup/pr-{N}` for PR mode), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, checkout-scoped `checkup/pr-{N}-<scope>` branch for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
@@ -3687,7 +3697,7 @@ One or more patent applications covering aspects of the PDD workflows and system
 
 ## Conclusion
 
-PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
+PDD (Prompt-Driven Development) is a prompt-native programming system for managing `.prompt` source files, generating code, creating examples, running tests, and keeping implementation artifacts synchronized with durable intent. By treating prompts and tests as the source of truth, PDD turns conventional code into reviewable output that can be regenerated as requirements evolve.
 
 The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
 
@@ -3697,4 +3707,4 @@ As you become more familiar with PDD, you can compose richer workflows by chaini
 
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
-Happy coding with PDD!
+Keep prompts as source; regenerate with PDD.

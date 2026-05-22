@@ -66,6 +66,7 @@
      - Use webbrowser.open()
 
   6. **Output messages**:
+     - Print `PDD_POSITIONING` from `pdd.cli_branding` before the server details.
      - "Starting PDD server on http://{host}:{port}"
      - "API Documentation: http://{host}:{port}/docs"
      - "Frontend: http://{host}:{port}" (or custom URL)
@@ -103,6 +104,7 @@
   - NO @track_cost decorator (no LLM calls)
   - Use click.echo() for output
   - Use click.style() for colored output
+  - Import `PDD_POSITIONING` from `pdd.cli_branding`
   - click.confirm() for security warning
   - Determine project_root from current working directory
   - Pass click context for potential future use

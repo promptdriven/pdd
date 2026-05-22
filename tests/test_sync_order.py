@@ -564,6 +564,30 @@ def test_topological_sort_non_cyclic_remaining_ordered():
 
 
 # ==============================================================================
+# compute_sccs determinism
+# ==============================================================================
+
+def test_compute_sccs_deterministic_regardless_of_dep_order():
+    """SCC output must depend only on graph structure, not dep-list ordering.
+
+    Two equivalent graphs whose adjacency lists differ only by sibling order
+    must produce identical SCC output. The simple ``a->b, b->a, a->c`` case
+    happens to come out the same regardless of sorting; a graph with more
+    than one peer sink reveals Tarjan's discovery-order dependence.
+    """
+    # Simple case: still must be equal.
+    g_simple_1 = {"a": ["b", "c"], "b": ["a"], "c": []}
+    g_simple_2 = {"a": ["c", "b"], "b": ["a"], "c": []}
+    assert sync_order.compute_sccs(g_simple_1) == sync_order.compute_sccs(g_simple_2)
+
+    # Stronger case: ``a`` has multiple sink neighbours; DFS-discovery order
+    # changes the SCC list order without the per-adjacency sort.
+    g_multi_1 = {"a": ["b", "c", "d"], "b": ["a"], "c": [], "d": []}
+    g_multi_2 = {"a": ["d", "c", "b"], "b": ["a"], "c": [], "d": []}
+    assert sync_order.compute_sccs(g_multi_1) == sync_order.compute_sccs(g_multi_2)
+
+
+# ==============================================================================
 # TDD Tests: Script Path Fix
 # ==============================================================================
 
