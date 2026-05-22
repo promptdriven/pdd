@@ -1968,26 +1968,32 @@ def _run_agentic_checkup_orchestrator_inner(
         # is the only authority — ``_finalize``'s fail-closed downgrade only
         # runs under --review-loop, and the fix-mode freshness lease's
         # checkpoints all explicitly skip ``no_fix``. Refetch the remote PR
-        # head before publishing the canonical verification report; if the
-        # head advanced during the run, downgrade to failure with a
-        # diagnostic so a stale clean verdict isn't posted as fresh.
-        # Fail-closed (no rerun budget consumed) — the lease is fix-mode
-        # only by design.
+        # head before publishing the canonical verification report.
+        # Fail-closed on TWO conditions (no rerun budget consumed — the
+        # lease is fix-mode only by design):
+        #   • advance confirmed  (fresh_sha != entry_sha, both non-empty)
+        #   • freshness unknown  (refetch failed / returned empty sha)
+        # An empty fresh_sha must NOT let a clean verdict through as if
+        # freshness were confirmed — unknown freshness == unverified.
         if pr_mode and worktree_path is not None and no_fix and nofix_gate_passed:
             assert pr_owner is not None and pr_repo is not None
             assert pr_number is not None
             try:
                 nofix_fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
-            except Exception:  # noqa: BLE001 — metadata is best-effort
+            except Exception:  # noqa: BLE001
                 nofix_fresh_metadata = {}
             nofix_fresh_sha = str(
                 (nofix_fresh_metadata or {}).get("head_sha", "") or ""
             )
-            if (
-                nofix_fresh_sha
-                and current_pr_head_sha
-                and nofix_fresh_sha != current_pr_head_sha
-            ):
+            if not nofix_fresh_sha:
+                stale_msg = (
+                    f"--no-fix verification on PR #{pr_number} completed a "
+                    f"clean Step 7 but the post-run freshness check failed "
+                    f"(could not retrieve the current PR head SHA). "
+                    f"Verdict treated as unverified; rerun pdd checkup --pr "
+                    f"--no-fix."
+                )
+            elif current_pr_head_sha and nofix_fresh_sha != current_pr_head_sha:
                 stale_msg = (
                     f"--no-fix verification on PR #{pr_number} produced a "
                     f"clean Step 7 verdict but the PR head advanced during "
@@ -1995,12 +2001,19 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"Verdict treated as unverified; rerun pdd checkup --pr "
                     f"--no-fix."
                 )
+            else:
+                stale_msg = None
+            if stale_msg is not None:
                 if not quiet:
                     console.print(f"[red]{stale_msg}[/red]")
-                # Post the canonical report so the PR thread shows what was
-                # verified and why it was downgraded — same pattern as the
-                # gate-fail path above.
-                stale_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
+                # Include the downgrade reason in the posted report body so
+                # the PR/issue thread shows WHY the verdict was invalidated,
+                # not just the clean Step 7 output that no longer applies.
+                stale_report_body = (
+                    f"**Verdict downgraded — unverified:**\n\n{stale_msg}"
+                    f"\n\n---\n\n{nofix_step7_output}"
+                )
+                stale_post_suffix = _post_pr_mode_final_report(stale_report_body)
                 return (
                     False,
                     f"{stale_msg}{stale_post_suffix}",

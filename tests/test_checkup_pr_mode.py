@@ -4447,6 +4447,157 @@ class TestPrHeadAdvanceAutoRerun:
         # No diagnostic — the verdict is clean.
         assert "treated as unverified" not in msg
 
+    def test_no_fix_freshness_check_fails_unknown_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-3 external review follow-up: when the post-Step-7
+        freshness refetch raises an exception (or returns empty SHA),
+        freshness is unknown — the orchestrator must fail-closed rather
+        than treating the silence as a confirmed clean verdict.
+
+        Expected: success=False; message contains 'treated as unverified'
+        and 'could not retrieve'; no restart budget consumed."""
+        from pdd.agentic_checkup_orchestrator import _load_persisted_refresh_count
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Entry metadata returns normally; freshness-check call raises.
+        def _side_effect_metadata(owner, repo, number):  # noqa: ANN001
+            # First call succeeds (entry SHA); second raises (freshness check).
+            if not hasattr(_side_effect_metadata, "_called"):
+                _side_effect_metadata._called = True  # type: ignore[attr-defined]
+                return _pr_metadata("aaaaaaaa11111111")
+            raise RuntimeError("network timeout")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=_side_effect_metadata,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa11111111",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ) as pr_comment_mock, patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(
+                tmp_path, no_fix=True, use_github_state=True
+            )
+
+        assert success is False, (
+            "Unknown freshness must downgrade to failure; "
+            f"got success message: {msg!r}"
+        )
+        assert "treated as unverified" in msg, msg
+        assert "could not retrieve" in msg, (
+            f"Diagnostic must mention failed SHA retrieval; got: {msg!r}"
+        )
+        push_mock.assert_not_called()
+        # Canonical report still posted so the PR thread records the downgrade.
+        pr_comment_mock.assert_called_once()
+        # No budget consumed — unknown freshness is fail-closed, not a lease event.
+        assert _load_persisted_refresh_count(tmp_path, 200) == 0
+        assert not self._refresh_counter_path(tmp_path, 200).exists()
+
+    def test_no_fix_head_advance_report_includes_downgrade_reason(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-3 external review follow-up: when --no-fix --pr detects a
+        head advance, the body posted to the PR/issue thread must include
+        the downgrade reason — not just the clean Step 7 output.
+
+        Expected: the argument passed to post_pr_comment contains both
+        'Verdict downgraded' and the SHA-transition text, ensuring the
+        report body communicates WHY the verdict was invalidated."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # entry
+            _pr_metadata("cccccccc33333333"),  # post-gate freshness check → advance
+        ]
+
+        posted_bodies: list[str] = []
+
+        def _capture_pr_comment(_owner, _repo, _number, body, _cwd):  # noqa: ANN001
+            posted_bodies.append(body)
+            return True
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="cccccccc33333333",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment",
+            side_effect=_capture_pr_comment,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(
+                tmp_path, no_fix=True, use_github_state=True
+            )
+
+        assert success is False, msg
+        assert posted_bodies, "Expected at least one PR comment to be posted"
+        combined_body = "\n".join(posted_bodies)
+        assert "Verdict downgraded" in combined_body, (
+            f"Report body must include downgrade header; got: {combined_body!r}"
+        )
+        assert "aaaaaaaa" in combined_body and "cccccccc" in combined_body, (
+            f"Report body must include SHA transition; got: {combined_body!r}"
+        )
+
     # ----- External review Finding 2: step_comments preserved on restart -----
 
     def test_step_comments_preserved_across_restart(
