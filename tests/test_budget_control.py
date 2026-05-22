@@ -510,3 +510,219 @@ class TestCostBudgetWatcher:
     def test_watch_rejects_invalid_cap(self, tmp_path, bad):
         with pytest.raises(ValueError):
             watch(tmp_path / "x.csv", cap=bad, on_exceeded=lambda s: None)
+
+    def test_naive_csv_timestamps_compared_against_aware_started_at(self, tmp_path):
+        """Regression: track_cost writes naive timestamps via
+        datetime.now().strftime(...), but job.started_at is aware UTC. The
+        watcher must reinterpret naive cells as UTC instead of raising
+        TypeError (which previously made spend stay at $0 silently).
+        """
+        csv_path = tmp_path / "cost.csv"
+        # Naive timestamp like track_cost.py emits ("%Y-%m-%dT%H:%M:%S.%f").
+        naive_ts = "2026-05-22T18:30:00.000"
+        _write_csv(csv_path, [
+            {"timestamp": naive_ts, "command": "change", "cost": "12.50"},
+        ])
+        # Aware started_at like JobManager sets.
+        started = datetime(2026, 5, 22, 0, 0, tzinfo=timezone.utc)
+        watcher = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"change"}, started_at=started, poll_interval=0.1,
+        )
+        try:
+            time.sleep(0.4)
+            assert watcher.spent() == pytest.approx(12.5), (
+                "Naive CSV timestamps must be reinterpreted as UTC so they "
+                "compare cleanly with the aware started_at."
+            )
+        finally:
+            watcher.stop()
+
+    def test_incremental_tail_only_reads_appended_bytes(self, tmp_path):
+        """Performance regression guard: each poll must NOT reread the full
+        CSV. We approximate this by patching csv.reader to count invocations
+        and asserting the count grows by 1 per append, not by ``rows`` per
+        poll.
+        """
+        from unittest import mock
+
+        csv_path = tmp_path / "cost.csv"
+        ts = "2026-05-22T18:30:00.000"
+        # Seed with header + one row.
+        _write_csv(csv_path, [{"timestamp": ts, "command": "change", "cost": "1.0"}])
+
+        from pdd import cost_budget_watcher as cbw
+
+        original_reader = cbw.csv.reader
+        call_count = {"n": 0}
+
+        def counting_reader(*args, **kwargs):
+            call_count["n"] += 1
+            return original_reader(*args, **kwargs)
+
+        watcher = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"change"}, poll_interval=0.1,
+        )
+        try:
+            # First poll reads header + one row.
+            time.sleep(0.3)
+            assert watcher.spent() == pytest.approx(1.0)
+            baseline = call_count["n"]
+
+            with mock.patch.object(cbw.csv, "reader", side_effect=counting_reader):
+                # Append more rows over several polls. If the watcher were
+                # rereading the whole file each poll, csv.reader calls would
+                # grow super-linearly. With incremental tail, only newly
+                # appended bytes are parsed.
+                for i in range(5):
+                    with csv_path.open("a", encoding="utf-8", newline="") as f:
+                        writer = csv.writer(f)
+                        writer.writerow([ts, "", "change", "1.0", "", "", ""])
+                    time.sleep(0.25)
+
+                assert watcher.spent() == pytest.approx(6.0)
+                # Each poll should hit the reader at most once. 5 appends +
+                # a handful of empty polls is fine; rereading the whole file
+                # would mean dozens of reader calls multiplied by row count.
+                assert call_count["n"] <= 30, (
+                    f"csv.reader called {call_count['n']} times; "
+                    f"incremental tail should keep this bounded."
+                )
+        finally:
+            watcher.stop()
+
+    def test_handles_truncation_by_resetting(self, tmp_path):
+        """If the CSV shrinks (truncation/rotation), the watcher resets and
+        re-reads from the start instead of permanently freezing at the
+        pre-truncation spend.
+        """
+        csv_path = tmp_path / "cost.csv"
+        ts = "2026-05-22T18:30:00.000"
+        _write_csv(csv_path, [
+            {"timestamp": ts, "command": "change", "cost": "10.0"},
+        ])
+        watcher = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"change"}, poll_interval=0.1,
+        )
+        try:
+            time.sleep(0.3)
+            assert watcher.spent() == pytest.approx(10.0)
+            # Replace the file with a fresh, smaller CSV.
+            _write_csv(csv_path, [
+                {"timestamp": ts, "command": "change", "cost": "3.0"},
+            ])
+            time.sleep(0.4)
+            assert watcher.spent() == pytest.approx(3.0)
+        finally:
+            watcher.stop()
+
+
+# ----------------------------------------------------------------- jobs
+
+
+class TestJobsBudgetIntegration:
+    """Async tests that exercise the JobManager's budget wiring without
+    spawning real subprocesses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_budget_exceeded_survives_concurrent_cancel(self, tmp_path):
+        """Regression: status=BUDGET_EXCEEDED must NOT be demoted to
+        CANCELLED by the racing _execute_job CancelledError handler.
+        """
+        import asyncio
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            # Simulate an in-flight subprocess: block until cancelled.
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        # Use a never-existing CSV path; _handle_budget_exceeded does not
+        # need the file to update the job status.
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        # Wait for the job to enter RUNNING.
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+        assert job.status == JobStatus.RUNNING
+
+        # Manually trip the budget-exceeded path (bypasses the CSV watcher).
+        await mgr._handle_budget_exceeded(job.id, spent=42.0, cap=30.0)
+        # Give the racing _execute_job handler time to fire its
+        # CancelledError handler.
+        await asyncio.sleep(0.5)
+
+        assert job.status == JobStatus.BUDGET_EXCEEDED, (
+            f"Finding 2 regression: status was demoted to {job.status} after "
+            "_handle_budget_exceeded set BUDGET_EXCEEDED."
+        )
+        assert job.cost >= 42.0
+
+        # get_budget snapshot must also report BUDGET_EXCEEDED.
+        snapshot = mgr.get_budget(job.id)
+        assert snapshot.status == JobStatus.BUDGET_EXCEEDED
+
+
+class TestExecuteRouteAcceptsIssue:
+    """Finding 3 regression: POST /commands/execute must accept command='issue'
+    and apply pdd_issue_defaults() when budget fields are absent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_execute_issue_applies_defaults(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from pdd.server.models import CommandRequest, JobStatus
+        from pdd.server.routes import commands as commands_route
+        from pdd.server.budget_settings import pdd_issue_defaults
+
+        manager = MagicMock()
+        manager.submit = AsyncMock(return_value=MagicMock(
+            id="abc", status=JobStatus.QUEUED, created_at=None,
+        ))
+        # The mock for created_at needs to be a real datetime for JobHandle.
+        from datetime import datetime, timezone as _tz
+        manager.submit.return_value.created_at = datetime.now(_tz.utc)
+
+        request = CommandRequest(command="issue", args={}, options={})
+        response = await commands_route.execute_command(request, manager=manager)
+        assert response.job_id == "abc"
+
+        node, max_total = pdd_issue_defaults()
+        manager.submit.assert_called_once_with(
+            command="issue", args={}, options={},
+            budget_cap=None, node_budget=node, max_total_cap=max_total,
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_issue_explicit_budget_skips_defaults(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from pdd.server.models import CommandRequest, JobStatus
+        from pdd.server.routes import commands as commands_route
+
+        manager = MagicMock()
+        from datetime import datetime, timezone as _tz
+        manager.submit = AsyncMock(return_value=MagicMock(
+            id="def", status=JobStatus.QUEUED, created_at=datetime.now(_tz.utc),
+        ))
+
+        request = CommandRequest(
+            command="issue", args={}, options={}, node_budget=42.0,
+        )
+        await commands_route.execute_command(request, manager=manager)
+        # Defaults must NOT override an explicit node_budget value.
+        manager.submit.assert_called_once_with(
+            command="issue", args={}, options={},
+            budget_cap=None, node_budget=42.0, max_total_cap=None,
+        )

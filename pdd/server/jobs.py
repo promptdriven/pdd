@@ -89,6 +89,20 @@ PDD_ISSUE_NESTED_COMMANDS = frozenset(
 # from "explicitly set to None". `None` semantically means "clear this field".
 _UNSET = object()
 
+# Once a job reaches one of these statuses, subsequent handlers must NOT
+# overwrite the status field — a later assignment would lose information
+# (most importantly: BUDGET_EXCEEDED set by _handle_budget_exceeded must
+# not be demoted to CANCELLED by the racing _execute_job CancelledError
+# handler).
+_TERMINAL_STATUSES = frozenset(
+    {
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+        JobStatus.BUDGET_EXCEEDED,
+    }
+)
+
 # Global options that must be placed BEFORE the subcommand (defined on cli group)
 GLOBAL_OPTIONS = {
     "force", "strength", "temperature", "time", "verbose", "quiet",
@@ -610,11 +624,13 @@ class JobManager:
         job = self._jobs.get(job_id)
         if job is None or job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
             return
+        # CRITICAL: set the terminal status BEFORE calling cancel(), so that
+        # the racing _execute_job exception handler (which fires on the
+        # asyncio.CancelledError that cancel() injects) sees a terminal
+        # status and does not demote BUDGET_EXCEEDED back to CANCELLED. The
+        # _execute_job handlers honor `_TERMINAL_STATUSES`; if they don't,
+        # there is a race and the wrong final status sticks.
         job.cost = max(job.cost, spent)
-        try:
-            await self.cancel(job_id)
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Cancel after budget exceeded failed: {exc}[/red]")
         job.status = JobStatus.BUDGET_EXCEEDED
         if not job.completed_at:
             job.completed_at = datetime.now(timezone.utc)
@@ -627,6 +643,10 @@ class JobManager:
                 )
             except KeyError:
                 pass
+        try:
+            await self.cancel(job_id)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Cancel after budget exceeded failed: {exc}[/red]")
         await self.callbacks.emit_budget_exceeded(job_id, spent, cap)
 
     async def submit(
@@ -712,19 +732,28 @@ class JobManager:
 
             # 4. Handle Result
             if self._cancel_events[job.id].is_set():
-                job.status = JobStatus.CANCELLED
+                # Respect a terminal status already set by another path
+                # (e.g. BUDGET_EXCEEDED from _handle_budget_exceeded).
+                if job.status not in _TERMINAL_STATUSES:
+                    job.status = JobStatus.CANCELLED
                 console.print(f"[yellow]Job cancelled:[/yellow] {job.id}")
             else:
                 job.result = result
                 job.cost = float(result.get("cost", 0.0)) if isinstance(result, dict) else 0.0
-                job.status = JobStatus.COMPLETED
+                if job.status not in _TERMINAL_STATUSES:
+                    job.status = JobStatus.COMPLETED
                 console.print(f"[green]Job completed:[/green] {job.id}")
 
         except asyncio.CancelledError:
-            job.status = JobStatus.CANCELLED
-            console.print(f"[yellow]Job cancelled (Task):[/yellow] {job.id}")
-            raise # Re-raise to propagate cancellation
-            
+            # Do not demote a terminal status the budget watcher (or any
+            # other handler) has already written. CancelledError is the
+            # mechanism we use to stop subprocesses on a budget hit, so
+            # BUDGET_EXCEEDED must survive this handler.
+            if job.status not in _TERMINAL_STATUSES:
+                job.status = JobStatus.CANCELLED
+                console.print(f"[yellow]Job cancelled (Task):[/yellow] {job.id}")
+            raise  # Re-raise to propagate cancellation
+
         except Exception as e:
             job.error = str(e)
             # Preserve captured output for debugging (live_stdout is updated by read_stream)
@@ -735,7 +764,8 @@ class JobManager:
                     "exit_code": None,
                     "error_type": type(e).__name__,
                 }
-            job.status = JobStatus.FAILED
+            if job.status not in _TERMINAL_STATUSES:
+                job.status = JobStatus.FAILED
             console.print(f"[red]Job failed:[/red] {job.id} - {e}")
             
         finally:
@@ -1126,8 +1156,11 @@ class JobManager:
         if job_id in self._tasks:
             self._tasks[job_id].cancel()
 
-        # Update job status
-        job.status = JobStatus.CANCELLED
+        # Update job status — but never demote a terminal status set by
+        # another handler (e.g. BUDGET_EXCEEDED already set by
+        # _handle_budget_exceeded before it called cancel()).
+        if job.status not in _TERMINAL_STATUSES:
+            job.status = JobStatus.CANCELLED
         job.completed_at = datetime.now(timezone.utc)
 
         console.print(f"[yellow]Cancellation completed for job:[/yellow] {job_id}")

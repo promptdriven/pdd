@@ -7,17 +7,24 @@ processes itself; the cancel path is the caller's responsibility (the
 ``on_exceeded`` callback decides what to do). Enforcement is at the
 **subprocess boundary** — ``track_cost`` only appends a row when a PDD
 subprocess exits, so the watcher cannot interrupt an in-flight call.
+
+The watcher tails the CSV incrementally: it tracks a byte offset and only
+parses new bytes on each poll, so cost grows linearly in the number of new
+rows rather than O(rows × polls). Partial rows (a row being flushed) are
+left for the next poll. If the file shrinks or its inode changes (e.g.
+truncation), the watcher resets and rereads from the start.
 """
 
 from __future__ import annotations
 
 import csv
+import io
 import logging
 import pathlib
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, FrozenSet, Iterable, Optional
 
 
@@ -45,13 +52,32 @@ def _parse_cost(raw: Optional[str]) -> float:
 
 
 def _parse_timestamp(raw: Optional[str]) -> Optional[datetime]:
+    """Parse a CSV timestamp cell into a timezone-aware ``datetime``.
+
+    ``track_cost`` historically writes naive local-time timestamps via
+    ``datetime.now().strftime(...)`` — see ``track_cost.py``'s wrapper —
+    even though the reader contract documents UTC. To stay interoperable
+    with both forms, a naive parse result is REINTERPRETED as UTC (so it
+    can be compared with the aware ``started_at`` set by the job manager
+    without raising ``TypeError``). Aware values are returned unchanged.
+    """
     if not raw:
         return None
     try:
-        # ISO 8601 like '2026-05-22T18:00:00.123' or '...+00:00'
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except (TypeError, ValueError):
         return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _normalize_started_at(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 @dataclass
@@ -83,12 +109,20 @@ class Watcher:
         self._commands: Optional[FrozenSet[str]] = (
             frozenset(commands) if commands is not None else None
         )
-        self._started_at = started_at
+        self._started_at = _normalize_started_at(started_at)
         self._poll_interval = max(0.1, float(poll_interval))
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._state = _State(cap=cap)
         self._spent: float = 0.0
+        # Incremental-tail state. ``_byte_offset`` is the first unread byte;
+        # ``_header_consumed`` flips True after the CSV header is parsed.
+        # ``_known_size`` caches the file size at last poll so we can detect
+        # truncation/rotation and reset state.
+        self._byte_offset: int = 0
+        self._header_consumed: bool = False
+        self._known_size: int = 0
+        self._fieldnames: Optional[list[str]] = None
         self._thread = threading.Thread(
             target=self._run, name=f"cost-budget-watcher:{self._csv_path.name}", daemon=True
         )
@@ -109,32 +143,117 @@ class Watcher:
 
     # -------------------------------------------------------------- internal
 
-    def _read_spent(self) -> float:
-        if not self._csv_path.exists():
-            return 0.0
+    def _reset_tail_state(self) -> None:
+        """Forget where we were — used on truncation or rotation."""
+        self._byte_offset = 0
+        self._header_consumed = False
+        self._known_size = 0
+        self._fieldnames = None
+        with self._lock:
+            self._spent = 0.0
+
+    def _row_matches(self, row: dict) -> bool:
+        if self._commands is not None and row.get("command") not in self._commands:
+            return False
+        if self._started_at is not None:
+            ts = _parse_timestamp(row.get("timestamp"))
+            if ts is None or ts < self._started_at:
+                return False
+        return True
+
+    def _consume_new_bytes(self) -> None:
+        """Read appended bytes and accumulate matching-row cost.
+
+        Tolerates partial rows: if the buffer does not end on a newline, the
+        last (incomplete) line is rewound so the next poll picks it up once
+        it has been fully flushed. Tolerates the file disappearing or being
+        truncated.
+        """
         try:
-            with self._csv_path.open("r", encoding="utf-8", newline="") as handle:
-                reader = csv.DictReader(handle)
-                total = 0.0
-                for row in reader:
-                    if self._commands is not None and row.get("command") not in self._commands:
-                        continue
-                    if self._started_at is not None:
-                        ts = _parse_timestamp(row.get("timestamp"))
-                        if ts is None or ts < self._started_at:
-                            continue
-                    total += _parse_cost(row.get("cost"))
-                return total
-        except (OSError, csv.Error) as exc:
-            logger.debug("cost-budget-watcher: read error on %s: %s", self._csv_path, exc)
-            return 0.0
+            stat = self._csv_path.stat()
+        except (OSError, FileNotFoundError):
+            # File not yet created or vanished — keep spent as-is until it
+            # reappears (R4).
+            return
+
+        size = stat.st_size
+        if size < self._byte_offset:
+            # Truncation or rotation: re-scan from scratch on next read.
+            self._reset_tail_state()
+        self._known_size = size
+
+        if size == self._byte_offset:
+            return
+
+        try:
+            with self._csv_path.open("rb") as handle:
+                handle.seek(self._byte_offset)
+                raw = handle.read()
+        except (OSError, FileNotFoundError):
+            return
+
+        # Tolerate partial last row: leave bytes after the final newline for
+        # the next poll. If the buffer contains no newline at all, defer
+        # parsing until more data arrives.
+        if not raw:
+            return
+        last_newline = raw.rfind(b"\n")
+        if last_newline == -1:
+            return
+        consumable = raw[: last_newline + 1]
+        leftover_len = len(raw) - len(consumable)
+        new_offset = self._byte_offset + len(consumable)
+
+        try:
+            text = consumable.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            self._byte_offset = new_offset
+            return
+
+        added = 0.0
+        try:
+            if not self._header_consumed:
+                reader = csv.reader(io.StringIO(text))
+                rows = list(reader)
+                if not rows:
+                    self._byte_offset = new_offset
+                    return
+                self._fieldnames = rows[0]
+                self._header_consumed = True
+                data_rows = rows[1:]
+            else:
+                reader = csv.reader(io.StringIO(text))
+                data_rows = list(reader)
+        except csv.Error as exc:
+            logger.debug("cost-budget-watcher: csv.Error on tail: %s", exc)
+            # Advance past consumed bytes regardless — a malformed row
+            # cannot be repaired by re-reading the same bytes next poll.
+            self._byte_offset = new_offset
+            return
+
+        fields = self._fieldnames or []
+        for raw_row in data_rows:
+            if not raw_row:
+                continue
+            row = {fields[i]: raw_row[i] for i in range(min(len(fields), len(raw_row)))}
+            if self._row_matches(row):
+                added += _parse_cost(row.get("cost"))
+
+        if added:
+            with self._lock:
+                self._spent += added
+        self._byte_offset = new_offset
+
+        # If a partial trailing row exists, the next poll will pick it up.
+        # `leftover_len` is informational; no action needed here.
+        _ = leftover_len
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
             try:
-                spent = self._read_spent()
+                self._consume_new_bytes()
                 with self._lock:
-                    self._spent = spent
+                    spent = self._spent
                     cap = self._state.cap
                     fired = self._state.fired
                 if cap is not None and not fired and spent >= cap:
@@ -165,11 +284,15 @@ def watch(
     (R1). When ``cap is None`` it acts as a read-only poller for
     :meth:`Watcher.spent`. Use the ``commands`` set (e.g. the nested PDD
     command names ``{"change", "sync", "bug", ...}``) to filter the CSV; for a
-    single-command job, pass ``{job.command}``. ``time`` here is unused but
-    referenced via ``poll_interval``.
+    single-command job, pass ``{job.command}``.
+
+    Naive timestamps in the CSV are reinterpreted as UTC so they compare
+    cleanly with the aware ``started_at`` value set by the job manager;
+    ``track_cost`` historically writes naive local time even though its
+    reader contract documents UTC, and we must not blow up the watcher
+    over that drift.
     """
-    # Silence "imported but unused" — kept so the helper module remains
-    # importable even when no caller has invoked watch yet.
+    # Reference `time` so the import is kept (some IDEs trim unused imports).
     _ = time
     if cap is not None:
         if not isinstance(cap, (int, float)) or cap != cap:  # NaN

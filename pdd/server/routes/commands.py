@@ -144,6 +144,10 @@ ALLOWED_COMMANDS = {
     "auto-deps": "Analyze project dependencies and update prompt",
     "conflicts": "Check for conflicts between prompt files",
     "preprocess": "Preprocess prompt file for LLM use",
+    # GitHub App label-triggered autonomous solving. The /commands/execute
+    # path applies pdd_issue_defaults() ($80 per node, $400 total) when the
+    # request omits explicit budget fields — see execute_command() below.
+    "issue": "Autonomous solving run (pdd-issue label); applies budget defaults if unset",
 }
 
 
