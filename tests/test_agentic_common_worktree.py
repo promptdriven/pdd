@@ -1151,3 +1151,20 @@ def test_revert_out_of_scope_changes_with_dirs_copy_reset_failure_strict(tmp_pat
             revert_out_of_scope_changes_with_dirs(
                 tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
             )
+
+
+def test_revert_out_of_scope_changes_with_dirs_rename_reset_failure_strict(tmp_path):
+    """If git reset fails for a rename under strict=True, raise immediately
+    and do NOT proceed to checkout/unlink — leaves the index consistent."""
+    porcelain = b"R100 old.py\x00new.py\x00"
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "reset"]:
+            return _cp(returncode=1, stderr=b"reset failed")
+        return _cp(stdout=porcelain)
+
+    with patch(f"{MODULE}.subprocess.run", side_effect=fake_run):
+        with pytest.raises(OSError, match="git reset HEAD"):
+            revert_out_of_scope_changes_with_dirs(
+                tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
+            )

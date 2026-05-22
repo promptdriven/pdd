@@ -545,42 +545,55 @@ def revert_out_of_scope_changes_with_dirs(
             # and delete the new path so the rename is fully undone.
             paths_to_reset = [new_rel, old_rel]
             try:
-                subprocess.run(
+                reset = subprocess.run(
                     ["git", "reset", "HEAD", "--"] + paths_to_reset,
                     cwd=str(cwd),
                     capture_output=True,
                     timeout=30,
                 )
-                checkout = subprocess.run(
-                    ["git", "checkout", "HEAD", "--", old_rel],
-                    cwd=str(cwd),
-                    capture_output=True,
-                    timeout=30,
-                )
-                try:
-                    (cwd / new_rel).unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    logger.warning("Failed to remove rename new-side %s: %s", new_rel, exc)
-                    if strict:
-                        raise
-                if checkout.returncode == 0:
-                    logger.info(
-                        "Reverted out-of-scope rename: %s -> %s", old_rel, new_rel,
-                    )
-                    reverted.append(Path(old_rel))
-                    reverted.append(Path(new_rel))
-                else:
-                    stderr_text = checkout.stderr.decode("utf-8", errors="replace").strip()
+                if reset.returncode != 0:
+                    stderr_text = reset.stderr.decode("utf-8", errors="replace").strip()
                     logger.warning(
-                        "Failed to revert rename %s -> %s: %s",
+                        "Failed to unstage rename %s -> %s: %s",
                         old_rel, new_rel, stderr_text,
                     )
                     if strict:
                         raise OSError(
-                            f"git checkout HEAD -- {old_rel} failed: {stderr_text}"
+                            f"git reset HEAD -- {old_rel} {new_rel} failed: {stderr_text}"
                         )
+                else:
+                    checkout = subprocess.run(
+                        ["git", "checkout", "HEAD", "--", old_rel],
+                        cwd=str(cwd),
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    try:
+                        (cwd / new_rel).unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        logger.warning(
+                            "Failed to remove rename new-side %s: %s", new_rel, exc
+                        )
+                        if strict:
+                            raise
+                    if checkout.returncode == 0:
+                        logger.info(
+                            "Reverted out-of-scope rename: %s -> %s", old_rel, new_rel,
+                        )
+                        reverted.append(Path(old_rel))
+                        reverted.append(Path(new_rel))
+                    else:
+                        stderr_text = checkout.stderr.decode("utf-8", errors="replace").strip()
+                        logger.warning(
+                            "Failed to revert rename %s -> %s: %s",
+                            old_rel, new_rel, stderr_text,
+                        )
+                        if strict:
+                            raise OSError(
+                                f"git checkout HEAD -- {old_rel} failed: {stderr_text}"
+                            )
             except subprocess.TimeoutExpired:
                 logger.warning("Timed out reverting rename %s -> %s", old_rel, new_rel)
                 if strict:
