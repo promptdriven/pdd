@@ -314,6 +314,7 @@ def run_agentic_checkup(
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
     pr_url: Optional[str] = None,
+    test_scope: str = "full",
     review_loop: bool = False,
     review_only: bool = False,
     reviewers: str = "codex,claude",
@@ -507,6 +508,7 @@ def run_agentic_checkup(
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_number=pr_number,
+            test_scope=test_scope,
             start_step_override=start_step_override,
         )
     except Exception as exc:

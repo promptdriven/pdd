@@ -12,7 +12,8 @@ You are working on step 5 of 8 in an agentic checkup workflow. Previous steps di
 - Project Root: {project_root}
 - PR-verification mode: {pr_mode}
 - PR URL (PR mode only): {pr_url}
-- PR changed files (PR mode only):
+- PR test scope (PR mode only): {pr_test_scope}
+- PR changed files (PR mode + targeted scope only):
 <pr_changed_files>
 {pr_changed_files}
 </pr_changed_files>
@@ -55,10 +56,10 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
 
 2. **Run the right tests for this mode** and capture output:
    - If `PR-verification mode` is `false`, run the full discovered test suite: unit tests, integration tests, and end-to-end tests.
-   - If `PR-verification mode` is `true`, first run the mandatory PR-scoped tests tied to `<pr_changed_files>`: direct tests for changed modules, adjacent tests, and tests that mention the changed module names. Expand beyond that only when project metadata or previous step output shows broader risk.
-   - If PR mode is true and `<pr_changed_files>` says PR changed files are unavailable, do not broaden into a timeout-prone full-suite run on a large repository. Run only cheap discovery/static checks and any small, clearly relevant tests inferred from the issue and prior step output; report that concrete PR scope could not be established and include the exact full-suite command as not run due to missing PR scope/time budget.
+   - If `PR-verification mode` is `true` and `PR test scope` is `full` (the default), run the full discovered test suite. PR mode does NOT imply targeted scope; the user opted into the comprehensive quality gate by not passing `--test-scope targeted`. If the full suite is too large to complete within this step's budget, report the exact full-suite command as **not run due to time budget** and do not claim full-suite coverage — do not silently fall back to targeted tests.
+   - If `PR-verification mode` is `true` AND `PR test scope` is `targeted`, first run the mandatory PR-scoped tests tied to `<pr_changed_files>`: direct tests for changed modules, adjacent tests, and tests that mention the changed module names. Expand beyond that only when project metadata or previous step output shows broader risk. The user explicitly opted into targeted scope; do NOT run the full suite.
+   - If PR mode is true, test scope is `targeted`, and `<pr_changed_files>` says PR changed files are unavailable, do not broaden into a timeout-prone full-suite run on a large repository. Run only cheap discovery/static checks and any small, clearly relevant tests inferred from the issue and prior step output; report that concrete PR scope could not be established and include the exact full-suite command as not run due to missing PR scope/time budget.
    - If `<pr_changed_files>` includes a full API changed-file list artifact path, read that local file before selecting PR-scoped tests; the inline list may be a bounded preview.
-   - In PR mode, run the full suite only if it is expected to fit within this step's budget. If it is too large, report the exact full-suite command as **not run due to time budget** and do not claim full-suite coverage.
 
 3. **Collect and categorize failures**:
    - Import errors (missing modules or packages)
@@ -110,5 +111,6 @@ Your comment should follow this format:
 - Discover the correct test command from the project — do NOT assume pytest or jest
 - Run the actual tests and capture real output
 - If tests take too long, use a timeout and report partial results; never present targeted-only PR-mode tests as a full-suite pass
+- In PR mode, `targeted` test scope is opt-in. `full` (the default) means the user expects comprehensive verification — do NOT silently downgrade to targeted because the suite is large; instead report the skipped command honestly
 - Always post your findings as a GitHub comment before completing
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"

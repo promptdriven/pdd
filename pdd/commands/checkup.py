@@ -82,6 +82,21 @@ from ..core.errors import handle_error
     ),
 )
 @click.option(
+    "--test-scope",
+    "test_scope",
+    type=click.Choice(["full", "targeted"]),
+    default="full",
+    show_default=True,
+    help=(
+        "PR-mode test scope. 'full' (default) runs the full discovered "
+        "test suite in Step 5 and Step 7. 'targeted' is an opt-in fast "
+        "path that passes PR changed-file context into Steps 5/7 so the "
+        "agent runs PR-scoped tests only; the final report explicitly "
+        "labels verification as targeted (full suite not run). Only "
+        "meaningful with --pr."
+    ),
+)
+@click.option(
     "--review-loop",
     is_flag=True,
     default=False,
@@ -240,6 +255,7 @@ def checkup(
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
+    test_scope: str,
     review_loop: bool,
     review_only: bool,
     reviewers: str,
@@ -286,6 +302,11 @@ def checkup(
 
     # PR-mode argument validation
     pr_mode = pr_url is not None or issue_url_opt is not None
+    if test_scope == "targeted" and not pr_mode:
+        raise click.BadParameter(
+            "--test-scope targeted requires --pr (PR mode).",
+            param_hint="'--test-scope'",
+        )
     if review_loop and not pr_mode:
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
@@ -381,6 +402,7 @@ def checkup(
             use_github_state=not no_github_state,
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             pr_url=pr_url,
+            test_scope=test_scope,
             start_step_override=start_step_override,
             review_loop=review_loop,
             review_only=review_only,

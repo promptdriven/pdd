@@ -711,8 +711,14 @@ class TestChangedFilesTracking:
         assert "Do not infer PR scope from HEAD~1" in result
         assert "second.py" not in result
 
-    def test_pr_mode_context_includes_changed_files(self, tmp_path):
-        """Changed-file summary should be passed to PR-mode step prompts."""
+    def _run_orchestrator_capturing_context(
+        self,
+        tmp_path,
+        *,
+        test_scope: str,
+        format_call_count: list,
+    ):
+        """Helper: run orchestrator in PR mode, capture step contexts."""
         captured_contexts = []
         wt = tmp_path / "wt"
         wt.mkdir()
@@ -722,12 +728,16 @@ class TestChangedFilesTracking:
             output = ALL_ISSUES_FIXED if step_num == 7 else f"out-{step_num}"
             return (True, output, 0.0, "fake")
 
+        def fake_format(*_args, **_kwargs):
+            format_call_count.append(1)
+            return "Base: main\n- M: pdd/example.py"
+
         with patch(
             "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
             return_value=(wt, None),
         ), patch(
             "pdd.agentic_checkup_orchestrator._format_pr_changed_files_for_prompt",
-            return_value="Base: main\n- M: pdd/example.py",
+            side_effect=fake_format,
         ), patch(
             "pdd.agentic_checkup_orchestrator._run_single_step",
             side_effect=capture_step,
@@ -757,13 +767,59 @@ class TestChangedFilesTracking:
                 pr_owner="o",
                 pr_repo="r",
                 pr_number=200,
+                test_scope=test_scope,
             )
 
         assert success is True
         assert captured_contexts
-        assert captured_contexts[0]["pr_changed_files"] == (
+        return captured_contexts
+
+    def test_pr_mode_targeted_scope_includes_changed_files(self, tmp_path):
+        """Opt-in targeted scope passes changed-file summary into step prompts."""
+        format_calls: list = []
+        captured = self._run_orchestrator_capturing_context(
+            tmp_path,
+            test_scope="targeted",
+            format_call_count=format_calls,
+        )
+        assert format_calls, "formatter should be invoked under targeted scope"
+        assert captured[0]["pr_test_scope"] == "targeted"
+        assert captured[0]["pr_changed_files"] == (
             "Base: main\n- M: pdd/example.py"
         )
+
+    def test_pr_mode_full_scope_skips_changed_files(self, tmp_path):
+        """Default 'full' scope keeps pr_changed_files empty so the agent runs the full suite."""
+        format_calls: list = []
+        captured = self._run_orchestrator_capturing_context(
+            tmp_path,
+            test_scope="full",
+            format_call_count=format_calls,
+        )
+        assert not format_calls, "formatter must not run under full scope"
+        assert captured[0]["pr_test_scope"] == "full"
+        assert captured[0]["pr_changed_files"] == ""
+
+    def test_orchestrator_rejects_invalid_test_scope(self, tmp_path):
+        """Invalid test_scope must fail loudly, not silently fall back."""
+        with pytest.raises(ValueError, match="test_scope"):
+            run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                quiet=True,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+                test_scope="quick",
+            )
 
     def test_changed_files_passed_to_step_8(self, mock_dependencies, default_args):
         """Changed files from step 6 should be available to step 8 as files_to_stage."""

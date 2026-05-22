@@ -1014,6 +1014,7 @@ def run_agentic_checkup_orchestrator(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_number: Optional[int] = None,
+    test_scope: str = "full",
     start_step_override: Optional[Union[int, float]] = None,
 ) -> Tuple[bool, str, float, str]:
     """Orchestrate the 8-step agentic checkup workflow.
@@ -1028,6 +1029,11 @@ def run_agentic_checkup_orchestrator(
         (success, final_message, total_cost, model_used)
     """
     pr_mode = pr_url is not None and pr_number is not None
+    if test_scope not in ("full", "targeted"):
+        raise ValueError(
+            f"test_scope must be 'full' or 'targeted', got {test_scope!r}"
+        )
+    pr_test_scope = test_scope if pr_mode else "full"
     if not quiet:
         console.print(
             f"[bold]Running checkup for issue #{issue_number}: "
@@ -1055,6 +1061,7 @@ def run_agentic_checkup_orchestrator(
         "pr_number": str(pr_number) if pr_number is not None else "",
         "pr_push_output": "",
         "pr_changed_files": "",
+        "pr_test_scope": pr_test_scope,
         "manual_start_step": str(start_step_override or ""),
         "worktree_path": "",
         "files_to_stage": "",
@@ -1270,10 +1277,11 @@ def run_agentic_checkup_orchestrator(
                     metadata_for_guard,
                     quiet,
                 )
-                context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
-                    worktree_path,
-                    metadata_for_guard,
-                )
+                if pr_test_scope == "targeted":
+                    context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
+                        worktree_path,
+                        metadata_for_guard,
+                    )
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
@@ -1640,10 +1648,11 @@ def run_agentic_checkup_orchestrator(
             metadata_for_guard,
             quiet,
         )
-        context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
-            worktree_path,
-            metadata_for_guard,
-        )
+        if pr_test_scope == "targeted":
+            context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
+                worktree_path,
+                metadata_for_guard,
+            )
 
         if not quiet:
             console.print(
