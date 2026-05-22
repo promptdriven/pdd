@@ -376,6 +376,8 @@ async def update_job_budget(
         kwargs["node_budget"] = request.node_budget
     if request.max_total_cap is not None:
         kwargs["max_total_cap"] = request.max_total_cap
+    if request.node_count is not None:
+        kwargs["node_count"] = request.node_count
 
     try:
         await manager.update_budget(job_id, **kwargs)

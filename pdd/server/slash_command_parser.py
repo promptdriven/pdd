@@ -162,8 +162,24 @@ def _parse_budget(
             metadata={},
         )
 
-    # /pdd budget node N
+    # /pdd budget node N — pdd-issue ONLY.
+    # `effective_cap()` ignores `node_budget` for non-issue commands; if we
+    # accepted this verb everywhere the user would see an apparent success
+    # while the cap silently never changed. Reject explicitly with a
+    # message that tells them /pdd budget N is the right verb for normal
+    # commands.
     if args[0].lower() == "node":
+        if active_command != "issue":
+            return SlashCommandResult(
+                kind="invalid",
+                message=(
+                    "`/pdd budget node N` only applies to the autonomous "
+                    "`pdd-issue` command. For other commands, use "
+                    "`/pdd budget N` to set the total cap."
+                ),
+                original_comment_id=comment_id,
+                metadata={},
+            )
         if len(args) != 2:
             return SlashCommandResult(
                 kind="invalid",
@@ -187,8 +203,19 @@ def _parse_budget(
             metadata={"amount": amount},
         )
 
-    # /pdd budget max N
+    # /pdd budget max N — pdd-issue ONLY (same rationale as `node` above).
     if args[0].lower() == "max":
+        if active_command != "issue":
+            return SlashCommandResult(
+                kind="invalid",
+                message=(
+                    "`/pdd budget max N` only applies to the autonomous "
+                    "`pdd-issue` command. For other commands, use "
+                    "`/pdd budget N` to set the total cap."
+                ),
+                original_comment_id=comment_id,
+                metadata={},
+            )
         if len(args) != 2:
             return SlashCommandResult(
                 kind="invalid",

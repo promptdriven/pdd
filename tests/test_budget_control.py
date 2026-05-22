@@ -167,12 +167,15 @@ class TestSlashCommandParser:
         assert r.metadata == {"amount": 30.0}
 
     def test_budget_node_metadata(self):
-        r = parse_comment(_user_comment("/pdd budget node 50"))
+        # node|max apply to pdd-issue only — set active_command='issue'
+        # so the parser accepts the verb instead of returning invalid.
+        # See TestNodeMaxRejectedForNonIssue below for the rejection path.
+        r = parse_comment(_user_comment("/pdd budget node 50"), active_command="issue")
         assert r.kind == "budget_node_set"
         assert r.metadata == {"amount": 50.0}
 
     def test_budget_max_metadata(self):
-        r = parse_comment(_user_comment("/pdd budget max 200"))
+        r = parse_comment(_user_comment("/pdd budget max 200"), active_command="issue")
         assert r.kind == "budget_max_set"
         assert r.metadata == {"amount": 200.0}
 
@@ -848,3 +851,250 @@ class TestBudgetExceededReportsCurrentCap:
             f"Finding 3 regression: callback received cap={reported_cap} "
             f"but current effective cap was 5.0 after /pdd budget update."
         )
+
+
+# ----------------------------------------------------------------- third review pass
+
+
+class TestNodeMaxRejectedForNonIssue:
+    """Finding 1 (third review pass): /pdd budget node|max only applies to
+    pdd-issue. effective_cap() ignores node_budget / max_total_cap for
+    other commands, so accepting these verbs would silently no-op.
+    """
+
+    def test_budget_node_rejected_on_bug(self):
+        r = parse_comment(_user_comment("/pdd budget node 50"), active_command="bug")
+        assert r.kind == "invalid"
+        assert "pdd-issue" in r.message
+        assert "/pdd budget N" in r.message
+
+    def test_budget_max_rejected_on_change(self):
+        r = parse_comment(_user_comment("/pdd budget max 200"), active_command="change")
+        assert r.kind == "invalid"
+        assert "pdd-issue" in r.message
+
+    def test_budget_node_accepted_on_issue(self):
+        r = parse_comment(_user_comment("/pdd budget node 50"), active_command="issue")
+        assert r.kind == "budget_node_set"
+        assert r.metadata == {"amount": 50.0}
+
+    def test_budget_max_accepted_on_issue(self):
+        r = parse_comment(_user_comment("/pdd budget max 200"), active_command="issue")
+        assert r.kind == "budget_max_set"
+        assert r.metadata == {"amount": 200.0}
+
+    def test_budget_node_rejected_without_active_command(self):
+        # `active_command=None` means we don't know what's running; safer
+        # to reject than to silently apply a verb that may no-op.
+        r = parse_comment(_user_comment("/pdd budget node 50"))
+        assert r.kind == "invalid"
+
+
+class TestNodeCountUpdateable:
+    """Finding 2 (third review pass): node_count must be updateable through
+    the public budget API so a growing solving tree raises the effective
+    cap accordingly.
+    """
+
+    def test_budget_update_request_accepts_node_count(self):
+        from pdd.server.models import BudgetUpdateRequest
+        req = BudgetUpdateRequest(node_count=5)
+        assert req.node_count == 5
+
+    def test_budget_update_request_rejects_negative_node_count(self):
+        from pdd.server.models import BudgetUpdateRequest
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            BudgetUpdateRequest(node_count=-1)
+
+    def test_budget_update_request_requires_at_least_one_field(self):
+        from pdd.server.models import BudgetUpdateRequest
+        with pytest.raises(Exception):
+            BudgetUpdateRequest()
+
+    def test_budget_update_request_node_count_alone_is_enough(self):
+        # Even with all $-fields None, node_count alone satisfies the
+        # "at least one" rule (the private executor pushes node_count
+        # alone as the solving tree grows).
+        from pdd.server.models import BudgetUpdateRequest
+        req = BudgetUpdateRequest(node_count=3)
+        assert req.node_count == 3
+
+    @pytest.mark.asyncio
+    async def test_update_budget_grows_effective_cap_with_node_count(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit(
+            "issue", args={}, options={},
+            node_budget=80.0, max_total_cap=400.0,
+        )
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # node_count=None -> effective_cap = 80 * 1 = 80 (capped at 400)
+        snapshot0 = mgr.get_budget(job.id)
+        assert snapshot0.effective_cap == 80.0
+
+        # Push node_count=3 -> effective_cap = min(80*3, 400) = 240
+        await mgr.update_budget(job.id, node_count=3)
+        snapshot1 = mgr.get_budget(job.id)
+        assert snapshot1.effective_cap == 240.0
+        assert snapshot1.node_count == 3
+
+        # Push node_count=10 -> effective_cap = min(80*10, 400) = 400
+        await mgr.update_budget(job.id, node_count=10)
+        snapshot2 = mgr.get_budget(job.id)
+        assert snapshot2.effective_cap == 400.0
+        assert snapshot2.node_count == 10
+
+    @pytest.mark.asyncio
+    async def test_update_node_count_sync_helper(self, tmp_path):
+        # Synchronous update_node_count helper is what the subprocess
+        # driver thread uses; verify it walks the same arithmetic.
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit(
+            "issue", args={}, options={},
+            node_budget=80.0, max_total_cap=400.0,
+        )
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        mgr.update_node_count(job.id, 5)
+        snap = mgr.get_budget(job.id)
+        assert snap.node_count == 5
+        assert snap.effective_cap == 400.0  # min(80*5, 400)
+
+
+class TestAutoWireCostCsv:
+    """Finding 3 (third review pass): a capped job with no output_cost /
+    PDD_OUTPUT_COST_PATH must derive and inject a default cost-CSV path
+    rather than silently skipping enforcement.
+    """
+
+    @pytest.mark.asyncio
+    async def test_capped_job_gets_default_csv_injected(self, tmp_path, monkeypatch):
+        # Ensure no env path is present, so the derivation branch runs.
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Watcher should be running (cap is set and a default CSV was derived).
+        assert job.id in mgr._watchers, (
+            "Finding 3 regression: capped job did not get a watcher; "
+            "default CSV path was not derived."
+        )
+        # options must now carry the derived path so the subprocess also
+        # writes to it via --output-cost.
+        assert "output_cost" in job.options
+        derived = Path(job.options["output_cost"])
+        assert derived.parent == tmp_path / ".pdd"
+        assert derived.name.startswith(f"cost-{job.id}")
+        # Parent dir must be created.
+        assert derived.parent.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_uncapped_job_does_not_derive_csv(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("bug", args={}, options={})
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Without a cap, no watcher should run and no default CSV should
+        # be derived (we don't want to litter .pdd/ with unused files).
+        assert job.id not in mgr._watchers
+        assert "output_cost" not in job.options
+
+    @pytest.mark.asyncio
+    async def test_explicit_output_cost_is_respected(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        explicit_path = tmp_path / "custom" / "cost.csv"
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit(
+            "bug", args={"options": {}},
+            options={"output_cost": str(explicit_path)},
+            budget_cap=30.0,
+        )
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        assert job.id in mgr._watchers
+        assert job.options["output_cost"] == str(explicit_path)

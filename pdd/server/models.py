@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 __all__ = [
     "FileMetadata",
@@ -272,13 +272,24 @@ class BudgetSettings(BaseModel):
 class BudgetUpdateRequest(BaseModel):
     """Request body for POST /commands/jobs/{job_id}/budget.
 
-    At least one of ``budget_cap`` / ``node_budget`` / ``max_total_cap`` MUST
-    be provided. Each numeric field is validated ``> 0`` and ``<= 10000``;
-    string forms (``"$30"``, ``"30.00"``, ``"30"``) are coerced to ``float``.
+    At least one of ``budget_cap`` / ``node_budget`` / ``max_total_cap`` /
+    ``node_count`` MUST be provided. Numeric budget fields are validated
+    ``> 0`` and ``<= 10000``; ``node_count`` is validated ``>= 0`` and
+    ``<= 10000`` (large but bounded — see
+    :func:`pdd.server.budget_settings.effective_cap`). String forms
+    (``"$30"``, ``"30.00"``, ``"30"``) are coerced to ``float``.
     """
     budget_cap: Optional[float] = Field(None, description="Total cap for non-issue commands")
     node_budget: Optional[float] = Field(None, description="Per-node budget for pdd-issue")
     max_total_cap: Optional[float] = Field(None, description="Tree-wide ceiling for pdd-issue")
+    node_count: Optional[int] = Field(
+        None,
+        description=(
+            "Current solving-tree node count for pdd-issue. Pushed by the "
+            "private executor as the tree expands so effective_cap grows "
+            "with the work."
+        ),
+    )
 
     @field_validator("budget_cap", "node_budget", "max_total_cap", mode="before")
     @classmethod
@@ -305,17 +316,40 @@ class BudgetUpdateRequest(BaseModel):
             raise ValueError(f"Budget amount {value} exceeds hard ceiling $10000")
         return value
 
-    @field_validator("max_total_cap")
+    @field_validator("node_count", mode="before")
     @classmethod
-    def _at_least_one(cls, v: Optional[float], info: Any) -> Optional[float]:
-        # Pydantic v2: this validator runs last on max_total_cap; check the
-        # combined dict to enforce "at least one set".
-        data = info.data if hasattr(info, "data") else {}
-        if v is None and data.get("budget_cap") is None and data.get("node_budget") is None:
+    def _coerce_node_count(cls, v: Any) -> Optional[int]:
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(f"Invalid node_count: {v!r}")
+        try:
+            value = int(v)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"node_count must be an integer: {v!r}") from exc
+        if value < 0:
+            raise ValueError(f"node_count must be >= 0: {v!r}")
+        if value > 10000:
+            raise ValueError(f"node_count {value} exceeds the hard ceiling 10000")
+        return value
+
+    @model_validator(mode="after")
+    def _require_at_least_one(self) -> "BudgetUpdateRequest":
+        # model_validator runs once per instance regardless of whether any
+        # fields were passed, so an empty body ({}) is rejected — a
+        # field_validator on node_count alone would not see this case
+        # because pydantic skips per-field validation for the default value.
+        if (
+            self.budget_cap is None
+            and self.node_budget is None
+            and self.max_total_cap is None
+            and self.node_count is None
+        ):
             raise ValueError(
-                "At least one of budget_cap, node_budget, or max_total_cap must be set"
+                "At least one of budget_cap, node_budget, max_total_cap, "
+                "or node_count must be set"
             )
-        return v
+        return self
 
 
 class SlashCommandResult(BaseModel):

@@ -557,12 +557,64 @@ class JobManager:
         return frozenset({command})
 
     def _resolve_cost_csv_path(self, job: Job) -> Optional[Path]:
+        """Resolve the cost-CSV path for this job, deriving and injecting a
+        default when a budget is set but no explicit path is configured.
+
+        Precedence:
+          1. ``job.options["output_cost"]`` — explicit per-job path.
+          2. ``PDD_OUTPUT_COST_PATH`` env var — process-wide path.
+          3. (Only when the job has an effective cap) a derived per-job
+             default under ``project_root/.pdd/cost-<job_id>.csv``,
+             which is also injected into ``job.options["output_cost"]``
+             so the subprocess command builder picks it up via
+             ``--output-cost``. This closes the silent-no-enforcement gap
+             where a job advertised a cap but no CSV was wired so the
+             watcher returned None and enforcement quietly never ran.
+
+        Returns ``None`` only when (a) the job has no effective cap (so we
+        don't generate a CSV gratuitously) or (b) creating the parent
+        directory for the derived default fails.
+        """
         candidate = (job.options or {}).get("output_cost") if job.options else None
         if candidate is None:
             candidate = os.environ.get("PDD_OUTPUT_COST_PATH")
         if candidate:
             return Path(candidate)
-        return None
+
+        # No explicit path configured. Derive a per-job default ONLY when an
+        # effective cap is active; otherwise there is nothing to enforce so
+        # we leave the legacy "no CSV, no watcher" behaviour intact.
+        if _effective_cap_fn is None:
+            return None
+        cap = _effective_cap_fn(
+            job.command,
+            budget_cap=job.budget_cap,
+            node_budget=job.node_budget,
+            max_total_cap=job.max_total_cap,
+            node_count=job.node_count,
+        )
+        if cap is None:
+            return None
+
+        derived = (self.project_root or Path.cwd()) / ".pdd" / f"cost-{job.id}.csv"
+        try:
+            derived.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            console.print(
+                f"[yellow]Could not create default cost-CSV directory "
+                f"{derived.parent}: {exc}; budget enforcement will be "
+                f"inactive for job {job.id}.[/yellow]"
+            )
+            return None
+
+        if job.options is None:
+            job.options = {}
+        job.options["output_cost"] = str(derived)
+        console.print(
+            f"[blue]Auto-wired cost CSV[/blue] for {job.id}: {derived} "
+            "(budget set but no output_cost / PDD_OUTPUT_COST_PATH provided)"
+        )
+        return derived
 
     def _start_watcher_for(self, job: Job) -> None:
         """Wire ``cost_budget_watcher`` around a job that has an effective cap."""
@@ -1080,6 +1132,7 @@ class JobManager:
         budget_cap: Any = _UNSET,
         node_budget: Any = _UNSET,
         max_total_cap: Any = _UNSET,
+        node_count: Any = _UNSET,
     ) -> Job:
         """Apply a mid-run budget change to ``job_id``.
 
@@ -1117,6 +1170,31 @@ class JobManager:
             job.max_total_cap = validate_amount(max_total_cap)
         elif max_total_cap is None and max_total_cap is not _UNSET:
             job.max_total_cap = None
+        if node_count is not _UNSET:
+            if node_count is None:
+                job.node_count = None
+            else:
+                # Defensive validation for programmatic callers — the route
+                # has Pydantic gating but JobManager is also called directly
+                # from tests and from the private executor as the solving
+                # tree expands. Reject negatives, non-ints, and absurd
+                # values so a bogus update can never produce
+                # nonsense effective_cap arithmetic.
+                try:
+                    coerced = int(node_count)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"node_count must be an integer: {node_count!r}"
+                    ) from exc
+                if isinstance(node_count, bool):
+                    raise ValueError(f"node_count must be an integer: {node_count!r}")
+                if coerced < 0:
+                    raise ValueError(f"node_count must be >= 0: {node_count!r}")
+                if coerced > 10000:
+                    raise ValueError(
+                        f"node_count {coerced} exceeds the hard ceiling 10000"
+                    )
+                job.node_count = coerced
 
         new_cap = _effective_cap_fn(
             job.command,
@@ -1150,6 +1228,47 @@ class JobManager:
             except KeyError:
                 # Store snapshot not yet created (watcher never started).
                 pass
+        return job
+
+    def update_node_count(self, job_id: str, node_count: int) -> Job:
+        """Synchronous helper for the executor to push solving-tree
+        progress without paying for an awaitable round-trip.
+
+        Equivalent to ``update_budget(node_count=node_count)`` but skips
+        the budget-only kwargs and runs synchronously, since this is
+        called from the subprocess driver thread.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if not isinstance(node_count, int) or isinstance(node_count, bool):
+            raise ValueError(f"node_count must be an integer: {node_count!r}")
+        if node_count < 0 or node_count > 10000:
+            raise ValueError(f"node_count {node_count} outside [0, 10000]")
+        job.node_count = node_count
+        if _effective_cap_fn is not None:
+            new_cap = _effective_cap_fn(
+                job.command,
+                budget_cap=job.budget_cap,
+                node_budget=job.node_budget,
+                max_total_cap=job.max_total_cap,
+                node_count=node_count,
+            )
+            watcher = self._watchers.get(job_id)
+            if watcher is not None:
+                try:
+                    watcher.update_cap(new_cap)
+                except Exception as exc:  # noqa: BLE001
+                    console.print(
+                        f"[red]update_cap failed for {job_id}: {exc}[/red]"
+                    )
+            if self._budget_store is not None:
+                try:
+                    self._budget_store.update(
+                        job_id, node_count=node_count, status=job.status
+                    )
+                except KeyError:
+                    pass
         return job
 
     async def cancel(self, job_id: str) -> bool:
