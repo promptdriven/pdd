@@ -888,8 +888,13 @@ def run_checkup_review_loop(
             # closed in the documented-failure path. Scrub before
             # storing so CI/cloud log capture cannot harvest tokens
             # from the unhandled exception text.
-            logger.debug("gates: PR base-ref refresh failed: %s", exc)
+            # Scrub BEFORE the debug log: ``logger.debug`` writes to
+            # the same stderr stream CI/cloud log capture harvests, so
+            # logging raw ``exc`` text first would leak any token
+            # embedded in the exception message even though the
+            # downstream ``base_ref_fetch_error`` value is scrubbed.
             scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+            logger.debug("gates: PR base-ref refresh failed: %s", scrubbed_exc)
             pr_metadata["base_ref_fetch_error"] = (
                 f"unexpected exception in _refresh_pr_base_ref: {scrubbed_exc}"
             )

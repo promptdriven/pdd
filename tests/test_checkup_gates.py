@@ -306,6 +306,57 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_script_rejects_bare_npx_prefix(self) -> None:
+        """Iter-22 Finding 2: ``npm run <script>`` lets the script body
+        execute. A script body of ``npx tsc --noEmit`` or
+        ``npx prettier --check .`` would let `npx` reach the npm
+        registry and install/exec the tool when it is not in local
+        ``node_modules`` — the same network-install hole the
+        tsconfig-discovery path closes with ``--no-install``.
+        ``_script_is_acceptable`` MUST reject bare ``npx`` prefixes.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "npx tsc --noEmit",
+            "npx prettier --check .",
+            "npx prettier --check src/**/*.ts",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"bare npx payload {payload!r} must be rejected"
+            )
+
+    def test_script_accepts_npx_with_no_install(self) -> None:
+        """Iter-22 Finding 2 inverse: an explicit ``npx --no-install``
+        invocation is the documented safe form (operators opt into
+        the gate without the registry-install fallback)."""
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "npx --no-install tsc --noEmit",
+            "npx --no-install prettier --check .",
+        ):
+            assert _script_is_acceptable(payload) is True, (
+                f"safe npx payload {payload!r} must be accepted"
+            )
+
+    def test_discover_skips_npm_script_with_bare_npx_prefix(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end: a poisoned ``package.json`` that smuggles in
+        bare ``npx tsc`` via a recognised script name must NOT emit a
+        gate; the npm-run path would otherwise reach the registry."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"typecheck": "npx tsc --noEmit"}),
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "npm:typecheck" not in names
+
     def test_script_accepts_legitimate_prettier_with_glob(self) -> None:
         """Positive sanity: a real prettier invocation with a glob and
         space-separated args must STILL be accepted — the metachar guard
@@ -686,6 +737,58 @@ class TestRunGates:
         assert "[REDACTED]" in results[0].stderr_excerpt
         assert "sk-abcdefghijklmnopqr" not in results[0].stderr_excerpt
         assert "sk-abcdefghijklmnopqr" not in results[0].stdout_excerpt
+
+    def test_secret_at_truncation_boundary_is_scrubbed(self, tmp_path: Path) -> None:
+        """Iter-22 Finding 1: a secret that lands near the 10KB
+        truncation boundary must still be redacted. Pre-fix the runner
+        called ``_scrub(_truncate(text))`` — truncation could leave a
+        partial-token prefix that the scrub regex (anchored on the full
+        token shape) no longer matched. The correct order is
+        ``_truncate(_scrub(text))``: scrub the full output first.
+        """
+        from pdd.checkup_gates import Gate, _EXCERPT_LIMIT, run_gates
+
+        # Pad stdout past _EXCERPT_LIMIT, then emit a full token at
+        # the boundary so the previous truncate-first order would
+        # chop the token mid-pattern and dodge the scrubber.
+        padding = "x" * (_EXCERPT_LIMIT - 4)
+        # ``ghp_`` + 36 chars satisfies the GitHub PAT regex
+        # (``ghp_[A-Za-z0-9]{20,}``). Construct the literal at runtime
+        # via ``chr()`` so it does not appear in argv (the per-gate
+        # artifact also dumps the cmd line; we want this test focused
+        # on the output-excerpt scrub-before-truncate contract, not on
+        # operator-supplied argv leakage).
+        secret_expr = (
+            "chr(103)+chr(104)+chr(112)+chr(95)+'A'*40"  # 'ghp_' + 40*A
+        )
+        script = (
+            f"import sys; sys.stdout.write({padding!r} + ({secret_expr})); "
+            "sys.exit(0)"
+        )
+        gates = [
+            Gate(
+                name="boundary-leak",
+                cmd=[sys.executable, "-c", script],
+                source="<test>",
+            )
+        ]
+        artifacts_dir = tmp_path / "artifacts"
+        results = run_gates(
+            tmp_path, gates, artifacts_dir=artifacts_dir, round_number=1, mode="review"
+        )
+        excerpt = results[0].stdout_excerpt
+        # No part of the token survives — including a truncated
+        # prefix like ``ghp_AAA`` that the pre-fix order would have
+        # left in place.
+        expected_secret = "ghp_" + ("A" * 40)
+        assert expected_secret not in excerpt
+        assert "ghp_" not in excerpt
+        # The on-disk artifact MUST also be clean (it's written from
+        # the same scrubbed/truncated string).
+        artifact_text = (artifacts_dir / "round-1-review-gate-boundary-leak.txt").read_text(
+            encoding="utf-8"
+        )
+        assert "ghp_" not in artifact_text
 
     def test_runs_with_ci_env_and_no_color(self, tmp_path: Path) -> None:
         from pdd.checkup_gates import Gate, run_gates

@@ -243,8 +243,16 @@ def _script_is_acceptable(command: str) -> bool:
     if not command:
         return False
     lowered = command.lower()
+    # ``--no-install`` is the SAFE form of ``npx`` (operators opt out
+    # of the registry-install fallback) and MUST be exempted from the
+    # ``install`` substring check below. Strip it before scanning so
+    # the forbidden-fragment loop cannot misclassify the safe flag as
+    # an ``npm install`` smuggle. The npx-prefix logic further down
+    # re-checks for ``--no-install`` on the original string so this
+    # strip does not loosen acceptance.
+    scan_target = lowered.replace("--no-install", "")
     for forbidden in _FORBIDDEN_SCRIPT_FRAGMENTS:
-        if forbidden in lowered:
+        if forbidden in scan_target:
             return False
     # Case-sensitive shell metachar / substitution / redirection /
     # newline / lead-with-shell-binary tokens. Tokens carrying a space
@@ -261,20 +269,39 @@ def _script_is_acceptable(command: str) -> bool:
     # Strip leading package-manager prefix so that
     # ``npm run format:check`` and ``yarn format:check`` both reduce to
     # the recognised tool head.
+    #
+    # Iter-22 Finding 2: ``npx`` is special. Unlike the ``run`` /
+    # ``yarn`` / ``pnpm`` / ``bun`` invocations, bare ``npx <tool>``
+    # falls back to a registry download + install + exec when the
+    # tool is not present in the local ``node_modules``. The
+    # tsconfig-based discovery path emits ``npx --no-install`` for
+    # this reason; the npm-run discovery path MUST hold the same
+    # bar. Accept the ``npx`` prefix ONLY when the script body
+    # explicitly contains ``--no-install`` (operators who want the
+    # gate can write ``npx --no-install tsc --noEmit``); reject
+    # bare ``npx`` to keep gates local/deterministic/non-mutating.
     stripped = lowered
-    for prefix in (
-        "npm run ",
-        "yarn run ",
-        "pnpm run ",
-        "bun run ",
-        "npx ",
-        "yarn ",
-        "pnpm ",
-        "bun ",
-    ):
-        if stripped.startswith(prefix):
-            stripped = stripped[len(prefix) :].lstrip()
-            break
+    if stripped.startswith("npx "):
+        if "--no-install" not in stripped:
+            return False
+        stripped = stripped[len("npx ") :].lstrip()
+        # Skip the ``--no-install`` flag itself so the tool head
+        # comparison below sees ``tsc`` / ``prettier`` directly.
+        if stripped.startswith("--no-install"):
+            stripped = stripped[len("--no-install") :].lstrip()
+    else:
+        for prefix in (
+            "npm run ",
+            "yarn run ",
+            "pnpm run ",
+            "bun run ",
+            "yarn ",
+            "pnpm ",
+            "bun ",
+        ):
+            if stripped.startswith(prefix):
+                stripped = stripped[len(prefix) :].lstrip()
+                break
     for head in _ACCEPTABLE_SCRIPT_HEADS:
         if stripped.startswith(head):
             # eslint without an explicit ``--fix``/no-fix marker — the
@@ -741,8 +768,13 @@ def _execute_one(
         return GateResult(
             gate=gate,
             exit_code=None,
-            stdout_excerpt=_scrub(_truncate(captured_stdout)),
-            stderr_excerpt=_scrub(_truncate(captured_stderr)),
+            # Scrub BEFORE truncating. A token like ``ghp_...`` whose
+            # last byte happens to land past the 10 KB cutoff would
+            # otherwise leave a partial-token prefix in the excerpt
+            # that the scrub regex (anchored on the full token shape)
+            # would no longer match. Iter-22 Finding 1.
+            stdout_excerpt=_truncate(_scrub(captured_stdout)),
+            stderr_excerpt=_truncate(_scrub(captured_stderr)),
             duration_seconds=duration,
             started_at_iso=started,
             error=f"timed out after {timeout:g}s",
@@ -773,8 +805,10 @@ def _execute_one(
     return GateResult(
         gate=gate,
         exit_code=proc.returncode,
-        stdout_excerpt=_scrub(_truncate(proc.stdout or "")),
-        stderr_excerpt=_scrub(_truncate(proc.stderr or "")),
+        # Scrub-then-truncate (iter-22 Finding 1): see the
+        # corresponding comment in the timeout branch above.
+        stdout_excerpt=_truncate(_scrub(proc.stdout or "")),
+        stderr_excerpt=_truncate(_scrub(proc.stderr or "")),
         duration_seconds=duration,
         started_at_iso=started,
         error="",
