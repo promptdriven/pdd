@@ -77,14 +77,25 @@ class Gate:
     required_fix_hint: str = ""
 
     def to_dict(self) -> Dict[str, object]:
+        # Iter-24 Finding 1: scrub every string field before
+        # serialization. The dict feeds both the per-round JSON
+        # manifest (``round-{R}-{mode}-gates.json``) and the
+        # in-memory ``state.gate_runs`` row that the review loop
+        # persists into ``final-state.json`` — both are long-term
+        # audit surfaces, and a fork PR can poison ``package.json``
+        # script bodies with literal tokens that would otherwise
+        # land verbatim in those artifacts. The Gate's bare ``cmd``
+        # list still flows through ``_execute_one`` unchanged for
+        # subprocess invocation; only the serialized projection
+        # gets the scrub.
         return {
-            "name": self.name,
-            "cmd": list(self.cmd),
-            "source": self.source,
+            "name": _scrub(self.name),
+            "cmd": [_scrub(arg) for arg in self.cmd],
+            "source": _scrub(self.source),
             "severity": self.severity,
             "timeout": self.timeout,
             "area": self.area,
-            "required_fix_hint": self.required_fix_hint,
+            "required_fix_hint": _scrub(self.required_fix_hint),
         }
 
 
@@ -892,10 +903,22 @@ def run_gates(
         try:
             per_gate_path.write_text(_render_per_gate_body(result), encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 - defensive: never raise
+            # Iter-24 Finding 2: scrub BEFORE the warning log. The
+            # raw exception text (and its traceback under
+            # ``exc_info=True``) can carry a path containing a token
+            # or any string a poisoned gate cmd shoved into the
+            # filename — CI/cloud log capture would otherwise
+            # harvest it. Demote the traceback to debug so the
+            # warning line stays clean.
+            persistence_error = _scrub(f"{type(exc).__name__}: {exc}")
             logger.warning(
                 "checkup-gates: failed to persist artifact for gate %r: %s",
                 gate.name,
-                exc,
+                persistence_error,
+            )
+            logger.debug(
+                "checkup-gates: artifact persistence traceback for gate %r",
+                gate.name,
                 exc_info=True,
             )
             # If the gate itself passed, downgrade to a runner-error
@@ -904,7 +927,6 @@ def run_gates(
             # its original exit code and append the persistence error
             # to ``error`` so the existing failure ride-along stays
             # intact while the operator still sees the artifact gap.
-            persistence_error = f"{type(exc).__name__}: {exc}"
             if result.exit_code == 0:
                 result = GateResult(
                     gate=result.gate,
@@ -942,10 +964,19 @@ def run_gates(
         # (and the in-memory results returned to the caller) are the
         # ship-gate; losing the JSON manifest only hurts later offline
         # audit, so log and continue rather than failing the loop.
+        #
+        # Iter-24 Finding 2: scrub the exception text before logging,
+        # for the same reason as the per-gate persistence path. The
+        # manifest path is short but a malicious gate could prepend
+        # any string the operator allowed into ``artifacts_dir``.
+        scrubbed_exc = _scrub(f"{type(exc).__name__}: {exc}")
         logger.warning(
             "checkup-gates: failed to persist manifest %s: %s",
             manifest,
-            exc,
+            scrubbed_exc,
+        )
+        logger.debug(
+            "checkup-gates: manifest persistence traceback",
             exc_info=True,
         )
     return results

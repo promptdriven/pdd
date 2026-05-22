@@ -802,6 +802,104 @@ class TestRunGates:
         assert "sk-abcdefghijklmnopqr" not in results[0].stderr_excerpt
         assert "sk-abcdefghijklmnopqr" not in results[0].stdout_excerpt
 
+    def test_manifest_and_to_dict_scrub_nested_gate_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-24 Finding 1: ``Gate.to_dict()`` MUST scrub every
+        string it serializes — name, every cmd arg, source, and
+        required_fix_hint. The dict flows into both the per-round
+        JSON manifest and the in-memory state.gate_runs row that
+        the review loop persists to final-state.json["gates"], so
+        an operator-supplied token in argv that the pre-fix code
+        leaked into both surfaces must now be redacted at the
+        serialization boundary.
+        """
+        from pdd.checkup_gates import Gate, GateResult, run_gates
+
+        secret = "ghp_" + ("C" * 40)
+        # Use ``echo`` so the gate succeeds and the manifest is
+        # actually written. The token rides in argv (and would
+        # otherwise be persisted verbatim).
+        gates = [
+            Gate(
+                name="leaky-argv",
+                cmd=["echo", f"--token={secret}"],
+                source=f"package.json:scripts.token={secret}",
+                required_fix_hint=f"Stop committing token={secret}",
+            )
+        ]
+        artifacts_dir = tmp_path / "artifacts"
+        results = run_gates(
+            tmp_path,
+            gates,
+            artifacts_dir=artifacts_dir,
+            round_number=1,
+            mode="review",
+        )
+        # The scrubbed dict (used for the JSON manifest and the
+        # review-loop state row) must be clean across ALL nested
+        # fields.
+        d = results[0].to_dict()
+        # ``cmd`` is now a list of scrubbed strings.
+        joined_cmd = " ".join(d["gate"]["cmd"])
+        assert secret not in joined_cmd, joined_cmd
+        assert secret not in d["gate"]["source"]
+        assert secret not in d["gate"]["required_fix_hint"]
+        # The on-disk JSON manifest must also be clean.
+        manifest = (
+            artifacts_dir / "round-1-review-gates.json"
+        ).read_text(encoding="utf-8")
+        assert secret not in manifest
+
+    def test_persistence_failure_scrubs_error_field(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-24 Finding 2: when per-gate artifact persistence
+        raises with a token in the exception text, the resulting
+        ``GateResult.error`` MUST be scrubbed before it lands in
+        the manifest / state.gate_runs row, and the WARNING log
+        line MUST also be scrubbed.
+        """
+        from pdd.checkup_gates import Gate, run_gates
+
+        secret = "ghp_" + ("D" * 40)
+        gates = [
+            Gate(
+                name="ok-then-disk-fail",
+                cmd=["echo", "hi"],
+                source="<test>",
+            )
+        ]
+        artifacts_dir = tmp_path / "artifacts"
+
+        original_write_text = type(artifacts_dir).write_text
+
+        def fail_write(self, *args, **kwargs):
+            # Per-gate write fails with an exception text that
+            # carries a secret.
+            if "round-1-review-gate-" in self.name:
+                raise OSError(f"disk full while writing {secret}")
+            return original_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", fail_write)
+
+        results = run_gates(
+            tmp_path,
+            gates,
+            artifacts_dir=artifacts_dir,
+            round_number=1,
+            mode="review",
+        )
+        assert results[0].error
+        # The error field landed in the manifest and in
+        # ReviewFinding.evidence; must be scrubbed.
+        assert secret not in (results[0].error or "")
+        # The manifest itself reads the (now scrubbed) error.
+        manifest_text = (
+            artifacts_dir / "round-1-review-gates.json"
+        ).read_text(encoding="utf-8")
+        assert secret not in manifest_text
+
     def test_runner_error_scrubs_secrets_in_synthetic_finding_evidence(
         self, tmp_path: Path
     ) -> None:
