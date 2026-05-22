@@ -1,7 +1,0 @@
-# Legacy Utility
-
-This demo prompt intentionally has no `<contract_rules>` section.
-`pdd coverage --contracts` should report no contract coverage data and exit cleanly for this file.
-
-Implement small formatting helpers for display-only strings.
-

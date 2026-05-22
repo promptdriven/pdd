@@ -352,6 +352,9 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
+    json_mode = "--json" in sys.argv
+    quiet = quiet or json_mode
+
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
 

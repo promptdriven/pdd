@@ -3,15 +3,15 @@
 % Used by: test_upload_handler_ambiguous_fixture
 
 <contract_rules>
-1. The function must reject duplicate uploads gracefully.
-2. Only authorized users may upload files.
-3. Return a valid response when the upload is successful.
-4. Active users are allowed up to 10 uploads per day.
+R2 - Duplicate upload rejection
+When ...
 </contract_rules>
 
 <requirements>
 - Accept multipart/form-data POST requests.
+- Only authorized users may upload files.
 - Return HTTP 201 on successful upload with {"id": "<uuid>"}.
+- Return a valid response for accepted uploads.
 - Reject duplicate uploads with HTTP 409.
 - Log all upload attempts for audit purposes.
 </requirements>

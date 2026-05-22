@@ -33,14 +33,8 @@ Default directories:
 - `--tests-dir` defaults to `tests/`
 - `TARGET` argument defaults to `prompts/`
 
-Runnable demo files live in `examples/coverage_contracts_demo/`:
-
-```bash
-pdd coverage --contracts \
-  --stories-dir examples/coverage_contracts_demo/user_stories \
-  --tests-dir examples/coverage_contracts_demo/tests \
-  examples/coverage_contracts_demo/prompts/refund_payment_python.prompt
-```
+Runnable fixtures live under `tests/fixtures/coverage_contracts/` and are used
+by `tests/commands/test_coverage.py`.
 
 ---
 

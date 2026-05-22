@@ -500,7 +500,7 @@ class TestPromptLintClarify:
             )
         ]
 
-        result = _ambiguity_invoke(runner, str(prompt), input_text="a\n")
+        result = _ambiguity_invoke(runner, "--apply", str(prompt), input_text="a\n")
         text = prompt.read_text(encoding="utf-8")
 
         assert result.exit_code == 0
@@ -522,7 +522,7 @@ class TestPromptLintClarify:
             )
         ]
 
-        result = _ambiguity_invoke(runner, str(prompt), input_text="p\n2\n")
+        result = _ambiguity_invoke(runner, "--apply", str(prompt), input_text="p\n2\n")
         text = prompt.read_text(encoding="utf-8")
 
         assert result.exit_code == 0
@@ -545,6 +545,7 @@ class TestPromptLintClarify:
 
         result = _ambiguity_invoke(
             runner,
+            "--apply",
             str(prompt),
             input_text="e\nduplicate upload: same tenant and idempotency key\n",
         )
@@ -572,7 +573,6 @@ class TestPromptLintClarify:
         result = _ambiguity_invoke(runner, str(prompt), input_text="s\n")
 
         assert result.exit_code == 0
-        assert "Wrote 0 vocabulary definition" in result.output
         assert prompt.read_text(encoding="utf-8") == original
 
     @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
@@ -580,6 +580,7 @@ class TestPromptLintClarify:
         self, mock_llm, runner, tmp_path
     ):
         prompt = self._prompt(tmp_path)
+        original = prompt.read_text(encoding="utf-8")
         mock_llm.return_value = [
             LintIssue(
                 level="warn",
@@ -595,9 +596,83 @@ class TestPromptLintClarify:
         result = _ambiguity_invoke(runner, "--non-interactive", str(prompt))
 
         assert result.exit_code == 0
+        assert prompt.read_text(encoding="utf-8") == original
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_non_interactive_apply_writes_concrete_suggestions(
+        self, mock_llm, runner, tmp_path
+    ):
+        prompt = self._prompt(tmp_path)
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same tenant and SHA-256 hash",
+                interpretations=[],
+            )
+        ]
+
+        result = _ambiguity_invoke(
+            runner,
+            "--non-interactive",
+            "--apply",
+            str(prompt),
+        )
+
+        assert result.exit_code == 0
         assert "duplicate upload: same tenant and SHA-256 hash" in prompt.read_text(
             encoding="utf-8"
         )
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_ambiguity_without_apply_does_not_modify_file(
+        self, mock_llm, runner, tmp_path
+    ):
+        prompt = self._prompt(tmp_path)
+        original = prompt.read_text(encoding="utf-8")
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same tenant and SHA-256 hash",
+                interpretations=[],
+            )
+        ]
+
+        result = _ambiguity_invoke(runner, str(prompt), input_text="a\n")
+
+        assert result.exit_code == 0
+        assert prompt.read_text(encoding="utf-8") == original
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_ambiguity_json_without_apply_does_not_modify_file(
+        self, mock_llm, runner, tmp_path
+    ):
+        prompt = self._prompt(tmp_path)
+        original = prompt.read_text(encoding="utf-8")
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same tenant and SHA-256 hash",
+                interpretations=[],
+            )
+        ]
+
+        result = _ambiguity_json_invoke(runner, str(prompt))
+
+        assert result.exit_code == 0
+        json.loads(result.output)
+        assert prompt.read_text(encoding="utf-8") == original
 
     @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_clarify_no_llm_issues_does_not_modify_file(self, mock_llm, runner, tmp_path):

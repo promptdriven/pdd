@@ -22,8 +22,6 @@ Keep this document synchronized with those `.prompt` files when changing
 the authoring workflow, expected JSON fields, or clarify/coaching behavior.
 
 `examples/prompt_lint_demo/` is the runnable demo for this workflow.
-`examples/prompt_lint_e2e_demo/` walks through a before/after comparison (lint,
-coverage, and vocabulary clarify) without an LLM.
 
 ## One Command, Layered Depth
 
@@ -613,17 +611,3 @@ Useful test command:
 ```bash
 pytest tests/test_prompt_lint.py tests/commands/test_prompt.py tests/commands/test_prompt_comprehensive.py -q
 ```
-
-## End-to-end before/after demo
-
-`examples/prompt_lint_e2e_demo/demo.sh` runs a **formal verification** loop:
-
-1. Before: lint, `pdd generate`, `pdd test` (no Z3), `find_verification_errors_LLM`
-2. `pdd prompt lint --ambiguity --json` — LLM ambiguity + coaching
-3. Clarify: vocabulary, `R1`/`R2` rules, `<formalization>` appendix
-4. After: generate, `pdd test` with Z3 proofs, `find_verification_errors` again
-
-It prints ambiguity verification, Z3/formalization metrics, and diffs.
-`reports/ambiguity.json` captures the LLM payload. Offline by default (mocked LLM);
-pass `--live` for real providers. Tests: `tests/test_prompt_lint_ambiguity_e2e.py`.
-See `examples/prompt_lint_e2e_demo/README.md`.

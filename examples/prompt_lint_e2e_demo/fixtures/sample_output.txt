@@ -1,3 +1,0 @@
-{'status': 'accepted', 'reason': None}
-{'status': 'rejected', 'reason': 'non_positive'}
-{'status': 'rejected', 'reason': 'over_refund'}

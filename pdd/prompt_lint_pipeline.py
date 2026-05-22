@@ -437,22 +437,36 @@ def run_prompt_lint_pipeline(
             if issues:
                 guidance = _coach_guidance(path, issues, options)
                 pipeline.guidances.append(guidance)
-                if not options.non_interactive and clarify_prompts is None:
+                if (
+                    not options.apply_fixes
+                    and not options.non_interactive
+                    and clarify_prompts is None
+                ):
+                    accepted = []
+                elif not options.non_interactive and clarify_prompts is None:
                     raise ValueError("LLM clarify requires clarify_prompts when interactive")
-                choice_fn, text_fn, int_fn = clarify_prompts or (
-                    _noop_choice, _noop_text, _noop_int,
-                )
-                accepted = collect_clarify_definitions(
-                    issues,
-                    non_interactive=options.non_interactive,
-                    prompt_choice=choice_fn,
-                    prompt_text=text_fn,
-                    prompt_int=int_fn,
-                    before_issue=before_clarify_issue,
-                )
-                vocab_written = append_vocabulary_definitions(path, accepted)
-                pipeline.clarify_written.append((path, vocab_written))
-                _apply_guidance_blocks(path, guidance, non_interactive=options.non_interactive)
+                else:
+                    choice_fn, text_fn, int_fn = clarify_prompts or (
+                        _noop_choice, _noop_text, _noop_int,
+                    )
+                    accepted = collect_clarify_definitions(
+                        issues,
+                        non_interactive=options.non_interactive,
+                        prompt_choice=choice_fn,
+                        prompt_text=text_fn,
+                        prompt_int=int_fn,
+                        before_issue=before_clarify_issue,
+                    )
+                if accepted:
+                    guidance["accepted_vocabulary_suggestions"] = accepted
+                if options.apply_fixes:
+                    vocab_written = append_vocabulary_definitions(path, accepted)
+                    pipeline.clarify_written.append((path, vocab_written))
+                    _apply_guidance_blocks(
+                        path,
+                        guidance,
+                        non_interactive=options.non_interactive,
+                    )
             else:
                 pipeline.clarify_no_issues.append(path)
                 guidance = _coach_guidance(path, [], options)
@@ -461,7 +475,7 @@ def run_prompt_lint_pipeline(
                 bundle, rejected = _run_formalize_stage(path, guidance, options)
                 if guidance.get("path"):
                     guidance.setdefault("formalization_rejected", rejected)
-                if bundle is not None and (options.apply_fixes or options.non_interactive):
+                if bundle is not None and options.apply_fixes:
                     counts = apply_formalize_bundle(path, bundle)
                     pipeline.formalize_written.append((path, counts))
                 elif bundle is not None and rejected:
