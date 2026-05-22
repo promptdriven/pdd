@@ -10918,6 +10918,65 @@ class TestReviewLoopDeterministicGates:
         assert state.gate_runs, "refresh error must record a gate_runs row"
         assert state.gate_runs[-1]["phase"] == "base-ref-refresh"
 
+    def test_unexpected_refresh_exception_sets_base_ref_fetch_error(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-21 Finding 3: when ``_refresh_pr_base_ref`` raises an
+        UNEXPECTED exception (anything outside the documented
+        CalledProcessError/TimeoutExpired branches it handles
+        internally), the review loop's except wrapper MUST still set
+        ``pr_metadata['base_ref_fetch_error']`` so the iter-19
+        fail-closed path engages. Previously the loop only logged at
+        debug level and the gate layer silently fell back to
+        ``origin/main`` or the worktree-only check.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "release-1.4",
+                "head_sha": "a" * 40,
+            },
+        )
+
+        secret = "ghp_SECRETSECRETSECRETSECRETSECRETabcdef"
+
+        def boom(*a, **k):
+            # Any non-subprocess exception escapes the helper.
+            raise RuntimeError(f"unexpected with token {secret}")
+
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fail-closed path MUST engage: a gate:base-ref blocker
+        # finding appears in the report and the loop did NOT mark the
+        # reviewer clean.
+        assert "gate:base-ref" in report
+        assert "reviewer-status: codex=clean" not in report
+        # The leaked token MUST NOT appear in the rendered report —
+        # the scrub before storing on base_ref_fetch_error must
+        # neutralize it.
+        assert secret not in report
+
     def test_review_loop_calls_refresh_pr_base_ref_when_gates_enabled(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

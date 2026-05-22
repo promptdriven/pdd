@@ -863,9 +863,10 @@ def run_checkup_review_loop(
     # fetched ref lives in a dedicated namespace and does NOT mutate
     # the user's ``refs/remotes/origin/*`` tracking refs. On success
     # the helper populates ``pr_metadata['base_local_ref']`` with the
-    # resolved ref; on failure it populates
-    # ``pr_metadata['base_ref_fetch_error']`` and the gate layer falls
-    # back to its standard candidate search (``origin/<base>`` etc.).
+    # resolved ref; on a documented fetch failure
+    # (``CalledProcessError`` or ``TimeoutExpired``) it populates
+    # ``pr_metadata['base_ref_fetch_error']`` and the loop's
+    # ``_enforce_gates_before_clean`` engages its fail-closed path.
     if config.enable_gates and pr_metadata and pr_metadata.get("base_ref"):
         try:
             _refresh_pr_base_ref(
@@ -877,7 +878,22 @@ def run_checkup_review_loop(
                 quiet,
             )
         except Exception as exc:  # noqa: BLE001 - defensive
+            # An UNEXPECTED exception from the helper (anything other
+            # than the documented CalledProcessError/TimeoutExpired
+            # branches it handles itself) MUST still set
+            # ``base_ref_fetch_error`` so the gate layer's fail-closed
+            # path engages — otherwise the loop would silently fall
+            # back to ``origin/main`` or the worktree-only
+            # ``git diff --check``, which is the exact gap iter-19
+            # closed in the documented-failure path. Scrub before
+            # storing so CI/cloud log capture cannot harvest tokens
+            # from the unhandled exception text.
             logger.debug("gates: PR base-ref refresh failed: %s", exc)
+            scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+            pr_metadata["base_ref_fetch_error"] = (
+                f"unexpected exception in _refresh_pr_base_ref: {scrubbed_exc}"
+            )
+            pr_metadata.pop("base_local_ref", None)
     # Capture the SHA the reviewer will actually see in the worktree.
     # This is the comparison target for the R-V5 re-fetch when a
     # reviewer path returns ``clean`` without ever invoking a fixer
