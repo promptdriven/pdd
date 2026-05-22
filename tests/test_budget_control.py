@@ -1386,6 +1386,162 @@ class TestPerJobCsvIsolation:
         assert job.id in derived
 
 
+class TestRelativeExplicitCostPathResolved:
+    """Sixth pass Finding 1: an explicit relative options.output_cost must
+    be resolved against project_root so the watcher (which runs in the
+    server cwd) and the subprocess (which runs in project_root) read/
+    write the SAME file. Otherwise spend stays $0.
+    """
+
+    @pytest.mark.asyncio
+    async def test_relative_path_absolutized_against_project_root(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+        # Server cwd is some unrelated directory.
+        server_cwd = tmp_path / "server-cwd"
+        server_cwd.mkdir()
+        monkeypatch.chdir(server_cwd)
+
+        # Project root is elsewhere.
+        project = tmp_path / "project"
+        project.mkdir()
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=project)
+        job = await mgr.submit(
+            "bug", args={},
+            # Relative path — easy mistake for a caller to make.
+            options={"output_cost": "custom/cost.csv"},
+            budget_cap=30.0,
+        )
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        resolved = Path(job.options["output_cost"])
+        assert resolved.is_absolute(), (
+            "Finding 1 (6th pass) regression: relative output_cost was "
+            "not absolutized; watcher and subprocess will read/write "
+            "different files."
+        )
+        # Must be under project_root, not server_cwd.
+        assert project in resolved.parents
+        assert server_cwd not in resolved.parents
+
+
+class TestJobIdScopedWatcherFilter:
+    """Sixth pass Finding 2: two same-command jobs explicitly sharing one
+    options.output_cost path must NOT count each other's spend. The
+    watcher filters rows by job_id (a new column track_cost writes
+    from the PDD_JOB_ID env var).
+    """
+
+    def test_watcher_with_job_id_skips_other_jobs_rows(self, tmp_path):
+        """End-to-end Finding 2: write two rows with different job_ids
+        to one CSV; the watcher for job_a's id must only sum job_a's
+        cost, ignoring job_b's row.
+        """
+        from pdd.cost_budget_watcher import watch
+
+        csv_path = tmp_path / "shared.csv"
+        ts = "2026-05-22T18:30:00.000+00:00"
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            # job_a spent $4
+            w.writerow([ts, "gpt-4", "bug", "4.0", "", "", "gpt-4", "job-a"])
+            # job_b spent $99 — must NOT count toward job_a's watcher.
+            w.writerow([ts, "gpt-4", "bug", "99.0", "", "", "gpt-4", "job-b"])
+
+        watcher_a = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"bug"}, job_id="job-a", poll_interval=0.1,
+        )
+        try:
+            time.sleep(0.3)
+            assert watcher_a.spent() == pytest.approx(4.0), (
+                "Finding 2 (6th pass) regression: watcher counted "
+                "another job's spend; sum should be $4 (job-a only)."
+            )
+        finally:
+            watcher_a.stop()
+
+    def test_legacy_rows_without_job_id_skipped_when_filter_active(self, tmp_path):
+        """Per the contract, when a job_id filter is set, rows missing
+        the column (legacy or third-party-written) are skipped rather
+        than counted. This is the conservative choice — never count
+        rows we cannot attribute when attribution is required.
+        """
+        from pdd.cost_budget_watcher import watch
+
+        csv_path = tmp_path / "shared.csv"
+        ts = "2026-05-22T18:30:00.000+00:00"
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            # Legacy header without job_id.
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files", "attempted_models"])
+            w.writerow([ts, "gpt-4", "bug", "50.0", "", "", "gpt-4"])
+
+        watcher = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"bug"}, job_id="job-a", poll_interval=0.1,
+        )
+        try:
+            time.sleep(0.3)
+            assert watcher.spent() == 0.0
+        finally:
+            watcher.stop()
+
+
+class TestLlmInvokePublishesPartialCost:
+    """Sixth pass Finding 3: llm_invoke must push cost/model onto ctx.obj
+    so track_cost's exception path has real data. The earlier fix added
+    the consumer side; this verifies the producer side actually
+    publishes the keys.
+    """
+
+    def test_publish_call_outcome_accumulates_and_overwrites(self):
+        # Drive the module-level helper directly with a synthetic
+        # click context. This avoids the full llm_invoke pipeline
+        # while still exercising the contract surface.
+        import click
+
+        from pdd.llm_invoke import _publish_call_outcome_to_ctx
+
+        runner = click.testing.CliRunner()
+
+        captured: dict = {}
+
+        @click.command()
+        @click.pass_context
+        def probe(ctx):
+            _publish_call_outcome_to_ctx(1.25, "gpt-4")
+            _publish_call_outcome_to_ctx(2.5, "gpt-4o")
+            _publish_call_outcome_to_ctx(0.0, None)  # silent no-op on cost=0
+            captured.update(ctx.obj)
+
+        runner.invoke(probe, [], obj={}, standalone_mode=False)
+        assert captured["partial_cost"] == pytest.approx(3.75)
+        assert captured["last_model"] == "gpt-4o"
+
+
 class TestTrackCostWritesOnException:
     """Finding 3 (fifth review pass): track_cost must write a row even
     when the wrapped command raises, otherwise failed-but-costly

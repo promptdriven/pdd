@@ -1796,6 +1796,44 @@ def _completion_with_attribution(
     return response
 
 
+def _publish_call_outcome_to_ctx(cost: Any, model: Any) -> None:
+    """Mirror per-call cost/model onto the active Click ctx.obj.
+
+    Accumulates ``partial_cost`` across LLM calls within one tracked
+    command and overwrites ``last_model`` with the most recent value, so
+    ``track_cost`` has real data to write when the wrapped command
+    raises after a successful LLM call. Without this, the exception-path
+    row records ``cost=0`` and the watcher misses spend.
+
+    Best-effort: silently no-ops when no Click context is active, when
+    ``ctx.obj`` is not a dict, or when ``cost`` is not a finite number.
+    """
+    try:
+        import click as _click  # llm_invoke must still work without click
+        click_ctx = _click.get_current_context(silent=True)
+    except Exception:
+        return
+    if click_ctx is None:
+        return
+    try:
+        if click_ctx.obj is None:
+            click_ctx.obj = {}
+        if not isinstance(click_ctx.obj, dict):
+            return
+        try:
+            cost_f = float(cost)
+        except (TypeError, ValueError):
+            cost_f = 0.0
+        if cost_f != cost_f or cost_f in (float("inf"), float("-inf")):
+            cost_f = 0.0
+        prior = float(click_ctx.obj.get("partial_cost") or 0.0)
+        click_ctx.obj["partial_cost"] = prior + max(cost_f, 0.0)
+        if model:
+            click_ctx.obj["last_model"] = str(model)
+    except Exception:
+        pass
+
+
 def _emit_llm_attribution(context: Optional[Dict[str, Any]], event: str, **fields: Any) -> None:
     """Emit one safe structured attribution record."""
     if not context or not _llm_attribution_enabled():
@@ -3081,6 +3119,10 @@ def llm_invoke(
                 _publish_attempted_models()
             if isinstance(cloud_result, dict):
                 cloud_result.setdefault("attempted_models", list(attempted_models))
+                _publish_call_outcome_to_ctx(
+                    cloud_result.get("cost", 0.0),
+                    cloud_result.get("model_name"),
+                )
             return cloud_result
         except CloudFallbackError as e:
             # Notify user and fall back to local execution
@@ -3784,6 +3826,7 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
+                        _publish_call_outcome_to_ctx(total_cost, model_name_litellm)
                         return {
                             'result': final_result,
                             'cost': total_cost,
@@ -4450,6 +4493,7 @@ def llm_invoke(
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
                 )
+                _publish_call_outcome_to_ctx(total_cost, model_name_litellm)
                 return {
                     'result': final_result,
                     'cost': total_cost,

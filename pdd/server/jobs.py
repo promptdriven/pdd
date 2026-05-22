@@ -622,6 +622,22 @@ class JobManager:
         explicit = (job.options or {}).get("output_cost") if job.options else None
         if explicit:
             path = Path(explicit)
+            # Resolve relative paths against project_root so the watcher
+            # (running in the server's cwd, which may differ from the
+            # subprocess cwd) sees the same file the subprocess writes
+            # to. Otherwise a caller passing "custom/cost.csv" gets two
+            # different files — server-cwd/custom/cost.csv for the
+            # watcher and project_root/custom/cost.csv for the
+            # subprocess — and spend stays $0.
+            if not path.is_absolute():
+                base = self.project_root or Path.cwd()
+                path = (base / path).resolve()
+                # Mutate job.options so the subprocess --output-cost
+                # arg also uses the absolute form; no ambiguity for
+                # any later reader.
+                if job.options is None:
+                    job.options = {}
+                job.options["output_cost"] = str(path)
             # Ensure the parent directory exists so track_cost can write
             # the first row; the subprocess catches the OSError and
             # swallows it, which would leave the watcher silently
@@ -708,6 +724,7 @@ class JobManager:
                 commands=self._commands_filter_for(job.command),
                 started_at=job.started_at,
                 poll_interval=2.0,
+                job_id=job.id,
             )
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Failed to start budget watcher: {exc}[/red]")
@@ -981,6 +998,12 @@ class JobManager:
             # Remove inherited shared path so subprocess can't write to a
             # foreign file the JobManager's watcher will never read.
             del env['PDD_OUTPUT_COST_PATH']
+
+        # Per-job attribution column. track_cost writes the value of
+        # PDD_JOB_ID into the CSV's new `job_id` column; the watcher
+        # filters rows by job_id so two jobs sharing an explicit
+        # output_cost path do not count each other's spend.
+        env['PDD_JOB_ID'] = job.id
 
         stdout_lines = []
         stderr_lines = []

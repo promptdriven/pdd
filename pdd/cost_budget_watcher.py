@@ -109,6 +109,7 @@ class Watcher:
         commands: Optional[Iterable[str]] = None,
         started_at: Optional[datetime] = None,
         poll_interval: float = 2.0,
+        job_id: Optional[str] = None,
     ) -> None:
         self._csv_path = pathlib.Path(csv_path)
         self._on_exceeded = on_exceeded
@@ -117,6 +118,12 @@ class Watcher:
         )
         self._started_at = _normalize_started_at(started_at)
         self._poll_interval = max(0.1, float(poll_interval))
+        # When set, only count rows whose `job_id` column matches. Rows
+        # written by older track_cost (no `job_id` column) are skipped
+        # rather than counted, so concurrent same-command jobs sharing
+        # a CSV cannot count each other's spend. Pass job_id=None to
+        # preserve the legacy command+timestamp filter behaviour.
+        self._job_id = job_id
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._state = _State(cap=cap)
@@ -164,6 +171,13 @@ class Watcher:
         if self._started_at is not None:
             ts = _parse_timestamp(row.get("timestamp"))
             if ts is None or ts < self._started_at:
+                return False
+        if self._job_id is not None:
+            # Per-job attribution: only count rows that explicitly carry
+            # this job_id. Legacy rows (no `job_id` column → empty string)
+            # are skipped so two same-command jobs sharing one CSV cannot
+            # contaminate each other's spend.
+            if row.get("job_id") != self._job_id:
                 return False
         return True
 
@@ -283,6 +297,7 @@ def watch(
     commands: Optional[Iterable[str]] = None,
     started_at: Optional[datetime] = None,
     poll_interval: float = 2.0,
+    job_id: Optional[str] = None,
 ) -> Watcher:
     """Start a daemon watcher polling ``csv_path`` and return its handle.
 
@@ -312,4 +327,5 @@ def watch(
         commands=commands,
         started_at=started_at,
         poll_interval=poll_interval,
+        job_id=job_id,
     )

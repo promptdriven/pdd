@@ -125,6 +125,13 @@ def track_cost(func):
                     # column width.
                     timestamp = start_time.isoformat(timespec='milliseconds')
 
+                    # Per-job attribution column (PDD_JOB_ID set by the
+                    # GitHub App's JobManager around each subprocess).
+                    # Empty when running outside the server — older
+                    # tooling that does not set the env reads/writes
+                    # CSVs unchanged.
+                    job_id = os.getenv('PDD_JOB_ID', '') or ''
+
                     row = {
                         'timestamp': timestamp,
                         'model': model_name,
@@ -133,21 +140,25 @@ def track_cost(func):
                         'input_files': ';'.join(input_files),
                         'output_files': ';'.join(output_files),
                         'attempted_models': attempted_models,
+                        'job_id': job_id,
                     }
 
                     file_exists = os.path.isfile(output_cost_path)
                     file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
 
                     legacy_fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
-                    new_fieldnames = legacy_fieldnames + ['attempted_models']
+                    mid_fieldnames = legacy_fieldnames + ['attempted_models']
+                    new_fieldnames = mid_fieldnames + ['job_id']
 
                     fieldnames = new_fieldnames
                     if file_has_content:
                         with open(output_cost_path, 'r', encoding='utf-8') as f:
                             first_line = f.readline().strip()
                             if 'attempted_models' not in first_line:
+                                # Oldest layout — no attempted_models, no job_id.
                                 fieldnames = legacy_fieldnames
                                 del row['attempted_models']
+                                del row['job_id']
                                 abs_path = os.path.abspath(output_cost_path)
                                 if abs_path not in _legacy_csv_warned:
                                     _legacy_csv_warned.add(abs_path)
@@ -159,6 +170,12 @@ def track_cost(func):
                                         "rename the file to start fresh with the "
                                         "attempted_models column.[/yellow]"
                                     )
+                            elif 'job_id' not in first_line:
+                                # Mid-era layout — has attempted_models but
+                                # no job_id. Write without job_id so the
+                                # row continues to fit the existing header.
+                                fieldnames = mid_fieldnames
+                                del row['job_id']
 
                     with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
