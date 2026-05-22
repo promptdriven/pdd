@@ -101,9 +101,16 @@
 
   R7 - Unauthorised reply.
   `render_unauthorized(commenter_login)` MUST produce a one-line message
-  explaining that only the issue author and repo collaborators may set
-  budgets, and refer the user to `/pdd settings` for a read-only view.
-  This is also safe to omit; the App may suppress it to avoid noise.
+  explaining that only the issue author and repo collaborators may CHANGE
+  budgets or stop the run, and refer the user to `/pdd settings` for a
+  read-only view (which is open to everyone — see
+  `slash_command_parser_python.prompt` R5 for the matching auth gate).
+  The renderer is only invoked for budget-mutating verbs
+  (`budget_set` / `budget_node_set` / `budget_max_set` / `stop`); the
+  webhook handler MUST NOT call it for `/pdd settings`. This renderer is
+  also safe to omit; the App may suppress it to avoid noise. Wording
+  MUST mention `/pdd settings` by name so the redirect promise is
+  visible in the rendered reply, not just in the README.
 
   R8 - Budget-exceeded reply.
   `render_budget_exceeded(settings)` MUST render a final status comment

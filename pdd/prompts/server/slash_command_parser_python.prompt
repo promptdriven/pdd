@@ -88,15 +88,34 @@
   Callers pass `comment.user_type`; when it is `"Bot"`, the parser MUST
   return `kind="ignored"` regardless of body content.
 
-  R5 - Authorisation is a separate gate.
+  R5 - Authorisation gates only mutating verbs.
   `parse_comment` does NOT enforce authorisation and does NOT emit a
-  `kind="unauthorized"` result. The webhook handler calls
-  `is_authorized(...)` first; if unauthorised, the handler posts a single
-  rejection reply rendered by `budget_comments.render_unauthorized(...)`
-  and does not call `parse_comment`. If the handler does call
-  `parse_comment` (authorised case), the result kinds are limited to
+  `kind="unauthorized"` result. Authorisation is the webhook handler's
+  responsibility and MUST be applied AFTER parsing, scoped to the parsed
+  `kind`:
+    - **Mutating verbs** (`budget_set`, `budget_node_set`,
+      `budget_max_set`, `stop`): the webhook handler MUST call
+      `is_authorized(...)` and, when it returns `False`, post a single
+      rejection reply rendered by
+      `budget_comments.render_unauthorized(commenter_login)` instead of
+      applying the change. The rejection reply tells the user that the
+      read-only `/pdd settings` verb remains available to them.
+    - **Read-only verbs** (`settings`): the webhook handler MUST NOT gate
+      these by `is_authorized(...)`. Anyone whose comment is parsed
+      (i.e. not filtered by R3 fenced block / R4 bot author / R8 dedupe)
+      can request `/pdd settings` and receive the current snapshot.
+      This matches the README's documented behaviour ("other commenters
+      can use `/pdd settings` for a read-only view") and the
+      `render_unauthorized` reply's promise.
+    - **Non-actionable kinds** (`invalid`, `ignored`): the webhook
+      handler renders the parser's reply directly without an
+      authorisation check (since `invalid` is purely a usage hint and
+      `ignored` produces no reply).
+  Parsing-after-auth is forbidden because it would either drop `/pdd
+  settings` from non-collaborators (violating the README) or duplicate
+  parsing logic in the auth gate. The result kinds remain limited to
   `budget_set`, `budget_node_set`, `budget_max_set`, `settings`, `stop`,
-  `invalid`, and `ignored`.
+  `invalid`, and `ignored`; `unauthorized` is never a parser output.
 
   R6 - Amount semantics.
   - `/pdd budget <N>` on an `"issue"` active_command -> kind
@@ -134,8 +153,15 @@
   - **Returns**: `SlashCommandResult` from `pdd.server.models`. When the
     parsed kind is one of `budget_set` / `budget_node_set` /
     `budget_max_set`, the result carries the validated `amount` as a float
-    on a `metadata` dict (e.g. `{"amount": 30.0}`); the rendered `message`
-    is left empty (the caller renders via `budget_comments.py`).
+    on the model's `metadata` dict — exactly `{"amount": <float>}`. The
+    `metadata` field is defined on `SlashCommandResult` in
+    `models_python.prompt` with `default_factory=dict`, so the parser
+    always sets the field to a concrete dict (never `None`) and the
+    Pydantic model never drops the `amount` because of a missing field.
+    The rendered `message` is left empty for these kinds (the caller
+    renders via `budget_comments.py`). Read-only kinds (`settings`),
+    terminal kinds (`stop`), and signalling kinds (`invalid`, `ignored`)
+    leave `metadata` as the empty dict.
 
 % Capabilities
   - MAY parse strings and validate amounts.

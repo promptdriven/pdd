@@ -137,7 +137,29 @@
   - Import `cost_budget_watcher.watch` for the polling watcher; pass the
     project's cost-CSV path (resolved via `track_cost`'s configured output
     path, falling back to `PDD_OUTPUT_COST_PATH`), the effective cap, an
-    `on_exceeded(spent)` callback, and `command` (for CSV row filtering).
+    `on_exceeded(spent)` callback, the job's `started_at` (timezone-aware
+    UTC), and a `commands` set used to filter cost-CSV rows. The set MUST
+    be chosen so it actually matches the rows the running job will write:
+    - For `pdd-issue` runs (`Job.command == "issue"`): pass the nested
+      command set the executor spawns — at minimum
+      `{"change", "sync", "bug", "fix", "generate", "test", "example",
+      "update", "verify", "split", "detect", "auto-deps", "conflicts",
+      "preprocess", "crash"}`. `pdd-issue` itself does NOT write a row
+      with `command="issue"`; it spawns nested subprocesses each of which
+      writes its own row. Filtering on `{"issue"}` here would sum to
+      `$0` and the cap would never fire (this is the
+      `command="issue"` attribution bug — do not reintroduce it).
+    - For single-command jobs (e.g. `bug`, `change`, `fix`, `sync`): pass
+      `{Job.command}` so the watcher only counts that job's row.
+    - When the executor does not know the full nested set at submit
+      time, pass `None` and rely on the per-job cost-CSV path (one CSV
+      per job/issue) plus the `started_at` filter for attribution.
+  - The watcher enforces caps at SUBPROCESS BOUNDARIES, not mid-call (see
+    `cost_budget_watcher_python.prompt`'s "Enforcement boundary"). For
+    `pdd-issue`, the practical effect is "stop expanding the solving tree
+    once cumulative spend across nested subprocesses crosses the cap"; for
+    single-command jobs, the cap can be overshot by up to one
+    subprocess's spend before `on_exceeded` fires.
   - Robust fallback for `rich.console`.
   - Export: Job, JobManager, JobCallbacks.
 

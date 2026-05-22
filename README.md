@@ -889,15 +889,16 @@ You can change this run by commenting:
 **Parser rules:**
 
 - The App only matches `/pdd ...` on the first non-fenced, non-blank line of an `issue_comment.created` event; fenced code blocks (so the startup comment's own examples cannot re-trigger commands) and bot-authored comments are skipped, and repeated webhook deliveries are de-duplicated by comment ID.
-- Only comments authored by the issue author or by users with `OWNER` / `MEMBER` / `COLLABORATOR` association on the repo can change settings; other commenters can use `/pdd settings` for a read-only view.
+- Authorisation is scoped to the verb, not to the `/pdd` prefix: budget-mutating verbs (`/pdd budget`, `/pdd budget node`, `/pdd budget max`, `/pdd stop`) require the commenter to be the issue author or a user with `OWNER` / `MEMBER` / `COLLABORATOR` association on the repo. The read-only verb `/pdd settings` is open to anyone whose comment is parsed (i.e. not filtered as fenced, bot, or duplicate). This matches the unauthorized-reply wording which redirects rejected commenters to `/pdd settings`.
 - Invalid `/pdd` commands get a single helpful reply and do not change settings.
 
 **Enforcement:**
 
-- Budget enforcement watches the same cost CSV that `track_cost` writes for every PDD command (the `--output-cost` / `PDD_OUTPUT_COST_PATH` file).
-- The watcher polls between LLM/tool calls, not mid-call — the in-flight call is allowed to finish so spend never goes backwards and state is never corrupted by a mid-call kill.
+- Budget enforcement watches the same cost CSV that `track_cost` writes for every PDD command (the `--output-cost` / `PDD_OUTPUT_COST_PATH` file). `track_cost` only appends a row when a PDD subprocess exits — never mid-call — so the watcher's enforcement boundary is the **subprocess boundary**, not the LLM call.
+- For `pdd-issue` (which spawns many nested PDD subprocesses: `change`, `sync`, `bug`, `fix`, `generate`, `test`, ...), the watcher polls after each nested subprocess writes its cost row and stops the run before the next subprocess is spawned once cumulative spend crosses the active effective cap. Filtering uses the SET of nested command names — never `{"issue"}`, because `pdd-issue` never writes a row with that command itself.
+- For single-subprocess commands (`pdd bug`, `pdd change`, `pdd fix`, `pdd sync`), the cost row is only written when the command exits, so the cap effectively applies "after this subprocess finishes, stop spawning more" — a single long command can overshoot the cap by exactly its own final spend before `budget_exceeded` fires.
 - When cumulative spend on the run reaches the active effective cap, the executor terminates the run via the same path `/pdd stop` uses and the App posts a final `budget_exceeded` comment.
-- `/pdd budget`, `/pdd budget node`, and `/pdd budget max` comments posted *during* an active run apply immediately to the in-flight job — they are not deferred to the next run.
+- `/pdd budget`, `/pdd budget node`, and `/pdd budget max` comments posted *during* an active run apply immediately to the in-flight job — they update the watcher's cap and are evaluated at the next subprocess boundary.
 
 ## Commands
 

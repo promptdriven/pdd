@@ -11,7 +11,7 @@
       {"name": "BudgetSettings", "signature": "(command, node_budget, max_total_cap, budget_cap, effective_cap, spent_so_far, status, node_count)", "returns": "BudgetSettings"},
       {"name": "BudgetUpdateRequest", "signature": "(budget_cap?, node_budget?, max_total_cap?)", "returns": "BudgetUpdateRequest"},
       {"name": "BudgetExceededMessage", "signature": "(job_id, command, spent, effective_cap, node_budget?, max_total_cap?, node_count?)", "returns": "BudgetExceededMessage"},
-      {"name": "SlashCommandResult", "signature": "(kind, message, settings?, original_comment_id?)", "returns": "SlashCommandResult"}
+      {"name": "SlashCommandResult", "signature": "(kind, message, settings?, original_comment_id?, metadata?)", "returns": "SlashCommandResult"}
     ]
   }
 }
@@ -80,11 +80,22 @@
        "budget_max_set", "settings", "stop", "invalid", "ignored"]),
        message (str, the rendered reply body), settings
        (Optional[BudgetSettings]), original_comment_id (Optional[int],
-       used for dedupe). Note: the `"unauthorized"` reply is rendered by
+       used for dedupe), metadata (Dict[str, Any], default empty dict;
+       parser stores the validated amount here for budget-mutating kinds,
+       e.g. `{"amount": 30.0}` for `kind in {"budget_set",
+       "budget_node_set", "budget_max_set"}`; empty for other kinds).
+       The `metadata` field MUST be a concrete `Dict[str, Any]` on the
+       Pydantic model (with `default_factory=dict`) so the parser can
+       attach the amount without falling outside the schema and so
+       callers can rely on `result.metadata.get("amount")` being safe
+       without `None`-checks on the dict itself. Note: the
+       `"unauthorized"` reply is rendered by
        `budget_comments.render_unauthorized(...)` directly by the webhook
-       handler after `is_authorized(...)` returns False; it is NOT a
-       parser-emitted kind, so it is intentionally absent from this
-       Literal.
+       handler after `is_authorized(...)` returns False for a
+       budget-mutating verb; it is NOT a parser-emitted kind, so it is
+       intentionally absent from this Literal. `/pdd settings` is
+       read-only and is NOT gated by authorisation (see
+       `slash_command_parser_python.prompt` R5).
 
   4. **Server Models**:
      - `ServerStatus`: version, project_root, uptime_seconds, active_jobs, connected_clients

@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "watch", "signature": "(csv_path: pathlib.Path, cap: Optional[float], on_exceeded: Callable[[float], None], *, command: Optional[str] = None, started_at: Optional[datetime] = None, poll_interval: float = 2.0) -> Watcher", "returns": "Watcher"},
+      {"name": "watch", "signature": "(csv_path: pathlib.Path, cap: Optional[float], on_exceeded: Callable[[float], None], *, commands: Optional[Iterable[str]] = None, started_at: Optional[datetime] = None, poll_interval: float = 2.0) -> Watcher", "returns": "Watcher"},
       {"name": "Watcher.spent", "signature": "() -> float", "returns": "float"},
       {"name": "Watcher.update_cap", "signature": "(new_cap: Optional[float]) -> None", "returns": "None"},
       {"name": "Watcher.stop", "signature": "() -> None", "returns": "None"}
@@ -30,8 +30,16 @@
 
 % Responsibility
   - Open and tail an append-only CSV using `csv.DictReader`.
-  - Sum the `cost` column for rows where `command` matches the filter (if
-    provided) and `timestamp >= started_at` (if provided).
+  - Sum the `cost` column for rows where `command` is a member of the
+    `commands` filter set (if provided) and `timestamp >= started_at` (if
+    provided). The filter is a SET of accepted command names rather than a
+    single string so the watcher can attribute spend correctly for
+    `pdd-issue`, which never writes rows with `command="issue"` itself but
+    instead spawns nested PDD subprocesses (`change`, `sync`, `bug`,
+    `fix`, `generate`, `test`, ...) that each write their own row. The
+    caller is responsible for constructing the correct accepted set
+    (`{job.command}` for single-command runs; the broader nested-command
+    set or `None` for `pdd-issue`).
   - Compare cumulative spend to the active cap on every poll.
   - Fire `on_exceeded(spent)` exactly once, then stay quiet until `.stop()`.
   - Support mid-flight cap updates via `.update_cap(new_cap)` so the GitHub
@@ -47,10 +55,22 @@
 % Vocabulary
   - **Cap**: a positive float USD value, or `None` meaning "no cap" (the
     watcher becomes a no-op poller that still reports `.spent()`).
-  - **Spent**: cumulative `cost` for rows matching `command` (if filter set)
-    and `timestamp >= started_at`. Missing or malformed `cost` cells are
+  - **Spent**: cumulative `cost` for rows whose `command` is in the
+    accepted `commands` set (or all rows when the filter is `None`) and
+    whose `timestamp >= started_at`. Missing or malformed `cost` cells are
     treated as `0.0`.
   - **Cap reached**: `spent >= cap` with `cap is not None`.
+  - **Enforcement boundary**: the cost CSV is appended to by `track_cost`
+    only when a subprocess exits (see `track_cost_python.prompt`'s "CSV
+    Reader Contract"). Therefore the watcher cannot interrupt an in-flight
+    subprocess. It enforces caps at SUBPROCESS BOUNDARIES — i.e. after a
+    subprocess writes its row, before the orchestrator spawns the next
+    one. This is sufficient for `pdd-issue` (whose executor spawns many
+    nested PDD subprocesses) and effectively means single-subprocess
+    commands (`pdd bug`, `pdd change`, `pdd fix`, `pdd sync`) can run
+    past the cap by exactly one subprocess's spend before the watcher
+    fires; the caller MUST treat the cap as "after this subprocess
+    finishes, stop spawning more" rather than as a mid-call hard ceiling.
 
 % Contract Rules
   R1 - Fire-once.
@@ -94,8 +114,12 @@
     not `None`.
   - **`on_exceeded`**: `Callable[[float], None]` invoked from the watcher
     thread with the spent amount at the moment of crossing.
-  - **`command`** (optional): restrict the spend sum to rows whose `command`
-    column matches.
+  - **`commands`** (optional): an iterable of accepted command names (e.g.
+    `{"change", "sync", "bug", "fix", "generate", "test"}` for
+    `pdd-issue`, or `{"change"}` for a single `pdd change` job). When
+    `None`, all rows in the file (subject to `started_at`) are summed.
+    The watcher snapshots the iterable into a frozen set on construction;
+    callers do not need to keep the original alive.
   - **`started_at`** (optional): a timezone-aware `datetime` UTC; restrict
     the spend sum to rows with `timestamp >= started_at`.
   - **`poll_interval`**: seconds (default `2.0`).

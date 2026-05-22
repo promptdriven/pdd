@@ -9183,7 +9183,7 @@
         "functions": [
           {
             "name": "watch",
-            "signature": "(csv_path, cap, on_exceeded, *, command=None, started_at=None, poll_interval=2.0) -> Watcher",
+            "signature": "(csv_path, cap, on_exceeded, *, commands=None, started_at=None, poll_interval=2.0) -> Watcher",
             "returns": "Watcher"
           },
           {
@@ -9409,7 +9409,7 @@
           },
           {
             "name": "SlashCommandResult",
-            "signature": "(kind, message, settings?, original_comment_id?)",
+            "signature": "(kind, message, settings?, original_comment_id?, metadata?)",
             "returns": "SlashCommandResult"
           }
         ]
