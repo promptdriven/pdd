@@ -2313,7 +2313,9 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         # litellm.  In non-interactive (--force) mode we must skip the model
         # unless the user has already authenticated (token file exists).
         model_name = str(model_info.get('model', ''))
-        if model_name.startswith("github_copilot/") and os.environ.get('PDD_FORCE'):
+        if model_name.startswith("github_copilot/") and (
+            os.environ.get('PDD_FORCE') or not sys.stdin.isatty()
+        ):
             token_dir = Path(os.environ.get(
                 'GITHUB_COPILOT_TOKEN_DIR',
                 str(Path.home() / ".config" / "litellm" / "github_copilot"),
@@ -2322,7 +2324,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
             token_path = token_dir / api_key_file
             if not token_path.exists():
                 logger.warning(
-                    f"Skipping GitHub Copilot model '{model_name}' in --force mode: "
+                    f"Skipping GitHub Copilot model '{model_name}' in non-interactive mode: "
                     f"no OAuth token found at {token_path}. Run 'pdd setup' to authenticate."
                 )
                 return False
@@ -2393,9 +2395,9 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
             newly_acquired_keys[key_name] = False
             return True
 
-    # Skip prompting if --force flag is set (non-interactive mode)
-    if os.environ.get('PDD_FORCE'):
-        logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
+    # Skip prompting in non-interactive contexts.
+    if os.environ.get('PDD_FORCE') or not sys.stdin.isatty():
+        logger.error(f"API key '{key_name}' not set. In non-interactive mode, skipping interactive prompt.")
         return False
 
     try:
