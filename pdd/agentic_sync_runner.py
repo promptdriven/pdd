@@ -26,6 +26,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .construct_paths import _is_known_language
+from .sync_order import compute_sccs
 
 console = Console()
 
@@ -841,6 +842,28 @@ class AsyncSyncRunner:
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in self.basenames
         }
+        # SCC membership is built over the subgraph induced by `basenames` so
+        # external deps don't pull non-target nodes into a cycle.
+        basename_set = set(self.basenames)
+        subgraph = {
+            b: [d for d in self.dep_graph.get(b, []) if d in basename_set]
+            for b in self.basenames
+        }
+        self._scc_of: Dict[str, frozenset] = {}
+        # SCCs that participate in a real cycle (size > 1, or a 1-node SCC
+        # with a self-loop). A trivial SCC (single node, no self-loop) is NOT
+        # here, so soft-edge logic only applies to actual cycle members.
+        self._cyclic_sccs: set = set()
+        for scc in compute_sccs(subgraph):
+            scc_set = frozenset(scc)
+            is_cyclic = len(scc) > 1 or any(
+                m in subgraph.get(m, []) for m in scc
+            )
+            for m in scc:
+                if m in basename_set:
+                    self._scc_of[m] = scc_set
+            if is_cyclic:
+                self._cyclic_sccs.add(scc_set)
         self.failed: bool = False
         self.budget_exhausted: bool = False
         self.comment_id: Optional[int] = None
@@ -992,64 +1015,158 @@ class AsyncSyncRunner:
             )
 
     def _get_ready_modules(self) -> List[str]:
-        """Pending modules whose deps are all satisfied."""
+        """Pending modules whose deps are all satisfied.
+
+        For modules participating in a cyclic SCC (size > 1, or 1-node with
+        a self-loop), intra-SCC dep edges are treated as **soft** — only a
+        failed peer blocks readiness — and the union of cross-SCC deps over
+        ALL members of the SCC must be satisfied before any member can
+        start. Otherwise an SCC could begin work while a transitive
+        dependency reached through a cycle peer was still pending or
+        failed, weakening dependency ordering. Cycle execution is
+        serialized: at most one member of a cyclic SCC may be running or
+        scheduled per pass.
+
+        Cross-SCC dep edges remain hard ordering constraints, and a consumer
+        outside the SCC must wait until every member of the dep's SCC has
+        succeeded.
+        """
         ready: List[str] = []
         with self.lock:
+            # SCCs that already have a running member -> peers must wait.
+            running_cyclic_sccs: set = set()
+            for b in self.basenames:
+                if self.module_states[b].status == "running":
+                    own = self._scc_of.get(b)
+                    if own is not None and own in self._cyclic_sccs:
+                        running_cyclic_sccs.add(own)
+
+            # SCCs that already had a member picked in THIS pass -> only one
+            # ready slot per SCC per pass (serialize cycle execution).
+            picked_cyclic_sccs: set = set()
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
-                deps = self.dep_graph.get(basename, [])
-                deps_ok = True
-                for d in deps:
-                    dep_state = self.module_states.get(d)
-                    if dep_state is None:
-                        # Out-of-target deps assumed already synced
+                own = self._scc_of.get(basename)
+                in_cycle = own is not None and own in self._cyclic_sccs
+                if in_cycle:
+                    if own in running_cyclic_sccs or own in picked_cyclic_sccs:
                         continue
-                    if dep_state.status != "success":
-                        deps_ok = False
+
+                # For a cycle member, the SCC's effective dependencies are
+                # the union of every member's cross-SCC deps; intra-SCC
+                # edges are soft. For non-cycle members, just walk the
+                # module's own deps.
+                if in_cycle:
+                    members_to_walk = list(own)
+                else:
+                    members_to_walk = [basename]
+
+                deps_ok = True
+                for member in members_to_walk:
+                    if not deps_ok:
                         break
+                    for d in self.dep_graph.get(member, []):
+                        dep_state = self.module_states.get(d)
+                        if dep_state is None:
+                            # Out-of-target deps assumed already synced
+                            continue
+                        # Intra-SCC edges (including a self-loop) are soft
+                        # when the SCC is cyclic; only a failed peer blocks
+                        # readiness.
+                        intra_scc = in_cycle and d in own
+                        if intra_scc:
+                            if dep_state.status == "failed":
+                                deps_ok = False
+                                break
+                            continue
+                        # Cross-SCC edge: depend on the WHOLE upstream SCC.
+                        dep_scc = self._scc_of.get(d)
+                        if dep_scc is None or dep_scc is own:
+                            if dep_state.status != "success":
+                                deps_ok = False
+                                break
+                        else:
+                            all_success = True
+                            for peer in dep_scc:
+                                peer_state = self.module_states.get(peer)
+                                if peer_state is None or peer_state.status != "success":
+                                    all_success = False
+                                    break
+                            if not all_success:
+                                deps_ok = False
+                                break
                 if deps_ok:
                     ready.append(basename)
+                    if in_cycle:
+                        picked_cyclic_sccs.add(own)
         return ready
 
     def _get_blocked_modules(self) -> List[str]:
-        """Pending modules transitively blocked by a failed dep."""
+        """Pending modules transitively blocked by a failed dep.
+
+        Operates on the SCC condensation (which is a DAG) so blocked-status
+        propagation through a cycle is sound regardless of which member is
+        visited first. A per-module DFS with a "visiting" set would wrongly
+        cache ``False`` on cycle re-entry before knowing whether the
+        parent's later deps would fail the chain.
+        """
         blocked: List[str] = []
         with self.lock:
-            cache: Dict[str, bool] = {}
+            scc_blocked_cache: Dict[frozenset, bool] = {}
 
-            def is_blocked(module: str, visiting: set) -> bool:
-                cached = cache.get(module)
+            def scc_is_blocked(scc: frozenset, visiting: set) -> bool:
+                cached = scc_blocked_cache.get(scc)
                 if cached is not None:
                     return cached
-                if module in visiting:
-                    cache[module] = False
+                # The condensation is acyclic, so this guard should never
+                # trigger; keep it for safety.
+                if scc in visiting:
                     return False
-                visiting.add(module)
+                visiting.add(scc)
                 try:
-                    for dep in self.dep_graph.get(module, []):
-                        dep_state = self.module_states.get(dep)
-                        if dep_state is None:
-                            continue
-                        if dep_state.status == "failed":
-                            cache[module] = True
+                    # Any member of this SCC itself failed?
+                    for m in scc:
+                        st = self.module_states.get(m)
+                        if st is not None and st.status == "failed":
+                            scc_blocked_cache[scc] = True
                             return True
-                        if dep_state.status == "pending" and is_blocked(
-                            dep, visiting
-                        ):
-                            cache[module] = True
-                            return True
+                    # Any cross-SCC dep is failed, or its SCC is blocked?
+                    for m in scc:
+                        for dep in self.dep_graph.get(m, []):
+                            dep_state = self.module_states.get(dep)
+                            if dep_state is None:
+                                # Out-of-target dep -> treated as synced.
+                                continue
+                            dep_scc = self._scc_of.get(dep)
+                            if dep_scc is None or dep_scc == scc:
+                                continue
+                            # Direct failure of the dep
+                            if dep_state.status == "failed":
+                                scc_blocked_cache[scc] = True
+                                return True
+                            # Dep's SCC may have a failed peer (cycle), or be
+                            # transitively blocked, regardless of the named
+                            # dep's current status. Always recurse to walk the
+                            # condensation DAG correctly.
+                            if scc_is_blocked(dep_scc, visiting):
+                                scc_blocked_cache[scc] = True
+                                return True
                 finally:
-                    visiting.discard(module)
-                cache[module] = False
+                    visiting.discard(scc)
+                scc_blocked_cache[scc] = False
                 return False
 
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
-                if is_blocked(basename, set()):
+                own_scc = self._scc_of.get(basename)
+                if own_scc is None:
+                    # Treat as a trivial 1-element SCC of just this basename.
+                    own_scc = frozenset({basename})
+                if scc_is_blocked(own_scc, set()):
                     blocked.append(basename)
         return blocked
 

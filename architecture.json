@@ -7274,6 +7274,14 @@
             ]
           },
           {
+            "name": "compute_sccs",
+            "signature": "(graph: Dict[str, List[str]]) -> List[List[str]]",
+            "returns": "List[List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
             "name": "get_affected_modules",
             "signature": "(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]",
             "returns": "List[str]",
@@ -7374,7 +7382,8 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
-      "agentic_test_orchestrator_python.prompt"
+      "agentic_test_orchestrator_python.prompt",
+      "sync_order_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7390,10 +7399,10 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0)",
             "returns": "AsyncSyncRunner",
             "sideEffects": [
-              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps"
+              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps; computes strongly connected components of the basename-induced dep graph so cyclic dependency sets are scheduled with soft intra-SCC edges and serialized cycle execution"
             ]
           },
           {
