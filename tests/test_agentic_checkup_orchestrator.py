@@ -2358,3 +2358,73 @@ class TestTrustedStepCommentPosting:
             success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
 
         assert success is True
+
+
+class TestRefreshPrBaseRefTimeout:
+    """Iter-20 Finding 3: the base-ref fetch MUST be bounded so a
+    stalled transport (auth prompt, dead remote, transient hang)
+    cannot hold the review loop forever. The deterministic-gate
+    layer's own ``gate_timeout`` does NOT apply to this subprocess
+    because the fetch runs BEFORE gate discovery.
+    """
+
+    def test_passes_timeout_to_subprocess_run(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        recorded = {}
+
+        def fake_run(args, **kwargs):
+            recorded["args"] = args
+            recorded["kwargs"] = kwargs
+            return sp.CompletedProcess(args, 0, b"", b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "release-1.4"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        assert "timeout" in recorded["kwargs"], (
+            "subprocess.run MUST be called with a timeout kwarg so a stalled "
+            "fetch cannot hang the review loop"
+        )
+        assert recorded["kwargs"]["timeout"] > 0
+        assert md.get("base_local_ref") == "refs/remotes/pdd-checkup/pr-1/base"
+
+    def test_timeout_expired_populates_base_ref_fetch_error(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        def fake_run(args, **kwargs):
+            raise sp.TimeoutExpired(cmd=args, timeout=60)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "release-1.4"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        # MUST be caught and surfaced as base_ref_fetch_error so the
+        # review-loop's iter-19 fail-closed path kicks in. MUST NOT
+        # leak as an unhandled TimeoutExpired exception.
+        assert "base_ref_fetch_error" in md
+        assert "timed out" in md["base_ref_fetch_error"].lower()
+        assert "base_local_ref" not in md

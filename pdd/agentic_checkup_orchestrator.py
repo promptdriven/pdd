@@ -205,6 +205,12 @@ def _refresh_pr_base_ref(
 
     base_local_ref = _pr_base_tracking_ref(pr_number)
     try:
+        # Bounded timeout so a stalled transport (auth prompt, dead
+        # remote, transient hang) cannot hold the review loop forever.
+        # The deterministic-gate layer's own ``gate_timeout`` does not
+        # apply to this fetch because the fetch runs BEFORE gate
+        # discovery. 60s matches the default per-gate timeout so the
+        # operator sees a single consistent upper bound.
         subprocess.run(
             [
                 "git",
@@ -217,7 +223,24 @@ def _refresh_pr_base_ref(
             capture_output=True,
             text=True,
             check=True,
+            timeout=60,
         )
+    except subprocess.TimeoutExpired:
+        # Surface as ``base_ref_fetch_error`` so the review loop's
+        # ``_enforce_gates_before_clean`` converts it into a synthetic
+        # ``gate:base-ref`` blocker finding (iter-19 fail-closed path).
+        # Without this branch a timeout would leak as an unhandled
+        # ``TimeoutExpired`` from ``_refresh_pr_base_ref`` and the loop
+        # would abort with a stack trace instead of a clean refusal.
+        pr_metadata["base_ref_fetch_error"] = (
+            f"git fetch timed out after 60s for base ref {base_ref!r}"
+        )
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: PR base ref fetch timed out: "
+                f"{pr_metadata['base_ref_fetch_error']}[/yellow]"
+            )
+        return
     except subprocess.CalledProcessError as exc:
         safe_err = (exc.stderr or str(exc)).strip()
         token = _github_token_from_env()

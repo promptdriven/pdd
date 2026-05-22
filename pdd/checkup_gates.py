@@ -417,8 +417,17 @@ def _discover_python_gates(
                     sys.executable,
                     "-B",
                     "-c",
+                    # Read the source as BYTES, not text. ``compile()``
+                    # accepts bytes and respects the PEP 263 encoding
+                    # declaration (``# -*- coding: latin-1 -*-`` and
+                    # friends) — forcing ``encoding='utf-8'`` would
+                    # raise ``UnicodeDecodeError`` on valid non-UTF-8
+                    # Python files, turning the gate into a false
+                    # blocker. ``compile()`` still raises
+                    # ``SyntaxError`` on bad input without writing any
+                    # bytecode to disk.
                     "import sys; "
-                    "src = open(sys.argv[1], 'r', encoding='utf-8').read(); "
+                    "src = open(sys.argv[1], 'rb').read(); "
                     "compile(src, sys.argv[1], 'exec')",
                     str(worktree / rel),
                 ],

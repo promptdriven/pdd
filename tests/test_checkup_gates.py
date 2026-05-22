@@ -134,6 +134,45 @@ class TestDiscoverGates:
         assert "py_compile" not in gate.cmd[3]
         assert gate.cmd[-1].endswith("a.py")
 
+    def test_py_compile_accepts_non_utf8_pep263_python_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-20 Finding 2: valid Python files with a PEP 263 encoding
+        declaration (``# -*- coding: latin-1 -*-`` etc.) must NOT trip
+        the syntax gate. The pre-fix gate read the source with
+        ``encoding='utf-8'`` and raised ``UnicodeDecodeError`` on the
+        first non-UTF-8 byte, producing a false blocker. Passing bytes
+        to ``compile()`` instead lets PEP 263 take effect.
+        """
+        from pdd.checkup_gates import discover_gates, run_gates
+
+        _git_init(tmp_path)
+        # A latin-1 source file: declare the encoding then include
+        # bytes that are valid latin-1 but invalid UTF-8 (0xE9 = é).
+        path = tmp_path / "latin.py"
+        path.write_bytes(
+            b"# -*- coding: latin-1 -*-\n"
+            b"GREETING = 'caf\xe9'\n"
+        )
+        gates = [
+            g for g in discover_gates(tmp_path, changed_files=("latin.py",))
+            if g.name == "py-compile:latin.py"
+        ]
+        assert gates, "discovery should emit py-compile for latin.py"
+        artifacts = tmp_path / "artifacts"
+        results = run_gates(
+            tmp_path,
+            gates,
+            artifacts_dir=artifacts,
+            round_number=1,
+            mode="review",
+        )
+        # ``compile()`` on the bytes payload respects PEP 263 and
+        # exits 0 — the file is syntactically valid Python.
+        assert results[0].exit_code == 0, (
+            f"PEP 263 latin-1 source must pass; stderr={results[0].stderr_excerpt!r}"
+        )
+
     def test_py_compile_does_not_write_pycache_to_worktree(
         self, tmp_path: Path
     ) -> None:
