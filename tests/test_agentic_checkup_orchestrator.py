@@ -2358,5 +2358,3 @@ class TestTrustedStepCommentPosting:
             success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
 
         assert success is True
-
-

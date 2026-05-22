@@ -10999,3 +10999,80 @@ class TestReviewLoopDeterministicGates:
         assert fetch_calls, "metadata fetch must run when gates are on"
         assert refresh_calls, "base-ref refresh must run when gates are on"
         assert "gate:prettier-check" in report
+
+
+class TestPrChangedFilesScannerBaseLocalRef:
+    """Iter-18 Findings 2+3: the changed-file scanners that scope
+    py_compile/ruff/black/mypy gates and the list-drift detector must
+    prefer ``pr_metadata['base_local_ref']`` (the dedicated tracking
+    ref populated by ``_refresh_pr_base_ref``) over the
+    ``origin/<base>`` / ``main`` / ``master`` candidate set.
+
+    Without the dedicated-ref preference, a PR targeting a non-``main``
+    base whose base was just freshly fetched into
+    ``refs/remotes/pdd-checkup/pr-<N>/base`` would still compute the
+    diff against a stale ``origin/main`` — silently dropping every
+    file the PR actually changed on that base.
+    """
+
+    def _make_pr_repo(self, tmp_path: Path) -> Tuple[Path, str]:
+        """Build a synthetic repo with a non-main base ref and an
+        additional commit on the PR branch that introduces a Python
+        file. Returns (worktree, base_local_ref)."""
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "--allow-empty", "-m", "init", "-q"],
+            cwd=tmp_path, check=True,
+        )
+        # Synthetic release base diverged from main:
+        subprocess.run(["git", "checkout", "-q", "-b", "release-1.4"], cwd=tmp_path, check=True)
+        (tmp_path / "release_anchor.txt").write_text("anchor\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "-m", "release-base", "-q"],
+            cwd=tmp_path, check=True,
+        )
+        local_ref = "refs/remotes/pdd-checkup/pr-1/base"
+        subprocess.run(
+            ["git", "update-ref", local_ref, "HEAD"],
+            cwd=tmp_path, check=True,
+        )
+        # PR branch off the release base, changing a Python file:
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "feature.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "-m", "feat", "-q"],
+            cwd=tmp_path, check=True,
+        )
+        return tmp_path, local_ref
+
+    def test_pr_changed_files_all_uses_base_local_ref(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _pr_changed_files_all
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        pr_metadata = {
+            "base_ref": "release-1.4",
+            "base_local_ref": local_ref,
+        }
+        files = _pr_changed_files_all(worktree, pr_metadata)
+        # Must include the Python file the PR added on the release base
+        # — exactly the file that would silently disappear if the
+        # scanner fell back to ``origin/main`` (which does not exist
+        # in this synthetic repo at all).
+        assert "pkg/feature.py" in files
+
+    def test_pr_changed_python_files_uses_base_local_ref(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _pr_changed_python_files
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        pr_metadata = {
+            "base_ref": "release-1.4",
+            "base_local_ref": local_ref,
+        }
+        files = _pr_changed_python_files(worktree, pr_metadata)
+        assert files == ["pkg/feature.py"]

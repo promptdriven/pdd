@@ -1719,11 +1719,15 @@ def _pr_changed_python_files(
     flagged as never firing.
 
     Resolution order for the base ref:
-      1. ``pr_metadata['base_ref']`` if set -- typically the value
+      1. ``pr_metadata['base_local_ref']`` if set -- the dedicated
+         tracking ref (``refs/remotes/pdd-checkup/pr-<N>/base``)
+         populated by ``_refresh_pr_base_ref`` for the PR's actual
+         base, freshest at this point in the loop.
+      2. ``pr_metadata['base_ref']`` if set -- typically the value
          returned by ``_fetch_pr_metadata`` (``main``/``master``/etc.).
-      2. ``origin/main`` then ``origin/master`` -- the conventional
+      3. ``origin/main`` then ``origin/master`` -- the conventional
          remote-tracking refs.
-      3. ``HEAD~1`` -- last-resort fallback so the scan still produces
+      4. ``HEAD~1`` -- last-resort fallback so the scan still produces
          a non-empty answer on the most recent commit if no base ref
          is resolvable.
 
@@ -1731,10 +1735,21 @@ def _pr_changed_python_files(
     contract is preserved.
     """
     base_candidates: List[str] = []
-    if pr_metadata and pr_metadata.get("base_ref"):
-        base_ref = str(pr_metadata["base_ref"])
-        base_candidates.append(f"origin/{base_ref}")
-        base_candidates.append(base_ref)
+    # Issue #1092: prefer the dedicated tracking ref over
+    # ``origin/<base>``/``main``/``master`` fallbacks. The list-drift
+    # scanner runs after ``_refresh_pr_base_ref`` populated this when
+    # gates are enabled; without it the scanner can compute the diff
+    # against ``origin/main`` on a non-``main``-base PR and silently
+    # miss the changed-file inventory that drives drift detection.
+    if pr_metadata:
+        local_ref = pr_metadata.get("base_local_ref")
+        if isinstance(local_ref, str) and local_ref.strip():
+            base_candidates.append(local_ref.strip())
+        base_ref_raw = pr_metadata.get("base_ref")
+        if base_ref_raw:
+            base_ref = str(base_ref_raw)
+            base_candidates.append(f"origin/{base_ref}")
+            base_candidates.append(base_ref)
     base_candidates.extend(["origin/main", "origin/master", "main", "master"])
 
     for base in base_candidates:
@@ -1773,7 +1788,15 @@ def _pr_changed_python_files(
             for line in diff.stdout.splitlines()
             if line.strip() and line.strip().endswith(".py")
         ]
-        if names or base.endswith(("/main", "/master", "main", "master")):
+        # The dedicated refresh ref is by construction the PR's exact
+        # base, so an empty diff is a real answer (not a stale-base
+        # signal) and the loop accepts it directly without falling
+        # back to HEAD~1.
+        if (
+            names
+            or base.startswith("refs/remotes/pdd-checkup/")
+            or base.endswith(("/main", "/master", "main", "master"))
+        ):
             # Either we got results or we resolved a canonical base ref:
             # take this answer (even if empty) rather than falling back
             # to HEAD~1 which would mis-report the PR scope.
@@ -3696,10 +3719,22 @@ def _pr_changed_files_all(
     repo-wide gate set (``git diff --check`` is always emitted).
     """
     base_candidates: List[str] = []
-    if pr_metadata and pr_metadata.get("base_ref"):
-        base_ref = str(pr_metadata["base_ref"])
-        base_candidates.append(f"origin/{base_ref}")
-        base_candidates.append(base_ref)
+    # Issue #1092: prefer the dedicated tracking ref populated by
+    # ``_refresh_pr_base_ref`` (``refs/remotes/pdd-checkup/pr-<N>/base``)
+    # over ``origin/<base>``/``main``/``master`` fallbacks. Without this
+    # the changed-file inventory (which scopes ``py_compile``/``ruff``/
+    # ``black``/``mypy``) can be computed against a stale ``origin/main``
+    # — silently MISSING files the PR actually changed on a non-``main``
+    # base. The list-form refresh always runs before this helper when
+    # gates are enabled, so the dedicated ref is the freshest signal.
+    if pr_metadata:
+        local_ref = pr_metadata.get("base_local_ref")
+        if isinstance(local_ref, str) and local_ref.strip():
+            base_candidates.append(local_ref.strip())
+        base_ref = str(pr_metadata.get("base_ref") or "")
+        if base_ref:
+            base_candidates.append(f"origin/{base_ref}")
+            base_candidates.append(base_ref)
     base_candidates.extend(["origin/main", "origin/master", "main", "master"])
 
     for base in base_candidates:
@@ -3728,7 +3763,14 @@ def _pr_changed_files_all(
         if diff.returncode != 0:
             continue
         names = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
-        if names or base.endswith(("/main", "/master", "main", "master")):
+        # The dedicated refresh ref is by construction the PR's exact
+        # base, so an empty diff there is a real "no changed files"
+        # answer (not a stale-base signal) and we accept it directly.
+        if (
+            names
+            or base.startswith("refs/remotes/pdd-checkup/")
+            or base.endswith(("/main", "/master", "main", "master"))
+        ):
             return names
 
     # HEAD~1 fallback — better than ``[]`` on a single-commit smoke test.
