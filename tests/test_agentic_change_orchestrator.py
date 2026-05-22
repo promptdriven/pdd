@@ -34,7 +34,25 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
+from pdd.agentic_change_orchestrator import (
+    run_agentic_change_orchestrator,
+    _parse_changed_files,
+    _detect_worktree_changes,
+    _parse_direct_edit_candidates,
+    _check_existing_pr,
+    _review_loop_no_issues,
+    _scope_architecture_to_changed_files,
+    _validate_architecture_filepaths,
+    # Issue #1123 — Step 9 scope guard helpers.
+    _parse_step6_devunit_prompts,
+    _parse_step6_dependency_prompts,
+    _parse_step6_integration_prompts,
+    _parse_step6_frontend_prompts,
+    _parse_step5_doc_paths,
+    _build_step9_allowlist,
+    _enforce_step9_scope,
+    _snapshot_worktree_status,
+)
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -1981,8 +1999,14 @@ def test_step9_fallback_detects_worktree_changes(mock_dependencies, temp_cwd):
 
 def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     """
-    _detect_worktree_changes only picks up .prompt and .md files,
-    not .py, .txt, or .agentic_prompt_* temp files.
+    _detect_worktree_changes picks up `.prompt`, `.md`, `.rst`, `.txt`
+    docs (Step 5 Associated Docs include all four), but not `.py` source
+    or `.agentic_prompt_*` temp files.
+
+    Round-2 (#1123): `.rst`/`.txt` were added to the allowed extensions so
+    Step 9 can legitimately edit `.txt` notes / `.rst` docs without the
+    fallback emitting an empty list and failing with "produced no file
+    changes." A literal `notes.txt` at the repo root therefore IS picked up.
     """
     # Create a real git repo with tracked prompts/ directory (like downstream_project)
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
@@ -2010,8 +2034,10 @@ def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     assert "prompts/existing.prompt" in files
     assert "README.md" in files
     assert "random.py" not in files
+    # .agentic_prompt_* temps are still filtered even though .txt is allowed.
     assert ".agentic_prompt_abc12345.txt" not in files
-    assert "notes.txt" not in files
+    # `.txt` is a Step 5 doc extension → included in the fallback.
+    assert "notes.txt" in files
 
 
 def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
@@ -5604,3 +5630,1735 @@ class TestTrustedStepCommentPosting:
             "Failed Step 12 should not have posted a fallback comment "
             f"or burned composite key 112. Saw: {step_nums}"
         )
+
+
+# =============================================================================
+# Issue #1123 — Step 9 scope guard
+#
+# Step 9 of `pdd change` is supposed to modify ONLY prompts/docs and the
+# Direct Edit Candidates explicitly listed in Step 6. The LLM does not
+# reliably honor this. These tests pin down:
+#   * the allowlist parsers,
+#   * the allowlist builder,
+#   * the scope-guard hook over a REAL git worktree,
+#   * the orchestrator wiring (mock_dependencies + real worktree).
+# =============================================================================
+
+import textwrap as _textwrap
+
+
+def _scope_git_env() -> dict:
+    return {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+
+def _scope_git_init(repo: Path, files: dict) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    env = _scope_git_env()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "t@t"],
+        check=True, capture_output=True, env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True, capture_output=True, env=env,
+    )
+    for rel, content in files.items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "-A"],
+        check=True, capture_output=True, env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "initial"],
+        check=True, capture_output=True, env=env,
+    )
+
+
+# Sample fixtures -------------------------------------------------------------
+
+_STEP6_SAMPLE = _textwrap.dedent("""
+## Step 6: Dev Units Identified
+
+**Status:** Found 3 dev units
+
+### Dev Units to MODIFY
+| Prompt | Code | Example | Test |
+|--------|------|---------|------|
+| `prompts/foo_python.prompt` | `pdd/foo.py` | `context/foo_example.py` | `tests/test_foo.py` |
+| `prompts/bar_python.prompt` | `pdd/bar.py` | `context/bar_example.py` | `tests/test_bar.py` |
+
+*(Use actual paths from project structure above)*
+
+### Dev Units to CREATE
+| Prompt | Code | Example | Test |
+|--------|------|---------|------|
+| `prompts/baz_python.prompt` | `pdd/baz.py` | `context/baz_example.py` | `tests/test_baz.py` |
+| `prompts/xxx_{lang}.prompt` | `{source_dir}/xxx.{ext}` | `{example_dir}/xxx_example.{ext}` | `{test_dir}/test_xxx.{ext}` |
+
+*(Use actual paths from project structure above)*
+
+### Dependencies (may need interface updates)
+- `prompts/qux_python.prompt` - upstream interface change
+- `pdd/legacy.py` - unrelated code file (ignore)
+
+### Integration Points Discovered
+
+| Integration Point | Reason for Update | Prompt File |
+|-------------------|-------------------|-------------|
+| `pdd/cli_main.py` | register new command | `prompts/cli_main_python.prompt` |
+| `pdd/registry.py` | add module | manual update needed |
+
+**Search performed:**
+- grep ...
+
+### Frontend Dev Units (Cross-Layer)
+
+| Frontend File | Prompt File | Action |
+|---------------|-------------|--------|
+| `frontend/src/App.tsx` | `prompts/frontend/app_TypescriptReact.prompt` | MODIFY prompt |
+| `frontend/src/Other.tsx` | None | Direct Edit |
+
+**Search performed:**
+- grep ...
+
+### Direct Edit Candidates (No Prompt)
+*Files that need scoped direct edits because no corresponding prompt exists*
+
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| `frontend/src/Other.tsx` | uncomment | TODO |
+| `scripts/run.sh` | remove placeholder | coming soon |
+
+""")
+
+
+_STEP5_SAMPLE = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+**Status:** Documentation Updates Required
+
+### Files to Update
+
+#### `README.md`
+**Section:** features
+**Change:** add bullet
+**Draft content:**
+```
+- new feature
+```
+
+#### `docs/usage.md`
+**Change:** update
+**Draft content:**
+```
+text
+```
+
+### Files to Create
+- `docs/new_guide.md` - tutorial
+- `docs/another.rst` - reference
+
+### Associated Documents
+*(Documents reachable from the modified prompts' `<include>` graph, depth ≤ 3.)*
+
+#### `docs/api_reference.md`
+**Discovered via:** `prompts/foo_python.prompt`
+**Section:** request
+**Change:** update
+**Draft content:**
+```
+text
+```
+
+### Conflicts
+*(Documents whose edits Step 5 cannot resolve automatically.)*
+
+- `docs/conflicted.md` — overlapping authority — review section X
+
+### No Changes Needed
+- `docs/unrelated.md` - not relevant
+
+""")
+
+
+# 1-6: Parser tests -----------------------------------------------------------
+
+
+def test_parse_step6_devunit_prompts_extracts_prompt_column_only():
+    result = _parse_step6_devunit_prompts(_STEP6_SAMPLE)
+    assert "prompts/foo_python.prompt" in result
+    assert "prompts/bar_python.prompt" in result
+    assert "prompts/baz_python.prompt" in result
+    # Code, example, test columns must never leak in.
+    assert "pdd/foo.py" not in result
+    assert "context/foo_example.py" not in result
+    assert "tests/test_foo.py" not in result
+
+
+def test_parse_step6_devunit_prompts_ignores_placeholder_template():
+    result = _parse_step6_devunit_prompts(_STEP6_SAMPLE)
+    # Template placeholder row must be skipped.
+    assert not any("{lang}" in p for p in result)
+    assert "prompts/xxx_{lang}.prompt" not in result
+
+
+def test_parse_step6_dependency_prompts():
+    result = _parse_step6_dependency_prompts(_STEP6_SAMPLE)
+    assert "prompts/qux_python.prompt" in result
+    # Non-prompt entries must be ignored.
+    assert "pdd/legacy.py" not in result
+
+
+def test_parse_step6_integration_prompts_skips_manual_update_needed():
+    result = _parse_step6_integration_prompts(_STEP6_SAMPLE)
+    assert "prompts/cli_main_python.prompt" in result
+    # "manual update needed" cells must be skipped.
+    assert not any("manual" in p.lower() for p in result)
+
+
+def test_parse_step6_frontend_prompts_skips_none():
+    result = _parse_step6_frontend_prompts(_STEP6_SAMPLE)
+    assert "prompts/frontend/app_TypescriptReact.prompt" in result
+    assert "None" not in result
+    assert not any("none" == p.strip().lower() for p in result)
+
+
+def test_parse_direct_edit_candidates_handles_real_template_format():
+    """Regression: the Step 6 prompt template emits the table after an italic
+    line and a blank line. Earlier the regex required `|` to follow the
+    heading on the very next line, which silently returned [] on real
+    outputs — breaking the scope guard's contract that Direct Edit
+    Candidates are in scope.
+    """
+    sample = _textwrap.dedent("""
+        ### Direct Edit Candidates (No Prompt)
+        *Files that need scoped direct edits because no corresponding prompt exists*
+
+        | File | Edit Type | Markers Found |
+        |------|-----------|---------------|
+        | `frontend/src/Foo.tsx` | uncomment | TODO |
+        | `scripts/launch.sh` | remove placeholder | coming soon |
+
+    """)
+    assert _parse_direct_edit_candidates(sample) == [
+        "frontend/src/Foo.tsx",
+        "scripts/launch.sh",
+    ]
+
+
+def test_parse_direct_edit_candidates_no_redos_on_blank_lines():
+    """Regression for CodeQL py/redos alert (PR #1133): blank lines after
+    the heading must not cause catastrophic backtracking.
+
+    The pre-fix regex's inner group ``(?:[^|#\\n][^\\n]*\\n|\\s*\\n)*`` had
+    overlapping alternatives — a whitespace-only line matched BOTH branches,
+    so N blank lines produced 2^N backtrack states. Vulnerable input on
+    Python 3.12 stalled for >>>1s; the fixed line-walker is sub-millisecond.
+    """
+    import time
+    output = "### Direct Edit Candidates\n" + "\n" * 200 + "no table here"
+    start = time.monotonic()
+    result = _parse_direct_edit_candidates(output)
+    elapsed = time.monotonic() - start
+    assert result == []
+    assert elapsed < 1.0, f"parser took {elapsed:.3f}s — possible ReDoS"
+
+
+def test_parse_step5_doc_paths_includes_update_create_associated_excludes_conflicts():
+    result = _parse_step5_doc_paths(_STEP5_SAMPLE)
+    # Update list
+    assert "README.md" in result
+    assert "docs/usage.md" in result
+    # Create list
+    assert "docs/new_guide.md" in result
+    assert "docs/another.rst" in result
+    # Associated documents
+    assert "docs/api_reference.md" in result
+    # Conflicts and No Changes Needed must be excluded.
+    assert "docs/conflicted.md" not in result
+    assert "docs/unrelated.md" not in result
+
+
+_STEP5_SAMPLE_UNRECONCILED_ASSOC = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+### Files to Update
+
+#### `README.md`
+**Change:** add bullet
+
+### Files to Create
+- `docs/new.md` - tutorial
+
+### Associated Documents
+
+#### `docs/from_confirmed.md`
+**Discovered via:** `prompts/foo_python.prompt`
+**Section:** request
+**Change:** update
+
+#### `docs/from_unconfirmed.md`
+**Discovered via:** `prompts/unconfirmed_python.prompt`
+**Section:** something
+**Change:** update
+""")
+
+
+def test_parse_step5_doc_paths_excludes_associated_doc_when_originating_prompt_not_confirmed():
+    """Round-5: Associated Documents must be reconciled against Step 6's
+    confirmed dev-unit prompt set. A doc whose ``Discovered via`` prompt
+    isn't in the confirmed set is a stale carryover and must be excluded
+    from the allowlist (matches the Step 9 prompt's reconciliation rule)."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_UNRECONCILED_ASSOC,
+        confirmed_prompts={"prompts/foo_python.prompt"},
+    )
+    assert "docs/from_confirmed.md" in result
+    assert "docs/from_unconfirmed.md" not in result
+
+
+def test_parse_step5_doc_paths_includes_associated_doc_when_originating_prompt_confirmed():
+    """Round-5: when the ``Discovered via`` prompt IS in the confirmed set,
+    the associated doc must be included."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_UNRECONCILED_ASSOC,
+        confirmed_prompts={
+            "prompts/foo_python.prompt",
+            "prompts/unconfirmed_python.prompt",
+        },
+    )
+    assert "docs/from_confirmed.md" in result
+    assert "docs/from_unconfirmed.md" in result
+
+
+def test_parse_step5_doc_paths_files_to_update_not_reconciled():
+    """Round-5: Step 5 owns Files to Update and Files to Create directly —
+    those buckets are NEVER reconciled against the confirmed prompt set
+    (they aren't discovered through the include graph and carry no
+    `Discovered via` line). Even with an empty confirmed set, they must
+    still pass through."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_UNRECONCILED_ASSOC,
+        confirmed_prompts=set(),
+    )
+    assert "README.md" in result
+    assert "docs/new.md" in result
+    # But the Associated Documents are filtered out by the empty set.
+    assert "docs/from_confirmed.md" not in result
+    assert "docs/from_unconfirmed.md" not in result
+
+
+_STEP5_SAMPLE_ARROW_SYNTAX = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+### Associated Documents
+
+#### `docs/api.md`
+**Discovered via:** `prompts/orphan_python.prompt` → `<include>docs/api.md</include>`
+**Section:** request
+**Change:** update
+""")
+
+
+def test_parse_step5_doc_paths_handles_arrow_syntax_in_discovered_via():
+    """Round-6 regression: the Step 5 prompt template documents the
+    ``**Discovered via:**`` value as an include-graph path with backticks
+    and a ``→`` arrow (``prompts/foo.prompt`` → ``<include>docs/x.md</include>``).
+    The originating prompt is the FIRST ``*.prompt`` token in the clause; the
+    reconciler must reject the doc when that prompt isn't confirmed by Step 6.
+    Before the fix the regex anchored to ``$`` and excluded backticks, so this
+    line never matched and the doc was always included.
+    """
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_ARROW_SYNTAX,
+        confirmed_prompts={"prompts/foo_python.prompt"},
+    )
+    assert "docs/api.md" not in result
+
+
+def test_parse_step5_doc_paths_handles_arrow_syntax_when_originating_prompt_confirmed():
+    """Round-6: same arrow-syntax body, but the originating prompt IS in the
+    confirmed set — the doc must be included."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_ARROW_SYNTAX,
+        confirmed_prompts={"prompts/orphan_python.prompt"},
+    )
+    assert "docs/api.md" in result
+
+
+_STEP5_SAMPLE_ARROW_CHAIN = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+### Associated Documents
+
+#### `docs/deep.md`
+**Discovered via:** `prompts/a.prompt` → `prompts/b.prompt` → `<include>docs/deep.md</include>`
+**Section:** intro
+**Change:** update
+""")
+
+
+def test_parse_step5_doc_paths_first_prompt_path_wins_when_multiple_in_include_chain():
+    """Round-6: when the ``Discovered via`` clause names multiple prompts along
+    the include chain, the FIRST one is the originating prompt and the only one
+    the reconciler considers. ``prompts/b.prompt`` being confirmed downstream
+    must NOT keep ``docs/deep.md`` in the allowlist when ``prompts/a.prompt``
+    isn't confirmed.
+    """
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_ARROW_CHAIN,
+        confirmed_prompts={"prompts/b.prompt"},
+    )
+    assert "docs/deep.md" not in result
+
+
+# 7-11: Allowlist builder tests ----------------------------------------------
+
+
+def test_build_step9_allowlist_includes_step6_prompts_step5_docs_direct_edits(tmp_path):
+    allowed_files, allowed_dirs = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    assert allowed_dirs == set()
+    expected = {
+        "prompts/foo_python.prompt",
+        "prompts/bar_python.prompt",
+        "prompts/baz_python.prompt",
+        "prompts/qux_python.prompt",
+        "prompts/cli_main_python.prompt",
+        "prompts/frontend/app_TypescriptReact.prompt",
+        "README.md",
+        "docs/usage.md",
+        "docs/new_guide.md",
+        "docs/another.rst",
+        "docs/api_reference.md",
+        # Direct edit candidates from Step 6.
+        "frontend/src/Other.tsx",
+        "scripts/run.sh",
+    }
+    resolved_expected = {(tmp_path / rel).resolve() for rel in expected}
+    assert resolved_expected.issubset(allowed_files)
+
+
+def test_build_step9_allowlist_excludes_step6_code_example_test_columns(tmp_path):
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    forbidden = {
+        "pdd/foo.py",
+        "pdd/bar.py",
+        "pdd/baz.py",
+        "context/foo_example.py",
+        "context/bar_example.py",
+        "context/baz_example.py",
+        "tests/test_foo.py",
+        "tests/test_bar.py",
+        "tests/test_baz.py",
+    }
+    resolved_forbidden = {(tmp_path / rel).resolve() for rel in forbidden}
+    assert resolved_forbidden.isdisjoint(allowed_files)
+
+
+def test_build_step9_allowlist_includes_preflight_healed_prompts(tmp_path):
+    """Round-2 (issue #1123): healed prompts go in the allowlist but their
+    `.pdd/meta/*.json` and `.pdd/meta/*_run.json` companions DO NOT —
+    those are protected via the pre-snapshot delta check in
+    ``_enforce_step9_scope``, not the allowlist. This sidesteps PDD's
+    nested-directory meta-path naming (`backend_foo_python.json` vs
+    `foo_python.json`) and `--sync-metadata` side-effect files."""
+    healed = ["prompts/healed_python.prompt"]
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, healed
+    )
+    healed_abs = (tmp_path / "prompts/healed_python.prompt").resolve()
+    assert healed_abs in allowed_files
+    # Companion meta files are NOT in the allowlist any more — the snapshot
+    # delta in the guard preserves them by virtue of pre-existing in
+    # `git status` before Step 9 ran.
+    meta_abs = (tmp_path / ".pdd/meta/healed_python.json").resolve()
+    run_meta_abs = (tmp_path / ".pdd/meta/healed_python_run.json").resolve()
+    assert meta_abs not in allowed_files
+    assert run_meta_abs not in allowed_files
+
+
+def test_build_step9_allowlist_excludes_step5_conflicts(tmp_path):
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    conflicted = (tmp_path / "docs/conflicted.md").resolve()
+    unrelated = (tmp_path / "docs/unrelated.md").resolve()
+    assert conflicted not in allowed_files
+    assert unrelated not in allowed_files
+
+
+def test_build_step9_allowlist_excludes_architecture_json(tmp_path):
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    arch = (tmp_path / "architecture.json").resolve()
+    nested_arch = (tmp_path / "extensions/foo/architecture.json").resolve()
+    assert arch not in allowed_files
+    assert nested_arch not in allowed_files
+
+
+def test_build_step9_allowlist_excludes_unreconciled_associated_documents(tmp_path):
+    """Round-5 integration test: ``_build_step9_allowlist`` must pass the
+    Step 6 confirmed dev-unit prompt set into ``_parse_step5_doc_paths``
+    so a Step 5 Associated Document whose `Discovered via` prompt isn't
+    in Step 6 stays out of the allowlist (defense-in-depth matching the
+    Step 9 prompt's reconciliation rule)."""
+    step6_min = _textwrap.dedent("""
+        ## Step 6
+
+        ### Dev Units to MODIFY
+        | Prompt | Code | Example | Test |
+        |--------|------|---------|------|
+        | `prompts/foo_python.prompt` | `pdd/foo.py` | `context/foo_example.py` | `tests/test_foo.py` |
+    """)
+    step5_with_stale_assoc = _textwrap.dedent("""
+        ## Step 5
+
+        ### Files to Update
+
+        #### `README.md`
+        **Change:** add bullet
+
+        ### Associated Documents
+
+        #### `docs/from_foo.md`
+        **Discovered via:** `prompts/foo_python.prompt`
+        **Change:** update
+
+        #### `docs/from_unconfirmed.md`
+        **Discovered via:** `prompts/orphan_python.prompt`
+        **Change:** update
+    """)
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, step5_with_stale_assoc, step6_min, []
+    )
+    readme = (tmp_path / "README.md").resolve()
+    from_foo = (tmp_path / "docs/from_foo.md").resolve()
+    from_unconfirmed = (tmp_path / "docs/from_unconfirmed.md").resolve()
+    assert readme in allowed_files  # Files to Update — never reconciled
+    assert from_foo in allowed_files  # discovered via a confirmed prompt
+    assert from_unconfirmed not in allowed_files  # stale carryover
+
+
+# 12-21: Scope-guard tests over a REAL git worktree --------------------------
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_untracked_examples_dir(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "prompts/foo_python.prompt": "p",
+        "README.md": "r",
+    })
+    # Step 9 dropped an untracked file under examples/.
+    (repo / "examples").mkdir(parents=True, exist_ok=True)
+    (repo / "examples" / "leak.py").write_text("nope")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "examples/leak.py" in reverted
+    assert not (repo / "examples" / "leak.py").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_untracked_tests_dir(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "prompts/foo_python.prompt": "p",
+    })
+    (repo / "tests").mkdir(parents=True, exist_ok=True)
+    (repo / "tests" / "leak.py").write_text("nope")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "tests/leak.py" in reverted
+    assert not (repo / "tests" / "leak.py").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_untracked_unrelated_prompt(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    # An untracked prompt that Step 6 never listed.
+    (repo / "prompts" / "backend").mkdir(parents=True, exist_ok=True)
+    (repo / "prompts" / "backend" / "unrelated_python.prompt").write_text("nope")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "prompts/backend/unrelated_python.prompt" in reverted
+    assert not (repo / "prompts" / "backend" / "unrelated_python.prompt").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_tracked_architecture_json_modification(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 9 modified architecture.json — out of scope.
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "architecture.json" in reverted
+    # Must be restored to the committed content.
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_in_scope_prompt_modification(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "original"})
+    # Step 6 lists `prompts/foo_python.prompt` — in scope.
+    (repo / "prompts" / "foo_python.prompt").write_text("modified by step 9")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "prompts" / "foo_python.prompt").read_text() == "modified by step 9"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_direct_edit_candidate(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "frontend/src/Other.tsx": "// TODO\n",
+    })
+    (repo / "frontend" / "src" / "Other.tsx").write_text("// done\n")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": ["frontend/src/Other.tsx"]},
+        state={},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "frontend" / "src" / "Other.tsx").read_text() == "// done\n"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_associated_document(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"docs/api_reference.md": "original"})
+    # Step 5 lists docs/api_reference.md as an Associated Document — in scope.
+    (repo / "docs" / "api_reference.md").write_text("updated by step 9")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "docs" / "api_reference.md").read_text() == "updated by step 9"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_healed_prompt_via_allowlist(tmp_path):
+    """The healed prompt itself is allowlisted (and rewritten further by
+    Step 9 here, mirroring `_preflight_drift_heal` → step-9 LLM follow-on
+    edits)."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/healed_python.prompt": "old"})
+    (repo / "prompts" / "healed_python.prompt").write_text("rewritten")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/healed_python.prompt"]},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "prompts" / "healed_python.prompt").read_text() == "rewritten"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_no_op_on_clean_worktree(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+    assert reverted == []
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_returns_empty_when_worktree_missing(tmp_path):
+    missing = tmp_path / "does_not_exist"
+    reverted = _enforce_step9_scope(
+        missing,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+    assert reverted == []
+
+
+# 22-24: Orchestrator integration tests --------------------------------------
+
+
+def _make_real_worktree_for_step9(tmp_path, init_files=None):
+    """Set up the cwd + worktree expected by the orchestrator's step9 flow.
+
+    The orchestrator computes ``worktree_path = git_root /
+    .pdd/worktrees/change-issue-{N}``. We pre-create that as a real git repo
+    so subprocess.run (NOT mocked here for the worktree subprocess calls) can
+    operate on it. The orchestrator's own ``_setup_worktree`` is mocked to
+    return our pre-built worktree.
+    """
+    repo = tmp_path / "repo"
+    files = {
+        "prompts/foo_python.prompt": "p",
+        # architecture.json is tracked from the start so step 10 sees a real
+        # file to work with. (Its modification is forbidden in Step 9.)
+        "architecture.json": '{"modules": []}\n',
+    }
+    if init_files:
+        files.update(init_files)
+    _scope_git_init(repo, files)
+
+    worktree = tmp_path / "wt"
+    _scope_git_init(worktree, files)
+    return repo, worktree
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_stops_workflow(temp_cwd):
+    """Step 9 drops a file under tests/. Guard reverts, workflow stops."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl") as _mlt, \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)) as _mls, \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state") as _mcs, \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True) as _mpc, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None) as _mcp, \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)) as _msw, \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])) as _mpdh, \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Simulate the LLM dropping an out-of-scope file inside the
+                # worktree, then claiming success.
+                (worktree / "tests").mkdir(parents=True, exist_ok=True)
+                (worktree / "tests" / "leak.py").write_text("nope")
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1123,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Scope violation" in msg
+    # Guard removed the leak.
+    assert not (worktree / "tests" / "leak.py").exists()
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_marks_failed_in_state(temp_cwd):
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                (worktree / "examples").mkdir(parents=True, exist_ok=True)
+                (worktree / "examples" / "leak.py").write_text("nope")
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1124,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert mock_save.called
+    saved_state = mock_save.call_args[0][3]
+    assert saved_state["step_outputs"]["9"].startswith("FAILED: SCOPE_VIOLATION")
+    # last_completed_step must NOT advance to 9.
+    assert saved_state["last_completed_step"] < 9
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_no_violations_proceeds_normally(temp_cwd):
+    """Step 9 only touches allowlisted files → workflow continues past Step 9."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Touch only allowlisted prompt.
+                (worktree / "prompts" / "foo_python.prompt").write_text(
+                    "rewritten by step 9"
+                )
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            if label == "step10":
+                return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json",
+                        0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/o/r/pull/9",
+                        0.2, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1125,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    # Workflow proceeds past Step 9 — at minimum step10 must have been called.
+    labels_called = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+    assert "step10" in labels_called, (
+        "Workflow did not proceed past Step 9; labels seen: %r" % labels_called
+    )
+    # And the message should NOT report a scope violation.
+    assert "Scope violation" not in msg
+
+
+# =============================================================================
+# Issue #1123 — Round-2: snapshot-based scope guard
+#
+# Step 8.5 drift-heal writes `.pdd/meta/<basename>_<lang>.json` (nested-aware)
+# AND `.pdd/meta/<basename>_<lang>_run.json` for `pdd update --sync-metadata`
+# operations, plus possibly architecture.json. An allowlist alone can't cover
+# every such path because module identity (`infer_module_identity`)
+# reconstructs subdir context. The snapshot-based delta check sidesteps
+# the naming problem: anything that already changed BEFORE Step 9 ran is by
+# construction pre-existing context, not a Step 9 mutation.
+# =============================================================================
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_preflight_meta_writes(tmp_path):
+    """Step 8.5 added a nested `.pdd/meta/backend_foo_python.json`; the
+    pre-snapshot must capture this so the guard doesn't revert it."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    # Simulate Step 8.5 heal: a new meta file appears in the worktree before
+    # Step 9 runs. Snapshot is taken here.
+    meta_dir = repo / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "backend_foo_python.json").write_text("{}")
+
+    pre_status = _snapshot_worktree_status(repo)
+    # Round-3 contract: snapshot value is (status, content_sha256).
+    snap_entry = pre_status.get(".pdd/meta/backend_foo_python.json")
+    assert snap_entry is not None and snap_entry[0] == "??"
+    assert snap_entry[1] is not None  # content hash captured
+
+    # No further changes — Step 9 is a no-op here. The guard must NOT
+    # revert the meta file even though it isn't in the allowlist.
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/backend/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (meta_dir / "backend_foo_python.json").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_preflight_run_report(tmp_path):
+    """Same as above but for the `--sync-metadata` run-report variant
+    (`.pdd/meta/<basename>_run.json`)."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    meta_dir = repo / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "backend_foo_python_run.json").write_text(
+        '{"status": "passed"}'
+    )
+
+    pre_status = _snapshot_worktree_status(repo)
+    snap_entry = pre_status.get(".pdd/meta/backend_foo_python_run.json")
+    assert snap_entry is not None and snap_entry[0] == "??"
+    assert snap_entry[1] is not None
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/backend/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (meta_dir / "backend_foo_python_run.json").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_preflight_architecture_json_mutation(tmp_path):
+    """Step 8.5 may legitimately update architecture.json (e.g. registering
+    a healed prompt). architecture.json is explicitly EXCLUDED from the
+    allowlist, but the pre-snapshot must still preserve the mutation."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modified arch.json.
+    (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
+
+    pre_status = _snapshot_worktree_status(repo)
+    snap_entry = pre_status.get("architecture.json")
+    assert snap_entry is not None and snap_entry[0] == " M"
+    assert snap_entry[1] is not None
+
+    # Step 9 was a no-op (arch.json was already at "healed" before Step 9).
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert reverted == []
+    # arch.json must be untouched (still has the heal-time content).
+    assert (repo / "architecture.json").read_text() == '{"modules": ["healed"]}\n'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_step9_arch_json_modification_when_no_preflight(tmp_path):
+    """Control case for the preceding test: without a preflight snapshot
+    capturing the arch.json mutation, Step 9 modifying it must still be
+    treated as a scope violation."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    # No pre_status (or empty pre_status) — Step 9's arch.json mutation
+    # MUST be reverted.
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        pre_status={},
+        quiet=True,
+    )
+
+    assert "architecture.json" in reverted
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_step9_new_arch_modification_even_with_snapshot(tmp_path):
+    """Snapshotting only protects the EXACT (path, status) pair from before
+    Step 9. If Step 9 changes a file whose pre-status was unchanged ("" /
+    missing), the guard still enforces the allowlist."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Pre-snapshot has no arch.json mutation (clean state at heal time).
+    pre_status = _snapshot_worktree_status(repo)
+    assert "architecture.json" not in pre_status
+
+    # Step 9 then modifies arch.json — must be reverted.
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert "architecture.json" in reverted
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+# =============================================================================
+# Issue #1123 — Round-3: content-aware snapshot + deletion detection
+#
+# Status-only delta matching was insufficient: when Step 8.5 left a file
+# with porcelain status ` M` and Step 9 modified the SAME file again, the
+# post-status was still ` M`, so the guard skipped Step 9's drift.
+# Snapshot value is now (status, content_sha256_hex). Both must match for
+# a skip; a content-only difference triggers enforcement.
+#
+# Deletion of pre-snapshot files is also now detected: tracked deletions
+# restore from HEAD; untracked deletions surface as unrecoverable
+# violations so the workflow stops.
+# =============================================================================
+
+
+@pytest.mark.timeout(60)
+def test_snapshot_worktree_status_includes_content_hash(tmp_path):
+    """`_snapshot_worktree_status` records both status and SHA-256 of file
+    bytes. Modifying the file between two snapshots must yield a different
+    hash for the same path."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"foo.txt": "initial\n"})
+    target = repo / "foo.txt"
+    target.write_text("v1\n")
+
+    snap_1 = _snapshot_worktree_status(repo)
+    entry_1 = snap_1.get("foo.txt")
+    assert entry_1 is not None
+    status_1, hash_1 = entry_1
+    assert status_1 == " M"
+    assert hash_1 is not None and len(hash_1) == 64  # sha256 hex length
+
+    # Modify in place — porcelain status stays " M" but content hash MUST change.
+    target.write_text("v2\n")
+    snap_2 = _snapshot_worktree_status(repo)
+    entry_2 = snap_2.get("foo.txt")
+    assert entry_2 is not None
+    status_2, hash_2 = entry_2
+    assert status_2 == " M"
+    assert hash_2 is not None
+    assert hash_2 != hash_1, (
+        "Content hash did not change after file mutation — pre-snapshot delta "
+        "check would erroneously skip Step-9-on-top-of-Step-8.5 mutations"
+    )
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_enforces_when_preflight_modified_file_changed_again(tmp_path):
+    """Step 8.5 modifies architecture.json (status ` M`, content A). Step 9
+    modifies architecture.json AGAIN (status still ` M`, content B). With
+    the round-2 status-only delta check, the guard skipped this file —
+    Step 9's drift survived. Round-3 content-hash matching must catch it.
+    """
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modifies arch.json.
+    (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get("architecture.json")
+    assert pre_entry is not None and pre_entry[0] == " M"
+
+    # Step 9 modifies arch.json on top of Step 8.5's modification.
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # The Step-9 mutation must be detected and reverted to Step-8.5's state.
+    # (`git checkout HEAD -- architecture.json` restores HEAD, but that's
+    # acceptable: we only care that the scope violation was caught and the
+    # workflow will stop.)
+    assert "architecture.json" in reverted
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_detects_deletion_of_tracked_preflight_file(tmp_path):
+    """Step 8.5 modified a tracked file (status ` M`). Step 9 deleted that
+    file. Status-only iteration misses this because the post-status no
+    longer lists the path. Round-3 deletion detection iterates
+    pre_snapshot keys not in post-status and restores tracked deletions
+    from HEAD."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "tracked.txt": "original\n",
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modified tracked.txt — heal-time mutation.
+    (repo / "tracked.txt").write_text("heal mutation\n")
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get("tracked.txt")
+    assert pre_entry is not None and pre_entry[0] == " M"
+
+    # Step 9 deletes the file (off-allowlist).
+    (repo / "tracked.txt").unlink()
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # The deletion must be detected and the file restored from HEAD.
+    assert "tracked.txt" in reverted
+    assert (repo / "tracked.txt").exists(), "Tracked deletion not restored"
+    # Restored to HEAD content (not the Step-8.5 modification; we don't
+    # have that content stored anywhere). That's acceptable — Step 8.5 is
+    # idempotent and will re-modify on the next invocation.
+    assert (repo / "tracked.txt").read_text() == "original\n"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_flags_deletion_of_untracked_preflight_file_as_unrecoverable(tmp_path):
+    """Step 8.5 created an untracked file (status ``??``). Step 9 deleted
+    it. We don't have HEAD content to restore from. The guard must still
+    surface the deletion in the reverted list so the orchestrator's
+    SCOPE_VIOLATION path stops the workflow; Step 8.5 is idempotent and
+    will recreate the file on the next invocation.
+    """
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    meta_dir = repo / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    untracked = meta_dir / "x.json"
+    untracked.write_text('{"step8_5": "wrote me"}')
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get(".pdd/meta/x.json")
+    assert pre_entry is not None and pre_entry[0] == "??"
+
+    # Step 9 deletes the untracked file.
+    untracked.unlink()
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # Workflow-stops path: deletion is in the reverted list, even though we
+    # cannot auto-restore. Line 2146 of agentic_change_orchestrator.py
+    # treats a non-empty reverted list as SCOPE_VIOLATION.
+    assert ".pdd/meta/x.json" in reverted
+    # And we did NOT recreate the file (no HEAD content to restore from).
+    assert not untracked.exists()
+
+
+# =============================================================================
+# Issue #1123 — Round-4: content-revert detection + resume re-heal
+#
+# Two failure modes round-3 still missed:
+# 1. Step 9 reverting a Step-8.5 mutation back to HEAD content (post-status
+#    no longer lists the path; file still exists). The deletion pass
+#    skipped it because the file existed; the main pass skipped it because
+#    it wasn't in post-status. Result: a silent loss.
+# 2. On scope violation, the saved state kept preflight_drift_healed=True,
+#    so a resume would skip Step 8.5 and run Step 9 against a worktree
+#    that Step 9 had just emptied of Step-8.5's mutations. Now the
+#    violation save path clears the preflight gates.
+# =============================================================================
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_flags_step9_revert_of_preflight_architecture_json(tmp_path):
+    """Step 8.5 modifies architecture.json (status ` M`, content A). Step 9
+    writes it back to HEAD bytes (post-status is clean; file still on disk).
+    Round-3 deletion detection skipped this because the file existed.
+    Round-4 must flag it as an unrecoverable scope violation so the
+    orchestrator stops the workflow and resume re-runs Step 8.5."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modifies arch.json.
+    (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get("architecture.json")
+    assert pre_entry is not None and pre_entry[0] == " M"
+
+    # Step 9 writes arch.json back to HEAD content (post-status will be clean).
+    (repo / "architecture.json").write_text('{"modules": []}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # Path is surfaced so the orchestrator's SCOPE_VIOLATION block fires.
+    assert "architecture.json" in reverted
+    # File is left at HEAD (we have no pre content to re-apply); resume
+    # path will re-run Step 8.5 to re-establish the heal mutation.
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_clears_preflight_flags(temp_cwd):
+    """When the scope-violation save path fires, the saved state must NOT
+    carry preflight_drift_healed / preflight_healed_worktree. Otherwise the
+    resume gate skips Step 8.5 — leaving the worktree without the mutation
+    Step 9 just deleted/reverted. preflight_healed_prompt_paths must
+    remain so Step 10's doc-discovery merge still works on retry."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], ["prompts/foo_python.prompt"])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Drop an out-of-scope file so the scope guard reverts it
+                # and the violation handler fires.
+                (worktree / "tests").mkdir(parents=True, exist_ok=True)
+                (worktree / "tests" / "leak.py").write_text("nope")
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=11231,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert mock_save.called
+    saved_state = mock_save.call_args[0][3]
+    # The violation marker must be present so we know we hit the right path.
+    assert saved_state["step_outputs"]["9"].startswith("FAILED: SCOPE_VIOLATION")
+    # Preflight gates cleared so resume re-runs Step 8.5.
+    assert "preflight_drift_healed" not in saved_state, (
+        "preflight_drift_healed must be cleared on scope violation so "
+        "resume re-runs Step 8.5 and re-establishes the heal mutation "
+        "that Step 9 may have deleted/reverted."
+    )
+    assert "preflight_healed_worktree" not in saved_state, (
+        "preflight_healed_worktree must be cleared on scope violation "
+        "so the per-worktree idempotency check no longer short-circuits."
+    )
+    # Healed prompt paths intentionally preserved (Step 10 discovery
+    # uses them on retry; re-heal will produce identical paths anyway).
+    assert (
+        saved_state.get("preflight_healed_prompt_paths")
+        == ["prompts/foo_python.prompt"]
+    )
+
+
+# -----------------------------------------------------------------------------
+# Blocker 2 — fallback worktree-change detection must include `.rst`/`.txt`
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(30)
+def test_detect_worktree_changes_returns_rst_and_txt_docs(tmp_path):
+    """Step 5 allows `.rst` and `.txt` docs. If Step 9 modifies one and
+    forgets `FILES_MODIFIED:`, `_detect_worktree_changes` is the fallback —
+    and it MUST return those extensions, or the workflow aborts with
+    'produced no file changes' even though the LLM did the right thing."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "docs/manual.rst": "old rst\n",
+        "docs/notes.txt": "old txt\n",
+        "prompts/foo_python.prompt": "p\n",
+    })
+    (repo / "docs" / "manual.rst").write_text("new rst content\n")
+    (repo / "docs" / "notes.txt").write_text("new txt content\n")
+
+    files = _detect_worktree_changes(repo)
+
+    assert "docs/manual.rst" in files
+    assert "docs/notes.txt" in files
+
+
+# -----------------------------------------------------------------------------
+# Blocker 3 — scope-guard exceptions must stop the workflow (fail closed)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(60)
+def test_enforce_step9_scope_propagates_helper_exceptions(tmp_path):
+    """`_enforce_step9_scope` no longer wraps the helper in a broad
+    `try/except`. Permission/OS errors surface to the orchestrator, which
+    treats them as workflow-stopping scope violations."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+
+    with patch(
+        "pdd.agentic_common_worktree.revert_out_of_scope_changes_with_dirs",
+        side_effect=OSError("Permission denied"),
+    ):
+        with pytest.raises(OSError):
+            _enforce_step9_scope(
+                repo,
+                context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                         "direct_edit_candidates": []},
+                state={},
+                quiet=True,
+            )
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_guard_exception_stops_workflow(temp_cwd):
+    """When `_enforce_step9_scope` raises, the orchestrator MUST treat it
+    as a scope-violation-equivalent stop: no advance past step 9, return
+    False with a clear message that mentions the guard error."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p), \
+         patch("pdd.agentic_change_orchestrator._enforce_step9_scope",
+               side_effect=OSError("simulated guard failure")):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Step 9 reports success; the guard is what fails.
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1126,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Scope guard error" in msg or "scope guard" in msg.lower()
+    # last_completed_step must NOT advance to 9.
+    assert mock_save.called
+    saved_state = mock_save.call_args[0][3]
+    assert saved_state["last_completed_step"] < 9
+    # State output should mention the guard failure for debugging.
+    s9_output = saved_state["step_outputs"].get("9", "")
+    assert "SCOPE_VIOLATION" in s9_output
+    assert "scope guard enforcement error" in s9_output.lower()
+
+
+# -----------------------------------------------------------------------------
+# Nit N1 — case-insensitive section heading
+# -----------------------------------------------------------------------------
+
+
+def test_parse_step6_devunit_prompts_case_insensitive_heading():
+    """LLMs occasionally lowercase part of the heading; the parser must
+    still find the section instead of silently returning an empty list
+    (which collapses the allowlist)."""
+    weird_case = _STEP6_SAMPLE.replace(
+        "### Dev Units to MODIFY",
+        "### Dev units to MODIFY",
+    )
+    result = _parse_step6_devunit_prompts(weird_case)
+    assert "prompts/foo_python.prompt" in result
+    assert "prompts/bar_python.prompt" in result
+
+
+# -----------------------------------------------------------------------------
+# Nit N2 — strip markdown emphasis in path parsers
+# -----------------------------------------------------------------------------
+
+
+def test_parse_step5_doc_paths_strips_markdown_emphasis():
+    """`#### **README.md**` and `- **docs/foo.md** - purpose` are real LLM
+    outputs. They must round-trip to the plain path."""
+    sample = _textwrap.dedent("""
+        ## Step 5: Documentation Changes
+
+        ### Files to Update
+
+        #### **README.md**
+        **Change:** add
+
+        #### **`docs/usage.md`**
+        **Change:** add
+
+        ### Files to Create
+        - **docs/new_guide.md** - tutorial
+        - **`docs/reference.rst`** - reference
+    """)
+    result = _parse_step5_doc_paths(sample)
+    assert "README.md" in result
+    assert "docs/usage.md" in result
+    assert "docs/new_guide.md" in result
+    assert "docs/reference.rst" in result
+    # No emphasis markers leaked into the parsed paths.
+    assert not any("*" in p for p in result)
+    assert not any("`" in p for p in result)
+
+
+# -----------------------------------------------------------------------------
+# Round 7 — SCOPE_VIOLATION GitHub comment body must NOT rely on the
+# 1000-char fallback path. Passing an explicit `body` puts the reverted
+# paths at the top of the comment and bypasses output truncation.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_passes_explicit_body_with_reverted_paths(temp_cwd):
+    """Long Step 9 LLM outputs must not clip the reverted-paths list.
+
+    Regression: `post_step_comment` with `body=None` truncates `output`
+    to the first 1000 chars. Because the SCOPE_VIOLATION block is
+    appended to the END of step_output, a long step_output can push
+    the reverted-paths list past 1000 chars, silently dropping it from
+    the issue comment. The orchestrator must now pass an explicit
+    `body` kwarg with the list at the TOP.
+    """
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    # Pad the step 9 output well past the 1000-char fallback cap so any
+    # regression to body=None would clip the list and fail the test.
+    pad = "noise " * 400  # ~2400 chars of filler
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True) as mock_pc, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Drop TWO out-of-scope files so both must survive in the
+                # comment body. Return a long step output that would clip
+                # under the 1000-char fallback path.
+                (worktree / "tests").mkdir(parents=True, exist_ok=True)
+                (worktree / "tests" / "leak_one.py").write_text("nope")
+                (worktree / "tests" / "leak_two.py").write_text("nope")
+                return (
+                    True,
+                    f"FILES_MODIFIED: prompts/foo_python.prompt\n{pad}",
+                    0.5,
+                    "gpt-4",
+                )
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=11237,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    # Locate the Step 9 post_step_comment call.
+    step9_calls = [
+        c for c in mock_pc.call_args_list
+        if c.kwargs.get("step_num") == 9
+    ]
+    assert step9_calls, "Step 9 must post a comment when a violation fires"
+    body = step9_calls[-1].kwargs.get("body")
+    assert body is not None, (
+        "Step 9 violation MUST pass an explicit `body` kwarg so the "
+        "1000-char fallback in post_step_comment does not clip the "
+        "reverted-paths list out of the GitHub comment."
+    )
+    # Both reverted paths must appear verbatim in the body.
+    assert "tests/leak_one.py" in body
+    assert "tests/leak_two.py" in body
+    # And the list should be near the TOP of the comment, ahead of any
+    # narrative — confirm by checking it precedes the "How to resume"
+    # section the template adds at the bottom.
+    assert body.index("tests/leak_one.py") < body.index("How to resume")
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_guard_error_passes_explicit_body_with_error(temp_cwd):
+    """The strict-mode guard-error branch must also pass an explicit body
+    so the underlying exception message is not truncated."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True) as mock_pc, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p), \
+         patch("pdd.agentic_change_orchestrator._enforce_step9_scope",
+               side_effect=OSError("simulated guard failure")):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=11238,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    step9_calls = [
+        c for c in mock_pc.call_args_list
+        if c.kwargs.get("step_num") == 9
+    ]
+    assert step9_calls, "Step 9 must post a comment when guard error fires"
+    body = step9_calls[-1].kwargs.get("body")
+    assert body is not None, (
+        "Step 9 guard-error branch MUST pass an explicit `body` kwarg "
+        "so the underlying exception detail is not clipped by the "
+        "1000-char fallback in post_step_comment."
+    )
+    # Underlying exception must be in the body verbatim so a debugger
+    # can see what actually failed without spelunking the saved state.
+    assert "simulated guard failure" in body
+    # Comment surfaces the violation status near the top.
+    assert "SCOPE_VIOLATION" in body
+    assert body.index("simulated guard failure") < body.index("How to resume")

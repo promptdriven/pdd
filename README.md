@@ -2290,7 +2290,11 @@ The 13-step workflow:
 12. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
 13. **Create PR**: Create a pull request linking to the issue and surface any unresolved `MANUAL_REVIEW:` flags in the PR body
 
-**Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
+**Workflow Resumption**: Steps 4, 7, and 9 may pause the workflow:
+- **Steps 4 (Clarification)** and **7 (Architecture Review)** pause to ask clarifying or architectural questions. Answer the questions in the GitHub issue and run `pdd change` again to resume.
+- **Step 9 (Scope Violation)** pauses when the implementation step touched files outside the scope contract derived from Steps 5 and 6 (e.g. unrelated prompts, new code/example/test files, or `architecture.json`). The orchestrator reverts the out-of-scope edits and posts a `## Step 9: Scope Violation` comment listing the reverted paths. To resume: refine the issue (or the Step 5/6 contract — sometimes the contract was too narrow), then run `pdd change` again. Step 8.5 (preflight drift heal) will re-run automatically so heal artifacts are restored before Step 9 retries.
+
+In all three cases, the workflow resumes from the paused step and skips already-completed steps to save tokens.
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 

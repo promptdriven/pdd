@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Any
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -730,23 +730,508 @@ def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
     Parse Step 6 output for 'Direct Edit Candidates' table.
     Extract file paths from the first column of each row.
     Returns empty list if no table found.
+
+    Tolerates optional italic descriptions or blank lines between the
+    `### Direct Edit Candidates...` heading and the markdown table (this
+    matches the actual `agentic_change_step6_devunits_LLM.prompt` template
+    which emits a `*Files that need scoped...*` line plus a blank line).
+
+    Implemented as a line-walker rather than a regex to avoid catastrophic
+    backtracking. The previous pattern's inner group
+    ``(?:[^|#\\n][^\\n]*\\n|\\s*\\n)*`` had overlapping alternatives — a
+    whitespace-only line matched BOTH branches, so N blank lines after the
+    heading produced 2^N backtrack states (CodeQL py/redos alert, PR #1133).
     """
-    candidates = []
-    # Look for the Direct Edit Candidates table section
-    # Format: | file_path | edit_type | markers |
-    table_pattern = r"### Direct Edit Candidates[^\n]*\n\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+\n)*)"
-    table_match = re.search(table_pattern, step6_output, re.IGNORECASE)
-    if table_match:
-        rows = table_match.group(1).strip().split("\n")
-        for row in rows:
-            if row.strip().startswith("|"):
-                # Extract first column (file path)
-                cols = [c.strip() for c in row.split("|")]
-                if len(cols) >= 2 and cols[1]:  # cols[0] is empty due to leading |
-                    file_path = cols[1].strip().strip("`")
-                    if file_path and not file_path.startswith("-"):
-                        candidates.append(file_path)
+    heading_re = re.compile(r"^###\s+Direct Edit Candidates", re.IGNORECASE)
+    separator_chars = set("-: ")
+    candidates: List[str] = []
+    found_heading = False
+    found_header = False
+    found_separator = False
+    for raw_line in step6_output.splitlines():
+        stripped = raw_line.strip()
+        if not found_heading:
+            if heading_re.match(raw_line.rstrip()):
+                found_heading = True
+            continue
+        if not found_header:
+            # Skip non-table content (italic description, blank lines) until
+            # we see the first pipe line. Abort if we hit another markdown
+            # heading at the same or higher level before the table — the
+            # section ended without a table.
+            if stripped.startswith("#"):
+                return candidates
+            if stripped.startswith("|"):
+                found_header = True  # header row, separator next
+            continue
+        if not stripped.startswith("|"):
+            break  # end of table
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if not found_separator:
+            if cells and all(c and set(c) <= separator_chars for c in cells):
+                found_separator = True
+            continue
+        if cells and cells[0]:
+            cell = cells[0].strip("`").strip("*").strip()
+            if cell and not cell.startswith("-"):
+                candidates.append(cell)
     return candidates
+
+def _extract_section(text: str, heading: str, level: int = 3) -> str:
+    """Return the body of a Markdown section, bounded by the next same-or-higher
+    level heading. Empty string if not found.
+
+    `level` is the number of `#` characters in the section heading. The
+    heading match itself is case-insensitive — LLMs occasionally drop or
+    flip capitalization (``Dev units to MODIFY`` instead of
+    ``Dev Units to MODIFY``) and silently losing the whole allowlist
+    section over that is worse than a one-line regex flag.
+    """
+    hashes = "#" * level
+    # Stop at the next heading of the same level or any higher level (fewer #).
+    # We approximate "higher level" by matching `#{1..level}` followed by space.
+    stop = rf"(?=^#{{1,{level}}} )"
+    pattern = rf"^{re.escape(hashes)} {re.escape(heading)}\s*\n(.*?)(?:{stop}|\Z)"
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _parse_md_table_column(section: str, column_index: int) -> List[str]:
+    """Extract the ``column_index``-th column (1-based) from every body row of
+    the first markdown table found in *section*.
+
+    Skips the header and separator rows, drops empty/placeholder cells.
+    """
+    values: List[str] = []
+    in_table = False
+    saw_separator = False
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|"):
+            if in_table:
+                break  # table ended
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        # Separator row: all cells match the dash pattern.
+        if all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
+            saw_separator = True
+            in_table = True
+            continue
+        if not in_table:
+            # First line is the header; flag and continue.
+            in_table = True
+            continue
+        if not saw_separator:
+            continue
+        if column_index - 1 >= len(cells):
+            continue
+        # Strip markdown emphasis (``**`` / ``*``) and code-ticks so the
+        # parser tolerates LLM variants like ``| **prompts/foo.prompt** | …``.
+        cell = cells[column_index - 1].strip().strip("*`").strip()
+        if cell:
+            values.append(cell)
+    return values
+
+
+def _parse_step6_devunit_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from Step 6 'Dev Units to MODIFY' / 'CREATE' tables.
+
+    Returns only the first column (Prompt). Code, Example, and Test columns are
+    forbidden Step 9 targets and never returned. Placeholder rows containing
+    `{...}` literals are skipped.
+    """
+    prompts: List[str] = []
+    for heading in ("Dev Units to MODIFY", "Dev Units to CREATE"):
+        section = _extract_section(step6_output, heading, level=3)
+        if not section:
+            continue
+        for cell in _parse_md_table_column(section, column_index=1):
+            if "{" in cell or "}" in cell:
+                continue
+            if cell.endswith(".prompt"):
+                prompts.append(cell)
+    return prompts
+
+
+def _parse_step6_dependency_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from Step 6's 'Dependencies' bullet list.
+
+    Format: `` - `path` - reason ``. Non-prompt entries are ignored.
+    """
+    section = _extract_section(step6_output, "Dependencies (may need interface updates)", level=3)
+    if not section:
+        return []
+    prompts: List[str] = []
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("-"):
+            continue
+        # Strip leading dash, take the first backticked token if present.
+        body = line.lstrip("-").strip()
+        match = re.match(r"`([^`]+)`", body)
+        candidate = match.group(1).strip() if match else body.split(" - ", 1)[0].strip()
+        candidate = candidate.strip("`").strip()
+        if candidate.endswith(".prompt") and "{" not in candidate:
+            prompts.append(candidate)
+    return prompts
+
+
+def _parse_step6_integration_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from the 3rd column of Step 6's Integration Points table.
+
+    Cells that are empty or say 'manual update needed' are skipped.
+    """
+    section = _extract_section(step6_output, "Integration Points Discovered", level=3)
+    if not section:
+        return []
+    prompts: List[str] = []
+    for cell in _parse_md_table_column(section, column_index=3):
+        lower = cell.lower()
+        if not cell or "manual" in lower:
+            continue
+        if cell.endswith(".prompt") and "{" not in cell:
+            prompts.append(cell)
+    return prompts
+
+
+def _parse_step6_frontend_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from the 2nd column of Step 6's Frontend Dev Units table.
+
+    Cells that say 'None' (case-insensitive) are skipped.
+    """
+    section = _extract_section(step6_output, "Frontend Dev Units (Cross-Layer)", level=3)
+    if not section:
+        return []
+    prompts: List[str] = []
+    for cell in _parse_md_table_column(section, column_index=2):
+        if not cell or cell.strip().lower() == "none":
+            continue
+        if cell.endswith(".prompt") and "{" not in cell:
+            prompts.append(cell)
+    return prompts
+
+
+def _parse_step5_doc_paths(
+    step5_output: str,
+    confirmed_prompts: Optional[Iterable[str]] = None,
+) -> List[str]:
+    """Extract documentation file paths from Step 5 output.
+
+    Includes paths under `### Files to Update`, `### Files to Create`, and
+    `### Associated Documents`. Excludes `### Conflicts` and
+    `### No Changes Needed`. Only `.md`, `.rst`, `.txt` paths are returned.
+
+    Markdown emphasis (``**path**``) and surrounding backticks are stripped so
+    LLM variants like ``#### **README.md**`` and
+    ``- **docs/foo.md** - purpose`` are recognized.
+
+    *confirmed_prompts* (when supplied) is the Step 6 confirmed dev-unit
+    prompt set — the union of MODIFY/CREATE/dependencies/integration/frontend
+    prompts. Each ``Associated Documents`` sub-entry carries a
+    ``**Discovered via:** prompts/...`` line identifying the prompt whose
+    ``<include>`` graph surfaced the doc. If that originating prompt is NOT
+    in *confirmed_prompts*, the doc is a stale carryover: Step 6 dropped the
+    prompt from the dev-unit list (or never confirmed it), so Step 9 is
+    required to skip the doc per the Step 9 prompt's reconciliation rule
+    (``prompts/agentic_change_step9_implement_LLM.prompt`` §2).
+
+    Files to Update and Files to Create entries are NEVER reconciled —
+    Step 5 owns those buckets directly, they aren't discovered through the
+    include graph, and a `Discovered via` line is not even emitted for them.
+    Only ``Associated Documents`` is subject to reconciliation.
+
+    When *confirmed_prompts* is ``None`` the previous (unfiltered) behavior
+    is preserved — callers that don't have a Step 6 set available still get
+    the union of all three buckets.
+    """
+    confirmed_set: Optional[Set[str]] = (
+        {str(p).replace("\\", "/").strip().strip("`").strip()
+         for p in confirmed_prompts if p}
+        if confirmed_prompts is not None
+        else None
+    )
+
+    docs: List[str] = []
+    # Files to Update: `#### path` headers. Tolerate any combination of
+    # surrounding markdown emphasis (``*``, ``**``) and code-ticks (``` ` ```)
+    # — strip them after capture rather than baking them into the pattern.
+    # ``str.strip("*`")`` peels off both characters in any order, so
+    # ``**`name`**`` collapses to ``name`` in a single call.
+    update_section = _extract_section(step5_output, "Files to Update", level=3)
+    if update_section:
+        for match in re.finditer(r"^####\s+(.+?)\s*$", update_section, re.MULTILINE):
+            candidate = match.group(1).strip().strip("*`").strip()
+            if candidate.endswith((".md", ".rst", ".txt")):
+                docs.append(candidate)
+
+    # Associated Documents: `#### path` sub-headings, each followed by a
+    # ``**Discovered via:** `prompts/...` `` line. Split per-sub-heading so
+    # each doc can be reconciled against its own originating prompt.
+    assoc_section = _extract_section(step5_output, "Associated Documents", level=3)
+    if assoc_section:
+        # ``re.split`` returns alternating non-match / match chunks; the
+        # first chunk is anything before the first ``####`` (intro text,
+        # usually italic description). Skip it.
+        sub_sections = re.split(r"(?m)^####\s+", assoc_section)
+        for sub in sub_sections[1:]:
+            first_line, _, body = sub.partition("\n")
+            candidate = first_line.strip().strip("*`").strip()
+            if not candidate.endswith((".md", ".rst", ".txt")):
+                continue
+            if confirmed_set is not None:
+                # Two-step extraction. The Step 5 template documents the
+                # ``**Discovered via:**`` value as an include-graph path that
+                # may contain backticks and a ``→`` arrow, e.g.
+                # ``\`prompts/foo.prompt\` → \`<include>docs/api.md</include>\```.
+                # A single anchored regex anchored to ``$`` with a
+                # ``[^`\n]`` character class cannot span that — it never
+                # matched on real Step 5 output, so the reconciliation gate
+                # silently allowlisted stale docs (issue #1123 round-6).
+                # Step 1: grab everything after ``**Discovered via:**`` on
+                # the same line and any continuation lines, up to the next
+                # bold field, a blank line, or the end of the body.
+                dv_match = re.search(
+                    r"\*\*Discovered via:\*\*(.*?)(?:\n\s*\*\*|\n\s*\n|$)",
+                    body,
+                    re.DOTALL,
+                )
+                if dv_match:
+                    clause = dv_match.group(1)
+                    # Step 2: the FIRST ``*.prompt`` path inside the clause
+                    # is the originating prompt (later entries are downstream
+                    # nodes along the include chain). Strip surrounding
+                    # backticks; whitespace is excluded by the token class.
+                    origin_match = re.search(r"`?([^\s`]+\.prompt)`?", clause)
+                    if origin_match:
+                        origin = origin_match.group(1).strip("`").strip()
+                        origin_norm = origin.replace("\\", "/")
+                        if origin_norm not in confirmed_set:
+                            # Originating prompt was not confirmed by Step 6;
+                            # Step 9 must skip this doc, so the scope guard
+                            # refuses to allowlist it.
+                            continue
+                    # No ``*.prompt`` token inside the Discovered via clause —
+                    # the LLM emitted a non-standard form. Fall through to the
+                    # conservative include path below so a malformed but
+                    # legitimately reachable doc isn't dropped.
+                # If the ``Discovered via`` field is absent entirely we
+                # cannot reconcile — include conservatively so a missing
+                # field doesn't drop a legitimately reachable doc. The
+                # Step 5 prompt requires the field; this branch only
+                # protects against minor LLM omissions.
+            docs.append(candidate)
+
+    # Files to Create: `- path - purpose` bullets.
+    create_section = _extract_section(step5_output, "Files to Create", level=3)
+    if create_section:
+        for raw_line in create_section.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("-"):
+                continue
+            body = line.lstrip("-").strip()
+            # Path is the first backticked or whitespace-separated token.
+            match = re.match(r"`([^`]+)`", body)
+            candidate = match.group(1).strip() if match else body.split(" - ", 1)[0].strip()
+            candidate = candidate.strip("*`").strip()
+            if candidate.endswith((".md", ".rst", ".txt")):
+                docs.append(candidate)
+    return docs
+
+
+def _snapshot_worktree_status(
+    worktree_path: Path,
+) -> Dict[str, Tuple[str, Optional[str]]]:
+    """Snapshot the current ``git status --porcelain=v1 -z`` state of *worktree_path*.
+
+    Returns a dict mapping POSIX-relative path →
+    ``(porcelain_status, content_sha256_hex_or_None)``.
+
+    ``content_sha256`` is the SHA-256 hex digest of the file's bytes at
+    snapshot time, or ``None`` when the file cannot be read (e.g. a staged
+    deletion with porcelain status ``' D'``, or a permission error).
+
+    Used by the Step 9 scope guard as a delta baseline: entries whose
+    ``(status, content_sha256)`` tuple matches this baseline are skipped
+    during enforcement because they pre-date the Step 9 LLM run (Step 8.5
+    drift-heal artifacts, earlier resume-state writes, etc.). Content-hash
+    matching catches the Step-8.5-modified-then-Step-9-modified case that
+    pure status-based matching missed (issue #1123 round-3).
+
+    Best-effort — returns ``{}`` on any error (no worktree, no git, etc.) so
+    callers always get a usable mapping.
+    """
+    if not worktree_path or not worktree_path.exists():
+        return {}
+    if not (worktree_path / ".git").exists():
+        return {}
+    try:
+        from pdd.git_porcelain import parse_porcelain_z
+        from pdd.agentic_common_worktree import _hash_file_content
+        result = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "-u"],
+            cwd=str(worktree_path),
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return {}
+        snapshot: Dict[str, Tuple[str, Optional[str]]] = {}
+        for entry in parse_porcelain_z(result.stdout):
+            content_hash = _hash_file_content(worktree_path / entry.path)
+            snapshot[entry.path] = (entry.status, content_hash)
+        return snapshot
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+    except Exception:
+        return {}
+
+
+def _build_step9_allowlist(
+    worktree_path: Path,
+    step5_output: str,
+    step6_output: str,
+    healed_prompt_paths: Sequence[str],
+) -> Tuple[Set[Path], Set[str]]:
+    """Build the (allowed_files, allowed_dirs) pair for the Step 9 scope guard.
+
+    Allowed files (resolved absolute paths under *worktree_path*):
+      * Step 6 dev-unit prompts (MODIFY + CREATE + dependencies + integration + frontend)
+      * Step 6 Direct Edit Candidates
+      * Step 5 doc paths (Update + Create + Associated; excludes Conflicts)
+      * Preflight-healed prompts (the companion `.pdd/meta/*.json` and
+        `.pdd/meta/*_run.json` files are NOT in the allowlist; their
+        Step 8.5 mutations are protected via the pre-snapshot delta check
+        in `_enforce_step9_scope` instead — see issue #1123 round-2.)
+
+    No directory prefixes are returned — paths only, exact match.
+    """
+    worktree_root = worktree_path.resolve()
+
+    def _resolve(rel: str) -> Path:
+        candidate = Path(rel)
+        if candidate.is_absolute():
+            return candidate.resolve()
+        return (worktree_root / candidate).resolve()
+
+    allowed_files: Set[Path] = set()
+    seen_rel: Set[str] = set()
+
+    def _add(rel: str) -> None:
+        normalized = rel.replace("\\", "/").strip().strip("`").strip()
+        if not normalized or normalized in seen_rel:
+            return
+        # Hard exclusions — these never enter the allowlist regardless of source.
+        if normalized.endswith("architecture.json"):
+            return
+        seen_rel.add(normalized)
+        allowed_files.add(_resolve(normalized))
+
+    devunit_prompts = _parse_step6_devunit_prompts(step6_output)
+    dependency_prompts = _parse_step6_dependency_prompts(step6_output)
+    integration_prompts = _parse_step6_integration_prompts(step6_output)
+    frontend_prompts = _parse_step6_frontend_prompts(step6_output)
+
+    for path in devunit_prompts:
+        _add(path)
+    for path in dependency_prompts:
+        _add(path)
+    for path in integration_prompts:
+        _add(path)
+    for path in frontend_prompts:
+        _add(path)
+    for path in _parse_direct_edit_candidates(step6_output):
+        _add(path)
+
+    # Reconcile Associated Documents against Step 6's confirmed dev-unit
+    # prompt set: a doc whose "Discovered via" originating prompt is not in
+    # this set is a stale carryover that Step 9 is required to skip
+    # (`prompts/agentic_change_step9_implement_LLM.prompt` §2). The Step 9
+    # prompt already enforces this rule; mirroring it in the scope guard
+    # closes a defense-in-depth gap where a misbehaving LLM could edit a
+    # stale doc and slip past the guard.
+    confirmed_prompts = (
+        set(devunit_prompts)
+        | set(dependency_prompts)
+        | set(integration_prompts)
+        | set(frontend_prompts)
+    )
+    for path in _parse_step5_doc_paths(step5_output, confirmed_prompts=confirmed_prompts):
+        _add(path)
+
+    for raw in healed_prompt_paths or []:
+        prompt_str = str(raw).replace("\\", "/").strip()
+        if not prompt_str.endswith(".prompt"):
+            continue
+        # Resolve healed prompt against the worktree if it's relative.
+        # Companion `.pdd/meta/*.json` and `.pdd/meta/*_run.json` files
+        # are NOT added here; they are protected via the pre-snapshot delta
+        # check in `_enforce_step9_scope` so that nested-directory and
+        # `--sync-metadata` side-effects (architecture.json, *_run.json)
+        # are all covered without having to mirror PDD's meta-path
+        # derivation logic in this allowlist.
+        prompt_path = Path(prompt_str)
+        if prompt_path.is_absolute():
+            allowed_files.add(prompt_path.resolve())
+        else:
+            allowed_files.add((worktree_root / prompt_path).resolve())
+
+    return allowed_files, set()
+
+
+def _enforce_step9_scope(
+    worktree_path: Path,
+    context: Dict[str, Any],
+    state: Dict[str, Any],
+    pre_status: Optional[Dict[str, Tuple[str, Optional[str]]]] = None,
+    quiet: bool = False,
+) -> List[str]:
+    """Revert any Step 9 file change that is not in the allowlist.
+
+    Returns the list of reverted relative paths (POSIX strings). Returns ``[]``
+    when the worktree is missing or git is unavailable.
+
+    On enforcement errors (helper raises, e.g. permission denied on
+    ``os.remove`` or OSError on ``git reset``), the exception propagates —
+    the orchestrator call site treats a failed guard as a workflow-stopping
+    scope violation rather than silently fail-open.
+
+    *pre_status* is the snapshot of ``git status`` BEFORE the Step 9 LLM ran
+    (captured right after preflight drift-heal), mapping POSIX-relative
+    path → ``(porcelain_status, content_sha256_hex_or_None)``. Entries
+    whose ``(status, content_sha)`` tuple matches the snapshot are skipped
+    during enforcement: their existing state is a Step 8.5 artifact, not a
+    Step 9 mutation.
+
+    The helper is invoked with ``strict=True`` so any internal failure
+    propagates — issue #1123 round-3 (blocker C). Without ``strict``, the
+    helper would swallow subprocess timeouts, non-zero ``git`` returns, and
+    OSErrors and return ``[]``, leaving the orchestrator to advance as if
+    enforcement succeeded.
+    """
+    if not worktree_path or not worktree_path.exists():
+        return []
+    # The helper relies on `git status` succeeding. If the path is not a git
+    # working tree (no `.git` dir or worktree gitlink file present), the
+    # guard is a no-op rather than a spurious failure.
+    if not (worktree_path / ".git").exists():
+        return []
+    from pdd.agentic_common_worktree import revert_out_of_scope_changes_with_dirs
+
+    step5_output = context.get("step5_output", "") or ""
+    step6_output = context.get("step6_output", "") or ""
+    healed = state.get("preflight_healed_prompt_paths", []) or []
+    allowed_files, allowed_dirs = _build_step9_allowlist(
+        worktree_path, step5_output, step6_output, healed
+    )
+    reverted_paths = revert_out_of_scope_changes_with_dirs(
+        worktree_path,
+        allowed_dirs,
+        allowed_files,
+        pre_snapshot=pre_status,
+        strict=True,
+    )
+    return [Path(p).as_posix() for p in reverted_paths]
+
 
 def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]:
     """
@@ -767,7 +1252,12 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
             capture_output=True, check=True
         )
         files = []
-        allowed_extensions = {".prompt", ".md"}
+        # Mirror the doc extensions Step 5/9 may legitimately edit. If this
+        # set drifts from `_parse_step5_doc_paths`, the scope guard will
+        # correctly preserve an in-scope `.rst`/`.txt` edit but this
+        # fallback returns [] — the workflow then aborts with "produced
+        # no file changes" even though the LLM did the right thing.
+        allowed_extensions = {".prompt", ".md", ".rst", ".txt"}
         direct_edit_set = set(direct_edit_candidates or [])
         for entry in parse_porcelain_z(result.stdout):
             # Use the new-side path verbatim — callers want current path.
@@ -1599,6 +2089,18 @@ def run_agentic_change_orchestrator(
                     ", ".join(failed_heal) if failed_heal else "None"
                 )
 
+            # Issue #1123: snapshot worktree state right BEFORE Step 9's
+            # LLM runs (and AFTER Step 8.5's drift-heal). The Step 9 scope
+            # guard uses this as a delta baseline so heal artifacts —
+            # `.pdd/meta/<nested>_<lang>.json`, `.pdd/meta/<basename>_run.json`,
+            # architecture.json mutations, etc. — are NOT misread as Step 9
+            # scope violations. Captured unconditionally (whenever the
+            # worktree exists), not just on the heal path: on resume after
+            # a violation, preflight already ran in a prior invocation and
+            # its mutations are on disk and must still be in the snapshot.
+            if worktree_path and worktree_path.exists():
+                context["_step9_pre_status"] = _snapshot_worktree_status(worktree_path)
+
         if not quiet:
             console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
 
@@ -1759,6 +2261,153 @@ def run_agentic_change_orchestrator(
                 console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
 
         if step_num == 9:
+            # Scope guard (issue #1123): revert any file change outside the
+            # Step 5/6 allowlist. Step 9 is supposed to touch only prompts,
+            # docs, and explicitly-listed Direct Edit Candidates. The LLM
+            # does not reliably honor this; the guard enforces it.
+            scope_reverted: List[str] = []
+            scope_guard_error: Optional[str] = None
+            if worktree_path:
+                pre_status = context.get("_step9_pre_status")
+                try:
+                    scope_reverted = _enforce_step9_scope(
+                        worktree_path=worktree_path,
+                        context=context,
+                        state=state,
+                        pre_status=pre_status,
+                        quiet=quiet,
+                    )
+                except Exception as exc:
+                    # Round-2 fail-closed: the guard is a workflow-stopping
+                    # safety net. If it raised (permission denied on a
+                    # revert, OSError on a git reset, etc.), do NOT
+                    # silently advance — surface the failure as a
+                    # scope-violation-equivalent stop so the user knows
+                    # the contract was never enforced. See issue #1123.
+                    scope_guard_error = (
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    if not quiet:
+                        console.print(
+                            f"[red]Step 9 scope guard FAILED to enforce: "
+                            f"{escape(scope_guard_error)}[/red]"
+                        )
+            if scope_reverted or scope_guard_error:
+                if scope_guard_error:
+                    violation_block = (
+                        "SCOPE_VIOLATION:\n"
+                        + f"- <scope guard enforcement error: {scope_guard_error}>\n"
+                        + "\nThe Step 9 scope guard raised an error and could "
+                        "not enforce the allowlist. Treating this as a "
+                        "workflow-stopping scope violation. Inspect the "
+                        "worktree state, address the underlying issue, then "
+                        "resume."
+                    )
+                    return_msg = (
+                        "Stopped at step 9: Scope guard error — "
+                        f"{scope_guard_error}"
+                    )
+                    # Round-7: build an explicit GitHub-comment body so the
+                    # error surfaces at the TOP of the comment. The legacy
+                    # body=None fallback truncates `output` to 1000 chars,
+                    # which can clip critical context on long Step 9 outputs.
+                    violation_body = (
+                        f"## Step {step_num}/13: {description}\n\n"
+                        f"**Status:** FAILED: SCOPE_VIOLATION "
+                        f"(guard enforcement error)\n\n"
+                        f"### Error\n```\n{scope_guard_error}\n```\n\n"
+                        f"### Why\n"
+                        f"The Step 9 scope guard could not complete (git "
+                        f"status / revert failure under strict mode). "
+                        f"Treating as a workflow-stopping scope "
+                        f"violation.\n\n"
+                        f"### How to resume\n"
+                        f"Investigate the underlying git/worktree issue, "
+                        f"then run `pdd change` again. Step 8.5 will "
+                        f"re-run automatically.\n\n"
+                        f"---\n"
+                        f"*Step 9 scope guard — issue #1123*"
+                    )
+                else:
+                    violation_block = (
+                        "SCOPE_VIOLATION:\n"
+                        + "\n".join(f"- {p}" for p in scope_reverted)
+                        + "\n\nThis indicates the Step 9 agent attempted edits outside "
+                        "the issue's contract. Review and refine the issue, then resume."
+                    )
+                    return_msg = (
+                        f"Stopped at step 9: Scope violation — agent modified "
+                        f"{len(scope_reverted)} file(s) outside allowlist"
+                    )
+                    # Round-7: build an explicit GitHub-comment body that
+                    # puts the reverted-paths list at the TOP. The legacy
+                    # body=None fallback truncates `output` to 1000 chars
+                    # and the SCOPE_VIOLATION block is appended to the END
+                    # of step_output, so long Step 9 outputs can clip the
+                    # list — making README's "comment lists reverted paths"
+                    # a false promise. Bypass the fallback by passing an
+                    # explicit body with the list up front.
+                    violation_body = (
+                        f"## Step {step_num}/13: {description}\n\n"
+                        f"**Status:** FAILED: SCOPE_VIOLATION\n\n"
+                        f"### Reverted files ({len(scope_reverted)})\n"
+                        + "\n".join(f"- `{p}`" for p in scope_reverted)
+                        + "\n\n"
+                        f"### Why\n"
+                        f"The Step 9 agent attempted edits outside the "
+                        f"issue's scope contract (Step 5 docs, Step 6 "
+                        f"prompts/dependencies/integration points/direct-"
+                        f"edit candidates, plus preflight-healed prompts). "
+                        f"Those files have been reverted in the "
+                        f"worktree.\n\n"
+                        f"### How to resume\n"
+                        f"Refine the issue (or the Step 5/6 contract if "
+                        f"it was too narrow), then run `pdd change` "
+                        f"again. Step 8.5 will re-run automatically.\n\n"
+                        f"---\n"
+                        f"*Step 9 scope guard — issue #1123*"
+                    )
+                step_output = step_output.rstrip() + "\n\n" + violation_block
+                if not quiet and scope_reverted:
+                    console.print(
+                        f"[red]Step 9 scope violation: reverted "
+                        f"{len(scope_reverted)} file(s) outside allowlist[/red]"
+                    )
+                    for path in scope_reverted:
+                        console.print(f"  [red]- {escape(path)}[/red]")
+                post_step_comment(
+                    repo_owner=repo_owner, repo_name=repo_name,
+                    issue_number=issue_number, step_num=step_num,
+                    total_steps=13, description=description,
+                    output=step_output, cwd=cwd,
+                    body=violation_body,
+                )
+                state["step_outputs"][str(step_num)] = f"FAILED: SCOPE_VIOLATION\n{step_output}"
+                # Do NOT advance last_completed_step — same pattern as the
+                # "no file changes" fallback below.
+                state["step_comments"] = sorted(step_comments_set)
+                # Issue #1123 round-4: clear preflight gates so resume
+                # re-runs Step 8.5. Step 9 may have deleted or reverted
+                # Step 8.5's mutations (.pdd/meta/*, architecture.json),
+                # and the resume path needs to re-establish them before
+                # the next Step 9 attempt. This applies to BOTH violation
+                # branches above (scope_reverted and scope_guard_error).
+                # Note: preflight_healed_prompt_paths is intentionally
+                # preserved so Step 10's doc-discovery sweep can still
+                # merge in the originally healed prompts on retry — the
+                # re-heal will regenerate them identically.
+                state.pop("preflight_drift_healed", None)
+                state.pop("preflight_healed_worktree", None)
+                save_workflow_state(
+                    cwd, issue_number, "change", state, state_dir,
+                    repo_owner, repo_name, use_github_state, github_comment_id,
+                )
+                return (
+                    False,
+                    return_msg,
+                    total_cost, model_used, [],
+                )
+
             extracted_files = _parse_changed_files(step_output)
             if not extracted_files and worktree_path:
                 # Fallback: check worktree for actual file changes
