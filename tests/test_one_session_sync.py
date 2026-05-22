@@ -2666,3 +2666,84 @@ class TestOneSessionRollback:
         assert (
             pdd_files["test"].read_text(encoding="utf-8") == original_tests
         ), "test file must be rolled back when TestChurnError fires"
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch(
+        "pdd.one_session_sync.build_one_session_prompt",
+        return_value="mega prompt",
+    )
+    def test_alt_path_rewrite_with_canonical_unchanged_raises_churn_error(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Greg-review regression (PR #1015): the one-session agent
+        rewrites a pre-existing alt-path test file (e.g.
+        ``__tests__/widget.test.ts``) from many tests down to one while
+        the canonical test file is unchanged. The pre-fix gate checked
+        only the canonical path and passed, leaving the high-churn
+        alt-path rewrite on disk. The multi-file sweep added in the
+        Greg-review follow-up MUST raise ``TestChurnError`` for the
+        alt-path and restore every snapshotted file (canonical, code,
+        and alt-paths) to its pre-session bytes."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_TEST_CHURN_GATE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_CONFORMANCE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_PUBLIC_SURFACE_GATE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = "def hello():\n    return 'world'\n"
+        canonical_tests = "def test_canonical_keep():\n    assert True\n"
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text(canonical_tests, encoding="utf-8")
+
+        # Pre-existing alt-path test file the canonical-only gate
+        # cannot see. Naming follows the `_test_<ext>` convention
+        # captured by `_is_test_output_path`.
+        alt_test_path = tmp_path / "src" / "widget_test.py"
+        alt_test_path.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing_alt = (
+            "\n".join(
+                f"def test_case_{i}():\n    assert True\n" for i in range(20)
+            )
+            + "\n"
+        )
+        alt_test_path.write_text(pre_existing_alt, encoding="utf-8")
+
+        rewritten_alt = "def test_case_0():\n    assert True\n"
+
+        def rewrite_only_alt(*args, **kwargs):
+            # Agent leaves canonical + code untouched, rewrites only the
+            # alt-path test file (the false-negative scenario Greg
+            # described).
+            alt_test_path.write_text(rewritten_alt, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = rewrite_only_alt
+
+        with pytest.raises(TestChurnError) as excinfo:
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Alt-path restored to its pre-session snapshot.
+        assert (
+            alt_test_path.read_text(encoding="utf-8") == pre_existing_alt
+        ), "alt-path test file must be rolled back when sweep fires"
+        # Canonical and code paths untouched by the gate (they were
+        # never modified by the agent, but the restore branch runs
+        # regardless and must be a no-op effectively).
+        assert (
+            pdd_files["test"].read_text(encoding="utf-8") == canonical_tests
+        ), "canonical test file must remain at pre-session bytes"
+        assert (
+            pdd_files["code"].read_text(encoding="utf-8") == original_code
+        ), "code file must remain at pre-session bytes"
+        # The error reports the alt-path, not the canonical.
+        assert str(alt_test_path) in str(excinfo.value), (
+            "TestChurnError must reference the alt-path output, not the canonical"
+        )

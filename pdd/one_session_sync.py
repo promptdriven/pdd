@@ -15,11 +15,16 @@ from rich.console import Console
 from rich import print as rprint
 
 from .agentic_common import run_agentic_task
+from .agentic_test_generate import (
+    _get_file_mtimes,
+    _snapshot_pre_test_contents,
+)
 from .code_generator_main import (
     PublicSurfaceRegressionError,
     TestChurnError,
     _env_flag_enabled,
     _get_test_churn_threshold,
+    _is_test_output_path,
     _prompt_allows_test_churn,
     _verify_public_surface_regression,
     _verify_test_churn,
@@ -251,6 +256,23 @@ def run_one_session_sync(
         existing_code_content = code_path.read_text(encoding="utf-8")
     except OSError:
         existing_code_content = None
+
+    # Pre-session snapshot of EVERY test-like file in the project so the
+    # alt-path churn sweep below catches multi-file rewrites the
+    # canonical-only check misses. Greg's review of PR #1015 surfaced
+    # the false negative: the agent can rewrite a pre-existing
+    # `__tests__/widget.test.ts` from 20 tests to 1 while leaving the
+    # canonical `tests/widget.test.ts` untouched, and without this
+    # snapshot the canonical churn check at line ~650 sees no change
+    # and passes. The snapshot lives outside the retry loop because the
+    # repair-loop restore writes back from these bytes — the snapshot
+    # is the single source of truth for the pre-session baseline across
+    # all attempts. `_snapshot_pre_test_contents` filters via
+    # `_is_test_output_path` so only files matching test-file naming
+    # conventions are captured.
+    pre_test_contents: Dict[Path, str] = _snapshot_pre_test_contents(
+        project_root, _get_file_mtimes(project_root).keys()
+    )
 
     # Build the mega-prompt
     prompt = build_one_session_prompt(
@@ -590,29 +612,19 @@ def run_one_session_sync(
                 heartbeat_thread.start()
                 continue  # Skip the churn gate this attempt; retry the session.
 
-            # When there's no pre-existing test content to compare
-            # against, the churn gate has nothing to evaluate and we
-            # accept this attempt.
-            if not (test_path and existing_test_content):
-                # No prior test file to protect — gate is not applicable.
-                churn_gate_passed = True
-                break
-
-            # Skip both the deletion-as-churn check AND the standard
-            # `_verify_test_churn` call when the operator has opted out
-            # of conformance gates (#1012, F-K). Either
-            # `PDD_SKIP_TEST_CHURN_GATE=1` (per-gate flag) or
-            # `PDD_SKIP_CONFORMANCE=1` (umbrella flag) disables this
-            # check. The standard `_verify_test_churn` also honors both
-            # flags internally, but the deletion-as-churn shortcut
-            # below raises ``TestChurnError`` directly without going
-            # through that helper, so it needs an explicit guard here.
-            # The prompt-side `BREAKING-CHANGE: rewrite tests` opt-out
-            # parsed by `_prompt_allows_test_churn` is honored here too
-            # so a deletion is treated symmetrically with a non-empty
-            # rewrite — otherwise the opt-out works for rewrites but
-            # silently fails when the agent empties/deletes the test
-            # file.
+            # Skip both the canonical churn check AND the alt-path
+            # sweep when the operator has opted out of conformance
+            # gates (#1012, F-K). Either `PDD_SKIP_TEST_CHURN_GATE=1`
+            # (per-gate flag) or `PDD_SKIP_CONFORMANCE=1` (umbrella
+            # flag) disables this check. The standard `_verify_test_churn`
+            # also honors both flags internally, but the deletion-as-churn
+            # shortcut below raises ``TestChurnError`` directly without
+            # going through that helper, so it needs an explicit guard
+            # here. The prompt-side `BREAKING-CHANGE: rewrite tests`
+            # opt-out parsed by `_prompt_allows_test_churn` is honored
+            # here too so a deletion is treated symmetrically with a
+            # non-empty rewrite. Moved above the canonical-empty
+            # early-return so the alt-path sweep also honors opt-outs.
             if (
                 _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
                 or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
@@ -621,40 +633,89 @@ def run_one_session_sync(
                 churn_gate_passed = True
                 break
 
+            # Track whether canonical existed pre-session — the deletion-
+            # as-churn shortcut and the canonical-only `_verify_test_churn`
+            # call below both require a non-None baseline.
+            canonical_existed = bool(test_path and existing_test_content)
+
             try:
-                # A deleted test file is the most extreme form of coverage
-                # loss — treat it as maximal churn (ratio=1.0) so the same
-                # repair-loop retry that handles wholesale rewrites also
-                # handles deletions. The except handler below restores the
-                # pre-existing content from `existing_test_content`.
-                if not test_path.exists():
-                    threshold = _get_test_churn_threshold()
-                    pre_line_count = len(existing_test_content.splitlines())
-                    raise TestChurnError(
+                # Multi-file alt-path churn sweep (Greg-review follow-up
+                # to PR #1015). Walk every test-like file captured in
+                # the pre-session snapshot; for each that still exists
+                # and whose content changed, compare current bytes
+                # against the snapshot via `_verify_test_churn`. Catches
+                # the false negative where the agent rewrites
+                # `__tests__/widget.test.ts` from 20 tests to 1 while
+                # leaving `tests/widget.test.ts` untouched — the
+                # canonical-only check below would see no change and
+                # pass, letting the high-churn alt-path rewrite slip.
+                # First-time creations are not in the snapshot and fall
+                # through (exempt by design). Deleted alt-path files
+                # also fall through here; the canonical-deletion branch
+                # below covers the canonical case explicitly.
+                for snap_path, prior in pre_test_contents.items():
+                    # Skip the canonical — handled by the dedicated
+                    # check after this loop so its repair directive
+                    # remains canonical-specific.
+                    if test_path is not None:
+                        try:
+                            if snap_path.samefile(test_path):
+                                continue
+                        except OSError:
+                            if snap_path.resolve() == test_path.resolve():
+                                continue
+                    if not snap_path.exists():
+                        continue
+                    try:
+                        current = snap_path.read_text(encoding="utf-8")
+                    except OSError:
+                        continue
+                    if current == prior:
+                        continue
+                    _verify_test_churn(
+                        existing_code=prior,
+                        generated_code=current,
+                        prompt_name=f"{basename}_test_{language}.prompt",
+                        output_path=str(snap_path),
+                        prompt_content=prompt_content,
+                    )
+
+                # Canonical churn check (only when a baseline exists).
+                # A deleted canonical test file is the most extreme
+                # form of coverage loss — treat it as maximal churn
+                # (ratio=1.0) so the same repair-loop retry that
+                # handles wholesale rewrites also handles deletions.
+                # The except handler below restores the pre-existing
+                # content from `existing_test_content`.
+                if canonical_existed:
+                    if not test_path.exists():
+                        threshold = _get_test_churn_threshold()
+                        pre_line_count = len(existing_test_content.splitlines())
+                        raise TestChurnError(
+                            prompt_name=f"{basename}_test_{language}.prompt",
+                            output_path=str(test_path),
+                            churn_ratio=1.0,
+                            threshold=threshold,
+                            pre_line_count=pre_line_count,
+                            post_line_count=0,
+                            repair_directive=(
+                                "Test churn repair required.\n"
+                                f"- The regenerated test file was DELETED from {test_path}.\n"
+                                "- Rewrite the test file preserving the prior test "
+                                "function names and coverage; do not omit accumulated "
+                                "regression tests.\n"
+                                "- Add new tests for the prompt change without removing "
+                                "the pre-existing ones."
+                            ),
+                        )
+                    generated_test_content = test_path.read_text(encoding="utf-8")
+                    _verify_test_churn(
+                        existing_code=existing_test_content,
+                        generated_code=generated_test_content,
                         prompt_name=f"{basename}_test_{language}.prompt",
                         output_path=str(test_path),
-                        churn_ratio=1.0,
-                        threshold=threshold,
-                        pre_line_count=pre_line_count,
-                        post_line_count=0,
-                        repair_directive=(
-                            "Test churn repair required.\n"
-                            f"- The regenerated test file was DELETED from {test_path}.\n"
-                            "- Rewrite the test file preserving the prior test "
-                            "function names and coverage; do not omit accumulated "
-                            "regression tests.\n"
-                            "- Add new tests for the prompt change without removing "
-                            "the pre-existing ones."
-                        ),
+                        prompt_content=prompt_content,
                     )
-                generated_test_content = test_path.read_text(encoding="utf-8")
-                _verify_test_churn(
-                    existing_code=existing_test_content,
-                    generated_code=generated_test_content,
-                    prompt_name=f"{basename}_test_{language}.prompt",
-                    output_path=str(test_path),
-                    prompt_content=prompt_content,
-                )
                 # Gate passed — accept this attempt.
                 churn_gate_passed = True
                 break
@@ -676,9 +737,31 @@ def run_one_session_sync(
                         )
                     except OSError:
                         pass
-                # Restore the pre-existing test file before deciding on retry
-                # so we never leave a high-churn rewrite on disk.
-                test_path.write_text(existing_test_content, encoding="utf-8")
+                # Restore the canonical test file when one existed
+                # pre-session. (When canonical didn't exist, restoring
+                # is a no-op and `existing_test_content` is None.)
+                if canonical_existed:
+                    test_path.write_text(existing_test_content, encoding="utf-8")
+                # Restore EVERY alt-path snapshot so the next attempt's
+                # re-snapshot sees the true pre-session state. Without
+                # this, attempt N's surviving rewrites become attempt
+                # N+1's baseline and the gate permanently weakens. The
+                # canonical was already restored above; skip it here.
+                for snap_path, snap_content in pre_test_contents.items():
+                    if test_path is not None:
+                        try:
+                            if snap_path.samefile(test_path):
+                                continue
+                        except OSError:
+                            try:
+                                if snap_path.resolve() == test_path.resolve():
+                                    continue
+                            except OSError:
+                                pass
+                    try:
+                        snap_path.write_text(snap_content, encoding="utf-8")
+                    except OSError:
+                        pass
                 signature = (
                     f"{churn_err.churn_ratio:.2f}",
                     str(churn_err.pre_line_count),

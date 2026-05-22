@@ -360,10 +360,75 @@ def run_agentic_test_generate(
                 "Inferring success from exit status and test file presence.[/yellow]"
             )
 
-    # If the expected output file doesn't exist, check if agent created it with different extension
-    alt_path_used: Path | None = None
+    # Sweep EVERY changed test-like file that existed pre-run and
+    # verify its churn against the working-tree snapshot. Greg's review
+    # of PR #1015 surfaced a false negative in the prior alt-path-only
+    # check: when the canonical output existed (`generated_content`
+    # truthy) the previous branch never ran the churn gate on any
+    # rewritten alt-path file (e.g. `__tests__/widget.test.ts` shrinking
+    # from 20 tests to 1 while `tests/widget.test.ts` was untouched).
+    # The outer `cmd_test_main` churn check only sees the canonical
+    # path, so without this sweep the alt-path rewrite slips through.
+    # First-time creations (no pre-run snapshot entry) are exempt; the
+    # gate honors its own env-flag and prompt-side opt-outs.
+    from .code_generator_main import (
+        TestChurnError,
+        _is_test_output_path,
+        _verify_test_churn,
+    )
+
+    for changed_file in changed_files:
+        changed_path = project_root / changed_file
+        if not changed_path.exists() or not changed_path.is_file():
+            continue
+        try:
+            rel = changed_path.relative_to(project_root).as_posix()
+        except ValueError:
+            continue
+        if not _is_test_output_path(rel):
+            continue
+        prior = pre_test_contents.get(changed_path)
+        if not prior:
+            # File didn't exist pre-run — first-time generation, exempt.
+            continue
+        try:
+            current = changed_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            _verify_test_churn(
+                existing_code=prior,
+                generated_code=current,
+                prompt_name=prompt_file.name,
+                output_path=str(changed_path),
+                prompt_content=prompt_content,
+            )
+        except TestChurnError as churn_err:
+            churn_err.total_cost = float(cost or 0.0)
+            churn_err.model_name = (
+                f"agentic-{provider}" if provider else "agentic-cli"
+            )
+            # Restore EVERY pre-run snapshot before raising so the
+            # repair loop's next attempt re-snapshots from the true
+            # pre-run baseline. Restoring only the violating file
+            # would leave any other concurrently-rewritten test files
+            # on disk; the next attempt's snapshot would then treat
+            # those rewrites as the new baseline, permanently
+            # weakening the gate.
+            for snap_path, snap_content in pre_test_contents.items():
+                try:
+                    snap_path.write_text(snap_content, encoding="utf-8")
+                except OSError:
+                    pass
+            raise
+
+    # If the expected output file doesn't exist, check if agent created it
+    # at a different path (e.g. `__tests__/foo.test.ts` vs the canonical
+    # `tests/foo.test.ts`). Pull the discovered content into
+    # ``generated_content`` so the returned ``TestResult`` is populated
+    # for the caller. Any churn check has already run above for files
+    # that existed pre-run; first-time-created alt-paths are exempt.
     if not generated_content and changed_files:
-        # Look for any new test files in changed_files
         for changed_file in changed_files:
             changed_path = project_root / changed_file
             if changed_path.exists() and changed_path.is_file():
@@ -373,52 +438,9 @@ def run_agentic_test_generate(
                         generated_content = changed_path.read_text(encoding="utf-8")
                         if verbose and not quiet:
                             console.print(f"[yellow]Test file created at different path: {changed_file}[/yellow]")
-                        alt_path_used = changed_path
                         break
                     except OSError:
                         continue
-
-    # When the agent wrote to an alternate path (e.g. `__tests__/foo.test.ts`)
-    # instead of `output_test_file`, the outer churn check in
-    # `cmd_test_main` compares the alt-path content against the
-    # CANONICAL path's pre-existing content (empty when canonical
-    # didn't exist), which lets a 20-test alt file shrink to 1 test
-    # without tripping the gate. Look up the alt-path's pre-run
-    # content from the working-tree snapshot taken before the agent
-    # ran and re-run the churn check here so the gate fires before we
-    # return. Files that did not exist before the run aren't in the
-    # snapshot and fall through — first-time generation is exempt.
-    if alt_path_used is not None and generated_content:
-        prior = pre_test_contents.get(alt_path_used, "")
-        if prior:
-            # Lazy import to avoid circular dependency.
-            from .code_generator_main import (
-                TestChurnError,
-                _verify_test_churn,
-            )
-
-            try:
-                _verify_test_churn(
-                    existing_code=prior,
-                    generated_code=generated_content,
-                    prompt_name=prompt_file.name,
-                    output_path=str(alt_path_used),
-                    prompt_content=prompt_content,
-                )
-            except TestChurnError as churn_err:
-                churn_err.total_cost = float(cost or 0.0)
-                churn_err.model_name = (
-                    f"agentic-{provider}" if provider else "agentic-cli"
-                )
-                # Restore the alt path to the user's pre-run
-                # working-tree content so the repair loop sees the
-                # actual pre-sync state — NOT HEAD, which would
-                # silently discard local dirty edits.
-                try:
-                    alt_path_used.write_text(prior, encoding="utf-8")
-                except OSError:
-                    pass
-                raise
 
     if not quiet:
         status_color = "green" if final_success else "red"
