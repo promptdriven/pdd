@@ -802,6 +802,99 @@ class TestRunGates:
         assert "sk-abcdefghijklmnopqr" not in results[0].stderr_excerpt
         assert "sk-abcdefghijklmnopqr" not in results[0].stdout_excerpt
 
+    def test_per_file_gate_name_and_source_scrub_when_path_contains_token(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-25 Finding 1: a PR can change a Python file whose
+        path contains a token-shaped substring (e.g.
+        ``pkg/ghp_xxx_abcdefghijklmnopqrst.py``). The per-file gate
+        names itself ``py-compile:<rel>`` and sets ``source=<rel>``,
+        so without scrubbing the token leaks into:
+        - the per-gate artifact FILENAME on disk (filename slug)
+        - the per-gate artifact BODY (gate:/source: lines)
+        - ReviewFinding.reviewer (``gate:<name>``)
+        - ReviewFinding.location (``<source>``)
+        - ReviewFinding.finding (the message text)
+        All five surfaces must be redacted.
+        """
+        from pdd.checkup_gates import (
+            discover_gates,
+            gate_results_to_findings,
+            run_gates,
+        )
+
+        _git_init(tmp_path)
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        # Token-shaped file name (ghp_ + 20+ alphanumeric chars).
+        token_path_part = "ghp_AAAAAAAAAAAAAAAAAAAAAA"
+        rel = f"pkg/{token_path_part}.py"
+        # Bad syntax so the gate FAILS — that's what routes the
+        # name/source through the finding adapter.
+        (pkg / f"{token_path_part}.py").write_text(
+            "this is not python(\n", encoding="utf-8"
+        )
+        gates = [g for g in discover_gates(tmp_path, changed_files=(rel,))
+                 if g.name.startswith("py-compile:")]
+        assert gates, "py-compile gate must be discovered"
+        artifacts_dir = tmp_path / "artifacts"
+        results = run_gates(
+            tmp_path, gates, artifacts_dir=artifacts_dir, round_number=1,
+            mode="review",
+        )
+        # On-disk per-gate artifact filename: token must not appear.
+        files = list(artifacts_dir.glob("round-1-review-gate-*.txt"))
+        assert files, "per-gate artifact must be written"
+        for f in files:
+            assert token_path_part not in f.name, f.name
+            assert token_path_part not in f.read_text(encoding="utf-8")
+        # Synthetic finding fields: reviewer/location/finding.
+        findings = gate_results_to_findings(results, round_number=1)
+        assert findings, "failing gate must produce a finding"
+        for f in findings:
+            assert token_path_part not in (f.reviewer or "")
+            assert token_path_part not in (f.location or "")
+            assert token_path_part not in (f.finding or "")
+            assert token_path_part not in (f.evidence or "")
+            assert token_path_part not in (f.required_fix or "")
+
+    def test_ruff_black_mypy_use_double_dash_separator(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-25 Finding 2: a PR file named ``--config=evil.py`` (or
+        any path starting with ``-``) would be parsed as a flag by
+        ruff/black/mypy. Every per-file gate argv MUST include the
+        POSIX ``--`` end-of-options separator before the file list so
+        the tools treat each entry as a positional path.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        # Enable ruff / black / mypy via pyproject.
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\n[tool.black]\n[tool.mypy]\n",
+            encoding="utf-8",
+        )
+        # Innocuous changed file — the assertion is on the argv shape,
+        # not on the tool actually being installed; we only assert
+        # when discovery emitted the gate.
+        (tmp_path / "foo.py").write_text("x = 1\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=("foo.py",))
+        for name in ("ruff", "black", "mypy"):
+            matching = [g for g in gates if g.name == name]
+            if not matching:  # tool may not be on PATH in the sandbox
+                continue
+            cmd = matching[0].cmd
+            assert "--" in cmd, (
+                f"{name} argv missing -- separator: {cmd}"
+            )
+            # The `--` must precede the file path.
+            dash_idx = cmd.index("--")
+            path_idx = cmd.index("foo.py")
+            assert dash_idx < path_idx, (
+                f"{name} `--` must come before the file path: {cmd}"
+            )
+
     def test_manifest_and_to_dict_scrub_nested_gate_metadata(
         self, tmp_path: Path
     ) -> None:

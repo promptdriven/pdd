@@ -249,8 +249,9 @@ from ..core.errors import handle_error
     help=(
         "Disable the deterministic-gate enforcement layer (issue #1092). "
         "By default the review loop discovers a conservative set of fast "
-        "local checks (prettier --check, git diff --check, py_compile, "
-        "optional ruff/black/mypy/tsc) and refuses a clean LLM verdict if "
+        "local checks (prettier --check, git diff --check against the PR "
+        "range, a non-mutating Python syntax check, optional "
+        "ruff/black/mypy/tsc) and refuses a clean LLM verdict if "
         "any of them fail on the PR worktree. Pass --no-gates to fall "
         "back to LLM-only verdicts (legacy behavior); the loop will then "
         "trust the reviewer's clean even if a deterministic check would "

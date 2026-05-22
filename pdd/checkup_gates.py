@@ -517,11 +517,18 @@ def _discover_python_gates(
             )
         )
 
+    # Iter-25 Finding 2: end-of-options ``--`` before the changed-file
+    # list. Without it a PR that adds a file named ``--config=evil.py``
+    # (or any path starting with ``-``) would feed that token to the
+    # tool as a flag instead of a path — bypassing the gate's intent
+    # and potentially altering its behaviour. ruff, black, and mypy
+    # all support the POSIX-standard ``--`` separator to mark the end
+    # of options.
     if changed_py and _tool_section_present("ruff") and shutil.which("ruff"):
         gates.append(
             Gate(
                 name="ruff",
-                cmd=["ruff", "check", *changed_py],
+                cmd=["ruff", "check", "--", *changed_py],
                 source="pyproject.toml:[tool.ruff]",
                 required_fix_hint=(
                     "Run `ruff check --fix` locally and address the remaining "
@@ -533,7 +540,7 @@ def _discover_python_gates(
         gates.append(
             Gate(
                 name="black",
-                cmd=["black", "--check", *changed_py],
+                cmd=["black", "--check", "--", *changed_py],
                 source="pyproject.toml:[tool.black]",
                 required_fix_hint=(
                     "Run `black .` locally and commit the formatting changes."
@@ -544,7 +551,7 @@ def _discover_python_gates(
         gates.append(
             Gate(
                 name="mypy",
-                cmd=["mypy", *changed_py],
+                cmd=["mypy", "--", *changed_py],
                 source="pyproject.toml:[tool.mypy]",
                 required_fix_hint=(
                     "Run `mypy` locally and fix the reported type errors."
@@ -896,9 +903,13 @@ def run_gates(
         # than mistaking the gate for "passed". The other gates
         # continue executing.
         result = _execute_one(worktree, gate, default_timeout=default_timeout)
+        # Iter-25 Finding 1: scrub the gate name BEFORE slugging so a
+        # token-bearing name (e.g. ``py-compile:ghp_xxx.py``) cannot
+        # land verbatim in the per-gate artifact filename — that
+        # filename is part of the public audit surface.
         per_gate_path = (
             artifacts_dir
-            / f"round-{round_number}-{mode}-gate-{_safe_slug(gate.name)}.txt"
+            / f"round-{round_number}-{mode}-gate-{_safe_slug(_scrub(gate.name))}.txt"
         )
         try:
             per_gate_path.write_text(_render_per_gate_body(result), encoding="utf-8")
@@ -911,15 +922,19 @@ def run_gates(
             # harvest it. Demote the traceback to debug so the
             # warning line stays clean.
             persistence_error = _scrub(f"{type(exc).__name__}: {exc}")
+            # Iter-25 Finding 3: ``gate.name`` itself can carry a
+            # token-bearing path (per-file gates name themselves as
+            # ``py-compile:<rel>``); scrub before interpolating into
+            # the WARNING log surface. Drop the ``exc_info=True``
+            # debug follow-up entirely: ``traceback.format_exception``
+            # re-renders the raw exception message — defeating the
+            # WARNING-line scrub — and any operator who needs the
+            # full traceback can reproduce the failure locally
+            # without scrubbing.
             logger.warning(
                 "checkup-gates: failed to persist artifact for gate %r: %s",
-                gate.name,
+                _scrub(gate.name),
                 persistence_error,
-            )
-            logger.debug(
-                "checkup-gates: artifact persistence traceback for gate %r",
-                gate.name,
-                exc_info=True,
             )
             # If the gate itself passed, downgrade to a runner-error
             # row so the loop's findings adapter still surfaces the
@@ -970,14 +985,13 @@ def run_gates(
         # manifest path is short but a malicious gate could prepend
         # any string the operator allowed into ``artifacts_dir``.
         scrubbed_exc = _scrub(f"{type(exc).__name__}: {exc}")
+        # Iter-25 Finding 3: drop the ``exc_info=True`` follow-up;
+        # ``traceback.format_exception`` re-renders the raw
+        # exception message at DEBUG, defeating the scrub above.
         logger.warning(
             "checkup-gates: failed to persist manifest %s: %s",
             manifest,
             scrubbed_exc,
-        )
-        logger.debug(
-            "checkup-gates: manifest persistence traceback",
-            exc_info=True,
         )
     return results
 
@@ -990,10 +1004,14 @@ def _render_per_gate_body(result: GateResult) -> str:
     # persistence so a future operator review of the artifacts cannot
     # accidentally surface a token. Output excerpts are already
     # scrubbed upstream by ``_execute_one``.
+    # Iter-25 Finding 1: gate.name and gate.source can carry a
+    # token-like path (a Python file under a directory whose name
+    # happens to match the scrub regex). Scrub here so the per-gate
+    # artifact body is safe.
     lines: List[str] = []
-    lines.append(f"gate: {result.gate.name}")
+    lines.append(f"gate: {_scrub(result.gate.name)}")
     lines.append(f"cmd: {_scrub(' '.join(result.gate.cmd))}")
-    lines.append(f"source: {result.gate.source}")
+    lines.append(f"source: {_scrub(result.gate.source)}")
     lines.append(f"started: {result.started_at_iso}")
     lines.append(f"duration_seconds: {result.duration_seconds:.3f}")
     if result.exit_code is None:
@@ -1047,7 +1065,11 @@ def _build_evidence(result: GateResult) -> str:
         tail = tail.strip()
         if len(tail) > 2000:
             tail = tail[:2000] + "\n[...]"
-    body = f"{prefix} for `{cmd_line}` ({result.gate.source})."
+    # Iter-25 Finding 1: scrub gate.source too. A PR can change a
+    # file like ``ghp_…/foo.py`` and the per-file gate's ``source``
+    # would otherwise carry that path verbatim into the public PR
+    # comment via ReviewFinding.evidence.
+    body = f"{prefix} for `{cmd_line}` ({_scrub(result.gate.source)})."
     if tail:
         body += f"\nOutput tail:\n{tail}"
     return body
@@ -1061,7 +1083,12 @@ def _build_required_fix(result: GateResult) -> str:
     cmd_line = _scrub(" ".join(result.gate.cmd))
     base = f"Run `{cmd_line}` locally and address the failure"
     if result.gate.required_fix_hint:
-        return f"{base}. {result.gate.required_fix_hint}"
+        # Iter-25 Finding 1: the hint contains the changed-file
+        # ``{rel}`` path for per-file gates (py-compile/ruff/black/
+        # mypy), so a PR file whose name contains a token-shaped
+        # substring would otherwise land in ``required_fix`` →
+        # public PR comment.
+        return f"{base}. {_scrub(result.gate.required_fix_hint)}"
     return base + "."
 
 
@@ -1076,13 +1103,20 @@ def _build_finding_message(result: GateResult) -> str:
     codes, or round-specific artifact paths). The volatile detail lives
     in ``_build_evidence`` (codex review iteration 2, Finding 1).
     """
+    # Iter-25 Finding 1: scrub the gate name interpolated into the
+    # finding message. The message lands in ReviewFinding.finding,
+    # which is published into the public PR comment and persisted
+    # to final-state.json["findings"], and the dedup-key contract
+    # (codex iter-2 Finding 1) means a stable scrubbed form is
+    # still per-gate-unique.
+    scrubbed_name = _scrub(result.gate.name)
     if result.exit_code is None:
         return (
-            f"Deterministic gate {result.gate.name!r} failed to execute "
+            f"Deterministic gate {scrubbed_name!r} failed to execute "
             "(runner error)."
         )
     return (
-        f"Deterministic gate {result.gate.name!r} failed with exit "
+        f"Deterministic gate {scrubbed_name!r} failed with exit "
         f"code {result.exit_code}."
     )
 
@@ -1109,12 +1143,16 @@ def gate_results_to_findings(
         findings.append(
             ReviewFinding(
                 severity=result.gate.severity,
-                reviewer=f"gate:{result.gate.name}",
+                # Iter-25 Finding 1: scrub the gate name and source
+                # interpolated into reviewer/location. Both fields
+                # are public rendering surfaces (PR comment +
+                # final-state.json).
+                reviewer=f"gate:{_scrub(result.gate.name)}",
                 area=result.gate.area,
                 evidence=_build_evidence(result),
                 finding=_build_finding_message(result),
                 required_fix=_build_required_fix(result),
-                location=result.gate.source,
+                location=_scrub(result.gate.source),
                 status="open",
                 round_number=round_number,
             )
