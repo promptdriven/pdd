@@ -1,14 +1,3 @@
-<pdd-reason>VS Code theme for the .prompt file extension. Provides syntax highlighting for PDD-specific XML tags and standard prompt content.</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "config",
-  "config": {
-    "keys": []
-  }
-}
-</pdd-interface>
-
 <pdd> Work in progress </pdd>
 % You are an expert in creating VS Code themes. Your task is to create a theme for the .prompt file extension.
 

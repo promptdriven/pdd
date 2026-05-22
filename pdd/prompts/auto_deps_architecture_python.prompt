@@ -1,5 +1,3 @@
-<pdd-reason>Helper for auto-deps to handle architectural metadata.</pdd-reason>
-
 % Module: auto_deps_architecture_sync
 % Purpose: Update architecture.json dependencies after auto-deps inserts new module <include> tags.
 
