@@ -2,6 +2,18 @@
 
 A concise set of principles for building and maintaining software where prompts are the primary artifact, regeneration is the default, and synchronization across code, examples, and tests is non‑negotiable.
 
+## PDD As the Last Programming Language
+
+PDD is not a faster way to type Python, TypeScript, or Go. It is a higher-level
+source language for software intent that compiles into those implementation
+languages. Developers author prompts, tests, examples, includes, and architecture
+metadata; PDD regenerates the code artifacts from that source.
+
+"The Last Programming Language" is a positioning claim, not a claim that target
+languages disappear. Traditional languages remain real execution targets and
+escape hatches. The shift is that humans primarily maintain the durable intent,
+while generated code becomes reviewable compiler output.
+
 ## Why This Doctrine
 - **Maintenance reality:** 80–90% of cost is post‑creation. Patching accretes complexity; regeneration preserves integrity.
 - **Intent over implementation:** Prompts capture the "why"; code captures one "how." We version the former and regenerate the latter.
