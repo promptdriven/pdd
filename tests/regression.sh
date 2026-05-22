@@ -48,9 +48,8 @@ export PDD_AUTO_UPDATE=false
 # suite naturally exceeds the 40% churn threshold. The gates are
 # NOT what this script is validating, so opt the regression run
 # out of them — individual env flags rather than the umbrella
-# `PDD_SKIP_CONFORMANCE` so the (separately validated) public-
-# surface and architecture gates still help if they ever trip in
-# this surface.
+# `PDD_SKIP_CONFORMANCE` so architecture conformance still helps if
+# it ever trips in this surface.
 export PDD_SKIP_TEST_CHURN_GATE=1
 export PDD_SKIP_PUBLIC_SURFACE_GATE=1
 
