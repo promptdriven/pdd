@@ -1117,3 +1117,37 @@ def test_revert_out_of_scope_changes_with_dirs_reverts_staged_addition_am(tmp_pa
 
     assert Path("out.py") in result
     assert not leak.exists()
+
+
+def test_revert_out_of_scope_changes_with_dirs_staged_addition_reset_failure_strict(tmp_path):
+    """If git reset fails for a staged addition under strict=True, raise and
+    do NOT unlink (the blob may still be staged — unlinking would leave the
+    index pointing at a missing file rather than actually reverting the add)."""
+    porcelain = b"A  leak.py\x00"
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "reset"]:
+            return _cp(returncode=1, stderr=b"reset failed")
+        return _cp(stdout=porcelain)
+
+    with patch(f"{MODULE}.subprocess.run", side_effect=fake_run):
+        with pytest.raises(OSError, match="git reset HEAD"):
+            revert_out_of_scope_changes_with_dirs(
+                tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
+            )
+
+
+def test_revert_out_of_scope_changes_with_dirs_copy_reset_failure_strict(tmp_path):
+    """Same reset-return check applies to copy-destination revert."""
+    porcelain = b"C100 src.py\x00dest.py\x00"
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "reset"]:
+            return _cp(returncode=1, stderr=b"reset failed")
+        return _cp(stdout=porcelain)
+
+    with patch(f"{MODULE}.subprocess.run", side_effect=fake_run):
+        with pytest.raises(OSError, match="git reset HEAD"):
+            revert_out_of_scope_changes_with_dirs(
+                tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
+            )

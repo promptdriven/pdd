@@ -593,22 +593,34 @@ def revert_out_of_scope_changes_with_dirs(
             # Copy: only the destination is changed. The source path is
             # informational and must not be reset/restored/removed.
             try:
-                subprocess.run(
+                reset = subprocess.run(
                     ["git", "reset", "HEAD", "--", new_rel],
                     cwd=str(cwd),
                     capture_output=True,
                     timeout=30,
                 )
-                try:
-                    (cwd / new_rel).unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    logger.warning("Failed to remove copy destination %s: %s", new_rel, exc)
+                if reset.returncode != 0:
+                    stderr_text = reset.stderr.decode("utf-8", errors="replace").strip()
+                    logger.warning(
+                        "Failed to unstage copy destination %s: %s", new_rel, stderr_text
+                    )
                     if strict:
-                        raise
-                logger.info("Reverted out-of-scope copy destination: %s", new_rel)
-                reverted.append(Path(new_rel))
+                        raise OSError(
+                            f"git reset HEAD -- {new_rel} failed: {stderr_text}"
+                        )
+                else:
+                    try:
+                        (cwd / new_rel).unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        logger.warning(
+                            "Failed to remove copy destination %s: %s", new_rel, exc
+                        )
+                        if strict:
+                            raise
+                    logger.info("Reverted out-of-scope copy destination: %s", new_rel)
+                    reverted.append(Path(new_rel))
             except subprocess.TimeoutExpired:
                 logger.warning("Timed out reverting copy destination %s", new_rel)
                 if strict:
@@ -622,22 +634,34 @@ def revert_out_of_scope_changes_with_dirs(
             # `git checkout HEAD --` would fail. Unstage then delete, same
             # pattern as copy-destination revert.
             try:
-                subprocess.run(
+                reset = subprocess.run(
                     ["git", "reset", "HEAD", "--", new_rel],
                     cwd=str(cwd),
                     capture_output=True,
                     timeout=30,
                 )
-                try:
-                    (cwd / new_rel).unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    logger.warning("Failed to remove staged addition %s: %s", new_rel, exc)
+                if reset.returncode != 0:
+                    stderr_text = reset.stderr.decode("utf-8", errors="replace").strip()
+                    logger.warning(
+                        "Failed to unstage staged addition %s: %s", new_rel, stderr_text
+                    )
                     if strict:
-                        raise
-                logger.info("Reverted out-of-scope staged addition: %s", new_rel)
-                reverted.append(Path(new_rel))
+                        raise OSError(
+                            f"git reset HEAD -- {new_rel} failed: {stderr_text}"
+                        )
+                else:
+                    try:
+                        (cwd / new_rel).unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        logger.warning(
+                            "Failed to remove staged addition %s: %s", new_rel, exc
+                        )
+                        if strict:
+                            raise
+                    logger.info("Reverted out-of-scope staged addition: %s", new_rel)
+                    reverted.append(Path(new_rel))
             except subprocess.TimeoutExpired:
                 logger.warning("Timed out reverting staged addition %s", new_rel)
                 if strict:
