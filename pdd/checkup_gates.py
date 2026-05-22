@@ -334,13 +334,27 @@ def _script_is_acceptable(command: str) -> bool:
                 break
     for head in _ACCEPTABLE_SCRIPT_HEADS:
         if stripped.startswith(head):
-            # Iter-26 Finding 1: ``tsc -p <project>`` without
-            # ``--noEmit`` writes .js/.d.ts/.tsbuildinfo files. The
-            # ``tsc --noemit`` head matches both ``tsc --noEmit`` and
-            # ``tsc --noEmit -p foo.json`` directly; ``tsc -p`` only
-            # matches when ``--noEmit`` ALSO appears somewhere in the
-            # argv (otherwise reject — gates must be non-mutating).
-            if head == "tsc -p" and "--noemit" not in stripped:
+            # Iter-27 Finding 2: tighten the head match — ``stripped``
+            # may continue with arbitrary suffix bytes (``tsc --noemit``
+            # head matches both ``tsc --noEmitOnError`` and
+            # ``tsc --noEmit false``, both of which emit). Require the
+            # head to be followed by whitespace, end-of-string, or
+            # ``=`` (to allow ``--check=…`` shapes) so a different
+            # flag with a shared prefix cannot smuggle past.
+            tail = stripped[len(head) :]
+            if tail and not tail[0].isspace() and tail[0] != "=":
+                continue
+            tokens = stripped.split()
+            # Iter-26 Finding 1 + iter-27 Finding 2: ``tsc -p
+            # <project>`` without ``--noEmit`` emits artifacts. Use
+            # tokenized matching so ``--noEmitOnError`` (different
+            # token) and ``--noEmit false`` (explicit disable) do NOT
+            # qualify as "noEmit is set".
+            if head == "tsc -p" and not _has_active_noemit(tokens):
+                return False
+            if head == "tsc --noemit" and not _has_active_noemit(tokens):
+                # Catches ``tsc --noEmit false`` which started with
+                # the head but explicitly disables emit-skipping.
                 return False
             # Iter-26 Finding 2: ``eslint`` requires explicit
             # ``--no-fix``. The prior rule (accept unless ``--fix`` is
@@ -355,7 +369,29 @@ def _script_is_acceptable(command: str) -> bool:
     return False
 
 
-def _discover_npm_gates(worktree: Path) -> List[Gate]:
+def _has_active_noemit(tokens: List[str]) -> bool:
+    """Return True iff ``--noEmit`` is present and not explicitly disabled.
+
+    ``tokens`` is the lowercased, whitespace-split argv. The check is
+    word-bounded: ``--noemitonerror`` is a SEPARATE TypeScript flag
+    that does NOT skip emit, so a substring match would silently
+    accept it (iter-27 Finding 2). Also reject ``--noemit false`` /
+    ``--noemit 0`` / ``--noemit no`` — TypeScript treats those as an
+    explicit disable.
+    """
+    for i, t in enumerate(tokens):
+        if t == "--noemit":
+            if i + 1 < len(tokens) and tokens[i + 1] in (
+                "false", "0", "no",
+            ):
+                continue
+            return True
+    return False
+
+
+def _discover_npm_gates(
+    worktree: Path, changed_files: Sequence[str] = ()
+) -> List[Gate]:
     package_json = worktree / "package.json"
     if not package_json.is_file():
         return []
@@ -368,6 +404,53 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
     if not isinstance(scripts, dict):
         return []
     runner = _detect_node_runner(worktree)
+    # Iter-27 Finding 3: PR-modified tool config files are RCE-equivalent.
+    # ``prettier.config.{js,cjs,mjs,ts}``, ``.prettierrc.{js,cjs,mjs,ts}``,
+    # ``eslint.config.{js,cjs,mjs,ts}``, ``.eslintrc.{js,cjs,mjs}``,
+    # and ``tsconfig*.json`` are all loaded and executed (or interpreted)
+    # by the corresponding tool — running ``prettier --check`` after a
+    # fork PR shipped a poisoned ``prettier.config.cjs`` is RCE. Skip
+    # the gate that would load each config when the PR modified it.
+    pr_changed_set = {f.lower() for f in changed_files}
+    def _pr_modified_any(prefixes: Tuple[str, ...]) -> bool:
+        for path in pr_changed_set:
+            base = path.rsplit("/", 1)[-1]
+            for pfx in prefixes:
+                if base == pfx or base.startswith(pfx + ".") or (
+                    pfx.endswith(".") and base.startswith(pfx)
+                ):
+                    return True
+                # Also match arbitrary-ext variants like
+                # ``prettier.config.cjs`` against prefix
+                # ``prettier.config``.
+                if "." in pfx and base.startswith(pfx + "."):
+                    return True
+        return False
+
+    prettier_config_changed = _pr_modified_any(
+        ("prettier.config", ".prettierrc")
+    )
+    eslint_config_changed = _pr_modified_any(
+        ("eslint.config", ".eslintrc")
+    )
+    tsconfig_changed = any(
+        path.endswith("tsconfig.json")
+        or "/tsconfig." in path
+        or path.startswith("tsconfig.")
+        for path in pr_changed_set
+    )
+    # Map recognized scripts to which config-class they load. A
+    # script can load multiple — e.g. ``lint:check`` could be
+    # eslint or prettier — but we conservatively skip when ANY
+    # plausibly-loaded config changed.
+    script_config_owners: Dict[str, Tuple[bool, ...]] = {
+        "format:check": (prettier_config_changed,),
+        "prettier:check": (prettier_config_changed,),
+        "lint:check": (eslint_config_changed, prettier_config_changed),
+        "typecheck": (tsconfig_changed,),
+        "tsc": (tsconfig_changed,),
+        "tsc:noemit": (tsconfig_changed,),
+    }
     gates: List[Gate] = []
     for script_name, script_command in scripts.items():
         if script_name not in _RECOGNIZED_NPM_SCRIPTS:
@@ -375,6 +458,15 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
         if not isinstance(script_command, str):
             continue
         if not _script_is_acceptable(script_command):
+            continue
+        # Iter-27 Finding 3 enforcement: skip the gate when the PR
+        # modified a config file the tool would load.
+        if any(script_config_owners.get(script_name, ())):
+            logger.debug(
+                "checkup-gates: skipping npm:%s — PR modified a tool "
+                "config file the script would load",
+                script_name,
+            )
             continue
         # npm/yarn/pnpm/bun all execute ``pre<name>`` and ``post<name>``
         # lifecycle hooks around ``<runner> run <name>``. Discovery only
@@ -431,19 +523,63 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
             if isinstance(value, dict):
                 deps.update(value)
         tsc_local = worktree / "node_modules" / "typescript" / "bin" / "tsc"
+        # Iter-27 Finding 1: ``composite: true`` in tsconfig forces emit
+        # (and tsc errors when combined with ``--noEmit``); skip the
+        # gate so we don't surface a false runner-error blocker on
+        # repos that legitimately use project references.
+        composite_in_config = False
+        try:
+            tsconfig_text = (worktree / "tsconfig.json").read_text(
+                encoding="utf-8"
+            )
+            # ``tsconfig.json`` allows comments / trailing commas; a
+            # strict json.loads would reject those. A loose regex is
+            # enough for the "is composite enabled?" decision.
+            if re.search(
+                r'"composite"\s*:\s*true', tsconfig_text
+            ):
+                composite_in_config = True
+        except (OSError, UnicodeDecodeError):
+            tsconfig_text = ""
         if (
             "typescript" in deps
             and tsc_local.is_file()
             and shutil.which("npx")
+            and not composite_in_config
+            # Iter-27 Finding 3: skip when PR modified tsconfig — the
+            # gate would otherwise execute the PR-controlled
+            # ``compilerOptions`` (paths/plugins/transformers) which is
+            # RCE-equivalent on a fork PR.
+            and not tsconfig_changed
         ):
             gates.append(
                 Gate(
-                    # Pass ``--no-install`` so npx refuses to fall back
-                    # to a registry fetch even if a future npm rewires
-                    # the local-binary resolution path. Belt-and-braces:
-                    # the local-tsc check above is the primary guard.
+                    # Iter-27 Finding 1: ``tsc --noEmit`` STILL writes
+                    # ``tsconfig.tsbuildinfo`` (and per-project
+                    # buildinfo files) when ``incremental: true`` is
+                    # set in tsconfig. The downstream commit/push
+                    # helper then stages that file into the PR on
+                    # repos whose .gitignore does not exclude it.
+                    # Pass ``--incremental false`` to suppress the
+                    # write and ``--tsBuildInfoFile <devnull>`` as
+                    # belt-and-braces so any TypeScript version that
+                    # ignores ``--incremental false`` (none known,
+                    # but cheap) still cannot reach the worktree.
+                    #
+                    # ``--no-install`` keeps npx from reaching the
+                    # registry when typescript is declared but not
+                    # actually installed.
                     name="tsc-noemit",
-                    cmd=["npx", "--no-install", "tsc", "--noEmit"],
+                    cmd=[
+                        "npx",
+                        "--no-install",
+                        "tsc",
+                        "--noEmit",
+                        "--incremental",
+                        "false",
+                        "--tsBuildInfoFile",
+                        os.devnull,
+                    ],
                     source="tsconfig.json",
                     required_fix_hint=(
                         # Iter-23 Finding 3: point the fixer at the
@@ -452,10 +588,13 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
                         # npm registry — defeating the
                         # local-node_modules safeguard via the
                         # automated-fix surface.
-                        "Run `npx --no-install tsc --noEmit` locally and fix "
+                        "Run `npx --no-install tsc --noEmit --incremental "
+                        "false --tsBuildInfoFile /dev/null` locally and fix "
                         "the reported TypeScript errors. Do NOT use bare "
                         "`npx tsc` — without `--no-install` it can fall back "
-                        "to a registry download/install."
+                        "to a registry download/install, and without "
+                        "`--incremental false` it writes "
+                        "`.tsbuildinfo` into the worktree."
                     ),
                 )
             )
@@ -731,7 +870,7 @@ def discover_gates(
     if _is_git_worktree(worktree):
         base_spec = _resolve_pr_base_spec(worktree, base_ref)
         gates.append(_git_diff_check_gate(base_spec))
-    gates.extend(_discover_npm_gates(worktree))
+    gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
     gates.extend(_discover_python_gates(worktree, changed_files))
     # Stable order: git-diff-check first, then language-specific gates
     # in discovery order. The runner walks the list left-to-right so

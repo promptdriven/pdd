@@ -370,6 +370,151 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_tsc_noemit_substring_bypass_rejected(self) -> None:
+        """Iter-27 Finding 2: ``tsc --noEmitOnError`` is a DIFFERENT
+        TypeScript flag that does NOT suppress emit; the prior
+        substring match (``"--noemit" not in stripped``) would have
+        accepted it. ``tsc --noEmit false`` likewise emits.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "tsc --noEmitOnError",
+            "tsc --noEmitOnError -p tsconfig.json",
+            "tsc --noEmit false",
+            "tsc --noEmit no",
+            "tsc -p tsconfig.json --noEmitOnError",
+            "tsc -p tsconfig.json --noEmit false",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"emitting payload must be rejected: {payload!r}"
+            )
+        # Sanity: the explicit ``--noEmit true`` and bare ``--noEmit``
+        # are both accepted.
+        assert _script_is_acceptable("tsc --noEmit") is True
+        assert _script_is_acceptable("tsc --noEmit true") is True
+        assert _script_is_acceptable("tsc --noEmit --incremental false") is True
+
+    def test_tsc_direct_gate_passes_incremental_false_and_redirects_buildinfo(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-27 Finding 1: even ``tsc --noEmit`` writes
+        ``tsconfig.tsbuildinfo`` when ``incremental: true`` is set
+        in tsconfig. The direct tsc-noemit gate MUST pass
+        ``--incremental false`` and ``--tsBuildInfoFile /dev/null``
+        so the gate cannot dirty the worktree.
+        """
+        import os
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0", "scripts": {},
+                "devDependencies": {"typescript": "^5.0.0"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {"incremental": true}}\n',
+            encoding="utf-8",
+        )
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=())
+        tsc_gates = [g for g in gates if g.name == "tsc-noemit"]
+        if not tsc_gates:  # ``npx`` not on PATH in sandbox
+            return
+        cmd = tsc_gates[0].cmd
+        # The argv MUST contain both safeguards.
+        assert "--incremental" in cmd and "false" in cmd, cmd
+        assert "--tsBuildInfoFile" in cmd, cmd
+        # ``--tsBuildInfoFile`` MUST point at devnull (or another
+        # path that cannot be staged into the worktree).
+        idx = cmd.index("--tsBuildInfoFile")
+        assert cmd[idx + 1] == os.devnull, cmd
+
+    def test_tsc_direct_gate_skipped_when_composite_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-27 Finding 1: ``composite: true`` conflicts with
+        ``--noEmit`` (tsc errors). Skip the gate so we don't spam
+        false runner-error blockers on legitimate project-reference
+        repos."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0", "scripts": {},
+                "devDependencies": {"typescript": "^5.0.0"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {"composite": true}}\n',
+            encoding="utf-8",
+        )
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=())
+        assert "tsc-noemit" not in {g.name for g in gates}
+
+    def test_npm_gate_skipped_when_pr_modified_prettier_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-27 Finding 3: prettier loads ``prettier.config.{js,cjs,mjs}``
+        (and ``.prettierrc.{js,cjs,mjs,ts}``) and executes it as
+        JavaScript. A fork PR that ships a poisoned config can
+        achieve RCE through the gate. Skip the gate when the PR
+        modified any prettier config file.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        # PR-modified prettier config in the changed-file inventory.
+        gates = discover_gates(
+            tmp_path, changed_files=("prettier.config.cjs",)
+        )
+        names = [g.name for g in gates]
+        assert "npm:format:check" not in names
+        # Sanity: when the PR did NOT touch the config the gate
+        # still fires (this is the existing safe path).
+        gates2 = discover_gates(tmp_path, changed_files=("src/a.ts",))
+        assert "npm:format:check" in [g.name for g in gates2]
+
+    def test_tsc_direct_gate_skipped_when_pr_modified_tsconfig(
+        self, tmp_path: Path
+    ) -> None:
+        """Same as above but for the direct tsc-noemit path:
+        ``tsconfig.json`` carries ``compilerOptions.paths`` /
+        ``plugins`` / transformer references that tsc will load.
+        Skip when the PR modified it."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0", "scripts": {},
+                "devDependencies": {"typescript": "^5.0.0"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text("{}\n", encoding="utf-8")
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        gates = discover_gates(
+            tmp_path, changed_files=("tsconfig.json",)
+        )
+        assert "tsc-noemit" not in {g.name for g in gates}
+
     def test_script_rejects_tsc_p_without_noemit(self) -> None:
         """Iter-26 Finding 1: ``tsc -p <project>`` without ``--noEmit``
         writes .js / .d.ts / .tsbuildinfo files to the worktree. The
