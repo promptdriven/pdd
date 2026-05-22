@@ -78,67 +78,93 @@ def track_cost(func):
                                 files_set.add(abs_path)
                     ctx.obj['core_dump_files'] = files_set
 
-                if exception_raised is None:
-                    if ctx.obj and hasattr(ctx.obj, 'get'):
-                        output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
-                    else:
-                        output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
+                # Write a row regardless of whether the wrapped command
+                # raised. A subprocess that spent money and then raised
+                # used to be invisible to budget enforcement (the old
+                # `if exception_raised is None:` gate skipped the write
+                # entirely), so a cap on a flaky job could be bypassed
+                # by simply crashing after the LLM call. We now always
+                # emit a row, sourcing the cost/model from any partial
+                # state that llm_invoke may have accumulated on
+                # ctx.obj when the wrapped command's return tuple is
+                # unavailable.
+                if ctx.obj and hasattr(ctx.obj, 'get'):
+                    output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
+                else:
+                    output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
 
-                    if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
-                        command_name = ctx.command.name
+                if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
+                    command_name = ctx.command.name
+                    if exception_raised is None and result is not None:
                         cost, model_name = extract_cost_and_model(result)
+                    else:
+                        # Failed command: fall back to whatever partial
+                        # cost/model llm_invoke pushed to ctx.obj before
+                        # the exception propagated. Both keys are
+                        # documented contract surface for cross-module
+                        # use; missing keys default to 0/empty.
+                        cost = (
+                            ctx.obj.get('partial_cost', 0.0)
+                            if ctx.obj and isinstance(ctx.obj, dict)
+                            else 0.0
+                        )
+                        model_name = (
+                            ctx.obj.get('last_model', '')
+                            if ctx.obj and isinstance(ctx.obj, dict)
+                            else ''
+                        )
 
-                        attempted_models_list = ctx.obj.get('attempted_models') if ctx.obj and isinstance(ctx.obj, dict) else None
-                        if not attempted_models_list:
-                            attempted_models_list = [model_name]
-                        attempted_models = ';'.join(str(m).replace(';', ':') for m in attempted_models_list)
+                    attempted_models_list = ctx.obj.get('attempted_models') if ctx.obj and isinstance(ctx.obj, dict) else None
+                    if not attempted_models_list:
+                        attempted_models_list = [model_name]
+                    attempted_models = ';'.join(str(m).replace(';', ':') for m in attempted_models_list)
 
-                        # Emit ISO 8601 with the tz offset preserved so
-                        # readers do not have to guess the timezone. Trim
-                        # microseconds to milliseconds to match the legacy
-                        # column width.
-                        timestamp = start_time.isoformat(timespec='milliseconds')
+                    # Emit ISO 8601 with the tz offset preserved so
+                    # readers do not have to guess the timezone. Trim
+                    # microseconds to milliseconds to match the legacy
+                    # column width.
+                    timestamp = start_time.isoformat(timespec='milliseconds')
 
-                        row = {
-                            'timestamp': timestamp,
-                            'model': model_name,
-                            'command': command_name,
-                            'cost': cost,
-                            'input_files': ';'.join(input_files),
-                            'output_files': ';'.join(output_files),
-                            'attempted_models': attempted_models,
-                        }
+                    row = {
+                        'timestamp': timestamp,
+                        'model': model_name,
+                        'command': command_name,
+                        'cost': cost,
+                        'input_files': ';'.join(input_files),
+                        'output_files': ';'.join(output_files),
+                        'attempted_models': attempted_models,
+                    }
 
-                        file_exists = os.path.isfile(output_cost_path)
-                        file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
+                    file_exists = os.path.isfile(output_cost_path)
+                    file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
 
-                        legacy_fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
-                        new_fieldnames = legacy_fieldnames + ['attempted_models']
+                    legacy_fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+                    new_fieldnames = legacy_fieldnames + ['attempted_models']
 
-                        fieldnames = new_fieldnames
-                        if file_has_content:
-                            with open(output_cost_path, 'r', encoding='utf-8') as f:
-                                first_line = f.readline().strip()
-                                if 'attempted_models' not in first_line:
-                                    fieldnames = legacy_fieldnames
-                                    del row['attempted_models']
-                                    abs_path = os.path.abspath(output_cost_path)
-                                    if abs_path not in _legacy_csv_warned:
-                                        _legacy_csv_warned.add(abs_path)
-                                        rprint(
-                                            "[yellow]Note: cost CSV "
-                                            f"'{output_cost_path}' uses the legacy "
-                                            "header; the new 'attempted_models' "
-                                            "column will not be recorded. Delete or "
-                                            "rename the file to start fresh with the "
-                                            "attempted_models column.[/yellow]"
-                                        )
+                    fieldnames = new_fieldnames
+                    if file_has_content:
+                        with open(output_cost_path, 'r', encoding='utf-8') as f:
+                            first_line = f.readline().strip()
+                            if 'attempted_models' not in first_line:
+                                fieldnames = legacy_fieldnames
+                                del row['attempted_models']
+                                abs_path = os.path.abspath(output_cost_path)
+                                if abs_path not in _legacy_csv_warned:
+                                    _legacy_csv_warned.add(abs_path)
+                                    rprint(
+                                        "[yellow]Note: cost CSV "
+                                        f"'{output_cost_path}' uses the legacy "
+                                        "header; the new 'attempted_models' "
+                                        "column will not be recorded. Delete or "
+                                        "rename the file to start fresh with the "
+                                        "attempted_models column.[/yellow]"
+                                    )
 
-                        with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
-                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                            if not file_has_content:
-                                writer.writeheader()
-                            writer.writerow(row)
+                    with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        if not file_has_content:
+                            writer.writeheader()
+                        writer.writerow(row)
 
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")

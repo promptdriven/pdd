@@ -595,29 +595,33 @@ class JobManager:
         return frozenset({command})
 
     def _resolve_cost_csv_path(self, job: Job) -> Optional[Path]:
-        """Resolve the cost-CSV path for this job, deriving and injecting a
-        default when a budget is set but no explicit path is configured.
+        """Resolve the cost-CSV path for this job.
 
-        Precedence:
-          1. ``job.options["output_cost"]`` — explicit per-job path.
-          2. ``PDD_OUTPUT_COST_PATH`` env var — process-wide path.
-          3. (Only when the job has an effective cap) a derived per-job
-             default under ``project_root/.pdd/cost-<job_id>.csv``,
-             which is also injected into ``job.options["output_cost"]``
-             so the subprocess command builder picks it up via
-             ``--output-cost``. This closes the silent-no-enforcement gap
-             where a job advertised a cap but no CSV was wired so the
-             watcher returned None and enforcement quietly never ran.
+        Two invariants this must enforce:
+          1. **Late-budget enforceability**: a job that starts uncapped MUST
+             still have a CSV writer so a subsequent `/pdd budget N` can
+             enforce against the spend that accumulated during the
+             previously-uncapped window. We therefore derive a CSV path
+             unconditionally — not only when a cap is set at submit time.
+          2. **Per-job isolation**: two jobs of the same command sharing
+             one CSV (via either an explicit options.output_cost or a
+             process-wide PDD_OUTPUT_COST_PATH) would have their watchers
+             count each other's rows, since the watcher filter is
+             `command` + `started_at` only. We therefore prefer a
+             derived per-job path under `project_root/.pdd/` over any
+             shared path so each job's watcher reads only that job's
+             rows. The shared path is honoured ONLY when explicitly set
+             on `job.options["output_cost"]`; the process-wide env var
+             is treated as a default the caller wants to NOT inherit
+             across jobs.
 
-        Returns ``None`` only when (a) the job has no effective cap (so we
-        don't generate a CSV gratuitously) or (b) creating the parent
-        directory for the derived default fails.
+        Returns the resolved Path. Returns None only if the parent
+        directory cannot be created (logged warning; budget enforcement
+        will then be inactive for this job).
         """
-        candidate = (job.options or {}).get("output_cost") if job.options else None
-        if candidate is None:
-            candidate = os.environ.get("PDD_OUTPUT_COST_PATH")
-        if candidate:
-            path = Path(candidate)
+        explicit = (job.options or {}).get("output_cost") if job.options else None
+        if explicit:
+            path = Path(explicit)
             # Ensure the parent directory exists so track_cost can write
             # the first row; the subprocess catches the OSError and
             # swallows it, which would leave the watcher silently
@@ -632,21 +636,11 @@ class JobManager:
                 )
             return path
 
-        # No explicit path configured. Derive a per-job default ONLY when an
-        # effective cap is active; otherwise there is nothing to enforce so
-        # we leave the legacy "no CSV, no watcher" behaviour intact.
-        if _effective_cap_fn is None:
-            return None
-        cap = _effective_cap_fn(
-            job.command,
-            budget_cap=job.budget_cap,
-            node_budget=job.node_budget,
-            max_total_cap=job.max_total_cap,
-            node_count=job.node_count,
-        )
-        if cap is None:
-            return None
-
+        # No explicit per-job path. Derive a per-job default so:
+        #   - late /pdd budget can find spend rows accumulated during
+        #     the uncapped window
+        #   - concurrent same-command jobs do not contaminate each
+        #     other's spend
         derived = (self.project_root or Path.cwd()) / ".pdd" / f"cost-{job.id}.csv"
         try:
             derived.parent.mkdir(parents=True, exist_ok=True)
@@ -661,10 +655,6 @@ class JobManager:
         if job.options is None:
             job.options = {}
         job.options["output_cost"] = str(derived)
-        console.print(
-            f"[blue]Auto-wired cost CSV[/blue] for {job.id}: {derived} "
-            "(budget set but no output_cost / PDD_OUTPUT_COST_PATH provided)"
-        )
         return derived
 
     def _start_watcher_for(self, job: Job) -> None:
@@ -816,6 +806,18 @@ class JobManager:
         self._jobs[job.id] = job
         self._cancel_events[job.id] = asyncio.Event()
 
+        # Resolve and pre-inject a per-job cost CSV path BEFORE the
+        # subprocess starts, regardless of whether a cap is currently
+        # set. This guarantees:
+        #   - a late `/pdd budget` arriving on an initially-uncapped run
+        #     has a CSV to read instead of seeing $0 forever, and
+        #   - the subprocess writes to a per-job file so concurrent
+        #     same-command jobs cannot count each other's spend.
+        # Resolution mutates job.options["output_cost"] when the path
+        # is derived; the subprocess command builder reads from there
+        # to emit --output-cost.
+        self._resolve_cost_csv_path(job)
+
         console.print(f"[blue]Job submitted:[/blue] {job.id} ({command})")
 
         task = asyncio.create_task(self._execute_wrapper(job))
@@ -963,6 +965,22 @@ class JobManager:
         env['TERM'] = 'dumb'
         env['PDD_SKIP_UPDATE_CHECK'] = '1'  # Skip update prompts
         env['PDD_JOB_DEADLINE'] = str(time.time() + JOB_TIMEOUT)  # Budget for agentic retries
+
+        # Per-job cost-CSV isolation. If options.output_cost was resolved at
+        # submit time to a per-job path, OVERRIDE PDD_OUTPUT_COST_PATH in
+        # the subprocess env so a process-wide value cannot quietly route
+        # writes to a shared file and cross-contaminate spend across
+        # concurrent same-command jobs. The --output-cost CLI flag will
+        # also be emitted from options below, but track_cost falls back
+        # to PDD_OUTPUT_COST_PATH when the flag is absent, so we belt-
+        # and-braces this with both.
+        per_job_csv = (job.options or {}).get("output_cost")
+        if per_job_csv:
+            env['PDD_OUTPUT_COST_PATH'] = str(per_job_csv)
+        elif 'PDD_OUTPUT_COST_PATH' in env:
+            # Remove inherited shared path so subprocess can't write to a
+            # foreign file the JobManager's watcher will never read.
+            del env['PDD_OUTPUT_COST_PATH']
 
         stdout_lines = []
         stderr_lines = []

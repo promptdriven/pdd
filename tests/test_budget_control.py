@@ -1039,7 +1039,16 @@ class TestAutoWireCostCsv:
         assert derived.parent.is_dir()
 
     @pytest.mark.asyncio
-    async def test_uncapped_job_does_not_derive_csv(self, tmp_path, monkeypatch):
+    async def test_uncapped_job_still_derives_csv_for_late_budget(
+        self, tmp_path, monkeypatch,
+    ):
+        """An initially-uncapped job MUST still get a CSV writer wired up
+        at submit time so a subsequent `/pdd budget N` has spend rows to
+        enforce against. Skipping the CSV when uncapped (the prior
+        behaviour) silently broke the documented "add a cap by
+        commenting /pdd budget 30" path because the subprocess was
+        already running without --output-cost.
+        """
         monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
 
         from pdd.server.jobs import JobManager
@@ -1062,10 +1071,17 @@ class TestAutoWireCostCsv:
                 break
             await asyncio.sleep(0.05)
 
-        # Without a cap, no watcher should run and no default CSV should
-        # be derived (we don't want to litter .pdd/ with unused files).
+        # No cap → no watcher yet, but CSV path IS derived and injected
+        # so a late /pdd budget can wire enforcement to existing rows.
         assert job.id not in mgr._watchers
-        assert "output_cost" not in job.options
+        assert "output_cost" in job.options, (
+            "Finding 1 regression: uncapped job has no CSV path; "
+            "a late /pdd budget would have nothing to enforce against."
+        )
+        derived = Path(job.options["output_cost"])
+        assert derived.parent == tmp_path / ".pdd"
+        assert derived.name == f"cost-{job.id}.csv"
+        assert derived.parent.is_dir()
 
     @pytest.mark.asyncio
     async def test_explicit_output_cost_is_respected(self, tmp_path, monkeypatch):
@@ -1241,7 +1257,12 @@ class TestExplicitCostPathParentCreated:
     """
 
     @pytest.mark.asyncio
-    async def test_explicit_path_parent_is_created(self, tmp_path, monkeypatch):
+    async def test_late_budget_finds_existing_rows(self, tmp_path, monkeypatch):
+        """End-to-end Finding 1: a job submitted uncapped writes spend
+        rows during the uncapped window; a later /pdd budget update
+        (via update_budget) MUST see those rows when the watcher
+        starts, so the cap is enforceable retroactively.
+        """
         monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
 
         from pdd.server.jobs import JobManager
@@ -1255,26 +1276,168 @@ class TestExplicitCostPathParentCreated:
             except asyncio.CancelledError:
                 raise
 
-        explicit_path = tmp_path / "nested" / "more_nested" / "cost.csv"
-        assert not explicit_path.parent.exists()
-
         mgr = JobManager(max_concurrent=1, executor=slow_executor,
                           project_root=tmp_path)
-        job = await mgr.submit(
-            "bug", args={},
-            options={"output_cost": str(explicit_path)},
-            budget_cap=30.0,
-        )
+        job = await mgr.submit("bug", args={}, options={})
         import asyncio
         for _ in range(50):
             if job.status == JobStatus.RUNNING:
                 break
             await asyncio.sleep(0.05)
 
-        # The parent directory must exist after submit, even though the
-        # caller passed an explicit path the JobManager has no business
-        # validating in advance.
-        assert explicit_path.parent.is_dir(), (
-            "Finding 3 regression: explicit output_cost parent dir was "
-            "not created — track_cost will silently fail on first write."
+        csv_path = Path(job.options["output_cost"])
+        # Simulate the subprocess having written a row during the
+        # uncapped window (track_cost writes on subprocess exit).
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = "2026-05-22T18:30:00.000+00:00"
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files", "attempted_models"])
+            w.writerow([ts, "gpt-4", "bug", "8.0", "", "", "gpt-4"])
+
+        # Now apply a late budget cap. The watcher should start and read
+        # the existing row, then update_budget's stored snapshot's
+        # effective_cap should reflect the new cap.
+        await mgr.update_budget(job.id, budget_cap=5.0)
+        assert job.id in mgr._watchers
+        snapshot = mgr.get_budget(job.id)
+        assert snapshot.effective_cap == 5.0
+
+
+class TestPerJobCsvIsolation:
+    """Finding 2 (fifth review pass): concurrent same-command jobs must
+    NOT count each other's spend. Each job gets its own derived CSV
+    under .pdd/ and the subprocess env is scrubbed of any inherited
+    process-wide PDD_OUTPUT_COST_PATH that could leak across jobs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_two_same_command_jobs_get_distinct_csvs(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=2, executor=slow_executor,
+                          project_root=tmp_path)
+        job_a = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        job_b = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        import asyncio
+        for _ in range(50):
+            if (job_a.status == JobStatus.RUNNING
+                    and job_b.status == JobStatus.RUNNING):
+                break
+            await asyncio.sleep(0.05)
+
+        path_a = job_a.options["output_cost"]
+        path_b = job_b.options["output_cost"]
+        assert path_a != path_b, (
+            "Finding 2 regression: two jobs share the same derived "
+            "cost-CSV path; one job will count the other's spend."
         )
+        assert job_a.id in path_a
+        assert job_b.id in path_b
+
+    @pytest.mark.asyncio
+    async def test_shared_env_var_does_not_contaminate(
+        self, tmp_path, monkeypatch,
+    ):
+        """Setting PDD_OUTPUT_COST_PATH to a shared file at the parent
+        process level must NOT cause two jobs to write to it (which
+        would pollute each watcher's spend with the other job's rows).
+        """
+        shared = tmp_path / "shared.csv"
+        monkeypatch.setenv("PDD_OUTPUT_COST_PATH", str(shared))
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # The derived per-job path must win over the shared env var.
+        derived = job.options["output_cost"]
+        assert derived != str(shared)
+        assert job.id in derived
+
+
+class TestTrackCostWritesOnException:
+    """Finding 3 (fifth review pass): track_cost must write a row even
+    when the wrapped command raises, otherwise failed-but-costly
+    attempts are invisible to budget enforcement.
+    """
+
+    def test_writes_partial_cost_on_exception(self, tmp_path):
+        """Drive track_cost with a click context whose wrapped function
+        raises after partial cost was pushed to ctx.obj. The decorator
+        must still emit a CSV row carrying the partial cost.
+        """
+        import click
+
+        from pdd.track_cost import track_cost
+
+        @click.command(name="bug")
+        @click.pass_context
+        @track_cost
+        def broken(ctx):
+            ctx.obj['partial_cost'] = 4.25
+            ctx.obj['last_model'] = "gpt-4"
+            ctx.obj.setdefault('attempted_models', []).append("gpt-4")
+            raise RuntimeError("synthetic mid-command failure")
+
+        cost_csv = tmp_path / "cost.csv"
+        runner = click.testing.CliRunner()
+        # Important: PYTEST_CURRENT_TEST being set normally suppresses
+        # writes; explicitly clear it for this test so the production
+        # path runs.
+        import os
+        old = os.environ.pop("PYTEST_CURRENT_TEST", None)
+        try:
+            result = runner.invoke(
+                broken, [],
+                obj={'output_cost': str(cost_csv)},
+                standalone_mode=False,
+            )
+        finally:
+            if old is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = old
+
+        # The wrapped command raised; track_cost re-raises after the
+        # finally block, so result.exception is the RuntimeError.
+        assert isinstance(result.exception, RuntimeError)
+        assert cost_csv.exists(), (
+            "Finding 3 regression: track_cost did not write a row for "
+            "a failed command; spend is invisible to enforcement."
+        )
+        contents = cost_csv.read_text()
+        # The partial cost from ctx.obj must be in the row.
+        assert "4.25" in contents
+        assert "bug" in contents
+        assert "gpt-4" in contents
+
+
