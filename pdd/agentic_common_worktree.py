@@ -617,6 +617,35 @@ def revert_out_of_scope_changes_with_dirs(
                 logger.warning("OS error reverting copy destination %s: %s", new_rel, exc)
                 if strict:
                     raise
+        elif status[:1] == "A":
+            # Staged addition (A , AM, etc.) — the file is not in HEAD so
+            # `git checkout HEAD --` would fail. Unstage then delete, same
+            # pattern as copy-destination revert.
+            try:
+                subprocess.run(
+                    ["git", "reset", "HEAD", "--", new_rel],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    timeout=30,
+                )
+                try:
+                    (cwd / new_rel).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logger.warning("Failed to remove staged addition %s: %s", new_rel, exc)
+                    if strict:
+                        raise
+                logger.info("Reverted out-of-scope staged addition: %s", new_rel)
+                reverted.append(Path(new_rel))
+            except subprocess.TimeoutExpired:
+                logger.warning("Timed out reverting staged addition %s", new_rel)
+                if strict:
+                    raise
+            except OSError as exc:
+                logger.warning("OS error reverting staged addition %s: %s", new_rel, exc)
+                if strict:
+                    raise
         else:
             try:
                 checkout = subprocess.run(

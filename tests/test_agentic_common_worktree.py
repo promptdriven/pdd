@@ -1046,3 +1046,74 @@ def test_revert_out_of_scope_changes_with_dirs_strict_raises_on_remove_failure(t
                 allowed_files=set(),
                 strict=True,
             )
+
+
+def test_revert_out_of_scope_changes_with_dirs_reverts_staged_addition(tmp_path):
+    """Regression for round-8: staged new out-of-scope files (A ) must be
+    unstaged and removed rather than hitting ``git checkout HEAD --`` which
+    fails for paths not in HEAD."""
+    # Set up a real git repo so git reset/unlink actually work.
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+        env={**__import__("os").environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
+    leak = tmp_path / "tests" / "leak.py"
+    leak.parent.mkdir(parents=True, exist_ok=True)
+    leak.write_text("# out of scope\n")
+    subprocess.run(["git", "add", str(leak)], cwd=str(tmp_path), check=True, capture_output=True)
+
+    # Confirm it is staged as A  before the guard runs.
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "-u"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert b"A  tests/leak.py" in status or b"A tests/leak.py" in status
+
+    result = revert_out_of_scope_changes_with_dirs(
+        tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
+    )
+
+    assert Path("tests/leak.py") in result
+    assert not leak.exists()
+    # Nothing staged after revert.
+    post_status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "-u"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert b"leak.py" not in post_status
+
+
+def test_revert_out_of_scope_changes_with_dirs_reverts_staged_addition_am(tmp_path):
+    """AM (staged add + unstaged modification) is also a staged addition and
+    must be handled via reset+remove, not git checkout HEAD --."""
+    import os as _os
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-m", "init"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        check=True,
+        env={**_os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
+    leak = tmp_path / "out.py"
+    leak.write_text("# v1\n")
+    subprocess.run(["git", "add", str(leak)], cwd=str(tmp_path), check=True, capture_output=True)
+    # Modify after staging to produce AM status.
+    leak.write_text("# v2\n")
+
+    result = revert_out_of_scope_changes_with_dirs(
+        tmp_path, allowed_dirs=set(), allowed_files=set(), strict=True
+    )
+
+    assert Path("out.py") in result
+    assert not leak.exists()
