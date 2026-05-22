@@ -1130,6 +1130,43 @@
     }
   },
   {
+    "reason": "Centralizes concise user-facing CLI branding strings for orientation surfaces.",
+    "description": "Defines shared tagline and positioning constants used by root help, setup onboarding, and connect startup output.",
+    "dependencies": [],
+    "priority": 31,
+    "filename": "cli_branding_python.prompt",
+    "filepath": "pdd/cli_branding.py",
+    "tags": [
+      "module",
+      "python",
+      "cli",
+      "branding"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "PDD_TAGLINE",
+            "type": "str"
+          },
+          {
+            "name": "PDD_FULL_TAGLINE",
+            "type": "str"
+          },
+          {
+            "name": "PDD_POSITIONING",
+            "type": "str"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 14960,
+      "y": 220
+    }
+  },
+  {
     "reason": "LLM prompt template for sync analysis operations.",
     "description": "Defines the prompt structure for sync analysis. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
@@ -4418,7 +4455,8 @@
     "reason": "Orchestrates pdd setup with OpenCode-aware CLI bootstrap and deterministic model configuration.",
     "description": "Runs the interactive pdd setup flow with agentic CLI bootstrapping, API-key discovery, model configuration, .pddrc initialization, and summary output.",
     "dependencies": [
-      "cli_detector_python.prompt"
+      "cli_detector_python.prompt",
+      "cli_branding_python.prompt"
     ],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
@@ -8708,7 +8746,8 @@
       "duplicate_cli_guard_python.prompt",
       "agentic_common_python.prompt",
       "auto_update_python.prompt",
-      "track_cost_python.prompt"
+      "track_cost_python.prompt",
+      "cli_branding_python.prompt"
     ],
     "priority": 5,
     "filename": "core/cli_python.prompt",

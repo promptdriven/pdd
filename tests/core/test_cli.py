@@ -9,6 +9,7 @@ from click.testing import CliRunner
 import click
 
 from pdd import __version__, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
+from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 # Import necessary components from pdd.core.cli for testing
 from pdd.core.cli import _strip_ansi_codes, OutputCapture, PDDCLI, cli as cli_command, process_commands
 import pdd.core.cli as core_cli_module
@@ -179,6 +180,8 @@ def test_cli_help(runner):
     result = runner.invoke(cli_command, ["--help"])
     assert result.exit_code == 0
     assert "Usage: cli [OPTIONS] COMMAND" in result.output
+    assert PDD_FULL_TAGLINE in result.output
+    assert PDD_POSITIONING in result.output
     assert "generate" in result.output
     assert "fix" in result.output
     assert "install-completion" in result.output
@@ -555,6 +558,8 @@ def test_pddcli_format_help_includes_suite():
     formatter = click.HelpFormatter()
     group.format_help(ctx, formatter)
     output = formatter.getvalue()
+    assert PDD_FULL_TAGLINE in output
+    assert PDD_POSITIONING in output
     assert "Generate Suite (related commands)" in output
     assert "generate" in output
 
