@@ -5959,6 +5959,70 @@ def test_parse_step5_doc_paths_files_to_update_not_reconciled():
     assert "docs/from_unconfirmed.md" not in result
 
 
+_STEP5_SAMPLE_ARROW_SYNTAX = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+### Associated Documents
+
+#### `docs/api.md`
+**Discovered via:** `prompts/orphan_python.prompt` → `<include>docs/api.md</include>`
+**Section:** request
+**Change:** update
+""")
+
+
+def test_parse_step5_doc_paths_handles_arrow_syntax_in_discovered_via():
+    """Round-6 regression: the Step 5 prompt template documents the
+    ``**Discovered via:**`` value as an include-graph path with backticks
+    and a ``→`` arrow (``prompts/foo.prompt`` → ``<include>docs/x.md</include>``).
+    The originating prompt is the FIRST ``*.prompt`` token in the clause; the
+    reconciler must reject the doc when that prompt isn't confirmed by Step 6.
+    Before the fix the regex anchored to ``$`` and excluded backticks, so this
+    line never matched and the doc was always included.
+    """
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_ARROW_SYNTAX,
+        confirmed_prompts={"prompts/foo_python.prompt"},
+    )
+    assert "docs/api.md" not in result
+
+
+def test_parse_step5_doc_paths_handles_arrow_syntax_when_originating_prompt_confirmed():
+    """Round-6: same arrow-syntax body, but the originating prompt IS in the
+    confirmed set — the doc must be included."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_ARROW_SYNTAX,
+        confirmed_prompts={"prompts/orphan_python.prompt"},
+    )
+    assert "docs/api.md" in result
+
+
+_STEP5_SAMPLE_ARROW_CHAIN = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+### Associated Documents
+
+#### `docs/deep.md`
+**Discovered via:** `prompts/a.prompt` → `prompts/b.prompt` → `<include>docs/deep.md</include>`
+**Section:** intro
+**Change:** update
+""")
+
+
+def test_parse_step5_doc_paths_first_prompt_path_wins_when_multiple_in_include_chain():
+    """Round-6: when the ``Discovered via`` clause names multiple prompts along
+    the include chain, the FIRST one is the originating prompt and the only one
+    the reconciler considers. ``prompts/b.prompt`` being confirmed downstream
+    must NOT keep ``docs/deep.md`` in the allowlist when ``prompts/a.prompt``
+    isn't confirmed.
+    """
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_ARROW_CHAIN,
+        confirmed_prompts={"prompts/b.prompt"},
+    )
+    assert "docs/deep.md" not in result
+
+
 # 7-11: Allowlist builder tests ----------------------------------------------
 
 

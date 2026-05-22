@@ -979,22 +979,44 @@ def _parse_step5_doc_paths(
             if not candidate.endswith((".md", ".rst", ".txt")):
                 continue
             if confirmed_set is not None:
-                discovered = re.search(
-                    r"\*\*Discovered via:\*\*\s*`?([^`\n]+?)`?\s*$",
+                # Two-step extraction. The Step 5 template documents the
+                # ``**Discovered via:**`` value as an include-graph path that
+                # may contain backticks and a ``→`` arrow, e.g.
+                # ``\`prompts/foo.prompt\` → \`<include>docs/api.md</include>\```.
+                # A single anchored regex anchored to ``$`` with a
+                # ``[^`\n]`` character class cannot span that — it never
+                # matched on real Step 5 output, so the reconciliation gate
+                # silently allowlisted stale docs (issue #1123 round-6).
+                # Step 1: grab everything after ``**Discovered via:**`` on
+                # the same line and any continuation lines, up to the next
+                # bold field, a blank line, or the end of the body.
+                dv_match = re.search(
+                    r"\*\*Discovered via:\*\*(.*?)(?:\n\s*\*\*|\n\s*\n|$)",
                     body,
-                    re.MULTILINE,
+                    re.DOTALL,
                 )
-                if discovered:
-                    origin = discovered.group(1).strip().strip("`").strip("*").strip()
-                    origin_norm = origin.replace("\\", "/")
-                    if origin_norm not in confirmed_set:
-                        # Originating prompt was not confirmed by Step 6;
-                        # Step 9 must skip this doc, so the scope guard
-                        # refuses to allowlist it.
-                        continue
-                # If no `Discovered via` line is present we cannot
-                # reconcile — include conservatively so legitimate Step 5
-                # output without the field still gets allowlisted. The
+                if dv_match:
+                    clause = dv_match.group(1)
+                    # Step 2: the FIRST ``*.prompt`` path inside the clause
+                    # is the originating prompt (later entries are downstream
+                    # nodes along the include chain). Strip surrounding
+                    # backticks; whitespace is excluded by the token class.
+                    origin_match = re.search(r"`?([^\s`]+\.prompt)`?", clause)
+                    if origin_match:
+                        origin = origin_match.group(1).strip("`").strip()
+                        origin_norm = origin.replace("\\", "/")
+                        if origin_norm not in confirmed_set:
+                            # Originating prompt was not confirmed by Step 6;
+                            # Step 9 must skip this doc, so the scope guard
+                            # refuses to allowlist it.
+                            continue
+                    # No ``*.prompt`` token inside the Discovered via clause —
+                    # the LLM emitted a non-standard form. Fall through to the
+                    # conservative include path below so a malformed but
+                    # legitimately reachable doc isn't dropped.
+                # If the ``Discovered via`` field is absent entirely we
+                # cannot reconcile — include conservatively so a missing
+                # field doesn't drop a legitimately reachable doc. The
                 # Step 5 prompt requires the field; this branch only
                 # protects against minor LLM omissions.
             docs.append(candidate)

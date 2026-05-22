@@ -26,7 +26,7 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
-6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately.
+6. For Step 9: Run `_enforce_step9_scope(...)` BEFORE parsing the LLM output (see "Step 9 Scope Guard" section). If it returns a non-empty list of reverted paths, build a `SCOPE_VIOLATION:` block, set `state["step_outputs"]["9"]` to `FAILED: SCOPE_VIOLATION` + the block, clear preflight idempotency flags, save state, and abort with `(False, "Stopped at step 9: Scope violation — …", ...)`. Only when the guard reports no reverts do you parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately.
 7. Pass extracted files to subsequent steps via `files_to_stage` context variable
 7b. For Step 10: Parse agent output for `ARCHITECTURE_FILES_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_CONFLICTS: path1, path2`, and `ASSOCIATED_DOCS_UNCHANGED: path1, path2` lines. Append `ARCHITECTURE_FILES_MODIFIED` and `ASSOCIATED_DOCS_MODIFIED` entries to `changed_files` / `files_to_stage`. `ASSOCIATED_DOCS_CONFLICTS` entries are logged but NOT auto-added (they need human review). `ASSOCIATED_DOCS_UNCHANGED` entries are logged only, not staged.
 7c. For Step 6: Parse agent output for "Direct Edit Candidates" table. Extract file paths and store in `context["direct_edit_candidates"]` list. These are frontend/code files with no corresponding prompt that need scoped edits (uncomment, remove placeholder). Pass this list to Step 9.
@@ -315,6 +315,39 @@ Between Step 8 (Analyze Prompt Changes) and Step 9 (Implement), the orchestrator
 3. Known v1 limitation (documented in the helper's docstring): a heal-induced cascade (healing module A triggers drift in module B) is NOT handled here. CI auto-heal (`pdd.ci_drift_heal`) is the post-PR safety net. Don't rerun `_preflight_drift_heal` in a fixed-point loop — it's intentionally single-pass to cap cost and worktree mutations.
 
 4. Heal failures are **non-fatal** except metadata-finalization failures: the workflow continues when ordinary subprocess-level module heals fail, and operators inspect `state["preflight_failed_heal_modules"]` for visibility. If a preflight heal subprocess reports `metadata finalization failed`, `metadata staging verification failed`, or the `pdd update --sync-metadata` `[metadata-sync]` error prefix, raise a hard failure instead of continuing, because issue #1006 requires preflight drift-heal to fail loudly rather than publish half-synced metadata.
+
+% Step 9 Scope Guard (Issue #1123)
+
+Step 9 implements the change in the isolated worktree but the underlying LLM tool calls are not bounded to the scope contract derived from Steps 5 and 6. The scope guard reconciles the post-Step-9 worktree against an allowlist and reverts any file that wasn't in scope, so unrelated prompts, fresh code/example/test files, and `architecture.json` cannot ride along on an in-scope change.
+
+1. Pre-snapshot capture (before Step 9 runs):
+   - Inside the `if step_num == 9:` block, immediately after the worktree is confirmed present and BEFORE `run_agentic_task` is dispatched for Step 9, call `_snapshot_worktree_status(worktree_path)` and stash the result on `context["_step9_pre_status"]` (type: `Dict[str, Tuple[str, Optional[str]]]` — `{posix_rel_path: (porcelain_xy_status, sha256_content_hex_or_None)}`).
+   - Capture **unconditionally** when the worktree exists — do not gate on first-run. The pre-snapshot must be present on every Step 9 invocation, including resume after a previous scope violation (the prior invocation already ran Step 8.5 preflight heal, so the new run sees heal artifacts that Step 9 itself did not produce).
+   - `_snapshot_worktree_status` shells out to `git status --porcelain=v1 -z -u`, hashes each non-deleted file's bytes with SHA-256, and returns `{}` on any error so callers always get a usable mapping. Content hashing is required: a file that Step 8.5 modified and Step 9 modifies again has the same porcelain status (`' M'`) before and after, but a different content hash, and the guard must revert it.
+
+2. Post-Step-9 enforcement (before FILES_* parsing):
+   - After Step 9's `run_agentic_task` returns and BEFORE `_parse_changed_files` / `_detect_worktree_changes` fallback, call `_enforce_step9_scope(worktree_path, context, state, pre_status=context["_step9_pre_status"], quiet=quiet)`.
+   - `_enforce_step9_scope` builds the allowlist from these sources:
+     - **Step 6 dev unit PROMPTS**: first column of the dev-unit table only — code/example/test columns are forbidden in scope. Parsed via `_parse_step6_devunit_prompts(step6_output)`.
+     - **Step 6 dependency / integration / frontend prompts**: parsed via `_parse_step6_dependency_prompts`, `_parse_step6_integration_prompts`, `_parse_step6_frontend_prompts` (frontend skips `None`, integration skips `manual update needed`).
+     - **Step 6 Direct Edit Candidates**: exact paths from `_parse_direct_edit_candidates(step6_output)`. These are frontend/code files with no corresponding prompt — Step 9 may directly edit them.
+     - **Step 5 Files to Update / Files to Create / Associated Documents**: parsed via `_parse_step5_doc_paths(step5_output, confirmed_prompts=<union of all Step 6 confirmed prompts>)`. **Reconciliation**: an Associated Documents entry is only allowlisted when its `**Discovered via:**` originating prompt appears in the Step 6 confirmed-prompt set. The originating prompt is the FIRST `*.prompt` token in the `Discovered via` clause; the template documents the include-graph arrow form (e.g. `` `prompts/foo.prompt` → `<include>docs/x.md</include>` ``), and the parser does a two-step extraction (grab the clause, then find the first `*.prompt` inside it). Files to Update / Files to Create are NEVER reconciled — Step 5 owns those buckets directly.
+     - **Preflight-healed prompt paths**: `state.get("preflight_healed_prompt_paths")` from Step 8.5. These are prompts the heal subprocesses rewrote; their edits pre-date Step 9 and must stay.
+   - With the allowlist built, call `pdd.agentic_common_worktree.revert_out_of_scope_changes_with_dirs(worktree_path, allowed_dirs=set(), allowed_files=allowed_files, pre_snapshot=pre_status, strict=True)`. The helper iterates post-Step-9 `git status --porcelain=v1 -z -u`, skips entries whose `(status, content_hash)` tuple matches the pre-snapshot, and reverts every other out-of-scope entry: `git checkout HEAD --` for tracked files, `os.remove` for untracked. A second pass over pre-snapshot keys absent from post status catches deletions and `dirty → clean` reversions. With `strict=True`, internal helper failures raise instead of returning silently.
+   - **`architecture.json` is NOT in the allowlist** — Step 10 owns it. If Step 9 wrote `architecture.json`, the guard reverts it and Step 10 will redo any needed updates.
+   - **Step 9-only** — other agentic_* commands (e.g. `pdd bug`, `pdd split`) are out of scope for this guard.
+
+3. Violation handling (when `_enforce_step9_scope` returns a non-empty list):
+   1. Build a `SCOPE_VIOLATION:` block: one bullet per reverted path, plus a brief explanation, appended to `step_output`.
+   2. Print a red console warning naming the count of reverted paths (when not quiet).
+   3. Post a GitHub comment with the violation details via `post_step_comment` so the issue thread captures the abort reason.
+   4. Set `state["step_outputs"]["9"] = f"FAILED: SCOPE_VIOLATION\n{step_output}"` so resume sees the failed state rather than a fresh prompt.
+   5. Do NOT advance `last_completed_step`.
+   6. Clear `state["preflight_drift_healed"]` and `state["preflight_healed_worktree"]` so resume re-runs Step 8.5 — the violation may have included reverted heal artifacts, and Step 8.5 is idempotent.
+   7. Save state and return `(False, "Stopped at step 9: Scope violation — refine the issue / Step 6 dev-unit list, then rerun pdd change.", total_cost, model_used, changed_files)`.
+
+4. Strict-mode error handling:
+   - If `_enforce_step9_scope` itself raises (the underlying `revert_out_of_scope_changes_with_dirs(strict=True)` helper or any of its `git`/IO calls failed): treat the exception as a workflow-stopping scope violation with `<scope guard enforcement error: {exc}>` as the block content. Same state-save and abort path as a normal violation — preflight flags cleared, `step_outputs["9"]` set to `FAILED: SCOPE_VIOLATION`, return `(False, ...)`. The orchestrator must never fall through to FILES_* parsing when the guard couldn't run cleanly.
 
 % Step 10.5 — Associated-Document Contract Verifier (Issue #739)
 
