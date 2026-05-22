@@ -47,6 +47,14 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - cycles_detected: list of cycles found (each cycle is a list of module names)
    - If cycles exist, sorted_list contains all non-cyclic modules in order
 
+4a. Function: compute_sccs(graph: Dict[str, List[str]]) -> List[List[str]]
+   - Compute strongly connected components of a directed dependency graph using an iterative Tarjan's algorithm (no recursion — deep cycle chains must not blow the Python recursion limit).
+   - Normalize the input graph so every node referenced as a dependency is also present as a key (mirrors topological_sort).
+   - With the input convention `graph[A] == [B]` meaning *A depends on B*, return SCCs in deps-first order: an SCC's external dependencies are emitted before the SCC itself. This is Tarjan's natural emission order (the reverse of a depender-first topological sort of the condensation).
+   - Within each SCC, sort node names alphabetically for determinism.
+   - Trivial SCCs (single node, no self-loop) are returned as single-element lists. A self-loop on a node is its own SCC and must be distinguishable from a non-self-loop singleton by inspecting `graph[node]` (callers detect self-loops via `node in graph.get(node, [])`).
+   - Sort each adjacency list before Tarjan's DFS so the discovery order depends only on graph structure, not the caller's dep-list ordering. The SCC set is invariant to neighbour order, but the order they're emitted in is not.
+
 5. Function: get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]
    - Given modified modules, find all modules that transitively depend on them
    - Build reverse graph to find dependents efficiently

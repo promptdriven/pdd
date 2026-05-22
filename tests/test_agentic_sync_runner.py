@@ -215,6 +215,339 @@ class TestGetBlockedModules:
         blocked = runner._get_blocked_modules()
         assert blocked == ["b", "c"]
 
+    def test_cycle_with_external_failed_dep_blocks_all_cycle_members(self):
+        """Every member of an SCC must be reported blocked when the SCC has a
+        failed cross-SCC dep, regardless of which member is visited first.
+
+        Graph: 3-cycle A->B->C->A; A also depends on external failed module X.
+        All of A, B, C are pending, X is failed.
+        The DFS-with-cache implementation previously cached False on the
+        cycle re-entry, leaving B and C wrongly unblocked.
+        """
+        runner = AsyncSyncRunner(
+            basenames=["A", "B", "C", "X"],
+            dep_graph={"A": ["B", "X"], "B": ["C"], "C": ["A"], "X": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["X"].status = "failed"
+        blocked = runner._get_blocked_modules()
+        assert set(blocked) == {"A", "B", "C"}, (
+            f"All cycle members must be blocked, got {blocked}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner scheduling with cyclic dep graphs
+# ---------------------------------------------------------------------------
+
+class TestCycleScheduling:
+    """Scheduling tests for dep graphs containing cycles.
+
+    ``pdd sync`` previously deadlocked when the target set contained a
+    legitimate dependency cycle (e.g.
+    ``agentic_checkup_orchestrator <-> checkup_review_loop``). The runner must
+    treat intra-SCC edges as soft (so cycle members can still be picked) while
+    serializing execution within an SCC (only one member running at a time)
+    and preserving cross-SCC ordering.
+    """
+
+    def _make_runner(self, basenames, dep_graph, states=None):
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph,
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        if states:
+            for name, status in states.items():
+                runner.module_states[name].status = status
+        return runner
+
+    def test_cycle_two_modules_no_state_picks_one_ready(self):
+        """A<->B cycle: exactly one member is ready in the first pass."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+        )
+        ready = runner._get_ready_modules()
+        assert ready == ["a"], (
+            f"Expected exactly the first basename of the cycle, got {ready}"
+        )
+
+    def test_cycle_two_modules_running_blocks_peer(self):
+        """While one cycle member is running, the other must not be scheduled."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+            states={"a": "running"},
+        )
+        ready = runner._get_ready_modules()
+        assert "b" not in ready
+        assert ready == []
+
+    def test_cycle_two_modules_one_success_unblocks_peer(self):
+        """Once one cycle member succeeds, the other becomes ready."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+            states={"a": "success"},
+        )
+        ready = runner._get_ready_modules()
+        assert ready == ["b"]
+
+    def test_cycle_two_modules_one_failed_blocks_peer(self):
+        """If one cycle member fails, the other is reported blocked, not ready."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+            states={"a": "failed"},
+        )
+        ready = runner._get_ready_modules()
+        blocked = runner._get_blocked_modules()
+        assert ready == []
+        assert blocked == ["b"]
+
+    def test_three_cycle_with_external_dependent(self):
+        """Three-module graph with a 2-cycle plus an external dependent.
+
+        ``agentic_checkup`` depends on the 2-cycle pair. The first pass must
+        pick exactly one cycle member (by basenames order), never the dependent.
+        As cycle members succeed, the next becomes ready, then finally the
+        external dependent.
+        """
+        basenames = [
+            "agentic_checkup_orchestrator",
+            "checkup_review_loop",
+            "agentic_checkup",
+        ]
+        dep_graph = {
+            "agentic_checkup_orchestrator": ["checkup_review_loop"],
+            "checkup_review_loop": ["agentic_checkup_orchestrator"],
+            "agentic_checkup": ["checkup_review_loop"],
+        }
+        runner = self._make_runner(basenames, dep_graph)
+
+        ready1 = runner._get_ready_modules()
+        assert ready1 == ["agentic_checkup_orchestrator"], (
+            f"First pass should yield exactly the first cycle member, got {ready1}"
+        )
+
+        runner.module_states["agentic_checkup_orchestrator"].status = "success"
+        ready2 = runner._get_ready_modules()
+        assert ready2 == ["checkup_review_loop"], (
+            f"After first cycle member succeeds, peer must be ready (without "
+            f"the external dependent yet), got {ready2}"
+        )
+
+        runner.module_states["checkup_review_loop"].status = "success"
+        ready3 = runner._get_ready_modules()
+        assert ready3 == ["agentic_checkup"], (
+            f"With both cycle members succeeded, the external dependent must "
+            f"now be ready, got {ready3}"
+        )
+
+    def test_acyclic_graph_unaffected(self):
+        """Regression guard: an acyclic 3-module graph schedules unchanged."""
+        runner = self._make_runner(
+            ["a", "b", "c"],
+            {"a": [], "b": ["a"], "c": ["b"]},
+        )
+        ready = runner._get_ready_modules()
+        assert ready == ["a"]
+
+        runner.module_states["a"].status = "success"
+        ready = runner._get_ready_modules()
+        assert ready == ["b"]
+
+        runner.module_states["b"].status = "success"
+        ready = runner._get_ready_modules()
+        assert ready == ["c"]
+
+    def test_self_loop_does_not_deadlock(self):
+        """A 1-node SCC formed by a self-loop is still a cyclic SCC. The
+        runner must treat the self dep as a soft edge, otherwise the module
+        deadlocks waiting for itself.
+        """
+        runner = self._make_runner(["a"], {"a": ["a"]})
+        ready = runner._get_ready_modules()
+        assert ready == ["a"], (
+            f"Self-loop must not block readiness, got {ready}"
+        )
+
+    def test_self_loop_with_external_dep_waits_for_external(self):
+        """A self-loop SCC also has cross-SCC deps; those gate normally."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["a", "b"], "b": []},
+        )
+        # b is the only initial ready; a waits because self-loop is soft but
+        # b is cross-SCC pending.
+        assert sorted(runner._get_ready_modules()) == ["b"]
+        runner.module_states["b"].status = "success"
+        # Now a can run; self-loop dep is soft, b's success satisfies the
+        # cross-SCC edge.
+        assert runner._get_ready_modules() == ["a"]
+
+    def test_external_consumer_waits_for_whole_cycle_scc(self):
+        """A consumer outside an SCC must wait until every cycle member is
+        success, not just its directly-named dep."""
+        runner = self._make_runner(
+            ["a", "b", "m"],
+            {"a": ["b"], "b": ["a"], "m": ["a"]},
+        )
+        # Initially: a/b serialize, m must wait for both
+        ready = runner._get_ready_modules()
+        # First SCC member becomes ready; m must NOT be in ready.
+        assert "m" not in ready
+        assert ready == ["a"]
+        runner.module_states["a"].status = "success"
+        # Now b is the only un-success cycle peer; m still must wait.
+        ready = runner._get_ready_modules()
+        assert ready == ["b"], (
+            f"m must not be ready while b is still pending; got {ready}"
+        )
+        runner.module_states["b"].status = "success"
+        # Whole SCC done -> m becomes ready
+        assert runner._get_ready_modules() == ["m"]
+
+    def test_external_consumer_blocked_when_cycle_peer_fails(self):
+        """If any cycle member fails, downstream consumers must be blocked."""
+        runner = self._make_runner(
+            ["a", "b", "m"],
+            {"a": ["b"], "b": ["a"], "m": ["a"]},
+        )
+        runner.module_states["a"].status = "success"
+        runner.module_states["b"].status = "failed"
+        # m's only direct dep (a) is success — but a's SCC has a failed peer
+        # (b). m must therefore be reported as blocked.
+        assert runner._get_blocked_modules() == ["m"]
+
+    def test_cycle_member_waits_for_peers_external_dep(self):
+        """A cycle member must wait for any external dep reached through
+        another cycle peer. Graph: a->b, b->[a,x], x->[]. SCC {a,b} effectively
+        depends on x (via b), so neither cycle member is ready until x is.
+        """
+        runner = self._make_runner(
+            ["a", "b", "x"],
+            {"a": ["b"], "b": ["a", "x"], "x": []},
+        )
+        ready = runner._get_ready_modules()
+        # Only x has no deps and is not in a cycle; cycle members must wait
+        # for x to succeed before either can start.
+        assert ready == ["x"], (
+            f"cycle members must not be ready while x is pending; got {ready}"
+        )
+        runner.module_states["x"].status = "success"
+        ready = runner._get_ready_modules()
+        # SCC {a,b} is now unblocked; pick one (basenames order -> a) and
+        # serialize the other.
+        assert ready == ["a"], f"expected ['a'], got {ready}"
+        runner.module_states["a"].status = "success"
+        assert runner._get_ready_modules() == ["b"]
+
+    def test_cycle_member_blocked_by_peers_external_failed_dep(self):
+        """If a cycle peer's external dep failed, no cycle member may run.
+        Graph: a->b, b->[a,x], x failed. {a,b} is blocked via b->x; neither
+        cycle member must be reported as ready.
+        """
+        runner = self._make_runner(
+            ["a", "b", "x"],
+            {"a": ["b"], "b": ["a", "x"], "x": []},
+        )
+        runner.module_states["x"].status = "failed"
+        ready = runner._get_ready_modules()
+        assert ready == [], (
+            f"cycle members must be blocked when a peer's external dep is "
+            f"failed; got ready={ready}"
+        )
+        blocked = runner._get_blocked_modules()
+        assert sorted(blocked) == ["a", "b"], (
+            f"both cycle members must be classified blocked; got {blocked}"
+        )
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_run_completes_with_cycle(self, mock_comment, mock_sync):
+        """Full run() with a 3-module cycle-bearing graph must succeed end-to-end."""
+        mock_sync.return_value = (True, 0.0, "")
+
+        basenames = [
+            "agentic_checkup_orchestrator",
+            "checkup_review_loop",
+            "agentic_checkup",
+        ]
+        dep_graph = {
+            "agentic_checkup_orchestrator": ["checkup_review_loop"],
+            "checkup_review_loop": ["agentic_checkup_orchestrator"],
+            "agentic_checkup": ["checkup_review_loop"],
+        }
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph,
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+        assert success, f"Expected success but got msg={msg!r}"
+        assert msg == "All 3 modules synced successfully"
+        assert cost == pytest.approx(0.0)
+        # Every basename must have been synced exactly once.
+        synced = sorted(c.args[0] for c in mock_sync.call_args_list)
+        assert synced == sorted(basenames)
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_run_with_cycle_one_failure(self, mock_comment, mock_sync):
+        """If one cycle member fails, the peer + downstream are blocked, not lost."""
+        def fake_sync(basename):
+            if basename == "agentic_checkup_orchestrator":
+                return (False, 0.0, "boom")
+            return (True, 0.0, "")
+
+        mock_sync.side_effect = fake_sync
+
+        basenames = [
+            "agentic_checkup_orchestrator",
+            "checkup_review_loop",
+            "agentic_checkup",
+        ]
+        dep_graph = {
+            "agentic_checkup_orchestrator": ["checkup_review_loop"],
+            "checkup_review_loop": ["agentic_checkup_orchestrator"],
+            "agentic_checkup": ["checkup_review_loop"],
+        }
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph,
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+        assert not success
+        assert (
+            runner.module_states["agentic_checkup_orchestrator"].status
+            == "failed"
+        )
+        assert runner.module_states["checkup_review_loop"].status == "pending"
+        assert runner.module_states["agentic_checkup"].status == "pending"
+        assert "Failed: ['agentic_checkup_orchestrator']" in msg
+        # Both the cycle peer and the external dependent must be reported as
+        # blocked — not silently dropped as "not run".
+        assert (
+            "Skipped (blocked): ['agentic_checkup', 'checkup_review_loop']"
+            in msg
+            or "Skipped (blocked): ['checkup_review_loop', 'agentic_checkup']"
+            in msg
+        )
+        assert "Skipped (not run):" not in msg
+
 
 # ---------------------------------------------------------------------------
 # AsyncSyncRunner._build_comment_body
