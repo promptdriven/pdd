@@ -2745,6 +2745,7 @@ Arguments:
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--start-step STEP`: Recovery override for the legacy checkup flow; accepted values are `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, and `8`. Not compatible with `--review-loop`.
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 - `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
 - `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
@@ -2778,7 +2779,7 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, `checkup/pr-{N}` for PR mode), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, checkout-scoped `checkup/pr-{N}-<scope>` branch for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 

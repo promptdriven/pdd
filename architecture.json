@@ -7538,7 +7538,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, cwd: Optional[Path]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, start_step_override: Optional[Union[int, float]], cwd: Optional[Path]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7690,7 +7690,7 @@
   },
   {
     "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
-    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
+    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt"
@@ -7709,7 +7709,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Creates or reuses checkup worktrees",
@@ -7752,6 +7752,66 @@
             ]
           },
           {
+            "name": "_format_pr_changed_files_for_prompt",
+            "signature": "(worktree: Path, pr_metadata: Optional[Dict[str, str]] = None) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Reads local git refs and diff output",
+              "Uses pr_metadata['api_changed_files'] as an authoritative fallback when the refreshed PR base ref is unavailable",
+              "Keeps the API fallback bounded so very large PRs do not bloat Step 5/7 prompts",
+              "Writes pr_metadata['api_changed_files_full'] to .pdd/checkup-context/pr-changed-files-api.txt when present"
+            ]
+          },
+          {
+            "name": "_is_step_timeout_failure",
+            "signature": "(output: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_is_provider_failure",
+            "signature": "(output: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_format_step_abort_message",
+            "signature": "(step_num: Union[int, float], output: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_pr_worktree_branch_name",
+            "signature": "(git_root: Path, pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_pr_base_tracking_ref",
+            "signature": "(pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_refresh_pr_base_ref",
+            "signature": "(worktree: Path, pr_owner: str, pr_repo: str, pr_number: int, pr_metadata: Dict[str, str], quiet: bool) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Fetches the PR base branch into a dedicated local tracking ref",
+              "Mutates pr_metadata with base_local_ref or base_ref_fetch_error"
+            ]
+          },
+          {
             "name": "_setup_worktree",
             "signature": "(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool) -> Tuple[Optional[Path], Optional[str]]",
             "returns": "Tuple[Optional[Path], Optional[str]]",
@@ -7765,7 +7825,7 @@
             "returns": "Tuple[Optional[Path], Optional[str]]",
             "sideEffects": [
               "Fetches PR head",
-              "Creates git worktree for the existing PR branch"
+              "Creates git worktree for the existing PR branch using a checkout-scoped local branch name"
             ]
           },
           {
@@ -7773,7 +7833,10 @@
             "signature": "(owner: str, repo: str, pr_number: int) -> Dict[str, str]",
             "returns": "Dict[str, str]",
             "sideEffects": [
-              "Reads pull request metadata through GitHub CLI"
+              "Reads pull request metadata through GitHub CLI",
+              "Includes prompt-ready GitHub PR files API changed-file lines for degraded PR-scoped test context",
+              "Bounds API fallback changed-file context with PR_API_CHANGED_FILES_MAX_LINES and PR_API_CHANGED_FILES_MAX_CHARS",
+              "Preserves the complete API changed-file list as api_changed_files_full when the prompt preview is truncated"
             ]
           },
           {

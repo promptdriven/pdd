@@ -161,7 +161,10 @@ class TestCliValidation:
 class TestSetupPrWorktree:
     def test_happy_path(self, tmp_path: Path) -> None:
         """Both the fetch and worktree-add subprocess calls succeed."""
-        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
 
         with patch(
             "pdd.agentic_checkup_orchestrator._get_git_root",
@@ -190,9 +193,29 @@ class TestSetupPrWorktree:
             cmds = [call.args[0] for call in run_mock.call_args_list]
             fetch_calls = [c for c in cmds if len(c) > 1 and c[0] == "git" and c[1] == "fetch"]
             add_calls = [c for c in cmds if len(c) > 2 and c[0] == "git" and c[1] == "worktree" and c[2] == "add"]
+            expected_branch = _pr_worktree_branch_name(tmp_path, 77)
             assert fetch_calls, "expected a git fetch for pull/77/head"
             assert any("pull/77/head" in " ".join(c) for c in fetch_calls)
+            assert any(f"pull/77/head:{expected_branch}" in c for c in fetch_calls[0])
             assert add_calls, "expected a git worktree add"
+            assert add_calls[0][-1] == expected_branch
+            assert expected_branch != "checkup/pr-77"
+
+    def test_pr_branch_name_is_scoped_to_git_root(self, tmp_path: Path) -> None:
+        """Linked worktrees share refs, so PR branches must not collide."""
+        from pdd.agentic_checkup_orchestrator import _pr_worktree_branch_name
+
+        root_a = tmp_path / "checkout-a"
+        root_b = tmp_path / "checkout-b"
+        root_a.mkdir()
+        root_b.mkdir()
+
+        branch_a = _pr_worktree_branch_name(root_a, 77)
+        branch_b = _pr_worktree_branch_name(root_b, 77)
+
+        assert branch_a.startswith("checkup/pr-77-")
+        assert branch_b.startswith("checkup/pr-77-")
+        assert branch_a != branch_b
 
     def test_fetch_failure_returns_error(self, tmp_path: Path) -> None:
         """If `git fetch pull/<N>/head` fails, surface a helpful error."""
