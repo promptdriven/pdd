@@ -49,13 +49,17 @@ try:
         pdd_issue_defaults,
         validate_amount,
     )
-    from ..cost_budget_watcher import watch as _watch_csv
+    from ..cost_budget_watcher import (
+        read_spent_now as _read_spent_now,
+        watch as _watch_csv,
+    )
 except ImportError:  # pragma: no cover - support partial installs
     BudgetStore = None  # type: ignore[assignment]
     _effective_cap_fn = None  # type: ignore[assignment]
     pdd_issue_defaults = None  # type: ignore[assignment]
     validate_amount = None  # type: ignore[assignment]
     _watch_csv = None  # type: ignore[assignment]
+    _read_spent_now = None  # type: ignore[assignment]
 
 
 # Maximum time (seconds) a subprocess job may run before being killed
@@ -916,6 +920,38 @@ class JobManager:
             # 3. Execute
             result = None
 
+            async def _final_watcher_flush() -> None:
+                """Synchronous final poll of the watcher BEFORE we set the
+                terminal status. If the subprocess wrote its final cost
+                row right before exiting (faster than the daemon's 2s
+                poll), flush() catches it now. When flush fires, it
+                schedules ``_handle_budget_exceeded`` via
+                ``run_coroutine_threadsafe``; yield to the loop a few
+                times so that coroutine actually sets
+                ``BUDGET_EXCEEDED`` before the post-executor code below
+                gets a chance to set ``COMPLETED``.
+                """
+                watcher = self._watchers.get(job.id)
+                if watcher is None:
+                    return
+                try:
+                    fired = watcher.flush()
+                except Exception:  # noqa: BLE001
+                    console.print(
+                        f"[red]Watcher flush raised for {job.id}; "
+                        "budget may not be enforced on the final row.[/red]"
+                    )
+                    return
+                if not fired:
+                    return
+                # Cooperatively wait for _handle_budget_exceeded to flip
+                # the status. Bounded retries so a hung coroutine cannot
+                # block job teardown forever.
+                for _ in range(50):
+                    if job.status in _TERMINAL_STATUSES:
+                        return
+                    await asyncio.sleep(0.01)
+
             if self._custom_executor:
                 # Custom executors (the private GitHub App's pdd-issue
                 # path) spawn their own subprocesses; they do NOT go
@@ -968,6 +1004,13 @@ class JobManager:
             else:
                 result = await self._run_click_command(job)
 
+            # 3b. Flush the watcher synchronously now that the
+            # subprocess has returned. This catches the final cost
+            # row that the daemon thread would otherwise miss in its
+            # next 2s poll window (which never runs because step 5
+            # stops the watcher in finally).
+            await _final_watcher_flush()
+
             # 4. Handle Result
             if self._cancel_events[job.id].is_set():
                 # Respect a terminal status already set by another path
@@ -1010,6 +1053,24 @@ class JobManager:
             # 5. Cleanup and Notify
             if not job.completed_at:
                 job.completed_at = datetime.now(timezone.utc)
+            # Synchronous final flush BEFORE stopping the watcher: the
+            # subprocess may have written its final cost row in the
+            # last ~2s and exited before the daemon thread's next poll
+            # would have observed it. Without this flush, a job whose
+            # only spend row is the final one completes as
+            # JobStatus.COMPLETED with no budget_exceeded event even
+            # when the cap is crossed. flush() is idempotent with
+            # respect to the fire-once invariant.
+            watcher = self._watchers.get(job.id)
+            if watcher is not None:
+                try:
+                    watcher.flush()
+                except Exception:  # noqa: BLE001
+                    console.print(
+                        f"[red]Final watcher flush failed for "
+                        f"{job.id}; budget may not have been "
+                        f"enforced on the final row.[/red]"
+                    )
             self._stop_watcher_for(job.id)
             await self.callbacks.emit_complete(job)
 
@@ -1278,6 +1339,29 @@ class JobManager:
                     spent = live
             except Exception:  # noqa: BLE001
                 pass
+        else:
+            # No active watcher means this job is uncapped — no daemon
+            # thread is tailing the CSV. /pdd settings must still
+            # report the actual accumulated spend during the run, so
+            # do a one-shot synchronous read of the CSV. Without this,
+            # an uncapped job that has already written cost rows would
+            # report Spent: $0.00 to the user.
+            csv_path_str = (
+                (job.options or {}).get("output_cost")
+                if job.options else None
+            ) or os.environ.get("PDD_OUTPUT_COST_PATH")
+            if csv_path_str and _read_spent_now is not None:
+                try:
+                    one_shot = _read_spent_now(
+                        Path(csv_path_str),
+                        commands=self._commands_filter_for(job.command),
+                        started_at=job.started_at,
+                        job_id=job.id,
+                    )
+                    if one_shot > spent:
+                        spent = one_shot
+                except Exception:  # noqa: BLE001
+                    pass
         return BudgetSettings(
             command=job.command,
             node_budget=job.node_budget,
@@ -1358,6 +1442,19 @@ class JobManager:
             # being set for the first time). Start one if the job is still
             # active.
             self._start_watcher_for(job)
+            watcher = self._watchers.get(job_id)
+        # Synchronous flush so the watcher's view of accumulated spend
+        # is current BEFORE this method returns. Closes the race where
+        # /pdd budget arrives on a fast-exiting uncapped job: the new
+        # cap would otherwise only be checked at the next 2s poll,
+        # which never runs because the subprocess finishes first and
+        # the cleanup stops the watcher. With flush(), any pre-update
+        # spend rows trigger budget_exceeded immediately.
+        if watcher is not None:
+            try:
+                watcher.flush()
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[red]flush after update_budget failed for {job_id}: {exc}[/red]")
 
         if self._budget_store is not None:
             try:

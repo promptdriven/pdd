@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Callable, FrozenSet, Iterable, Optional
 
 
-__all__ = ["watch", "Watcher"]
+__all__ = ["watch", "Watcher", "read_spent_now"]
 
 
 logger = logging.getLogger(__name__)
@@ -79,11 +79,24 @@ def _parse_timestamp(raw: Optional[str]) -> Optional[datetime]:
 
 
 def _normalize_started_at(value: Optional[datetime]) -> Optional[datetime]:
+    """Coerce to aware UTC AND truncate to millisecond precision.
+
+    ``track_cost`` writes timestamps via
+    ``datetime.now(timezone.utc).isoformat(timespec='milliseconds')``,
+    which truncates the microsecond field to multiples of 1000. The
+    caller's ``started_at`` (typically ``datetime.now(timezone.utc)``
+    from the job manager) has microsecond precision, so a row written
+    in the SAME millisecond as ``started_at`` ends up with a timestamp
+    strictly less than ``started_at`` and would otherwise be silently
+    dropped by the ``ts < started_at`` check. Truncating to ms here
+    aligns the two precisions so legitimately-current rows always
+    pass the filter.
+    """
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
+        value = value.replace(tzinfo=timezone.utc)
+    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
 
 
 @dataclass
@@ -157,6 +170,43 @@ class Watcher:
     def update_cap(self, new_cap: Optional[float]) -> None:
         with self._lock:
             self._state.cap = new_cap
+
+    def flush(self) -> bool:
+        """Synchronously consume any new bytes and fire ``on_exceeded``
+        if the cap is now crossed. Returns ``True`` iff the callback
+        fired on this call so the caller can await the resulting
+        status change before proceeding.
+
+        Callers use this to close two race windows:
+          1. A subprocess writes its final cost row and exits before the
+             daemon thread's next 2-second poll, so the cap is never
+             observed and ``budget_exceeded`` never fires.
+          2. A late ``/pdd budget N`` arrives on a previously-uncapped
+             run that already wrote ``> N`` of spend, and the job
+             exits before the daemon thread polls — enforcement
+             silently misses the existing rows.
+
+        ``flush()`` runs the same consume + check logic the daemon
+        thread uses, but inline on the calling thread. The fire-once
+        invariant (R1) is preserved by the same ``_state.fired`` flag.
+        """
+        try:
+            self._consume_new_bytes()
+        except Exception:  # noqa: BLE001 - flush must not raise out
+            logger.exception("cost-budget-watcher: flush consume error")
+        with self._lock:
+            spent = self._spent
+            cap = self._state.cap
+            fired = self._state.fired
+        if cap is not None and not fired and spent >= cap:
+            with self._lock:
+                self._state.fired = True
+            try:
+                self._on_exceeded(spent)
+            except Exception:  # noqa: BLE001
+                logger.exception("cost-budget-watcher: flush on_exceeded raised")
+            return True
+        return False
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -317,6 +367,41 @@ class Watcher:
                 logger.exception("cost-budget-watcher: poll error")
             # Sleep via Event.wait so .stop() wakes the loop promptly.
             self._stop_event.wait(self._poll_interval)
+
+
+def read_spent_now(
+    csv_path: pathlib.Path,
+    *,
+    commands: Optional[Iterable[str]] = None,
+    started_at: Optional[datetime] = None,
+    job_id: Optional[str] = None,
+) -> float:
+    """One-shot read of cumulative spend from ``csv_path``.
+
+    Used by callers that need the current spend without paying for a
+    daemon-thread watcher — notably ``JobManager.get_budget`` when no
+    active watcher exists (uncapped runs), so that ``/pdd settings``
+    can report a non-zero spend during the run. Filtering rules
+    (commands set, started_at, job_id-when-column-present) match
+    :class:`Watcher` exactly so results are consistent regardless of
+    whether a watcher is also running.
+    """
+    if not csv_path or not pathlib.Path(csv_path).exists():
+        return 0.0
+    fake = Watcher(
+        csv_path=csv_path,
+        cap=None,  # No cap — never fires on_exceeded.
+        on_exceeded=lambda spent: None,
+        commands=commands,
+        started_at=started_at,
+        poll_interval=2.0,
+        job_id=job_id,
+    )
+    try:
+        fake._consume_new_bytes()
+        return fake.spent()
+    finally:
+        fake.stop()
 
 
 def watch(

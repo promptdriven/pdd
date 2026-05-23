@@ -1901,6 +1901,204 @@ class TestConcurrentMigrationSafe:
         )
 
 
+class TestFinalFlushCatchesLastRow:
+    """Finding 1 (12th pass): a job that writes its final cost row and
+    exits before the watcher's next 2s poll must still have the cap
+    enforced. The fix is a synchronous Watcher.flush() in
+    _execute_job's finally — without it the cleanup stops the
+    watcher before the daemon thread sees the row and the job
+    completes without budget_exceeded.
+    """
+
+    @pytest.mark.asyncio
+    async def test_final_row_triggers_budget_exceeded_on_fast_exit(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        # A custom executor that writes a $5 row to the per-job CSV and
+        # exits immediately (much faster than the watcher's 2s poll).
+        # Use a current timestamp so the watcher's started_at filter
+        # accepts it.
+        from datetime import datetime, timezone
+        async def write_row_executor(job):
+            csv_path = Path(job.options["output_cost"])
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            with csv_path.open("w", encoding="utf-8", newline="") as f:
+                w = _csv.writer(f)
+                w.writerow(["timestamp", "model", "command", "cost",
+                            "input_files", "output_files",
+                            "attempted_models", "job_id"])
+                w.writerow([ts, "gpt-4", "bug", "5.0", "", "",
+                            "gpt-4", job.id])
+            return {"cost": 5.0}
+
+        events: list = []
+
+        async def on_be(job_id: str, spent: float, cap: float) -> None:
+            events.append((job_id, spent, cap))
+
+        mgr = JobManager(max_concurrent=1, executor=write_row_executor,
+                          project_root=tmp_path)
+        mgr.callbacks.on_budget_exceeded(on_be)
+
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=1.0)
+        for _ in range(50):
+            if job.status in (
+                JobStatus.COMPLETED, JobStatus.FAILED,
+                JobStatus.BUDGET_EXCEEDED,
+            ):
+                break
+            await asyncio.sleep(0.05)
+
+        assert job.status == JobStatus.BUDGET_EXCEEDED, (
+            f"Finding 1 (12th pass) regression: fast-exit job's final "
+            f"row was not seen by the watcher before cleanup. status="
+            f"{job.status}, events={events}"
+        )
+        assert events, "on_budget_exceeded was never invoked"
+
+
+class TestSettingsReportsSpendOnUncappedRun:
+    """Finding 2 (12th pass): /pdd settings on an uncapped run after
+    spend rows have been written must report the real spend, not $0.
+    The previous get_budget only read job.cost (set on subprocess
+    exit) and watcher.spent() (no watcher exists for uncapped runs).
+    Fixed by falling back to a one-shot CSV read.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_budget_reads_csv_when_no_watcher(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        async def slow_executor(job):
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        # Submit UNCAPPED — no watcher will be started.
+        job = await mgr.submit("bug", args={}, options={})
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Confirm no watcher was started.
+        assert job.id not in mgr._watchers
+
+        # Simulate the subprocess having written a $3.25 row to the
+        # per-job CSV (always derived at submit time per earlier fixes).
+        from datetime import datetime, timezone
+        csv_path = Path(job.options["output_cost"])
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            w.writerow([ts, "gpt-4", "bug", "3.25", "", "",
+                        "gpt-4", job.id])
+
+        snapshot = mgr.get_budget(job.id)
+        assert snapshot.spent_so_far == pytest.approx(3.25), (
+            f"Finding 2 (12th pass) regression: /pdd settings on "
+            f"uncapped run reported spent={snapshot.spent_so_far} but "
+            f"the CSV holds a $3.25 row."
+        )
+
+
+class TestUpdateBudgetFlushesImmediately:
+    """Finding 3 (12th pass): /pdd budget N arriving on an uncapped
+    run that has already spent more than N — and is about to exit —
+    must enforce the cap on the existing rows. Previously
+    update_budget started a watcher but the daemon thread might
+    never poll before the job ended.
+    """
+
+    @pytest.mark.asyncio
+    async def test_late_cap_enforced_on_existing_rows(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        # Slow executor so the job is still RUNNING when we apply the
+        # late cap. After update_budget returns we will cancel the
+        # job quickly to simulate "fast exit before next 2s poll".
+        async def slow_executor(job):
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        events: list = []
+
+        async def on_be(job_id: str, spent: float, cap: float) -> None:
+            events.append((job_id, spent, cap))
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        mgr.callbacks.on_budget_exceeded(on_be)
+
+        job = await mgr.submit("bug", args={}, options={})
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Pre-write $5 of spend (uncapped window) with a current
+        # timestamp so the watcher's started_at filter accepts it.
+        from datetime import datetime, timezone
+        csv_path = Path(job.options["output_cost"])
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            w.writerow([ts, "gpt-4", "bug", "5.0", "", "",
+                        "gpt-4", job.id])
+
+        # Apply a late cap. update_budget must synchronously flush so
+        # the existing $5 row trips the $1 cap immediately.
+        await mgr.update_budget(job.id, budget_cap=1.0)
+        # Give the callback a moment to fire.
+        await asyncio.sleep(0.2)
+
+        assert job.status == JobStatus.BUDGET_EXCEEDED, (
+            f"Finding 3 (12th pass) regression: late cap did not "
+            f"enforce existing rows. status={job.status}, events={events}"
+        )
+        assert events, "on_budget_exceeded was never invoked"
+
+
 class TestWatcherDetectsCsvMigration:
     """Finding 3 (9th pass): track_cost migrates a mid-format CSV in
     place via os.replace, which gives the file a new inode. The watcher
