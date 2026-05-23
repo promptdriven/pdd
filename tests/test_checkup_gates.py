@@ -370,6 +370,101 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_script_rejects_nested_package_manager_run_prefix(self) -> None:
+        """Iter-31 Finding 1: ``npm run X`` / ``yarn run X`` / ``pnpm
+        run X`` / ``bun run X`` / bare ``yarn X`` / ``pnpm X`` /
+        ``bun X`` all dispatch to a DIFFERENT named script in
+        package.json. A fork PR can add ``"prettier": "sh -c '<evil>'"``
+        and an accepted ``"format:check": "yarn run prettier --check ."``
+        becomes RCE. Reject every dispatch prefix outright; only
+        ``npx --no-install`` remains acceptable as a prefix.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "npm run prettier --check .",
+            "yarn run prettier --check .",
+            "pnpm run prettier --check .",
+            "bun run prettier --check .",
+            "yarn prettier --check .",
+            "pnpm prettier --check .",
+            "bun prettier --check .",
+            "npm run tsc --noEmit",
+            "yarn run tsc --noEmit",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"nested package-manager dispatch must be rejected: {payload!r}"
+            )
+        # The safe forms still pass: direct tool invocation and the
+        # validated npx --no-install prefix.
+        assert _script_is_acceptable("prettier --check .") is True
+        assert _script_is_acceptable("npx --no-install prettier --check .") is True
+
+    def test_script_accepts_install_substring_in_path(self) -> None:
+        """Iter-31 Finding 3: ``install`` / ``publish`` / ``deploy`` /
+        ``start`` / ``build`` are dangerous as STANDALONE COMMAND
+        TOKENS but completely fine as substrings inside legitimate
+        filenames (e.g. ``src/install.ts``, ``startup.ts``). Use
+        word-bounded matching so legitimate scripts are NOT
+        false-rejected.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "prettier --check src/install.ts",
+            "prettier --check src/startup.ts",
+            "prettier --check src/deployment-helpers.ts",
+            "prettier --check src/publishers.ts",
+            "prettier --check src/builders.ts",
+            "tsc --noEmit src/install.ts",
+        ):
+            assert _script_is_acceptable(payload) is True, (
+                f"legitimate path-with-substring must pass: {payload!r}"
+            )
+        # Confirm the genuine danger is still rejected when the word
+        # is a standalone token.
+        for payload in (
+            "prettier --check . && npm install",
+            "prettier --check . start",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"standalone forbidden token must be rejected: {payload!r}"
+            )
+
+    def test_mypy_gate_skipped_when_pr_modifies_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-31 Finding 2: mypy supports ``plugins = ["evil.py"]``
+        under ``[tool.mypy]`` and imports/executes the plugin during
+        type-checking. A fork PR that ships both a plugin file and
+        a config update would RCE through the mypy gate. Skip mypy
+        whenever its config surface (`pyproject.toml`, `mypy.ini`,
+        `.mypy.ini`, `setup.cfg`) is in the PR diff. ruff/black
+        have no equivalent Python-plugin escape hatch so they still
+        fire.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\n[tool.black]\n[tool.mypy]\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        for changed in (
+            ("pyproject.toml", "a.py"),
+            ("mypy.ini", "a.py"),
+            (".mypy.ini", "a.py"),
+            ("setup.cfg", "a.py"),
+        ):
+            gates = discover_gates(tmp_path, changed_files=changed)
+            names = {g.name for g in gates}
+            assert "mypy" not in names, (
+                f"mypy must skip when PR touched {changed}"
+            )
+            # ruff/black still fire (they don't have plugin RCE).
+            # Skipped if those tools aren't on PATH in the sandbox.
+
     def test_npm_script_gates_skipped_when_pr_touches_node_modules(
         self, tmp_path: Path
     ) -> None:

