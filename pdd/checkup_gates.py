@@ -431,11 +431,24 @@ def _tsconfig_chain_signals_emit(
         for m in re.finditer(r'"([^"]+)"', array.group(1)):
             extends_targets.append(m.group(1))
     for target in extends_targets:
-        # Only follow relative-path extends. Package-name extends
-        # (``"@tsconfig/strictest"``) come from ``node_modules`` and
-        # are not PR-controllable in the same way; we trust them.
-        if not (target.startswith("./") or target.startswith("../") or target.startswith("/")):
-            continue
+        # Iter-30 Finding 2: package-name extends (e.g.
+        # ``"@tsconfig/strictest"``, ``"@demo/tsconfig"``) resolve
+        # through ``node_modules`` and so MAY set
+        # ``incremental: true`` or ``composite: true`` themselves —
+        # we cannot statically know without parsing the resolved
+        # config. Treat the chain as emit-signalling whenever it
+        # extends any non-relative target. A fork PR can also add
+        # the corresponding ``node_modules/@…/tsconfig.json`` file
+        # outright; the ``node_modules_pr_touched`` skip in
+        # ``_discover_npm_gates`` handles that for script gates,
+        # but for the chain-walk we conservatively assume the
+        # worst.
+        if not (
+            target.startswith("./")
+            or target.startswith("../")
+            or target.startswith("/")
+        ):
+            return True
         candidate = (tsconfig_path.parent / target).resolve()
         # Defense in depth: refuse to leave the worktree.
         try:
@@ -480,6 +493,20 @@ def _discover_npm_gates(
     # fork PR shipped a poisoned ``prettier.config.cjs`` is RCE. Skip
     # the gate that would load each config when the PR modified it.
     pr_changed_set = {f.lower() for f in changed_files}
+    # Iter-30 Finding 1: every npm script gate invokes a binary from
+    # ``node_modules`` (directly or via npm's PATH-injection of
+    # ``node_modules/.bin``). A fork PR can ADD or MODIFY any path
+    # under ``node_modules/`` — including ``node_modules/.bin/prettier``
+    # or ``node_modules/typescript/bin/tsc`` — so the gate would
+    # execute PR-controlled JavaScript. Skip ALL npm-flavoured
+    # gates (script-based AND the direct tsc-noemit) when the PR
+    # touched anything under ``node_modules/``. Lockfile updates
+    # (``package-lock.json`` / ``yarn.lock``) live OUTSIDE
+    # ``node_modules/`` so the common "add a dependency" PR is not
+    # affected by this rule.
+    node_modules_pr_touched = any(
+        path.startswith("node_modules/") for path in pr_changed_set
+    )
     def _pr_modified_any(prefixes: Tuple[str, ...]) -> bool:
         for path in pr_changed_set:
             base = path.rsplit("/", 1)[-1]
@@ -541,23 +568,41 @@ def _discover_npm_gates(
     # script can load multiple — e.g. ``lint:check`` could be
     # eslint or prettier — but we conservatively skip when ANY
     # plausibly-loaded config changed.
+    # ``node_modules_pr_touched`` applies to EVERY recognised
+    # script — the npm invocation always goes through
+    # ``node_modules/.bin`` or a workspace binary path.
     script_config_owners: Dict[str, Tuple[bool, ...]] = {
         "format:check": (
             prettier_config_changed,
             js_plugin_module_changed,
+            node_modules_pr_touched,
         ),
         "prettier:check": (
             prettier_config_changed,
             js_plugin_module_changed,
+            node_modules_pr_touched,
         ),
         "lint:check": (
             eslint_config_changed,
             prettier_config_changed,
             js_plugin_module_changed,
+            node_modules_pr_touched,
         ),
-        "typecheck": (tsconfig_changed, tsconfig_signals_emit),
-        "tsc": (tsconfig_changed, tsconfig_signals_emit),
-        "tsc:noemit": (tsconfig_changed, tsconfig_signals_emit),
+        "typecheck": (
+            tsconfig_changed,
+            tsconfig_signals_emit,
+            node_modules_pr_touched,
+        ),
+        "tsc": (
+            tsconfig_changed,
+            tsconfig_signals_emit,
+            node_modules_pr_touched,
+        ),
+        "tsc:noemit": (
+            tsconfig_changed,
+            tsconfig_signals_emit,
+            node_modules_pr_touched,
+        ),
     }
     gates: List[Gate] = []
     for script_name, script_command in scripts.items():
@@ -631,18 +676,16 @@ def _discover_npm_gates(
             if isinstance(value, dict):
                 deps.update(value)
         tsc_local = worktree / "node_modules" / "typescript" / "bin" / "tsc"
-        # Iter-29 Finding 3: the local-binary precondition trusted
-        # ``node_modules/typescript/bin/tsc`` to be operator-supplied.
-        # A fork PR can ADD or MODIFY that file (or
-        # ``node_modules/.bin/tsc``) — the gate would then execute
-        # PR-controlled JavaScript via npx. Skip the gate when the
-        # PR diff includes ANY path under ``node_modules/typescript/``
-        # or ``node_modules/.bin/tsc``-like binaries.
-        tsc_binary_pr_touched = any(
-            path.startswith("node_modules/typescript/")
-            or path.startswith("node_modules/.bin/tsc")
-            for path in pr_changed_set
-        )
+        # Iter-29 Finding 3 + iter-30 Finding 1: the local-binary
+        # precondition trusted ``node_modules/typescript/bin/tsc`` to
+        # be operator-supplied. A fork PR can ADD or MODIFY any path
+        # under ``node_modules/`` (binary OR a transitive
+        # dependency it loads). The iter-29 narrow guard on
+        # ``node_modules/typescript/`` / ``node_modules/.bin/tsc*``
+        # missed e.g. ``node_modules/some-tsc-plugin/`` that the
+        # compiler would load via tsconfig. Generalise the guard:
+        # skip the direct gate whenever the PR touched anything
+        # under ``node_modules/``.
         if (
             "typescript" in deps
             and tsc_local.is_file()
@@ -650,7 +693,7 @@ def _discover_npm_gates(
             # Iter-27 Finding 3 + iter-28 Finding 2: skip when PR
             # modified tsconfig (RCE via compilerOptions/plugins).
             and not tsconfig_changed
-            and not tsc_binary_pr_touched
+            and not node_modules_pr_touched
         ):
             gates.append(
                 Gate(

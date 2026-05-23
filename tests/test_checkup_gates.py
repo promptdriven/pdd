@@ -370,6 +370,77 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_npm_script_gates_skipped_when_pr_touches_node_modules(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-30 Finding 1: ANY npm-script gate invokes a binary
+        from ``node_modules`` (directly or via npm's PATH-injection
+        of ``node_modules/.bin``). A fork PR can add or modify any
+        path under ``node_modules/`` to land a poisoned shim — the
+        iter-29 narrow guard only covered the direct tsc gate and
+        the prettier/eslint paths slipped through.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({
+                "format:check": "prettier --check .",
+                "lint:check": "eslint --no-fix .",
+                "typecheck": "tsc --noEmit",
+            }),
+            encoding="utf-8",
+        )
+        # Each target hits a different attack surface but all live
+        # under node_modules/, so all gates must skip.
+        for changed in (
+            ("node_modules/.bin/prettier",),
+            ("node_modules/prettier/index.js",),
+            ("node_modules/.bin/eslint",),
+            ("node_modules/typescript/lib/typescript.js",),
+            ("node_modules/some-tsc-plugin/index.js",),
+        ):
+            gates = discover_gates(tmp_path, changed_files=changed)
+            names = {g.name for g in gates}
+            assert "npm:format:check" not in names, (
+                f"format:check must skip on {changed}"
+            )
+            assert "npm:lint:check" not in names, (
+                f"lint:check must skip on {changed}"
+            )
+            assert "npm:typecheck" not in names, (
+                f"typecheck must skip on {changed}"
+            )
+
+    def test_tsconfig_chain_signals_emit_on_package_extends(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-30 Finding 2: package-name extends (e.g.
+        ``"@demo/tsconfig"``) resolve through ``node_modules`` to a
+        config we can't statically read without parsing
+        ``node_modules`` — and a fork PR can install/modify that
+        package. The conservative answer is to assume the chain
+        signals emit and skip the script gate.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        # Package-name extends — the gate must skip because we
+        # cannot read what the resolved config says.
+        (tmp_path / "tsconfig.json").write_text(
+            '{"extends": "@demo/tsconfig"}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        assert "npm:typecheck" not in {g.name for g in gates}
+
     def test_npm_tsc_script_gate_skipped_when_extends_chain_signals_incremental(
         self, tmp_path: Path
     ) -> None:

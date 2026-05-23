@@ -2775,6 +2775,13 @@ Options:
 - `--gate-timeout FLOAT`: Per-gate timeout in seconds (default: 60). Applies to every discovered gate; the runner kills the subprocess and surfaces the gate as a `runner-error` blocker finding when the timeout fires.
 - `--gate-allow GATE`: Repeatable allowlist token forwarded to `discover_gates` as `extra_allow`. Reserved for future versions to opt extra gate names into the discovery set; the current default discovery is allowlist-only and the argument is accepted but does not widen it. Useful primarily as a forward-compat plumbing hook for CI configurations.
 
+**Deterministic-gate coverage limits (issue #1092)**: The default gate set is intentionally conservative because PR contents are untrusted on fork PRs. As a result the following workflows do NOT block a clean verdict and you should still rely on CI / human review for them:
+- **JS/TS PRs that change any `.js` / `.cjs` / `.mjs` file (anywhere in the worktree)**: prettier and eslint script gates are skipped because their configs can `require()` arbitrary local JavaScript (including subdirectory plugin modules) and the require chain is undecidable without running the very code we are trying to gate. A PR-sized JS formatting/lint regression on such a PR will only be caught by CI.
+- **TypeScript PRs that change `tsconfig*.json`, anything under `node_modules/`, or whose tsconfig extends-chain sets `incremental: true` / `composite: true`**: the script-based `npm run typecheck` gate is skipped because it would write `tsbuildinfo` into the worktree or execute PR-controlled config/plugin code. The direct `tsc --noEmit` gate also skips on a PR-touched `node_modules/` for the same reason.
+- **Repos without a recognised lockfile-local tool**: gates skip cleanly when the operator-supplied tool is missing; you'll see the gate absent from `### Deterministic Gates` rather than a runner error.
+
+These trade favourable-on-untrusted-PRs safety against gate coverage. To enforce the full check matrix in trusted environments, run the corresponding tools in CI under your existing PR pipeline.
+
 **How it works (8-step workflow with iterative fix-verify loop):**
 
 1. **Discover** — Scan project structure, tech stack, and module inventory
