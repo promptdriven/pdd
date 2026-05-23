@@ -1023,3 +1023,100 @@ def test_canonical_present_multiple_alt_paths_all_restored_on_failure(
     # true pre-run state for every test-like file.
     assert alt_a.read_text(encoding="utf-8") == pre_a
     assert alt_b.read_text(encoding="utf-8") == pre_b
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_canonical_present_alt_path_deletion_raises_churn_error(
+    mock_agents, mock_load, mock_run, mock_env
+):
+    """Greg iter-15 follow-up review (PR #1015): the multi-file churn
+    sweep must also catch DELETIONS of pre-existing alt-path test
+    files, not just rewrites. The iter-15 sweep iterated
+    ``changed_files`` and `continue`d when the path no longer existed,
+    so an agent deleting `__tests__/widget.test.ts` (broad coverage)
+    while leaving the canonical untouched returned success and the
+    file stayed deleted. The iter-16 sweep iterates the snapshot
+    keys directly and treats deletion as maximal churn (ratio=1.0).
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    canonical = mock_env["test"]
+    canonical_content = "it('canonical stays', () => { expect(1).toBe(1); });\n"
+    canonical.write_text(canonical_content, encoding="utf-8")
+
+    alt_path = mock_env["root"] / "__tests__" / "add.test.ts"
+    alt_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_existing_alt = (
+        "\n".join(f"it('case {i}', () => {{}});" for i in range(20)) + "\n"
+    )
+    alt_path.write_text(pre_existing_alt, encoding="utf-8")
+
+    def side_effect(*args, **kwargs):
+        # Agent leaves canonical alone, DELETES the alt-path entirely.
+        alt_path.unlink()
+        return (True, '{"success": true, "message": "Removed obsolete tests"}', 0.2, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    from pdd.code_generator_main import TestChurnError
+
+    with pytest.raises(TestChurnError) as excinfo:
+        run_agentic_test_generate(
+            mock_env["prompt"], mock_env["code"], canonical, quiet=True
+        )
+
+    # Alt-path RESTORED from snapshot (not left deleted).
+    assert alt_path.exists(), "deleted alt-path must be restored from snapshot"
+    assert alt_path.read_text(encoding="utf-8") == pre_existing_alt
+    # Canonical never touched by the gate.
+    assert canonical.read_text(encoding="utf-8") == canonical_content
+    # Maximal churn — ratio=1.0, post_line_count=0.
+    assert excinfo.value.churn_ratio == 1.0
+    assert excinfo.value.post_line_count == 0
+    assert excinfo.value.pre_line_count == len(pre_existing_alt.splitlines())
+    # Error references the deleted alt-path, not the canonical.
+    assert str(alt_path) in str(excinfo.value)
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_alt_path_deletion_honors_skip_test_churn_gate_env(
+    mock_agents, mock_load, mock_run, mock_env, monkeypatch
+):
+    """``PDD_SKIP_TEST_CHURN_GATE=1`` must bypass the alt-path
+    deletion check too — the iter-16 deletion branch raises
+    ``TestChurnError`` directly without going through
+    ``_verify_test_churn``, so the env-flag check has to live inline.
+    """
+    monkeypatch.setenv("PDD_SKIP_TEST_CHURN_GATE", "1")
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    canonical = mock_env["test"]
+    canonical.write_text("it('keep', () => {});\n", encoding="utf-8")
+
+    alt_path = mock_env["root"] / "__tests__" / "add.test.ts"
+    alt_path.parent.mkdir(parents=True, exist_ok=True)
+    alt_path.write_text(
+        "\n".join(f"it('case {i}', () => {{}});" for i in range(20)) + "\n",
+        encoding="utf-8",
+    )
+
+    def side_effect(*args, **kwargs):
+        alt_path.unlink()
+        return (True, '{"success": true, "message": "Removed"}', 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    # No exception — skip env disables the sweep entirely.
+    content, cost, model, success, error_msg = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], canonical, quiet=True
+    )
+    assert success is True
+    # File stays deleted because the gate was skipped — restoration
+    # only happens on gate violation.
+    assert not alt_path.exists()

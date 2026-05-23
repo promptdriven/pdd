@@ -639,33 +639,58 @@ def run_one_session_sync(
             canonical_existed = bool(test_path and existing_test_content)
 
             try:
-                # Multi-file alt-path churn sweep (Greg-review follow-up
-                # to PR #1015). Walk every test-like file captured in
-                # the pre-session snapshot; for each that still exists
-                # and whose content changed, compare current bytes
-                # against the snapshot via `_verify_test_churn`. Catches
-                # the false negative where the agent rewrites
-                # `__tests__/widget.test.ts` from 20 tests to 1 while
-                # leaving `tests/widget.test.ts` untouched — the
-                # canonical-only check below would see no change and
-                # pass, letting the high-churn alt-path rewrite slip.
-                # First-time creations are not in the snapshot and fall
-                # through (exempt by design). Deleted alt-path files
-                # also fall through here; the canonical-deletion branch
-                # below covers the canonical case explicitly.
+                # Multi-file alt-path churn sweep. Walks every test-like
+                # file captured in the pre-session snapshot and checks
+                # both rewrites AND deletions against the snapshot.
+                # Iter-15 introduced the rewrite sweep; iter-16 closes
+                # the residual deletion false negative Greg flagged in
+                # his follow-up review (an agent deleting a pre-existing
+                # alt-path test file while leaving canonical intact
+                # previously slipped past the gate because the sweep
+                # `continue`d on missing files). First-time creations
+                # are not in the snapshot and fall through (exempt by
+                # design). The canonical path is skipped here so its
+                # deletion-as-churn shortcut + repair directive below
+                # remain canonical-specific.
                 for snap_path, prior in pre_test_contents.items():
-                    # Skip the canonical — handled by the dedicated
-                    # check after this loop so its repair directive
-                    # remains canonical-specific.
+                    if not prior:
+                        continue  # zero-byte pre-session file — nothing to protect
+                    # Skip the canonical — dedicated check below.
                     if test_path is not None:
                         try:
                             if snap_path.samefile(test_path):
                                 continue
                         except OSError:
-                            if snap_path.resolve() == test_path.resolve():
-                                continue
+                            try:
+                                if snap_path.resolve() == test_path.resolve():
+                                    continue
+                            except OSError:
+                                pass
+                    # Deletion case: treat as maximal churn (ratio=1.0).
+                    # Mirrors the canonical-deletion shortcut below so
+                    # alt-path deletions are handled symmetrically.
                     if not snap_path.exists():
-                        continue
+                        threshold = _get_test_churn_threshold()
+                        pre_line_count = len(prior.splitlines())
+                        raise TestChurnError(
+                            prompt_name=f"{basename}_test_{language}.prompt",
+                            output_path=str(snap_path),
+                            churn_ratio=1.0,
+                            threshold=threshold,
+                            pre_line_count=pre_line_count,
+                            post_line_count=0,
+                            repair_directive=(
+                                "Test churn repair required.\n"
+                                f"- The pre-existing alternate test file at "
+                                f"{snap_path} was DELETED by the agent.\n"
+                                "- Recreate the file preserving the prior "
+                                "test function names and coverage; do not "
+                                "drop accumulated regression tests.\n"
+                                "- Add new tests for the prompt change "
+                                "without deleting pre-existing test files."
+                            ),
+                        )
+                    # Rewrite case: file still exists, compare content.
                     try:
                         current = snap_path.read_text(encoding="utf-8")
                     except OSError:
@@ -743,9 +768,12 @@ def run_one_session_sync(
                 if canonical_existed:
                     test_path.write_text(existing_test_content, encoding="utf-8")
                 # Restore EVERY alt-path snapshot so the next attempt's
-                # re-snapshot sees the true pre-session state. Without
-                # this, attempt N's surviving rewrites become attempt
-                # N+1's baseline and the gate permanently weakens. The
+                # re-snapshot sees the true pre-session state. Covers
+                # both rewrites (overwrite back to pre-session bytes)
+                # AND deletions (recreate the file, plus any directories
+                # the agent removed along with it). Without this,
+                # attempt N's surviving rewrites become attempt N+1's
+                # baseline and the gate permanently weakens. The
                 # canonical was already restored above; skip it here.
                 for snap_path, snap_content in pre_test_contents.items():
                     if test_path is not None:
@@ -759,6 +787,7 @@ def run_one_session_sync(
                             except OSError:
                                 pass
                     try:
+                        snap_path.parent.mkdir(parents=True, exist_ok=True)
                         snap_path.write_text(snap_content, encoding="utf-8")
                     except OSError:
                         pass

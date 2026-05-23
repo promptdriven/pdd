@@ -360,67 +360,106 @@ def run_agentic_test_generate(
                 "Inferring success from exit status and test file presence.[/yellow]"
             )
 
-    # Sweep EVERY changed test-like file that existed pre-run and
-    # verify its churn against the working-tree snapshot. Greg's review
-    # of PR #1015 surfaced a false negative in the prior alt-path-only
-    # check: when the canonical output existed (`generated_content`
-    # truthy) the previous branch never ran the churn gate on any
-    # rewritten alt-path file (e.g. `__tests__/widget.test.ts` shrinking
-    # from 20 tests to 1 while `tests/widget.test.ts` was untouched).
-    # The outer `cmd_test_main` churn check only sees the canonical
-    # path, so without this sweep the alt-path rewrite slips through.
-    # First-time creations (no pre-run snapshot entry) are exempt; the
-    # gate honors its own env-flag and prompt-side opt-outs.
+    # Sweep EVERY snapshotted test-like file and check churn against the
+    # working-tree snapshot. Iterating `pre_test_contents` directly
+    # (rather than `changed_files`) covers both rewrites AND deletions
+    # uniformly: a deleted file is the most extreme form of coverage
+    # loss and must trip the gate. Greg's iter-15 follow-up review of
+    # PR #1015 surfaced the residual deletion false-negative — the
+    # prior `changed_files`-driven sweep filtered out paths that no
+    # longer existed and let alt-path deletions slip past the gate.
+    # First-time creations are not in the snapshot and fall through
+    # naturally (exempt by design).
     from .code_generator_main import (
         TestChurnError,
+        _env_flag_enabled,
+        _get_test_churn_threshold,
         _is_test_output_path,
+        _prompt_allows_test_churn,
         _verify_test_churn,
     )
 
-    for changed_file in changed_files:
-        changed_path = project_root / changed_file
-        if not changed_path.exists() or not changed_path.is_file():
-            continue
-        try:
-            rel = changed_path.relative_to(project_root).as_posix()
-        except ValueError:
-            continue
-        if not _is_test_output_path(rel):
-            continue
-        prior = pre_test_contents.get(changed_path)
-        if not prior:
-            # File didn't exist pre-run — first-time generation, exempt.
-            continue
-        try:
-            current = changed_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        try:
-            _verify_test_churn(
-                existing_code=prior,
-                generated_code=current,
-                prompt_name=prompt_file.name,
-                output_path=str(changed_path),
-                prompt_content=prompt_content,
-            )
-        except TestChurnError as churn_err:
-            churn_err.total_cost = float(cost or 0.0)
-            churn_err.model_name = (
-                f"agentic-{provider}" if provider else "agentic-cli"
-            )
-            # Restore EVERY pre-run snapshot before raising so the
-            # repair loop's next attempt re-snapshots from the true
-            # pre-run baseline. Restoring only the violating file
-            # would leave any other concurrently-rewritten test files
-            # on disk; the next attempt's snapshot would then treat
-            # those rewrites as the new baseline, permanently
-            # weakening the gate.
-            for snap_path, snap_content in pre_test_contents.items():
-                try:
-                    snap_path.write_text(snap_content, encoding="utf-8")
-                except OSError:
-                    pass
-            raise
+    def _restore_snapshots() -> None:
+        # Restore EVERY pre-run snapshot (rewrites AND deletions) before
+        # raising so the repair loop's next attempt re-snapshots from
+        # the true pre-run baseline. Restoring only the violator would
+        # let other rewrites become attempt-N+1's new baseline and
+        # permanently weaken the gate.
+        for snap_path, snap_content in pre_test_contents.items():
+            try:
+                snap_path.parent.mkdir(parents=True, exist_ok=True)
+                snap_path.write_text(snap_content, encoding="utf-8")
+            except OSError:
+                pass
+
+    churn_sweep_skip = (
+        _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or _prompt_allows_test_churn(prompt_content)
+    )
+    if not churn_sweep_skip:
+        for snap_path, prior in pre_test_contents.items():
+            if not prior:
+                continue  # zero-byte pre-existing file — nothing to protect
+            try:
+                rel = snap_path.relative_to(project_root).as_posix()
+            except ValueError:
+                continue
+            if not _is_test_output_path(rel):
+                continue
+            # Deletion case: the agent removed a pre-existing test file.
+            # Treat as maximal churn (ratio=1.0) so the same repair-loop
+            # retry that handles wholesale rewrites also handles
+            # deletions of broad pre-existing coverage.
+            if not snap_path.exists():
+                threshold = _get_test_churn_threshold()
+                pre_line_count = len(prior.splitlines())
+                churn_err = TestChurnError(
+                    prompt_name=prompt_file.name,
+                    output_path=str(snap_path),
+                    churn_ratio=1.0,
+                    threshold=threshold,
+                    pre_line_count=pre_line_count,
+                    post_line_count=0,
+                    repair_directive=(
+                        "Test churn repair required.\n"
+                        f"- The pre-existing alternate test file at {snap_path} "
+                        "was DELETED by the agent.\n"
+                        "- Recreate the file preserving the prior test "
+                        "function names and coverage; do not drop accumulated "
+                        "regression tests.\n"
+                        "- Add new tests for the prompt change without "
+                        "deleting pre-existing test files."
+                    ),
+                )
+                churn_err.total_cost = float(cost or 0.0)
+                churn_err.model_name = (
+                    f"agentic-{provider}" if provider else "agentic-cli"
+                )
+                _restore_snapshots()
+                raise churn_err
+            # Rewrite case: file still exists, compare contents.
+            try:
+                current = snap_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if current == prior:
+                continue  # unchanged
+            try:
+                _verify_test_churn(
+                    existing_code=prior,
+                    generated_code=current,
+                    prompt_name=prompt_file.name,
+                    output_path=str(snap_path),
+                    prompt_content=prompt_content,
+                )
+            except TestChurnError as churn_err:
+                churn_err.total_cost = float(cost or 0.0)
+                churn_err.model_name = (
+                    f"agentic-{provider}" if provider else "agentic-cli"
+                )
+                _restore_snapshots()
+                raise
 
     # If the expected output file doesn't exist, check if agent created it
     # at a different path (e.g. `__tests__/foo.test.ts` vs the canonical

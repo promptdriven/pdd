@@ -2747,3 +2747,78 @@ class TestOneSessionRollback:
         assert str(alt_test_path) in str(excinfo.value), (
             "TestChurnError must reference the alt-path output, not the canonical"
         )
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch(
+        "pdd.one_session_sync.build_one_session_prompt",
+        return_value="mega prompt",
+    )
+    def test_alt_path_deletion_with_canonical_unchanged_raises_churn_error(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Greg iter-15 follow-up review (PR #1015): the multi-file
+        sweep in ``run_one_session_sync`` must catch DELETIONS of
+        pre-existing alt-path test files, not just rewrites. The
+        iter-15 sweep `continue`d on `not snap_path.exists()` so the
+        agent could delete `src/widget_test.py` (broad coverage)
+        while leaving the canonical untouched and the session
+        returned success with the file still gone. iter-16 treats
+        alt-path deletion as maximal churn (ratio=1.0) and restores
+        the file from the pre-session snapshot before raising."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_TEST_CHURN_GATE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_CONFORMANCE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_PUBLIC_SURFACE_GATE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = "def hello():\n    return 'world'\n"
+        canonical_tests = "def test_canonical_keep():\n    assert True\n"
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text(canonical_tests, encoding="utf-8")
+
+        alt_test_path = tmp_path / "src" / "widget_test.py"
+        alt_test_path.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing_alt = (
+            "\n".join(
+                f"def test_case_{i}():\n    assert True\n" for i in range(20)
+            )
+            + "\n"
+        )
+        alt_test_path.write_text(pre_existing_alt, encoding="utf-8")
+
+        def delete_only_alt(*args, **kwargs):
+            # Agent leaves canonical + code untouched, DELETES alt-path.
+            alt_test_path.unlink()
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = delete_only_alt
+
+        with pytest.raises(TestChurnError) as excinfo:
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Alt-path RESTORED from snapshot.
+        assert (
+            alt_test_path.exists()
+        ), "deleted alt-path must be restored from snapshot"
+        assert (
+            alt_test_path.read_text(encoding="utf-8") == pre_existing_alt
+        ), "alt-path content must match pre-session bytes"
+        # Canonical + code untouched.
+        assert (
+            pdd_files["test"].read_text(encoding="utf-8") == canonical_tests
+        )
+        assert (
+            pdd_files["code"].read_text(encoding="utf-8") == original_code
+        )
+        # Maximal churn ratio for deletion.
+        assert excinfo.value.churn_ratio == 1.0
+        assert excinfo.value.post_line_count == 0
+        assert str(alt_test_path) in str(excinfo.value)
