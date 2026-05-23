@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -21,7 +21,7 @@
 Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
 
 % Requirements
-1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -48,6 +48,20 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
 13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
 14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+15. **Clean Restart Mode** (`clean_restart=True`): When set by the caller, the orchestrator MUST perform a clean restart for this issue *before* the normal state-load / PR-guard / step-loop entry path runs:
+    - At entry (before `load_workflow_state`), call `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` to discard any persisted local + GitHub state from a prior run on this issue.
+    - Skip the **Existing PR Guard** (Requirement 12) entirely — a clean restart explicitly wants to ignore the previously generated `change/issue-{N}` branch and PR.
+    - Skip the **Stale State Detection** (Requirement 13) entirely — state has already been cleared, and `issue_updated_at` comparison would be meaningless.
+    - Force `start_step = 1` regardless of any partially recovered state (loaded state, if present, MUST NOT cause step-skipping in this mode).
+    - Force the worktree base ref: when `_setup_worktree` runs, the underlying call MUST use `_resolve_main_ref(git_root)` as the base (never the current HEAD or a previously generated `change/issue-{N}` branch). The existing `_setup_worktree` already uses `_resolve_main_ref` by default; the only additional requirement is that the worktree path / branch be removed-and-recreated cleanly when `clean_restart=True` (`_setup_worktree` already force-removes existing worktree + branch, so no new helper is needed — but the orchestrator MUST NOT short-circuit worktree setup based on cached `state["worktree_path"]`).
+    - When stale state for a different worktree exists, treat it as fully discarded: do not reuse `state["github_comment_id"]`, `state["step_comments"]`, `state["preflight_drift_healed"]`, or any other resume-only marker.
+    - This mode is idempotent: a second `clean_restart=True` invocation MUST behave identically to the first (state is cleared each time at entry).
+16. **Mode-Aware Startup Comment**: Immediately after the worktree is set up and before Step 1 runs, post exactly one trusted startup comment to the issue via `post_step_comment_once` (using a reserved `step_num=0` key so it dedupes correctly on resume). The comment body MUST explicitly state:
+    - **Mode**: `"Clean restart"` when `clean_restart=True`, otherwise `"Resuming from step {start_step}"` if `start_step > 1`, otherwise `"Starting fresh"`.
+    - **Model**: the resolved model name (or `"unknown"` if not yet determined at startup).
+    - **Base branch**: the result of `_resolve_main_ref(git_root)` (or the literal `"HEAD"` fallback string when no main ref resolves).
+    - **Command**: `"pdd-issue (full change → sync flow)"`.
+    Wrap the body as a `## Step 0/13: Workflow Startup` header so it aligns with the existing per-step success comment format. Failure to post (gh CLI missing, network error) MUST be log-and-continue; never raise into the orchestrator loop.
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
