@@ -18,14 +18,22 @@ Trust-boundary invariants:
 * All stdout/stderr is truncated to roughly 10KB each side and scrubbed
   via ``pdd.checkup_review_loop._scrub_secrets`` before persistence or
   rendering.
-* Environment is scrubbed: ``CI=1``, ``NO_COLOR=1``, ``FORCE_COLOR=0`` are
-  injected; ``PDD_*`` mutating envs are stripped so a gate cannot inherit
-  reviewer/fixer state. The Python import-path family
+* Environment is scrubbed: ``CI=1``, ``NO_COLOR=1``, ``FORCE_COLOR=0``,
+  ``COREPACK_ENABLE_AUTO_PIN=0`` are injected; ``PDD_*`` mutating envs
+  are stripped so a gate cannot inherit reviewer/fixer state. The
+  Python import-path family
   (``PYTHONPATH``/``PYTHONHOME``/``PYTHONSTARTUP``/``PYTHONUSERBASE``/
-  ``PYTHONNOUSERSITE``) is also stripped: a developer with
-  ``PYTHONPATH=.`` (or any worktree-resolving value) in their shell
-  would otherwise let mypy/ruff/black resolve a PR-controlled plugin
-  module from the gate's ``cwd`` (iter-38 Finding 3).
+  ``PYTHONNOUSERSITE``) is also stripped (iter-38 Finding 3). The
+  Node/npm import-path and config family
+  (``NPM_CONFIG_*``/``npm_config_*``/``NODE_OPTIONS``/``NODE_PATH``) is
+  stripped too: ``NPM_CONFIG_SCRIPT_SHELL`` would otherwise redirect
+  ``npm run`` to a PR-controlled shell binary even on a clean
+  ``.npmrc``, ``NODE_OPTIONS=--require=./evil.js`` would inject
+  arbitrary JS into the ``npx --no-install tsc`` gate, and ``NODE_PATH``
+  is Node's ``PYTHONPATH`` analogue (iter-39 Finding 3).
+  ``COREPACK_ENABLE_AUTO_PIN=0`` keeps Corepack-managed yarn/pnpm from
+  mutating ``package.json`` (auto-pinning a ``packageManager`` field
+  on first run) inside the loop-owned worktree (iter-39 Finding 1).
 * The runner's ``cwd`` is always the loop-owned PR worktree.
 """
 
@@ -1514,6 +1522,20 @@ def _mypy_declares_local_plugin_anywhere(
     return False
 
 
+# iter-39 Finding 2: Python's "src/" layout (``setup.cfg``-era
+# convention, increasingly common in pyproject-based projects) puts the
+# importable package at ``worktree/src/<top_level>/`` rather than
+# ``worktree/<top_level>/``. An editable install of a src-layout
+# project adds ``worktree/src/`` to ``sys.path``, so a pure-package
+# plugin reference still resolves to PR-controlled code. Mirror the
+# root-level check at the ``src/`` level. (Other less-common roots —
+# ``[tool.setuptools.packages.find].where``, hatchling's
+# ``packages = ["lib/foo"]`` — are out of v1 scope: parsing them
+# accurately is large and the two roots below cover the dominant
+# layouts.)
+_PYTHON_SRC_ROOTS: Tuple[str, ...] = ("", "src")
+
+
 def _mypy_pure_package_plugin_resolves_to_worktree(
     worktree: Path, pyproject_text: str
 ) -> bool:
@@ -1526,6 +1548,12 @@ def _mypy_pure_package_plugin_resolves_to_worktree(
     editable install of the worktree (or any setup that adds the
     worktree to ``sys.path``) makes mypy import the PR-controlled
     module rather than a stable site-packages copy.
+
+    iter-39 Finding 2 extends the check to the ``src/`` layout:
+    ``worktree/src/my_project/`` is the dominant alternative root, and
+    an editable install of a src-layout project adds ``src/`` to
+    ``sys.path`` so the plugin import resolves there. We probe both
+    ``worktree/<top_level>`` and ``worktree/src/<top_level>``.
 
     Only pure-package entries are inspected here. Path-shaped entries
     (``./plugin.py``, ``/abs/plugin.py``, ``a/b/c.py``) are already
@@ -1566,17 +1594,28 @@ def _mypy_pure_package_plugin_resolves_to_worktree(
         # an empty string or a weird config entry as a directory).
         if not top_level or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", top_level):
             continue
-        pkg_dir = worktree / top_level
-        if (pkg_dir / "__init__.py").is_file():
-            return True
-        if (worktree / f"{top_level}.py").is_file():
-            return True
-        # PEP 420 namespace packages — a worktree directory with no
-        # ``__init__.py`` can still expose ``top_level.submodule`` via
-        # namespace-package discovery on ``sys.path``. Conservatively
-        # treat a same-named directory as worktree-resolvable.
-        if pkg_dir.is_dir():
-            return True
+        # iter-39 Finding 2: check both the flat layout
+        # (``worktree/<top_level>``) AND the src layout
+        # (``worktree/src/<top_level>``). Editable installs add the
+        # src root to ``sys.path`` so a plugin import resolves
+        # against ``src/<top_level>`` even though no top-level
+        # directory of that name exists at the worktree root.
+        for src_root in _PYTHON_SRC_ROOTS:
+            base = worktree if not src_root else worktree / src_root
+            if not base.is_dir():
+                continue
+            pkg_dir = base / top_level
+            if (pkg_dir / "__init__.py").is_file():
+                return True
+            if (base / f"{top_level}.py").is_file():
+                return True
+            # PEP 420 namespace packages — a worktree directory with
+            # no ``__init__.py`` can still expose
+            # ``top_level.submodule`` via namespace-package discovery
+            # on ``sys.path``. Conservatively treat a same-named
+            # directory as worktree-resolvable.
+            if pkg_dir.is_dir():
+                return True
     return False
 
 
@@ -1923,25 +1962,67 @@ _STRIPPED_PYTHON_ENV_KEYS: Tuple[str, ...] = (
 )
 
 
+# Iter-39 Finding 3: npm reads ``NPM_CONFIG_<KEY>`` (uppercase) AND
+# ``npm_config_<key>`` (lowercase) as env-overrides for every ``.npmrc``
+# key — including ``script-shell``, which redirects the shell ``npm
+# run`` uses to execute the validated argv. Confirmed against npm 10.x:
+# ``NPM_CONFIG_SCRIPT_SHELL=./evil-sh npm run format:check`` executes
+# ``./evil-sh -c "prettier --check ."`` even when ``.npmrc`` is safe.
+# pnpm reads the same lowercase ``npm_config_*`` family.
+# Iter-39 Finding 3 (cont): ``NODE_OPTIONS`` honours ``--require=<path>``
+# which loads arbitrary JS into every node-launched process — the
+# ``npx --no-install tsc`` gate spawns node, so a PR-controlled
+# ``./evil.js`` is loaded before tsc's main runs. ``NODE_PATH`` is
+# Node's ``PYTHONPATH`` analogue: an absolute or worktree-resolving
+# value would let an editable JS plugin be imported by the gate.
+_STRIPPED_NODE_ENV_KEYS: Tuple[str, ...] = (
+    "NODE_OPTIONS",
+    "NODE_PATH",
+)
+_STRIPPED_NODE_ENV_PREFIXES: Tuple[str, ...] = (
+    "NPM_CONFIG_",
+    "npm_config_",
+)
+
+
 def _build_subprocess_env() -> Dict[str, str]:
     """Build the environment dict the runner injects for each gate.
 
     Inherits the caller's PATH/HOME (so tools resolve), strips ``PDD_*``
     envs (so the gate cannot inherit reviewer/fixer state or token
-    files) AND the Python import-path family (``PYTHONPATH`` etc., so
-    a PR-controlled module under the worktree cannot be imported by a
-    pure-package plugin reference; iter-38 Finding 3), and forces
-    ``CI=1``, ``NO_COLOR=1``, ``FORCE_COLOR=0`` for deterministic
-    non-interactive output.
+    files), the Python import-path family (``PYTHONPATH`` etc., so a
+    PR-controlled module under the worktree cannot be imported by a
+    pure-package plugin reference; iter-38 Finding 3), AND the
+    npm/Node import-path/config family
+    (``NPM_CONFIG_*``/``npm_config_*``/``NODE_OPTIONS``/``NODE_PATH``;
+    iter-39 Finding 3). Forces ``CI=1``, ``NO_COLOR=1``,
+    ``FORCE_COLOR=0`` for deterministic non-interactive output and
+    ``COREPACK_ENABLE_AUTO_PIN=0`` so Corepack-managed yarn/pnpm
+    cannot mutate ``package.json`` on first run (iter-39 Finding 1).
     """
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("PDD_") and key not in _STRIPPED_PYTHON_ENV_KEYS
-    }
+    env: Dict[str, str] = {}
+    for key, value in os.environ.items():
+        if key.startswith("PDD_"):
+            continue
+        if key in _STRIPPED_PYTHON_ENV_KEYS:
+            continue
+        if key in _STRIPPED_NODE_ENV_KEYS:
+            continue
+        if any(key.startswith(prefix) for prefix in _STRIPPED_NODE_ENV_PREFIXES):
+            continue
+        env[key] = value
     env["CI"] = "1"
     env["NO_COLOR"] = "1"
     env["FORCE_COLOR"] = "0"
+    # iter-39 Finding 1: when Corepack manages the yarn/pnpm binary
+    # (default in Node 16+) and ``package.json`` does not pin a
+    # ``packageManager`` field, the first ``yarn run``/``pnpm run``
+    # inside the gate writes one. The runner's ``cwd`` is the
+    # loop-owned PR worktree, so the mutation lands in the PR and the
+    # downstream commit/push helper stages it. Forcing
+    # ``COREPACK_ENABLE_AUTO_PIN=0`` (a documented Corepack
+    # opt-out) keeps Corepack from touching ``package.json``.
+    env["COREPACK_ENABLE_AUTO_PIN"] = "0"
     return env
 
 

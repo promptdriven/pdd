@@ -2143,6 +2143,195 @@ class TestDiscoverGates:
                 f"worktree import"
             )
 
+    # ------------------------------------------------------------------
+    # Iter-39 Finding 3: NPM_CONFIG_*/npm_config_*/NODE_OPTIONS/NODE_PATH
+    # are equivalent to .npmrc settings and must be stripped from the
+    # gate env. Confirmed against npm 10.x:
+    # NPM_CONFIG_SCRIPT_SHELL=./evil-sh executes ./evil-sh on
+    # npm run, even on a clean .npmrc.
+    # ------------------------------------------------------------------
+
+    def test_build_subprocess_env_strips_npm_config_uppercase(
+        self, monkeypatch: Any
+    ) -> None:
+        """Iter-39 Finding 3: ``NPM_CONFIG_SCRIPT_SHELL`` in the
+        operator env redirects ``npm run`` to a PR-controlled binary
+        even when ``.npmrc`` is safe. Confirmed against npm 10.x."""
+        from pdd.checkup_gates import _build_subprocess_env
+
+        monkeypatch.setenv("NPM_CONFIG_SCRIPT_SHELL", "./evil-sh")
+        monkeypatch.setenv("NPM_CONFIG_REGISTRY", "https://evil.example/")
+        env = _build_subprocess_env()
+        assert "NPM_CONFIG_SCRIPT_SHELL" not in env
+        assert "NPM_CONFIG_REGISTRY" not in env
+
+    def test_build_subprocess_env_strips_npm_config_lowercase(
+        self, monkeypatch: Any
+    ) -> None:
+        """Iter-39 Finding 3: npm/pnpm read the lowercase
+        ``npm_config_<key>`` form too. Confirmed against npm 10.x:
+        ``npm_config_script_shell=./evil-sh`` is an independent env
+        key from ``NPM_CONFIG_SCRIPT_SHELL`` and is also honoured."""
+        from pdd.checkup_gates import _build_subprocess_env
+
+        monkeypatch.setenv("npm_config_script_shell", "./evil-sh")
+        monkeypatch.setenv("npm_config_registry", "https://evil.example/")
+        env = _build_subprocess_env()
+        assert "npm_config_script_shell" not in env
+        assert "npm_config_registry" not in env
+
+    def test_build_subprocess_env_strips_node_options_and_node_path(
+        self, monkeypatch: Any
+    ) -> None:
+        """Iter-39 Finding 3: ``NODE_OPTIONS=--require=./evil.js`` loads
+        arbitrary JS into every node subprocess — including the
+        ``npx --no-install tsc`` gate. ``NODE_PATH`` is Node's
+        ``PYTHONPATH`` analogue and adds directories to Node's
+        module-resolution path. Both must be stripped."""
+        from pdd.checkup_gates import _build_subprocess_env
+
+        monkeypatch.setenv("NODE_OPTIONS", "--require=./evil.js")
+        monkeypatch.setenv("NODE_PATH", "/tmp/evil-modules")
+        env = _build_subprocess_env()
+        assert "NODE_OPTIONS" not in env
+        assert "NODE_PATH" not in env
+
+    def test_build_subprocess_env_forces_corepack_auto_pin_off(
+        self, monkeypatch: Any
+    ) -> None:
+        """Iter-39 Finding 1: Corepack-managed yarn/pnpm auto-pin a
+        ``packageManager`` field into ``package.json`` on first run
+        (default behaviour). The gate's cwd is the loop-owned PR
+        worktree, so the mutation lands in the PR and the downstream
+        commit/push helper stages it. The runner MUST set
+        ``COREPACK_ENABLE_AUTO_PIN=0`` to prevent this.
+
+        Confirmed against corepack 0.31 + pnpm@latest:
+        ``COREPACK_ENABLE_AUTO_PIN=1 corepack pnpm@latest run …``
+        mutates ``package.json`` while
+        ``COREPACK_ENABLE_AUTO_PIN=0 corepack pnpm@latest run …`` does
+        not.
+        """
+        from pdd.checkup_gates import _build_subprocess_env
+
+        # Even if the operator's env explicitly enables auto-pin, the
+        # runner must force the disable.
+        monkeypatch.setenv("COREPACK_ENABLE_AUTO_PIN", "1")
+        env = _build_subprocess_env()
+        assert env.get("COREPACK_ENABLE_AUTO_PIN") == "0"
+
+    # ------------------------------------------------------------------
+    # Iter-39 Finding 2: mypy "pure package" plugin resolution under the
+    # src/ layout. The iter-38 fix only checked the worktree root; src/
+    # layout repos (very common with modern pyproject.toml) put the
+    # importable package at worktree/src/<top_level>/.
+    # ------------------------------------------------------------------
+
+    def test_mypy_gate_skipped_when_pure_package_plugin_matches_src_layout(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-39 Finding 2: ``plugins = ["evil_plugin"]`` plus a
+        src-layout package at ``src/evil_plugin/__init__.py`` still
+        resolves to PR-controlled code under an editable install. The
+        iter-38 root-only worktree check missed this — extend the
+        check to ``worktree/src/<top_level>``."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["evil_plugin"]\n',
+            encoding="utf-8",
+        )
+        # src/ layout: the package lives under src/, not at root.
+        src_pkg = tmp_path / "src" / "evil_plugin"
+        src_pkg.mkdir(parents=True)
+        (src_pkg / "__init__.py").write_text(
+            "from mypy.plugin import Plugin\nclass P(Plugin): pass\ndef plugin(v): return P\n",
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" not in names
+
+    def test_mypy_gate_skipped_when_dotted_plugin_matches_src_top_level(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-39 Finding 2: dotted plugin name (``evil_plugin.main``)
+        whose top-level (``evil_plugin``) sits under src/ still
+        resolves under an editable install."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["evil_plugin.main"]\n',
+            encoding="utf-8",
+        )
+        src_pkg = tmp_path / "src" / "evil_plugin"
+        src_pkg.mkdir(parents=True)
+        (src_pkg / "__init__.py").write_text("", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" not in names
+
+    def test_mypy_gate_skipped_when_src_namespace_dir_matches_plugin(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-39 Finding 2 + PEP 420: a ``src/evil_plugin/`` directory
+        with NO ``__init__.py`` is still importable under namespace-
+        package discovery. Conservative treatment: same-named
+        directory under src/ disables the gate."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["evil_plugin"]\n',
+            encoding="utf-8",
+        )
+        # PEP 420 namespace-package directory at src/ level — no
+        # __init__.py but the directory exists.
+        (tmp_path / "src" / "evil_plugin").mkdir(parents=True)
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" not in names
+
+    def test_mypy_gate_emits_when_pure_package_plugin_matches_neither_root_nor_src(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-39 Finding 2 regression bound: a third-party plugin
+        (``mypy_django_plugin.main``) whose top-level appears NEITHER
+        at worktree root NOR under ``src/`` must still produce the
+        mypy gate. We do not want the broadened check to disable
+        legitimate third-party plugin use."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["mypy_django_plugin.main"]\n',
+            encoding="utf-8",
+        )
+        # Worktree has a src/ dir but NO ``src/mypy_django_plugin/``.
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "unrelated.py").write_text("", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" in names
+
 
 class TestRunGates:
     """``run_gates`` executes each discovered gate and persists artifacts."""
