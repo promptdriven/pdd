@@ -10,6 +10,7 @@ from rich import print as rprint
 
 from .detect_change import detect_change
 from .get_extension import get_extension
+from .construct_paths import BUILTIN_EXT_MAP
 
 
 DEFAULT_STORIES_DIR = "user_stories"
@@ -231,7 +232,7 @@ def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]
     try:
         extension = get_extension(language)
     except ValueError:
-        return None
+        extension = BUILTIN_EXT_MAP.get(language.lower(), "")
     extension = extension.lstrip(".")
 
     code_dir = _resolve_src_dir(prompts_dir)

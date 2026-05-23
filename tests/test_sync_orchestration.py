@@ -7374,6 +7374,10 @@ def test_non_python_agentic_test_with_failures_persists_real_count(orchestration
 
 
 @pytest.mark.e2e
+@pytest.mark.skipif(
+    os.getenv("PDD_RUN_ALL_TESTS") != "1",
+    reason="Set PDD_RUN_ALL_TESTS=1 or use --run-all to run npm-backed E2E tests.",
+)
 def test_e2e_typescript_real_execution_detects_failures(tmp_path):
     """
     E2E integration test: verify the full chain from buggy TypeScript code

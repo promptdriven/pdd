@@ -32,6 +32,27 @@ pytestmark = pytest.mark.e2e
 class TestOperationLoggingE2E:
     """E2E tests verifying CLI commands log with invocation_mode='manual'."""
 
+    @pytest.fixture(autouse=True)
+    def skip_without_live_credentials(self) -> None:
+        """Avoid running costly subprocess LLM tests without usable auth signals."""
+        run_live = (
+            os.getenv("PDD_RUN_REAL_LLM_TESTS") == "1"
+            or os.getenv("PDD_RUN_ALL_TESTS") == "1"
+        )
+        if not run_live:
+            pytest.skip("Set PDD_RUN_REAL_LLM_TESTS=1 to run real LLM tests.")
+
+        has_cloud_auth = bool(os.getenv("PDD_JWT_TOKEN"))
+        provider_keys = (
+            "OPENAI_API_KEY",
+            "AZURE_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+        )
+        if not has_cloud_auth and not any(os.getenv(key) for key in provider_keys):
+            pytest.skip("No PDD Cloud token or supported provider key is configured.")
+
     @pytest.fixture
     def project_dir(self, tmp_path: Path) -> Path:
         """Create a minimal PDD project structure."""

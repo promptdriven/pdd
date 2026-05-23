@@ -18,13 +18,20 @@ from .construct_paths import construct_paths
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop, run_pytest_on_file
 from .get_jwt_token import get_jwt_token
-from .get_language import get_language
+from .get_language import get_language, get_language_from_package_data
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 
 # Import DEFAULT_STRENGTH from the package
 from . import DEFAULT_STRENGTH
 
 console = Console()
+
+def _resolve_language(extension: str) -> str:
+    """Resolve workflow language without requiring project initialization."""
+    try:
+        return get_language(extension)
+    except ValueError:
+        return get_language_from_package_data(extension)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -167,7 +174,7 @@ def fix_main(
                     "code": input_strings["code_file"],
                     "prompt": input_strings["prompt_file"],
                     "errors": input_strings.get("error_file", ""),
-                    "language": get_language(os.path.splitext(code_file)[1]),
+                    "language": _resolve_language(os.path.splitext(code_file)[1]),
                     "strength": strength,
                     "temperature": temperature,
                     "time": time if time is not None else 0.25,
@@ -522,7 +529,7 @@ def fix_main(
                             "metadata": {
                                 "title": f"Auto-submitted fix for {os.path.basename(code_file)}",
                                 "description": "Automatically submitted successful code fix",
-                                "language": get_language(os.path.splitext(code_file)[1]),  # Detect language from file extension
+                                "language": _resolve_language(os.path.splitext(code_file)[1]),  # Detect language from file extension
                                 "framework": "",
                                 "tags": ["auto-fix", "example"],
                                 "isPublic": True,

@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 # Relative import from an internal module.
-from .get_language import get_language
+from .get_language import get_language, get_language_from_package_data
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
@@ -33,6 +33,13 @@ from .failure_classification import (
 )
 
 console = Console()
+
+def _resolve_language(extension: str) -> str:
+    """Resolve workflow language without requiring project initialization."""
+    try:
+        return get_language(extension)
+    except ValueError:
+        return get_language_from_package_data(extension)
 
 def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
@@ -100,7 +107,7 @@ def cloud_fix_errors(
         "code": code,
         "prompt": prompt,
         "errors": err_body,
-        "language": get_language(code_file_ext),
+        "language": _resolve_language(code_file_ext),
         "strength": strength,
         "temperature": temperature,
         "time": time if time is not None else 0.25,
@@ -404,7 +411,7 @@ def fix_error_loop(unit_test_file: str,
         else:
             # For non-Python files, run the verification program to get an initial error state
             rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
-            lang = get_language(os.path.splitext(code_file)[1])
+            lang = _resolve_language(os.path.splitext(code_file)[1])
             test_cmd_result = get_test_command_for_file(unit_test_file, lang)
             if not test_cmd_result:
                 # No verify command available (e.g., Java without maven/gradle).
@@ -735,7 +742,7 @@ def fix_error_loop(unit_test_file: str,
                         verbose=verbose,
                         time=time,
                         protect_tests=protect_tests,
-                        language=get_language(os.path.splitext(code_file)[1]),
+                        language=_resolve_language(os.path.splitext(code_file)[1]),
                         failure_classification=failure_hint,
                     )
             else:
@@ -751,7 +758,7 @@ def fix_error_loop(unit_test_file: str,
                     verbose=verbose,
                     time=time,  # Pass time parameter
                     protect_tests=protect_tests,
-                    language=get_language(os.path.splitext(code_file)[1]),
+                    language=_resolve_language(os.path.splitext(code_file)[1]),
                     failure_classification=failure_hint,
                 )
 

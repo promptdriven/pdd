@@ -8,9 +8,16 @@ from rich.console import Console
 
 from .agentic_common_worktree import get_git_root
 from .agentic_split_orchestrator import run_agentic_split_orchestrator
-from .get_language import get_language
+from .get_language import get_language, get_language_from_package_data
 
 console = Console()
+
+def _resolve_language(extension: str) -> str:
+    """Resolve workflow language without requiring project initialization."""
+    try:
+        return get_language(extension)
+    except ValueError:
+        return get_language_from_package_data(extension)
 
 
 def run_agentic_split(
@@ -49,7 +56,7 @@ def run_agentic_split(
         return False, error_msg, 0.0, "", []
 
     # Detect language
-    language = get_language(target_path.suffix)
+    language = _resolve_language(target_path.suffix)
     if not language:
         error_msg = f"Unsupported file extension '{target_path.suffix}' for: {target_file}"
         if not quiet:

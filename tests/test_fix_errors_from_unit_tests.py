@@ -736,6 +736,11 @@ def test_add_with_none():
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.skipif(
+    os.getenv("PDD_RUN_REAL_LLM_TESTS") != "1"
+    and os.getenv("PDD_RUN_ALL_TESTS") != "1",
+    reason="Set PDD_RUN_REAL_LLM_TESTS=1 to run real-LLM integration tests.",
+)
 def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
     """
     INTEGRATION TEST: Verify live LLM respects prompt as authoritative.

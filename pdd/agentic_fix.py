@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 
-from .get_language import get_language
+from .get_language import get_language, get_language_from_package_data
 from .get_run_command import get_run_command_for_file
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
@@ -17,6 +17,13 @@ from .agentic_langtest import default_verify_cmd_for
 from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES, _revert_out_of_scope_changes
 
 console = Console()
+
+def _resolve_language(extension: str) -> str:
+    """Resolve workflow language without requiring project initialization."""
+    try:
+        return get_language(extension)
+    except ValueError:
+        return get_language_from_package_data(extension)
 
 # Logging level selection; defaults to "quiet" under pytest, else "normal"
 _env_level = os.getenv("PDD_AGENTIC_LOGLEVEL")
@@ -283,7 +290,7 @@ def run_agentic_fix(
 
         if _is_useless_error_content(error_content):
             try:
-                lang = get_language(os.path.splitext(code_path)[1])
+                lang = _resolve_language(os.path.splitext(code_path)[1])
                 pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
                 if pre_cmd:
                     pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(working_dir))
@@ -327,7 +334,7 @@ def run_agentic_fix(
             if verify_cmd is None:
                 verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None)
             if verify_cmd is None:
-                verify_cmd = default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
+                verify_cmd = default_verify_cmd_for(_resolve_language(os.path.splitext(code_path)[1]), unit_test_file)
 
             primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
             if not primary_prompt_template:

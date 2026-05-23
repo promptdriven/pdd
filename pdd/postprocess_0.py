@@ -5,9 +5,17 @@ from .get_comment import get_comment
 from .comment_line import comment_line
 from .find_section import find_section
 
+_FALLBACK_LINE_COMMENTS = {
+    "bash": "#",
+    "python": "#",
+    "shell": "#",
+}
+
 def postprocess_0(llm_output: str, language: str) -> str:
     # Step 1: Get the comment character for the specified language
     comment_char = get_comment(language)
+    if comment_char == "del":
+        comment_char = _FALLBACK_LINE_COMMENTS.get(language.lower(), comment_char)
 
     # Step 2: Find code sections in the llm_output
     lines = llm_output.splitlines()

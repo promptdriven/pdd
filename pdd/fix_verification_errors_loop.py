@@ -31,7 +31,7 @@ except ImportError:
 
 from . import DEFAULT_TIME # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
-from .get_language import get_language
+from .get_language import get_language, get_language_from_package_data
 from .agentic_langtest import default_verify_cmd_for
 from .agentic_verify import run_agentic_verify
 
@@ -44,6 +44,14 @@ except ImportError:
     CloudConfig = None
     get_cloud_timeout = None
     get_cloud_request_timeout = None
+
+
+def _resolve_language(extension: str) -> str:
+    """Resolve workflow language without requiring project initialization."""
+    try:
+        return get_language(extension)
+    except ValueError:
+        return get_language_from_package_data(extension)
 
 
 def cloud_verify_fix(
@@ -276,7 +284,7 @@ def fix_verification_errors_loop(
     if not is_python:
         # For non-Python files, run the verification program to get an initial error state
         console.print(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
-        lang = get_language(os.path.splitext(code_file)[1])
+        lang = _resolve_language(os.path.splitext(code_file)[1])
         verify_cmd = default_verify_cmd_for(lang, verification_program)
         if not verify_cmd:
             # No verify command available (e.g., Java without maven/gradle).
@@ -554,7 +562,7 @@ def fix_verification_errors_loop(
                         temperature=temperature,
                         time_param=llm_time,
                         verbose=verbose,
-                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                        language="python" if is_python else _resolve_language(os.path.splitext(code_file)[1]),
                     )
                     if verbose:
                         console.print(f"[cyan]Cloud verify fix completed.[/cyan]")
@@ -787,7 +795,7 @@ def fix_verification_errors_loop(
                         temperature=temperature,
                         time_param=llm_time,
                         verbose=verbose,
-                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                        language="python" if is_python else _resolve_language(os.path.splitext(code_file)[1]),
                     )
                     if verbose:
                         console.print(f"[cyan]Cloud verify fix completed.[/cyan]")

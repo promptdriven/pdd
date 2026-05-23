@@ -26,12 +26,19 @@ from .agentic_common import (
 )
 from .agentic_common_worktree import get_git_root, setup_worktree
 from .architecture_sync import sync_all_prompts_to_architecture
-from .get_language import get_language
+from .get_language import get_language, get_language_from_package_data
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .split_validation import get_lint_commands, get_test_command, validate_extraction
 
 console = Console()
+
+def _resolve_language(extension: str) -> str:
+    """Resolve workflow language without requiring project initialization."""
+    try:
+        return get_language(extension)
+    except ValueError:
+        return get_language_from_package_data(extension)
 
 # Per-Step Timeouts
 SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
@@ -1118,7 +1125,7 @@ def _apply_improvement_gate(
 def _detect_language(target_file: str) -> str:
     """Detect language from file extension using pdd's get_language."""
     ext = Path(target_file).suffix
-    lang = get_language(ext) if ext else ""
+    lang = _resolve_language(ext) if ext else ""
     return lang.lower() if lang else ""
 
 
