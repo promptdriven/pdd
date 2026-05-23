@@ -2822,3 +2822,86 @@ class TestOneSessionRollback:
         assert excinfo.value.churn_ratio == 1.0
         assert excinfo.value.post_line_count == 0
         assert str(alt_test_path) in str(excinfo.value)
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch(
+        "pdd.one_session_sync.build_one_session_prompt",
+        return_value="mega prompt",
+    )
+    def test_surface_failure_with_alt_path_deletion_restores_all(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Greg iter-16 follow-up review (PR #1015): when the same
+        one-session attempt regresses public surface AND deletes (or
+        rewrites) an alt-path test file, the public-surface gate fires
+        first (higher priority) and `continue`s before the test-churn
+        gate runs. Pre-iter-17 the surface handler restored only the
+        code file + canonical test file — leaving the alt-path damage
+        on disk and silently discarding broad existing coverage as a
+        side effect of the higher-priority failure. iter-17 mirrors
+        the churn-handler restore loop in the surface handler so
+        every snapshotted alt-path test file is restored too.
+        """
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_TEST_CHURN_GATE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_CONFORMANCE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_PUBLIC_SURFACE_GATE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        # Pre-existing code with a public function the agent will drop.
+        original_code = (
+            "def hello():\n    return 'world'\n\n"
+            "def keep_me():\n    return 'must stay'\n"
+        )
+        canonical_tests = "def test_canonical_keep():\n    assert True\n"
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text(canonical_tests, encoding="utf-8")
+
+        # Pre-existing alt-path test file with broad coverage.
+        alt_test_path = tmp_path / "src" / "widget_test.py"
+        alt_test_path.parent.mkdir(parents=True, exist_ok=True)
+        pre_existing_alt = (
+            "\n".join(
+                f"def test_case_{i}():\n    assert True\n" for i in range(20)
+            )
+            + "\n"
+        )
+        alt_test_path.write_text(pre_existing_alt, encoding="utf-8")
+
+        regressed_code = "def hello():\n    return 'mutated'\n"  # keep_me() removed
+
+        def regress_surface_and_delete_alt(*args, **kwargs):
+            # Same attempt: agent removes public `keep_me()` AND
+            # deletes the alt-path test file.
+            pdd_files["code"].write_text(regressed_code, encoding="utf-8")
+            alt_test_path.unlink()
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = regress_surface_and_delete_alt
+
+        with pytest.raises(PublicSurfaceRegressionError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Surface gate fires first; alt-path deletion must NOT be left
+        # on disk as a side effect of the higher-priority failure.
+        assert (
+            alt_test_path.exists()
+        ), "alt-path deleted by failed attempt must be restored even when surface fails first"
+        assert (
+            alt_test_path.read_text(encoding="utf-8") == pre_existing_alt
+        ), "alt-path content must match pre-session bytes"
+        # Code + canonical also restored (existing iter-15 behavior).
+        assert (
+            pdd_files["code"].read_text(encoding="utf-8") == original_code
+        )
+        assert (
+            pdd_files["test"].read_text(encoding="utf-8") == canonical_tests
+        )

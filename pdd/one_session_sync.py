@@ -573,6 +573,34 @@ def run_one_session_sync(
                         test_path.write_text(existing_test_content, encoding="utf-8")
                     except OSError:
                         pass
+                # iter-17 (Greg iter-16 follow-up review): restore EVERY
+                # alt-path test-like file from the pre-session snapshot
+                # too. Without this, a one-session attempt that both
+                # regresses public surface AND rewrites/deletes an alt-
+                # path test file (e.g. removes `keep_me()` while deleting
+                # `src/widget_test.py`) would surface the
+                # PublicSurfaceRegressionError, restore code + canonical,
+                # but leave the alt-path damage on disk — silently
+                # discarding broad existing coverage as a side effect of
+                # a higher-priority surface failure. Mirrors the
+                # churn-handler restoration loop below. The canonical
+                # was already restored above; skip it here.
+                for snap_path, snap_content in pre_test_contents.items():
+                    if test_path is not None:
+                        try:
+                            if snap_path.samefile(test_path):
+                                continue
+                        except OSError:
+                            try:
+                                if snap_path.resolve() == test_path.resolve():
+                                    continue
+                            except OSError:
+                                pass
+                    try:
+                        snap_path.parent.mkdir(parents=True, exist_ok=True)
+                        snap_path.write_text(snap_content, encoding="utf-8")
+                    except OSError:
+                        pass
                 signature = (
                     tuple(sorted(set(surface_err.removed_symbols))),
                     tuple(sorted(set(getattr(surface_err, "changed_signatures", []) or []))),
