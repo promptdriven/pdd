@@ -311,6 +311,105 @@ def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[
     return sorted_list, cycles
 
 
+def compute_sccs(graph: Dict[str, List[str]]) -> List[List[str]]:
+    """
+    Computes strongly connected components of a directed graph.
+
+    Args:
+        graph: Adjacency list (module -> dependencies). The graph is
+            normalized so every node referenced as a dependency is also
+            present as a key (mirrors ``topological_sort``).
+
+    Returns:
+        SCCs in deps-first order: with the input convention that
+        ``graph[A] == [B]`` means *A depends on B*, an SCC's external
+        dependencies are emitted before the SCC itself. This is Tarjan's
+        natural emission order (the reverse of a depender-first topological
+        sort of the condensation). Within each SCC, node names are sorted
+        alphabetically for determinism. Trivial SCCs (single node with no
+        self-loop) are returned as single-element lists. A self-loop on a
+        node is its own SCC (one-element list) — callers can distinguish
+        it from a non-self-loop singleton by inspecting ``graph[node]``.
+
+    Implementation: iterative Tarjan's algorithm, so deep cycle chains do
+    not blow the Python recursion limit.
+    """
+    # Normalize: include every referenced node as a key.
+    all_nodes: Set[str] = set(graph.keys())
+    for deps in graph.values():
+        all_nodes.update(deps)
+    # Sort each adjacency list so Tarjan's DFS discovery order depends only on
+    # graph structure, not the caller's dep-list ordering. The set of SCCs is
+    # invariant to neighbour order, but the order they're emitted in is not.
+    adj: Dict[str, List[str]] = {n: sorted(graph.get(n, [])) for n in all_nodes}
+
+    index_of: Dict[str, int] = {}
+    lowlink: Dict[str, int] = {}
+    on_stack: Set[str] = set()
+    stack: List[str] = []
+    sccs: List[List[str]] = []
+    next_index = 0
+
+    # Iterative Tarjan: each work-stack frame holds (node, iterator over
+    # neighbors, the neighbor we just recursed into — or None on first entry).
+    for start in sorted(all_nodes):  # sort for deterministic start order
+        if start in index_of:
+            continue
+        # Push initial frame.
+        work_stack: List[Tuple[str, "iter", Optional[str]]] = []
+        index_of[start] = next_index
+        lowlink[start] = next_index
+        next_index += 1
+        stack.append(start)
+        on_stack.add(start)
+        work_stack.append((start, iter(adj[start]), None))
+
+        while work_stack:
+            node, neighbors, just_returned = work_stack[-1]
+            if just_returned is not None:
+                # We're back from a recursion into `just_returned`; fold its
+                # lowlink into ours.
+                lowlink[node] = min(lowlink[node], lowlink[just_returned])
+                # Clear the marker so we resume iterating.
+                work_stack[-1] = (node, neighbors, None)
+
+            recursed = False
+            for nb in neighbors:
+                if nb not in index_of:
+                    # Tree edge: descend.
+                    index_of[nb] = next_index
+                    lowlink[nb] = next_index
+                    next_index += 1
+                    stack.append(nb)
+                    on_stack.add(nb)
+                    # Mark current frame so we know which neighbor to fold on return.
+                    work_stack[-1] = (node, neighbors, nb)
+                    work_stack.append((nb, iter(adj[nb]), None))
+                    recursed = True
+                    break
+                if nb in on_stack:
+                    # Back edge to a node still on the SCC stack.
+                    lowlink[node] = min(lowlink[node], index_of[nb])
+                # else: cross edge to a node already in a finished SCC; ignore.
+
+            if recursed:
+                continue
+
+            # All neighbors processed. If `node` is a root of an SCC, pop it.
+            if lowlink[node] == index_of[node]:
+                component: List[str] = []
+                while True:
+                    w = stack.pop()
+                    on_stack.discard(w)
+                    component.append(w)
+                    if w == node:
+                        break
+                sccs.append(sorted(component))
+            work_stack.pop()
+
+    return sccs
+
+
 def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]:
     """
     Identifies modules that need syncing based on modified modules and dependencies.

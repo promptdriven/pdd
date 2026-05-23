@@ -68,11 +68,13 @@
 
 import csv
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from pdd import setup_tool
+from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,17 @@ _ENV_VARS_TO_CLEAN = [
     "VERTEXAI_LOCATION", "AZURE_API_KEY", "AZURE_API_BASE",
     "AZURE_API_VERSION",
 ]
+
+
+def test_print_pdd_logo_includes_positioning(capsys):
+    """Setup onboarding banner should include the repositioning line."""
+    setup_tool._print_pdd_logo()
+
+    output = capsys.readouterr().out
+    assert PDD_FULL_TAGLINE in output
+    assert PDD_POSITIONING in output
+    assert "THE LAST" in output
+    assert "PROGRAMMING LANGUAGE" in output
 
 
 # ---------------------------------------------------------------------------
