@@ -9485,6 +9485,7 @@
     "dependencies": [
       "llm_invoke_python.prompt",
       "load_prompt_template_python.prompt",
+      "preprocess_python.prompt",
       "path_resolution_python.prompt"
     ],
     "priority": 297,

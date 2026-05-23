@@ -1,139 +1,37 @@
-(This is still a draft).
+# PR #1108 — Clarify `pdd sync` no-op output and clean up Model labeling
 
-Previously, `<include>` would insert an entire file into the prompt. Now you can use the `query` and `select` attributes with the `<include>` tag to extract specific parts of files instead of including the entire contents. Also, `auto-deps` will automatically insert the right selectors when it detects and inserts `<include>` tags in your prompt files. `select` is a deterministic attribute that will insert a specific function or heading. `query` uses LLM-powered semantic extraction of a file, and caches it in `.pdd/extracts/`.
+Closes #1103.
 
-### Canonical `<include>` Tag Format
+## Scope
 
-The file path is always the **body content** of the tag. Optional attributes (`select`, `query`, `mode`) go on the opening tag:
+This PR is scoped to the user-visible output of `pdd sync` and related commands. It does **not** introduce the selective-include / `<include select=...>` / `pdd extracts prune` features (those are tracked separately).
 
-```xml
-<include>path/to/file</include>                                    <!-- full file -->
-<include select="def:foo,class:Bar">path/to/file</include>        <!-- structural selector -->
-<include query="...">path/to/file</include>                        <!-- semantic query -->
-<include select="class:Handler" mode="interface">api.py</include>  <!-- interface mode -->
-```
+## Issue #1103: improved sync output and Model labeling
 
-The file path is always the tag body.
+### Runtime changes
 
-### Structural Selectors (`select=`)
+- `pdd/sync_orchestration.py` — Adds a truthful `summary` field via the new `_compose_sync_summary` helper so a successful no-op no longer produces a `None` Details cell. The composed summary is scoped to the selected target/language and surfaces accepted-as-complete reasons when applicable.
+- `pdd/sync_main.py` — Final summary table now picks `summary` first and guards against `None` / "No details." / empty strings, falling back to a status-scoped phrase so a row never carries a placeholder.
+- `pdd/sync_main.py` (one-session path) — When the pre-generate phase ran inside one-session mode, `generate` is surfaced in `operations_completed` and the success `summary`, so the Details column does not under-report completed work.
+- `pdd/one_session_sync.py` — Always sets a non-empty `summary` on both success and failure so downstream rendering never collapses to a placeholder.
+- `pdd/commands/checkup.py`, `pdd/commands/maintenance.py`, `pdd/commands/modify.py`, `pdd/core/utils.py` — All five `Model: {model}` echo sites now go through the shared `echo_model_line(model)` helper, which suppresses the line when the model is empty, `"unknown"`, or `"N/A"` (case-insensitive).
 
-Extract file fragments by structure using `<include select="...">file</include>`
+### Prompt changes (kept in sync with the runtime above)
 
-| Selector | Description | Example |
-| -- | -- | -- |
-| `lines:N-M` | Line ranges (single, range, open-ended) | `lines:10-20`, `lines:5-`, `lines:-3` |
-| `def:name` | Python function/async function by name | `def:process_request` |
-| `class:Name` | Entire Python class | `class:UserModel` |
-| `class:Name.method` | Specific method from a class | `class:UserModel.validate` |
-| `section:Heading` | Markdown section by heading text | `section:Installation` |
-| `pattern:/regex/` | Lines matching a regex | `pattern:/^import/` |
-| `path:key.nested[0]` | JSON/YAML value by dot-notation path | `path:config.database.host` |
+- `pdd/prompts/sync_orchestration_python.prompt`, `pdd/prompts/one_session_sync_python.prompt`, `pdd/prompts/sync_main_python.prompt` — Standardized no-op success and failure summary contracts; documented the `summary` field and the placeholder-rejection rule.
+- `pdd/prompts/bug_main_python.prompt`, `pdd/prompts/code_generator_main_python.prompt`, `pdd/prompts/update_main_python.prompt`, `pdd/prompts/commands/checkup_python.prompt`, `pdd/prompts/commands/maintenance_python.prompt`, `pdd/prompts/commands/modify_python.prompt` — Standardized Model-suppression contract.
+- Several prompts that previously carried `<pdd-interface>` blocks declaring signatures that did not match the runtime have been corrected so conformance repair does not try to reshape stable signatures.
 
-Selectors are composable: `select="lines:1-5,def:main,def:helper"`
+### Tests
 
-### Interface Mode (`mode="interface"`)
+- `tests/test_sync_main.py` — New regression `test_sync_no_op_success_details_never_renders_none` covering the historical no-op shape (`summary` absent, `error: None`) and asserting the final table never contains the literal `"None"`. Additional `TestSyncMainEarlyOutSummaryKeys` cases cover the one-session early-out summary contract.
+- `tests/test_one_session_sync.py`, `tests/test_sync_orchestration.py` — Updated to cover the new `summary` contract and the `_compose_sync_summary` outputs.
+- `tests/core/test_cli.py` — Coverage for the shared `echo_model_line` helper (suppression cases for empty / `unknown` / `N/A`).
 
-Extract only signatures, docstrings, and type hints — no implementation bodies:
+### Architecture metadata
 
-```xml
-<include select="class:Handler" mode="interface">api.py</include>
-```
+- `architecture.json` — Updated to reflect the prompt-side dependency edges that were tightened in this PR, including restoring `preprocess_python.prompt` as a dependency of `include_query_extractor_python.prompt` (matches both the prompt body and the runtime imports).
 
-### Semantic Extraction (`query=`)
+## Out of scope
 
-Use an LLM to extract relevant content based on a natural language query:
-
-```xml
-<include query="List all authentication requirements">spec.md</include>
-```
-
-Results are cached in `.pdd/extracts/` (keyed by `sha256(path + query)`), committed to git for reproducible builds, and invalidated when the source file changes.
-
-### Cache Management (`pdd extracts prune`)
-
-New CLI command to garbage-collect orphaned cache entries no longer referenced by any prompt file.
-
-### Automatic Selector Insertion via Auto-Deps
-
-Auto-deps (`pdd auto-deps` / `insert_includes`) now automatically determines *what parts* of each dependency are needed:
-
-1. **Better summaries** — `summarize_file_LLM.prompt` produces structured output (`file_summary`, `key_exports`, `dependencies`) instead of prose. This gives auto-deps richer data for both file selection and selector emission.
-
-2. **Selector-aware auto-include** — `auto_include_LLM.prompt` now understands selector types and emits `select=` or `query=` alongside file paths. It prefers structural selectors (deterministic, stays up-to-date) over semantic queries. The LLM returns structured JSON via Pydantic (`AutoIncludeResult`) with `new_includes` and `existing_include_annotations`.
-
-3. **Deterministic `<update>` application** — When auto-deps annotates existing `<include>` tags with selectors, the replacement is applied deterministically via regex (no LLM call). The LLM is only invoked for inserting *new* includes.
-
-4. **Small file optimization** — Files under 100 lines skip extraction entirely (the overhead exceeds the token savings).
-
-5. **Single LLM call** — `extract_auto_include_LLM.prompt` has been removed. The old two-call pipeline (free-form LLM → extraction LLM) is replaced by a single call with Pydantic structured output.
-
----
-
-## Changes
-
-### New Modules
-
-- **`pdd/content_selector.py`** — Selector parsing and extraction engine (lines, AST, markdown, regex, JSON/YAML path)
-- **`pdd/include_query_extractor.py`** — LLM-powered semantic extraction with deterministic caching
-- **`pdd/extracts_prune.py`** — Cache garbage collection logic
-- **`pdd/commands/extracts.py`** — CLI registration for `pdd extracts prune`
-- **`pdd/server/routes/extracts.py`** — REST API for browsing extracts cache
-
-### Modified Modules
-
-- **`pdd/preprocess.py`** — Wired `select`, `mode`, and `query` attributes into `<include>` tag processing
-- **`pdd/auto_include.py`** — Single LLM call with `AutoIncludeResult` Pydantic model; emits `<new>`/`<update>` blocks with selectors; small-file stripping
-- **`pdd/insert_includes.py`** — Deterministic `<update>` block application; LLM only handles `<new>` blocks
-- **`pdd/summarize_directory.py`** — `FileSummary` Pydantic model gains `key_exports`/`dependencies`; CSV output has 5 columns; backward-compatible parsing of older CSV formats
-- **`pdd/commands/__init__.py`** — Registered the `extracts` command group
-- **`.gitignore`** — Excepted `.pdd/extracts/` so cache entries can be committed
-
-### Prompts — New
-
-| Prompt | Purpose |
-|--------|---------|
-| `pdd/prompts/content_selector_python.prompt` | `ContentSelector` class with structural extraction |
-| `pdd/prompts/include_query_extractor_python.prompt` | `IncludeQueryExtractor` class with caching |
-| `pdd/prompts/extracts_prune_python.prompt` | `pdd extracts prune` CLI subcommand |
-| `pdd/prompts/server/routes/extracts_python.prompt` | REST API for browsing extracts cache |
-| `pdd/prompts/include_query_extractor_LLM.prompt` | LLM instructions for semantic extraction |
-
-### Prompts — Modified
-
-| Prompt | Change |
-|--------|--------|
-| `pdd/prompts/auto_include_LLM.prompt` | **Rewritten.** Now selector-aware: documents selector types, guidelines for when to use `select` vs `query` vs full file, structured JSON output matching Pydantic models |
-| `pdd/prompts/auto_include_python.prompt` | Single LLM call with `AutoIncludeResult`; `<new>`/`<update>` output format; `_strip_selectors_from_small_files`; no extract step |
-| `pdd/prompts/summarize_file_LLM.prompt` | Structured output: `file_summary` (one sentence), `key_exports` (list), `dependencies` (list) |
-| `pdd/prompts/summarize_directory_python.prompt` | `FileSummary` Pydantic model gains `key_exports`/`dependencies`; CSV has 5 columns; backward-compatible parsing |
-| `pdd/prompts/insert_includes_python.prompt` | `<update>` blocks applied deterministically via `_apply_update_blocks()`; LLM only sees `<new>` blocks; skips LLM call if no new includes |
-| `pdd/prompts/preprocess_python.prompt` | Tag syntax updated to canonical body-content format |
-
-### Prompts — Removed
-
-| Prompt | Reason |
-|--------|--------|
-| `pdd/prompts/extract_auto_include_LLM.prompt` | Eliminated second LLM call. Replaced by Pydantic structured output from `auto_include_LLM`;  |
-
-### Documentation
-
-- **`README.md`** — Tag syntax fixed to canonical format; `pdd extracts prune` docs
-- **`docs/prompting_guide.md`** — Selective include syntax, selector reference, LLM extraction docs; all examples use canonical body-content format
----
-
-## Issue #1103: Improved Sync Output and Model Labeling
-
-### Changes
-
-- **Prompts**: Standardized "Model:" label and suppression logic across all main commands (`bug_main`, `code_generator_main`, `update_main`, `checkup`, `maintenance`, `modify`).
-- **Sync Output**: Updated `sync_orchestration_python.prompt` and `one_session_sync_python.prompt` to provide descriptive success summaries (e.g., "Completed: generate, example, test") and standardized failure summaries.
-- **Robust Fallback**: Enhanced `sync_main_python.prompt` to handle cases where upstream components return literal "None" or "No details." strings.
-- **Architecture Metadata**:
-    - Resolved circular dependency between `preprocess` and `include_query_extractor`.
-    - Corrected filepaths for moved files (`regression.sh`, `run_generated.py`, `prompt_tester.py`).
-    - Registered missing core prompts (`construct_paths`, `load_prompt_template`, etc.) by adding missing PDD tags.
-    - Cleaned up dead entries and duplicate dependencies.
-
-### Documentation Justification (Issue #5 from Step 11)
-
-- **README.md** and **docs/whitepaper.md** were kept out of scope for output changes. A repository-wide audit confirmed that these files do not contain hardcoded "No sync operations required" messages or other specific CLI output examples that were invalidated by the improved summary logic. General command usage descriptions remain accurate.
+Anything outside the `pdd sync` no-op / Model-labeling surface (e.g., selective-include syntax, `pdd extracts prune`, `auto-deps` selector emission, README / `docs/prompting_guide.md` rewrites) is intentionally **not** part of this PR.
