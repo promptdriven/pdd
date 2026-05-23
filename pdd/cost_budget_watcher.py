@@ -131,10 +131,17 @@ class Watcher:
         # Incremental-tail state. ``_byte_offset`` is the first unread byte;
         # ``_header_consumed`` flips True after the CSV header is parsed.
         # ``_known_size`` caches the file size at last poll so we can detect
-        # truncation/rotation and reset state.
+        # truncation/rotation and reset state. ``_known_inode`` lets us
+        # detect ``os.replace``-style migrations (track_cost rewrites the
+        # cost CSV in place to add the job_id column when the env asks
+        # for per-job attribution; the new file gets a new inode even
+        # though the path is unchanged). Without inode tracking the
+        # watcher would keep its stale fieldnames and never enforce
+        # the job_id filter even after migration.
         self._byte_offset: int = 0
         self._header_consumed: bool = False
         self._known_size: int = 0
+        self._known_inode: Optional[int] = None
         self._fieldnames: Optional[list[str]] = None
         self._thread = threading.Thread(
             target=self._run, name=f"cost-budget-watcher:{self._csv_path.name}", daemon=True
@@ -161,6 +168,7 @@ class Watcher:
         self._byte_offset = 0
         self._header_consumed = False
         self._known_size = 0
+        self._known_inode = None
         self._fieldnames = None
         with self._lock:
             self._spent = 0.0
@@ -202,9 +210,26 @@ class Watcher:
             return
 
         size = stat.st_size
-        if size < self._byte_offset:
-            # Truncation or rotation: re-scan from scratch on next read.
+        # Detect file replacement (os.replace from track_cost migration,
+        # logrotate-style rotation, etc.) by comparing the inode. A new
+        # inode at the same path means a completely new file — discard
+        # everything we cached (offset, header, spent) so the new
+        # header is reparsed and the job_id filter activates if the
+        # post-migration CSV carries the column. Without this, the
+        # watcher keeps the pre-migration fieldnames and never enforces
+        # job_id filtering even after the file is migrated.
+        if (
+            self._known_inode is not None
+            and stat.st_ino != self._known_inode
+        ):
             self._reset_tail_state()
+        self._known_inode = stat.st_ino
+
+        if size < self._byte_offset:
+            # Truncation or rotation without inode change: re-scan from
+            # scratch on next read.
+            self._reset_tail_state()
+            self._known_inode = stat.st_ino
         self._known_size = size
 
         if size == self._byte_offset:

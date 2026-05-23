@@ -12,6 +12,53 @@ from typing import Any, List, Tuple
 _legacy_csv_warned: set = set()
 
 
+def _migrate_legacy_to_new_header(path: str) -> None:
+    """Rewrite an oldest-format cost CSV in place to add both the
+    ``attempted_models`` and ``job_id`` columns.
+
+    Same migration story as :func:`_migrate_mid_to_new_header`: triggered
+    only when a server-managed run (``PDD_JOB_ID`` non-empty) writes to a
+    pre-existing legacy file, so two same-command jobs sharing that file
+    can be attributed via the watcher's strict ``job_id`` filter rather
+    than collapsing under the command + timestamp fallback (where each
+    counts the other's spend).
+
+    Existing rows get empty ``attempted_models`` and ``job_id`` cells;
+    the legacy fallback in the watcher then treats them as "untagged"
+    rows that do not match any active job's filter, so old rows do not
+    contaminate new jobs' spend.
+    """
+    legacy_fieldnames = [
+        'timestamp', 'model', 'command', 'cost',
+        'input_files', 'output_files',
+    ]
+    new_fieldnames = legacy_fieldnames + ['attempted_models', 'job_id']
+    tmp_path = path + '.migrate.tmp'
+    try:
+        with open(path, 'r', encoding='utf-8', newline='') as src:
+            reader = csv.DictReader(src)
+            rows = list(reader)
+        with open(tmp_path, 'w', encoding='utf-8', newline='') as dst:
+            writer = csv.DictWriter(dst, fieldnames=new_fieldnames)
+            writer.writeheader()
+            for r in rows:
+                r.setdefault('attempted_models', '')
+                r.setdefault('job_id', '')
+                writer.writerow({k: r.get(k, '') for k in new_fieldnames})
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        rprint(
+            f"[yellow]Could not migrate legacy cost CSV {path} to add "
+            f"attempted_models + job_id columns: {exc}. Per-job isolation "
+            f"will degrade to command+timestamp filtering for this file."
+            f"[/yellow]"
+        )
+
+
 def _migrate_mid_to_new_header(path: str) -> None:
     """Rewrite a mid-format cost CSV in place to add the ``job_id`` column.
 
@@ -205,20 +252,32 @@ def track_cost(func):
                             first_line = f.readline().strip()
                             if 'attempted_models' not in first_line:
                                 # Oldest layout — no attempted_models, no job_id.
-                                fieldnames = legacy_fieldnames
-                                del row['attempted_models']
-                                del row['job_id']
-                                abs_path = os.path.abspath(output_cost_path)
-                                if abs_path not in _legacy_csv_warned:
-                                    _legacy_csv_warned.add(abs_path)
-                                    rprint(
-                                        "[yellow]Note: cost CSV "
-                                        f"'{output_cost_path}' uses the legacy "
-                                        "header; the new 'attempted_models' "
-                                        "column will not be recorded. Delete or "
-                                        "rename the file to start fresh with the "
-                                        "attempted_models column.[/yellow]"
-                                    )
+                                if job_id:
+                                    # Server-managed run with isolation
+                                    # need: migrate legacy → new (adds
+                                    # both attempted_models and job_id
+                                    # columns; existing rows get empty
+                                    # values). Same legacy-header
+                                    # migration path as the mid → new
+                                    # branch below.
+                                    _migrate_legacy_to_new_header(output_cost_path)
+                                    # Header now includes job_id; fall
+                                    # through to the new_fieldnames write.
+                                else:
+                                    fieldnames = legacy_fieldnames
+                                    del row['attempted_models']
+                                    del row['job_id']
+                                    abs_path = os.path.abspath(output_cost_path)
+                                    if abs_path not in _legacy_csv_warned:
+                                        _legacy_csv_warned.add(abs_path)
+                                        rprint(
+                                            "[yellow]Note: cost CSV "
+                                            f"'{output_cost_path}' uses the legacy "
+                                            "header; the new 'attempted_models' "
+                                            "column will not be recorded. Delete or "
+                                            "rename the file to start fresh with the "
+                                            "attempted_models column.[/yellow]"
+                                        )
                             elif 'job_id' not in first_line:
                                 # Mid-era layout — has attempted_models but
                                 # no job_id. When the env supplies a

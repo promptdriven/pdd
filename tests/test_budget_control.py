@@ -47,6 +47,27 @@ from pdd.server.slash_command_parser import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_pdd_job_id_env():
+    """Restore os.environ['PDD_JOB_ID'] after every test in this file.
+
+    Several tests construct a `JobManager` with a custom executor under
+    `max_concurrent=1`; per the production safety-net contract, that
+    triggers `os.environ['PDD_JOB_ID'] = job.id` and intentionally
+    leaves the value set (sequential jobs each overwrite). Without
+    this fixture, the leaked job UUID would contaminate tests in
+    sibling files (notably `tests/test_track_cost.py`) that assume
+    the env is clean.
+    """
+    import os as _os
+    prior = _os.environ.get("PDD_JOB_ID")
+    yield
+    if prior is None:
+        _os.environ.pop("PDD_JOB_ID", None)
+    else:
+        _os.environ["PDD_JOB_ID"] = prior
+
+
 # ----------------------------------------------------------------- budget_settings
 
 
@@ -1568,13 +1589,58 @@ class TestSubprocessEnvHelper:
         assert explicit["PDD_JOB_ID"] == job_a.id
 
     @pytest.mark.asyncio
-    async def test_custom_executor_does_not_mutate_os_environ(
+    async def test_env_safety_net_active_under_max_concurrent_one(
         self, tmp_path, monkeypatch,
     ):
-        """Regression guard: the prior implementation set os.environ
-        around the custom executor call, which raced under concurrency.
-        os.environ must remain untouched by the manager itself; the
-        executor is responsible for passing env= to subprocess.
+        """Finding 1 (9th pass): legacy custom executors that do not
+        call subprocess_env still need their spawned subprocesses to see
+        PDD_JOB_ID. Under max_concurrent=1 there is no race risk, so
+        the manager sets os.environ['PDD_JOB_ID']=job.id as a safety
+        net. Under max_concurrent>1 it must not (see the next test).
+        """
+        import asyncio
+        import os as _os
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        prior = _os.environ.pop("PDD_JOB_ID", None)
+        observed: dict = {}
+
+        async def custom_executor(job):
+            observed["env"] = _os.environ.get("PDD_JOB_ID")
+            return {"cost": 0.0}
+
+        try:
+            mgr = JobManager(max_concurrent=1, executor=custom_executor,
+                              project_root=tmp_path)
+            job = await mgr.submit("issue", args={}, options={},
+                                     node_budget=80.0, max_total_cap=400.0)
+            for _ in range(50):
+                if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                    break
+                await asyncio.sleep(0.05)
+
+            assert observed.get("env") == job.id, (
+                "Finding 1 (9th pass) regression: PDD_JOB_ID safety net "
+                "was not set under max_concurrent=1; legacy executors "
+                "lose job_id attribution on their spawned subprocesses."
+            )
+        finally:
+            # Production design is for the safety-net value to persist
+            # across sequential jobs (each new submit overwrites the
+            # previous), but tests that assume a clean env would
+            # otherwise see leakage. Restore the original env state.
+            _os.environ.pop("PDD_JOB_ID", None)
+            if prior is not None:
+                _os.environ["PDD_JOB_ID"] = prior
+
+    @pytest.mark.asyncio
+    async def test_env_safety_net_skipped_under_concurrency(
+        self, tmp_path, monkeypatch,
+    ):
+        """Under max_concurrent>1 the os.environ mutation would race
+        across coroutines. Skip it; the executor MUST use
+        subprocess_env() to isolate spawned children.
         """
         monkeypatch.delenv("PDD_JOB_ID", raising=False)
 
@@ -1583,13 +1649,13 @@ class TestSubprocessEnvHelper:
         from pdd.server.jobs import JobManager
         from pdd.server.models import JobStatus
 
-        observations = []
+        observations: list = []
 
         async def custom_executor(job):
             observations.append(_os.environ.get("PDD_JOB_ID"))
             return {"cost": 0.0}
 
-        mgr = JobManager(max_concurrent=1, executor=custom_executor,
+        mgr = JobManager(max_concurrent=2, executor=custom_executor,
                           project_root=tmp_path)
         job = await mgr.submit("issue", args={}, options={},
                                  node_budget=80.0, max_total_cap=400.0)
@@ -1598,10 +1664,65 @@ class TestSubprocessEnvHelper:
                 break
             await asyncio.sleep(0.05)
 
-        # Manager must NOT have mutated process-global env. Executors that
-        # want PDD_JOB_ID in subprocess env must call subprocess_env().
+        # No env mutation when max_concurrent>1.
         assert observations == [None]
         assert _os.environ.get("PDD_JOB_ID") is None
+
+
+class TestWatcherDetectsCsvMigration:
+    """Finding 3 (9th pass): track_cost migrates a mid-format CSV in
+    place via os.replace, which gives the file a new inode. The watcher
+    must detect the inode change and reset its cached fieldnames/offset
+    so the new header is reparsed and job_id filtering activates.
+    """
+
+    def test_watcher_resets_after_os_replace(self, tmp_path):
+        from pdd.cost_budget_watcher import watch
+        from pdd.track_cost import _migrate_mid_to_new_header
+
+        csv_path = tmp_path / "cost.csv"
+        ts = "2026-05-22T18:30:00.000+00:00"
+        # Seed mid-format file with one row from job-a.
+        csv_path.write_text(
+            "timestamp,model,command,cost,input_files,output_files,attempted_models\n"
+            f"{ts},gpt-4,bug,10.0,,,gpt-4\n",
+            encoding="utf-8",
+        )
+
+        watcher = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"bug"}, job_id="job-a", poll_interval=0.1,
+        )
+        try:
+            time.sleep(0.3)
+            # Legacy fallback applies (no job_id column in header) →
+            # counts the row.
+            assert watcher.spent() == pytest.approx(10.0)
+
+            # Now migrate the file in place. The mid → new helper
+            # rewrites the file (new inode) and adds the job_id
+            # column. Append a job-b row AFTER migration.
+            _migrate_mid_to_new_header(str(csv_path))
+            with csv_path.open("a", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                w.writerow([ts, "gpt-4", "bug", "20.0", "", "", "gpt-4", "job-b"])
+
+            time.sleep(0.6)
+            # After migration the header carries job_id; watcher should
+            # have detected the inode change, re-parsed the header, and
+            # now strictly filter on job_id="job-a". The job-b row must
+            # NOT be counted; the only matching row is the migrated
+            # job-a row (which has an empty job_id after migration, so
+            # it ALSO doesn't match — total spend is $0).
+            spent = watcher.spent()
+            assert spent == 0.0, (
+                f"Finding 3 (9th pass) regression: watcher did not "
+                f"detect the inode change; counted spend={spent} (expected $0 "
+                f"because job-a's migrated row has empty job_id and "
+                f"job-b's row matches the wrong job_id)."
+            )
+        finally:
+            watcher.stop()
 
 
 class TestMidFormatCsvMigration:
@@ -1611,6 +1732,52 @@ class TestMidFormatCsvMigration:
     files. Without migration, two same-command jobs on the same legacy
     CSV count each other's spend.
     """
+
+    def test_track_cost_migrates_legacy_header_when_pdd_job_id_set(
+        self, tmp_path, monkeypatch,
+    ):
+        """Same migration story as the mid-format case but for the
+        OLDEST layout: no attempted_models AND no job_id. Without this
+        migration, two same-command jobs sharing a legacy file count
+        each other's spend even after PDD_JOB_ID is wired through.
+        """
+        import os
+        import click
+        import click.testing
+        from pdd.track_cost import track_cost
+
+        cost_csv = tmp_path / "cost.csv"
+        # Seed a legacy CSV (no attempted_models, no job_id).
+        cost_csv.write_text(
+            "timestamp,model,command,cost,input_files,output_files\n"
+            "2026-01-01T00:00:00.000,old-model,gen,1.5,/i,/o\n",
+            encoding="utf-8",
+        )
+
+        @click.command(name="bug")
+        @click.pass_context
+        @track_cost
+        def bug(ctx):
+            return ("result", 0.25, "gpt-4")
+
+        monkeypatch.setenv("PDD_JOB_ID", "job-a")
+        prior_pytest = os.environ.pop("PYTEST_CURRENT_TEST", None)
+        try:
+            runner = click.testing.CliRunner()
+            runner.invoke(
+                bug, [],
+                obj={"output_cost": str(cost_csv)},
+                standalone_mode=False,
+            )
+        finally:
+            if prior_pytest is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = prior_pytest
+
+        first_line = cost_csv.read_text(encoding="utf-8").splitlines()[0]
+        assert "job_id" in first_line and "attempted_models" in first_line, (
+            f"Finding 2 (9th pass) regression: legacy CSV not migrated to "
+            f"new header. Header was: {first_line!r}"
+        )
 
     def test_track_cost_migrates_mid_header_when_pdd_job_id_set(
         self, tmp_path, monkeypatch,

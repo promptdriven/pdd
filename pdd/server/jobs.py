@@ -919,20 +919,37 @@ class JobManager:
             if self._custom_executor:
                 # Custom executors (the private GitHub App's pdd-issue
                 # path) spawn their own subprocesses; they do NOT go
-                # through _run_click_command. We do NOT mutate
-                # os.environ here because async coroutines running
-                # concurrently (max_concurrent > 1) would race on the
-                # global env var — job A's await yields while job B
-                # overwrites PDD_JOB_ID; A then sees B's id when it
-                # resumes, and B's finally restores env to A's
-                # leaked value. The integration contract is instead:
-                # the custom executor calls `JobManager.subprocess_env(
-                # job)` (or reads `job.id` directly) and passes the
-                # resulting dict as the `env=` kwarg to
-                # `subprocess.Popen` / `asyncio.create_subprocess_*`.
-                # That keeps each spawned child isolated from other
-                # concurrent jobs without any shared mutable state.
-                result = await self._custom_executor(job)
+                # through _run_click_command. The integration
+                # contract is that the custom executor calls
+                # `JobManager.subprocess_env(job)` and passes the
+                # result as `env=` to subprocess.Popen /
+                # asyncio.create_subprocess_*; that is the only
+                # concurrency-safe path for max_concurrent > 1.
+                #
+                # As a SAFETY NET for legacy executors that do not
+                # know about subprocess_env yet, set
+                # os.environ['PDD_JOB_ID'] when (and only when)
+                # max_concurrent == 1 — sequential execution means no
+                # other job can overwrite the env mid-flight. Restore
+                # the prior value (or remove) in finally so the env
+                # does not leak past this job's execution; under
+                # max_concurrent=1 there is no concurrent reader to
+                # race with. Under max_concurrent > 1 we leave
+                # os.environ alone entirely.
+                _env_safety_net = self.max_concurrent == 1
+                _prior_job_id = (
+                    os.environ.get('PDD_JOB_ID') if _env_safety_net else None
+                )
+                if _env_safety_net:
+                    os.environ['PDD_JOB_ID'] = job.id
+                try:
+                    result = await self._custom_executor(job)
+                finally:
+                    if _env_safety_net:
+                        if _prior_job_id is None:
+                            os.environ.pop('PDD_JOB_ID', None)
+                        else:
+                            os.environ['PDD_JOB_ID'] = _prior_job_id
             else:
                 result = await self._run_click_command(job)
 
