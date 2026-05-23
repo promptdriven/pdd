@@ -94,14 +94,23 @@ Changing this contract is a breaking change.
    cost/model from `ctx.obj['partial_cost']` and
    `ctx.obj['last_model']` (published by `llm_invoke` on each
    successful LLM call) so the watcher's running spend stays accurate
-   even when the wrapped Click command crashes after the LLM call. The
-   file is never truncated or rewritten in-place outside the legacy-
-   header migration path. Readers MAY safely tail the file by line
-   count or by `csv.DictReader`.
-6. **Concurrency:** writers append a single row per command invocation under
-   the OS's default open-append semantics. Readers MUST tolerate transient
-   parse errors on a partially-flushed final row (treat as `0.0` and re-read
-   on the next poll).
+   even when the wrapped Click command crashes after the LLM call.
+   The file is APPEND-ONLY for ordinary writes; the ONLY rewrite path
+   is the legacy-header migration described in row 8 below, which
+   atomically (`os.replace`) substitutes a re-formatted copy of the
+   file when `PDD_JOB_ID` is set and the header is in the legacy or
+   mid layout. Readers MAY safely tail the file by line count or by
+   `csv.DictReader`, and MUST tolerate file-inode changes at the
+   stable path (see `cost_budget_watcher_python.prompt` for the
+   matching `stat().st_ino` handling).
+6. **Concurrency:** writers serialise per-file via a POSIX
+   `fcntl.flock` on a sidecar `<csv>.migrate.lock` (see row 8). Each
+   writer holds the lock for the entire read-header → maybe-migrate
+   → append-row block; without this, a contending writer would fall
+   back to a legacy append while a parallel migration's `os.replace`
+   silently deleted the contender's row. Readers MUST tolerate
+   transient parse errors on a partially-flushed final row (treat as
+   `0.0` and re-read on the next poll).
 7. **`job_id`:** read from the `PDD_JOB_ID` environment variable (set by
    `pdd/server/jobs.py` around each subprocess so concurrent same-command
    jobs sharing a CSV can be attributed). Empty string when the env var
@@ -114,29 +123,30 @@ Changing this contract is a breaking change.
    `attempted_models`, no `job_id`) or the MID layout (has
    `attempted_models` but no `job_id`) AND `PDD_JOB_ID` is set on
    the writer's env (signalling a server-managed run that needs
-   per-job isolation), the file is migrated in place — implemented
-   as a pair of helpers (`_migrate_legacy_to_new_header`,
-   `_migrate_mid_to_new_header`) that rewrite the file with the new
-   header, backfill empty values for the added columns on each
-   pre-existing row, write to a per-writer unique tmp path
-   (`<csv>.migrate.tmp.<pid>.<uuid>` — NOT a single shared name),
-   and `os.replace` the tmp file atomically. The whole migration
-   runs under a POSIX `fcntl.flock` on a sidecar
-   `<csv>.migrate.lock` file so two concurrent writers cannot both
-   migrate the same file (the second writer's `os.replace` would
-   otherwise clobber a row the first writer appended between the
-   migration's read and replace). When the lock cannot be acquired
-   (another process holds it, or POSIX locking is unavailable), the
-   helper skips the migration and the calling write re-reads the
-   header to detect the current layout — under lock contention the
-   row is appended in whatever format the file is currently in,
-   and the next write picks up the migrated header. The CSV
-   reader contract permits this one-time legacy-header migration
-   explicitly. Without it, two same-command jobs sharing an
-   explicit legacy/mid CSV would still count each other's spend
-   even after `PDD_JOB_ID` was wired through. When `PDD_JOB_ID` is
-   empty (CLI use outside the server), no migration runs and the
-   row is appended in the existing layout.
+   per-job isolation), the file is migrated in place. Implementation:
+   the entire write block (header detect → migrate → append row)
+   runs under a BLOCKING `fcntl.flock(LOCK_EX)` on a sidecar
+   `<csv>.migrate.lock` file that is NEVER unlinked (unlinking lets
+   a later opener get a different inode at the same path and hold
+   an "exclusive" lock that does not actually serialise with the
+   prior holder). Inside the lock, the migration helpers rewrite
+   the file with the new header, backfill empty values for the
+   added columns on each pre-existing row, write to a per-writer
+   unique tmp path (`<csv>.migrate.tmp.<pid>.<uuid>` — NOT a
+   single shared name), and `os.replace` the tmp file atomically.
+   Contending writers block at the `flock` and proceed only after
+   the holder releases; they then re-read the header and append in
+   the now-migrated layout. No skip-and-fall-back path exists —
+   that pattern previously allowed a contender to append in the
+   legacy format while a parallel migration was about to
+   `os.replace` the file, silently deleting the contender's row.
+   When `fcntl` is unavailable (non-POSIX hosts), the lock yields
+   `False`; the write proceeds without serialisation, with a
+   documented soundness gap that does not apply to the Linux-only
+   GitHub App. When `PDD_JOB_ID` is empty (CLI use outside the
+   server), no migration runs and the row is appended in the
+   existing layout. The CSV reader contract permits this
+   legacy-header migration explicitly.
 
 % Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
 ```@cli.command()

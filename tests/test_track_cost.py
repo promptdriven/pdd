@@ -163,7 +163,7 @@ def test_csv_header_written_if_file_exists_but_empty(mock_click_context, mock_op
          mock.patch.dict(os.environ, {'PDD_OUTPUT_COST_PATH': '/tmp/cost_abc.csv'}):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
-    mock_open_file.assert_called_once_with('/tmp/cost_abc.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/tmp/cost_abc.csv', 'a', newline='', encoding='utf-8')
 
     handle = mock_open_file()
     # Header MUST be written when file is empty (with attempted_models column)
@@ -217,7 +217,7 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path and mode
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -256,7 +256,7 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the path from environment variable
-    mock_open_file.assert_called_once_with('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -293,7 +293,7 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called once
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -332,7 +332,7 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
         result = train_command(mock_ctx, '/path/to/input.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -372,7 +372,7 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
         result = short_result_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -413,7 +413,7 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
         result = process_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt')
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -459,7 +459,7 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
         )
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -536,7 +536,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
         result = mixed_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -590,7 +590,7 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
         result = non_tuple_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()

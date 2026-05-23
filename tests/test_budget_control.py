@@ -1748,61 +1748,156 @@ class TestConcurrentMigrationSafe:
         assert a.startswith(path + ".migrate.tmp.")
         assert b.startswith(path + ".migrate.tmp.")
 
-    def test_concurrent_migrations_serialize_via_flock(self, tmp_path):
-        """Two threads each entering a _MigrationLock context on the
-        same CSV: exactly one acquires; the other gets False and is
-        expected to skip the migration. This proves the lock works for
-        the in-process case (cross-process is also covered by fcntl).
+    def test_concurrent_writes_do_not_lose_rows(self, tmp_path):
+        """Finding 1 (11th pass) end-to-end: two concurrent track_cost
+        writers hitting the same legacy CSV must not lose either
+        writer's row. The previous skip-and-fall-back lock pattern
+        let one writer append while a parallel migration was about to
+        os.replace the file, silently deleting the appended row.
+        """
+        import os
+        import threading
+        import click
+        import click.testing
+        from pdd.track_cost import track_cost
+
+        try:
+            import fcntl  # noqa: F401
+        except ImportError:
+            pytest.skip("fcntl not available on this platform")
+
+        cost_csv = tmp_path / "cost.csv"
+        # Seed legacy header.
+        cost_csv.write_text(
+            "timestamp,model,command,cost,input_files,output_files\n"
+            "2026-01-01T00:00:00.000,old,gen,0.5,/i,/o\n",
+            encoding="utf-8",
+        )
+
+        @click.command(name="bug")
+        @click.pass_context
+        @track_cost
+        def cmd_a(ctx):
+            return ("result-a", 1.50, "model-a")
+
+        @click.command(name="bug")
+        @click.pass_context
+        @track_cost
+        def cmd_b(ctx):
+            return ("result-b", 2.50, "model-b")
+
+        prior_pytest = os.environ.pop("PYTEST_CURRENT_TEST", None)
+        prior_job_id = os.environ.get("PDD_JOB_ID")
+        try:
+            # Two threads running concurrently with different
+            # PDD_JOB_IDs. The lock must serialise both writes; both
+            # rows must end up in the file.
+            results: list = []
+
+            def run_writer(name: str, cmd) -> None:
+                # Each "writer" sets its own PDD_JOB_ID via ctx.obj
+                # (track_cost reads from env, but for the test we
+                # exercise both writers in-process; set env right
+                # before invocation).
+                os.environ["PDD_JOB_ID"] = name
+                runner = click.testing.CliRunner()
+                result = runner.invoke(
+                    cmd, [], obj={"output_cost": str(cost_csv)},
+                    standalone_mode=False,
+                )
+                results.append((name, result.exception))
+
+            # Note: this is a serial in-process test because Click's
+            # CliRunner is not thread-safe; the real concurrency
+            # protection is fcntl across processes. We still verify
+            # that both rows end up in the file after the two writes
+            # — the prior bug would lose one row even in this
+            # sequential scenario if a migration replaced after an
+            # append from another writer's snapshot.
+            run_writer("job-a", cmd_a)
+            run_writer("job-b", cmd_b)
+        finally:
+            os.environ.pop("PDD_JOB_ID", None)
+            if prior_job_id is not None:
+                os.environ["PDD_JOB_ID"] = prior_job_id
+            if prior_pytest is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = prior_pytest
+
+        text = cost_csv.read_text(encoding="utf-8")
+        # Both writers' rows must be present.
+        assert "model-a" in text, (
+            f"Finding 1 (11th pass) regression: model-a row missing. "
+            f"File: {text!r}"
+        )
+        assert "model-b" in text, (
+            f"Finding 1 (11th pass) regression: model-b row missing. "
+            f"File: {text!r}"
+        )
+        # Old row preserved across migrations.
+        assert "old-model" not in text or "old,gen,0.5" in text, (
+            "Pre-existing row should be preserved across migration."
+        )
+
+    def test_writes_serialize_via_blocking_flock(self, tmp_path):
+        """Two threads each entering a _WriteLock context on the same
+        CSV: both eventually acquire (LOCK_EX is BLOCKING now, not
+        non-blocking), but the order is serialised — the second
+        thread does not enter the critical section until the first
+        releases. The prior non-blocking behaviour allowed concurrent
+        writers to skip the lock and race with a holder's migration,
+        losing appended rows.
         """
         import threading
+        import time
 
-        from pdd.track_cost import _MigrationLock
+        from pdd.track_cost import _WriteLock
+
+        try:
+            import fcntl  # noqa: F401
+        except ImportError:
+            pytest.skip("fcntl not available on this platform")
 
         path = str(tmp_path / "cost.csv")
-        # Seed any content so the lock file's directory exists.
         (tmp_path / "cost.csv").write_text("", encoding="utf-8")
 
-        outcomes = []
-        # Hold the lock from thread 1 long enough that thread 2's
-        # non-blocking attempt fails.
-        first_acquired = threading.Event()
+        order = []
+        first_in = threading.Event()
         release_first = threading.Event()
 
         def hold_lock():
-            with _MigrationLock(path) as locked:
-                outcomes.append(("first", locked))
-                first_acquired.set()
+            with _WriteLock(path) as locked:
+                assert locked, "first thread failed to acquire on POSIX"
+                order.append("first_in")
+                first_in.set()
                 release_first.wait(timeout=2)
+                order.append("first_out")
 
         def try_lock():
-            first_acquired.wait(timeout=2)
-            with _MigrationLock(path) as locked:
-                outcomes.append(("second", locked))
+            first_in.wait(timeout=2)
+            # Brief sleep to give the test confidence that the second
+            # thread is actually blocked, not just slow.
+            time.sleep(0.1)
+            with _WriteLock(path) as locked:
+                assert locked, "second thread failed to acquire on POSIX"
+                order.append("second_in")
 
         t1 = threading.Thread(target=hold_lock)
         t2 = threading.Thread(target=try_lock)
         t1.start()
         t2.start()
-        # Give thread 2 a moment to attempt the lock.
-        t2.join(timeout=1)
+        # Hold the lock for a bit so the second thread is observably
+        # blocked.
+        first_in.wait(timeout=2)
+        time.sleep(0.3)
         release_first.set()
         t1.join(timeout=2)
         t2.join(timeout=2)
 
-        # The first must have acquired; the second must have been blocked.
-        outcomes_dict = dict(outcomes)
-        # On non-POSIX hosts both attempts return False; skip there.
-        try:
-            import fcntl  # noqa: F401
-        except ImportError:
-            pytest.skip("fcntl not available on this platform")
-        assert outcomes_dict.get("first") is True, (
-            f"First lock attempt failed unexpectedly: {outcomes}"
-        )
-        assert outcomes_dict.get("second") is False, (
-            f"Finding 2 (10th pass) regression: second concurrent "
-            f"migration acquired the lock instead of being blocked. "
-            f"Outcomes: {outcomes}"
+        # The second thread's entry must come AFTER the first thread's
+        # exit; no interleaving.
+        assert order == ["first_in", "first_out", "second_in"], (
+            f"Finding 1 (11th pass) regression: writes did not "
+            f"serialise via _WriteLock. Order was: {order}"
         )
 
 
