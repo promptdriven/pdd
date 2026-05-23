@@ -2,14 +2,91 @@ import functools
 from datetime import datetime, timezone
 import csv
 import os
+import uuid
 import click
 from rich import print as rprint
 from typing import Any, List, Tuple
+
+try:
+    import fcntl  # POSIX-only; absent on Windows
+    _HAVE_FCNTL = True
+except ImportError:  # pragma: no cover - non-POSIX hosts
+    fcntl = None  # type: ignore[assignment]
+    _HAVE_FCNTL = False
 
 # Tracks cost-CSV paths we've already warned the user about for the
 # "legacy header, attempted_models column will be omitted" case. Keyed on
 # absolute path so a long-running session doesn't spam the same notice.
 _legacy_csv_warned: set = set()
+
+
+class _MigrationLock:
+    """Best-effort POSIX file lock around a cost-CSV migration.
+
+    Uses ``fcntl.flock`` on a sidecar ``.migrate.lock`` file so two
+    processes simultaneously appending to the same CSV cannot run two
+    migrations in parallel and silently lose rows via the ``os.replace``
+    race (each migration reads, only the second writer's replace wins,
+    the first writer's appended row vanishes).
+
+    On non-POSIX hosts or when the lock cannot be acquired, the
+    context manager yields ``False`` so callers can fall back to a
+    no-migration path (write the row in the existing format). The
+    caller MUST treat the ``with`` value as the "did I get the lock?"
+    signal — it is NOT a True/False *acquired-only-mine* flag, it is
+    a *safe-to-mutate-this-file* flag.
+    """
+
+    def __init__(self, csv_path: str) -> None:
+        self._csv_path = csv_path
+        self._lock_path = csv_path + ".migrate.lock"
+        self._fh = None
+        self._acquired = False
+
+    def __enter__(self) -> bool:
+        if not _HAVE_FCNTL:
+            return False
+        try:
+            self._fh = open(self._lock_path, "a+b")
+            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._acquired = True
+            return True
+        except (OSError, BlockingIOError):
+            # Lock held by another process; close handle and report
+            # failure so the caller can skip migration safely.
+            if self._fh is not None:
+                try:
+                    self._fh.close()
+                except OSError:
+                    pass
+                self._fh = None
+            return False
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._fh is not None:
+            if self._acquired:
+                try:
+                    fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+            self._fh = None
+        # Best-effort cleanup of the sidecar lock file. The lock has
+        # already been released; deleting the file is just hygiene.
+        try:
+            os.unlink(self._lock_path)
+        except OSError:
+            pass
+
+
+def _unique_tmp_path(path: str) -> str:
+    """Per-writer tmp filename so two concurrent migrations do not
+    clobber a single shared ``*.migrate.tmp``.
+    """
+    return f"{path}.migrate.tmp.{os.getpid()}.{uuid.uuid4().hex}"
 
 
 def _migrate_legacy_to_new_header(path: str) -> None:
@@ -33,30 +110,40 @@ def _migrate_legacy_to_new_header(path: str) -> None:
         'input_files', 'output_files',
     ]
     new_fieldnames = legacy_fieldnames + ['attempted_models', 'job_id']
-    tmp_path = path + '.migrate.tmp'
-    try:
-        with open(path, 'r', encoding='utf-8', newline='') as src:
-            reader = csv.DictReader(src)
-            rows = list(reader)
-        with open(tmp_path, 'w', encoding='utf-8', newline='') as dst:
-            writer = csv.DictWriter(dst, fieldnames=new_fieldnames)
-            writer.writeheader()
-            for r in rows:
-                r.setdefault('attempted_models', '')
-                r.setdefault('job_id', '')
-                writer.writerow({k: r.get(k, '') for k in new_fieldnames})
-        os.replace(tmp_path, path)
-    except OSError as exc:
+    with _MigrationLock(path) as locked:
+        if not locked:
+            # Another writer is migrating this file concurrently (or
+            # POSIX locking is unavailable). Skipping migration is the
+            # safe choice — the other writer's migration will produce
+            # the new header; this writer will then see the new header
+            # on its NEXT row write and use new_fieldnames. For THIS
+            # row write we fall back to the legacy path that callers
+            # will execute when this helper returns without migrating.
+            return
+        tmp_path = _unique_tmp_path(path)
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        rprint(
-            f"[yellow]Could not migrate legacy cost CSV {path} to add "
-            f"attempted_models + job_id columns: {exc}. Per-job isolation "
-            f"will degrade to command+timestamp filtering for this file."
-            f"[/yellow]"
-        )
+            with open(path, 'r', encoding='utf-8', newline='') as src:
+                reader = csv.DictReader(src)
+                rows = list(reader)
+            with open(tmp_path, 'w', encoding='utf-8', newline='') as dst:
+                writer = csv.DictWriter(dst, fieldnames=new_fieldnames)
+                writer.writeheader()
+                for r in rows:
+                    r.setdefault('attempted_models', '')
+                    r.setdefault('job_id', '')
+                    writer.writerow({k: r.get(k, '') for k in new_fieldnames})
+            os.replace(tmp_path, path)
+        except OSError as exc:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            rprint(
+                f"[yellow]Could not migrate legacy cost CSV {path} to add "
+                f"attempted_models + job_id columns: {exc}. Per-job isolation "
+                f"will degrade to command+timestamp filtering for this file."
+                f"[/yellow]"
+            )
 
 
 def _migrate_mid_to_new_header(path: str) -> None:
@@ -80,32 +167,37 @@ def _migrate_mid_to_new_header(path: str) -> None:
     ]
     mid_fieldnames = legacy_fieldnames + ['attempted_models']
     new_fieldnames = mid_fieldnames + ['job_id']
-    tmp_path = path + '.migrate.tmp'
-    try:
-        with open(path, 'r', encoding='utf-8', newline='') as src:
-            reader = csv.DictReader(src)
-            rows = list(reader)
-        with open(tmp_path, 'w', encoding='utf-8', newline='') as dst:
-            writer = csv.DictWriter(dst, fieldnames=new_fieldnames)
-            writer.writeheader()
-            for r in rows:
-                r.setdefault('job_id', '')
-                # Drop any unknown columns the reader picked up so the
-                # writer does not raise on extras.
-                writer.writerow({k: r.get(k, '') for k in new_fieldnames})
-        os.replace(tmp_path, path)
-    except OSError as exc:
-        # Best-effort: if migration fails (perms, disk full), fall back
-        # to the legacy-fallback path. Clean up the temp file.
+    with _MigrationLock(path) as locked:
+        if not locked:
+            # Another writer is migrating concurrently — same rationale
+            # as in _migrate_legacy_to_new_header.
+            return
+        tmp_path = _unique_tmp_path(path)
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        rprint(
-            f"[yellow]Could not migrate cost CSV {path} to add job_id "
-            f"column: {exc}. Per-job isolation will degrade to "
-            f"command+timestamp filtering for this file.[/yellow]"
-        )
+            with open(path, 'r', encoding='utf-8', newline='') as src:
+                reader = csv.DictReader(src)
+                rows = list(reader)
+            with open(tmp_path, 'w', encoding='utf-8', newline='') as dst:
+                writer = csv.DictWriter(dst, fieldnames=new_fieldnames)
+                writer.writeheader()
+                for r in rows:
+                    r.setdefault('job_id', '')
+                    # Drop any unknown columns the reader picked up so the
+                    # writer does not raise on extras.
+                    writer.writerow({k: r.get(k, '') for k in new_fieldnames})
+            os.replace(tmp_path, path)
+        except OSError as exc:
+            # Best-effort: if migration fails (perms, disk full), fall back
+            # to the legacy-fallback path. Clean up the temp file.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            rprint(
+                f"[yellow]Could not migrate cost CSV {path} to add job_id "
+                f"column: {exc}. Per-job isolation will degrade to "
+                f"command+timestamp filtering for this file.[/yellow]"
+            )
 
 
 def looks_like_file(path_str) -> bool:
@@ -250,55 +342,61 @@ def track_cost(func):
                     if file_has_content:
                         with open(output_cost_path, 'r', encoding='utf-8') as f:
                             first_line = f.readline().strip()
+                        if 'attempted_models' not in first_line:
+                            # Oldest layout — no attempted_models, no job_id.
+                            if job_id:
+                                _migrate_legacy_to_new_header(output_cost_path)
+                            # Re-read the header: migration may have
+                            # been skipped under lock contention (the
+                            # POSIX file lock returned False), in which
+                            # case the file is still in its original
+                            # format and we must NOT write with the
+                            # new_fieldnames layout (would corrupt the
+                            # column count).
+                            with open(output_cost_path, 'r', encoding='utf-8') as f:
+                                first_line = f.readline().strip()
                             if 'attempted_models' not in first_line:
-                                # Oldest layout — no attempted_models, no job_id.
-                                if job_id:
-                                    # Server-managed run with isolation
-                                    # need: migrate legacy → new (adds
-                                    # both attempted_models and job_id
-                                    # columns; existing rows get empty
-                                    # values). Same legacy-header
-                                    # migration path as the mid → new
-                                    # branch below.
-                                    _migrate_legacy_to_new_header(output_cost_path)
-                                    # Header now includes job_id; fall
-                                    # through to the new_fieldnames write.
-                                else:
-                                    fieldnames = legacy_fieldnames
-                                    del row['attempted_models']
-                                    del row['job_id']
-                                    abs_path = os.path.abspath(output_cost_path)
-                                    if abs_path not in _legacy_csv_warned:
-                                        _legacy_csv_warned.add(abs_path)
-                                        rprint(
-                                            "[yellow]Note: cost CSV "
-                                            f"'{output_cost_path}' uses the legacy "
-                                            "header; the new 'attempted_models' "
-                                            "column will not be recorded. Delete or "
-                                            "rename the file to start fresh with the "
-                                            "attempted_models column.[/yellow]"
-                                        )
+                                fieldnames = legacy_fieldnames
+                                del row['attempted_models']
+                                del row['job_id']
+                                abs_path = os.path.abspath(output_cost_path)
+                                if abs_path not in _legacy_csv_warned:
+                                    _legacy_csv_warned.add(abs_path)
+                                    rprint(
+                                        "[yellow]Note: cost CSV "
+                                        f"'{output_cost_path}' uses the legacy "
+                                        "header; the new 'attempted_models' "
+                                        "column will not be recorded. Delete or "
+                                        "rename the file to start fresh with the "
+                                        "attempted_models column.[/yellow]"
+                                    )
                             elif 'job_id' not in first_line:
-                                # Mid-era layout — has attempted_models but
-                                # no job_id. When the env supplies a
-                                # PDD_JOB_ID and this is a server-managed
-                                # run that needs per-job isolation, MIGRATE
-                                # the file in place: rewrite the header to
-                                # add the job_id column and backfill empty
-                                # job_id on existing rows. The CSV reader
-                                # contract allows this explicitly under
-                                # "legacy-header migration path" so it is
-                                # not a breaking change. When PDD_JOB_ID
-                                # is empty (CLI use outside the server),
-                                # leave the file alone and write the row
-                                # without job_id.
-                                if job_id:
-                                    _migrate_mid_to_new_header(output_cost_path)
-                                    # Header now includes job_id; fall
-                                    # through to the new_fieldnames write.
-                                else:
-                                    fieldnames = mid_fieldnames
-                                    del row['job_id']
+                                fieldnames = mid_fieldnames
+                                del row['job_id']
+                            # else: header has job_id → fall through to
+                            # new_fieldnames write.
+                        elif 'job_id' not in first_line:
+                            # Mid-era layout — has attempted_models but
+                            # no job_id. When the env supplies a
+                            # PDD_JOB_ID and this is a server-managed
+                            # run that needs per-job isolation, MIGRATE
+                            # the file in place: rewrite the header to
+                            # add the job_id column and backfill empty
+                            # job_id on existing rows. The CSV reader
+                            # contract allows this explicitly under
+                            # "legacy-header migration path" so it is
+                            # not a breaking change. When PDD_JOB_ID
+                            # is empty (CLI use outside the server),
+                            # leave the file alone and write the row
+                            # without job_id.
+                            if job_id:
+                                _migrate_mid_to_new_header(output_cost_path)
+                            # Re-read to detect lock-contention skip.
+                            with open(output_cost_path, 'r', encoding='utf-8') as f:
+                                first_line = f.readline().strip()
+                            if 'job_id' not in first_line:
+                                fieldnames = mid_fieldnames
+                                del row['job_id']
 
                     with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)

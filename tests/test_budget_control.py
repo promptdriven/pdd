@@ -1669,6 +1669,143 @@ class TestSubprocessEnvHelper:
         assert _os.environ.get("PDD_JOB_ID") is None
 
 
+class TestSafetyNetSetsBothEnvVars:
+    """Finding 1 (10th pass): the safety net under max_concurrent=1 must
+    set BOTH PDD_JOB_ID and PDD_OUTPUT_COST_PATH for legacy executors.
+    Setting only PDD_JOB_ID leaves child track_cost without a cost-CSV
+    path, so it writes no row and the watcher freezes at $0 even
+    though attribution would have been correct.
+    """
+
+    @pytest.mark.asyncio
+    async def test_safety_net_sets_output_cost_path_too(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import os as _os
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        prior_id = _os.environ.pop("PDD_JOB_ID", None)
+        prior_cost = _os.environ.pop("PDD_OUTPUT_COST_PATH", None)
+        observed: dict = {}
+
+        async def custom_executor(job):
+            observed["pdd_job_id"] = _os.environ.get("PDD_JOB_ID")
+            observed["pdd_cost"] = _os.environ.get("PDD_OUTPUT_COST_PATH")
+            return {"cost": 0.0}
+
+        try:
+            mgr = JobManager(max_concurrent=1, executor=custom_executor,
+                              project_root=tmp_path)
+            job = await mgr.submit(
+                "issue", args={}, options={},
+                node_budget=80.0, max_total_cap=400.0,
+            )
+            for _ in range(50):
+                if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                    break
+                await asyncio.sleep(0.05)
+
+            assert observed.get("pdd_job_id") == job.id
+            assert observed.get("pdd_cost") == job.options["output_cost"], (
+                "Finding 1 (10th pass) regression: safety net set "
+                "PDD_JOB_ID but not PDD_OUTPUT_COST_PATH; legacy "
+                "executors' child track_cost would have no path to "
+                "write to and the watcher would see $0."
+            )
+            # finally block restores both.
+            assert _os.environ.get("PDD_JOB_ID") is None
+            assert _os.environ.get("PDD_OUTPUT_COST_PATH") is None
+        finally:
+            _os.environ.pop("PDD_JOB_ID", None)
+            _os.environ.pop("PDD_OUTPUT_COST_PATH", None)
+            if prior_id is not None:
+                _os.environ["PDD_JOB_ID"] = prior_id
+            if prior_cost is not None:
+                _os.environ["PDD_OUTPUT_COST_PATH"] = prior_cost
+
+
+class TestConcurrentMigrationSafe:
+    """Finding 2 (10th pass): two concurrent writers attempting to
+    migrate the same legacy/mid CSV must not lose rows. The migration
+    helpers now take a fcntl.flock and use a per-writer unique tmp
+    filename so the second writer's os.replace cannot clobber a row
+    the first writer appended between read and replace.
+    """
+
+    def test_unique_tmp_path_per_writer(self, tmp_path):
+        from pdd.track_cost import _unique_tmp_path
+
+        path = str(tmp_path / "cost.csv")
+        a = _unique_tmp_path(path)
+        b = _unique_tmp_path(path)
+        assert a != b, (
+            f"Finding 2 (10th pass) regression: _unique_tmp_path returned "
+            f"the same value for two calls — concurrent migrations would "
+            f"collide on the same tmp file."
+        )
+        assert a.startswith(path + ".migrate.tmp.")
+        assert b.startswith(path + ".migrate.tmp.")
+
+    def test_concurrent_migrations_serialize_via_flock(self, tmp_path):
+        """Two threads each entering a _MigrationLock context on the
+        same CSV: exactly one acquires; the other gets False and is
+        expected to skip the migration. This proves the lock works for
+        the in-process case (cross-process is also covered by fcntl).
+        """
+        import threading
+
+        from pdd.track_cost import _MigrationLock
+
+        path = str(tmp_path / "cost.csv")
+        # Seed any content so the lock file's directory exists.
+        (tmp_path / "cost.csv").write_text("", encoding="utf-8")
+
+        outcomes = []
+        # Hold the lock from thread 1 long enough that thread 2's
+        # non-blocking attempt fails.
+        first_acquired = threading.Event()
+        release_first = threading.Event()
+
+        def hold_lock():
+            with _MigrationLock(path) as locked:
+                outcomes.append(("first", locked))
+                first_acquired.set()
+                release_first.wait(timeout=2)
+
+        def try_lock():
+            first_acquired.wait(timeout=2)
+            with _MigrationLock(path) as locked:
+                outcomes.append(("second", locked))
+
+        t1 = threading.Thread(target=hold_lock)
+        t2 = threading.Thread(target=try_lock)
+        t1.start()
+        t2.start()
+        # Give thread 2 a moment to attempt the lock.
+        t2.join(timeout=1)
+        release_first.set()
+        t1.join(timeout=2)
+        t2.join(timeout=2)
+
+        # The first must have acquired; the second must have been blocked.
+        outcomes_dict = dict(outcomes)
+        # On non-POSIX hosts both attempts return False; skip there.
+        try:
+            import fcntl  # noqa: F401
+        except ImportError:
+            pytest.skip("fcntl not available on this platform")
+        assert outcomes_dict.get("first") is True, (
+            f"First lock attempt failed unexpectedly: {outcomes}"
+        )
+        assert outcomes_dict.get("second") is False, (
+            f"Finding 2 (10th pass) regression: second concurrent "
+            f"migration acquired the lock instead of being blocked. "
+            f"Outcomes: {outcomes}"
+        )
+
+
 class TestWatcherDetectsCsvMigration:
     """Finding 3 (9th pass): track_cost migrates a mid-format CSV in
     place via os.replace, which gives the file a new inode. The watcher

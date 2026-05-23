@@ -927,21 +927,32 @@ class JobManager:
                 # concurrency-safe path for max_concurrent > 1.
                 #
                 # As a SAFETY NET for legacy executors that do not
-                # know about subprocess_env yet, set
-                # os.environ['PDD_JOB_ID'] when (and only when)
-                # max_concurrent == 1 — sequential execution means no
-                # other job can overwrite the env mid-flight. Restore
-                # the prior value (or remove) in finally so the env
-                # does not leak past this job's execution; under
-                # max_concurrent=1 there is no concurrent reader to
-                # race with. Under max_concurrent > 1 we leave
-                # os.environ alone entirely.
+                # know about subprocess_env yet, set BOTH
+                # PDD_JOB_ID and PDD_OUTPUT_COST_PATH when (and only
+                # when) max_concurrent == 1 — sequential execution
+                # means no other job can overwrite the env mid-flight.
+                # Setting only PDD_JOB_ID would have track_cost write
+                # no CSV row at all (it gates the write on having an
+                # output path), so the watcher would still see $0.
+                # Restore both in finally so the env does not leak
+                # past this job's execution. Under max_concurrent > 1
+                # we leave os.environ alone entirely; the executor
+                # MUST call subprocess_env().
                 _env_safety_net = self.max_concurrent == 1
                 _prior_job_id = (
                     os.environ.get('PDD_JOB_ID') if _env_safety_net else None
                 )
+                _prior_cost_path = (
+                    os.environ.get('PDD_OUTPUT_COST_PATH')
+                    if _env_safety_net else None
+                )
                 if _env_safety_net:
                     os.environ['PDD_JOB_ID'] = job.id
+                    per_job_csv = (job.options or {}).get('output_cost')
+                    if per_job_csv:
+                        os.environ['PDD_OUTPUT_COST_PATH'] = str(per_job_csv)
+                    else:
+                        os.environ.pop('PDD_OUTPUT_COST_PATH', None)
                 try:
                     result = await self._custom_executor(job)
                 finally:
@@ -950,6 +961,10 @@ class JobManager:
                             os.environ.pop('PDD_JOB_ID', None)
                         else:
                             os.environ['PDD_JOB_ID'] = _prior_job_id
+                        if _prior_cost_path is None:
+                            os.environ.pop('PDD_OUTPUT_COST_PATH', None)
+                        else:
+                            os.environ['PDD_OUTPUT_COST_PATH'] = _prior_cost_path
             else:
                 result = await self._run_click_command(job)
 

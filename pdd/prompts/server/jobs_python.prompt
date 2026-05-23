@@ -177,23 +177,38 @@
     once cumulative spend across nested subprocesses crosses the cap"; for
     single-command jobs, the cap can be overshot by up to one
     subprocess's spend before `on_exceeded` fires.
-  - `PDD_JOB_ID` env propagation. The manager NEVER mutates
-    `os.environ` for per-job data — that races under
-    `max_concurrent>1` (job A's await yields, job B overwrites
-    PDD_JOB_ID, A resumes and reads B's id, B's finally restores
-    A's leaked value). Instead the manager exposes
-    `JobManager.subprocess_env(job, *, base_env=None) ->
-    Dict[str, str]` which returns a per-job env dict containing
-    `PDD_JOB_ID` (always set to `job.id`), `PDD_OUTPUT_COST_PATH`
-    (set to the resolved per-job CSV, or explicitly removed if no
-    per-job CSV was resolved), and any caller-supplied `base_env`.
-    For the default subprocess path (`_run_click_command`) the
-    manager uses this helper itself. For the CUSTOM EXECUTOR path
-    (private GitHub App's `pdd-issue` driver), the executor MUST
-    call `subprocess_env(job)` and pass the result as the `env=`
-    kwarg to `subprocess.Popen` / `asyncio.create_subprocess_*`
-    when spawning child processes. This contract is thread- and
-    coroutine-safe under any concurrency level.
+  - `PDD_JOB_ID` env propagation has two paths.
+
+    (1) **Primary contract — concurrency-safe.** The manager exposes
+        `JobManager.subprocess_env(job, *, base_env=None) ->
+        Dict[str, str]` which returns a per-job env dict containing
+        `PDD_JOB_ID` (always set to `job.id`), `PDD_OUTPUT_COST_PATH`
+        (set to the resolved per-job CSV, or explicitly removed if
+        no per-job CSV was resolved), and any caller-supplied
+        `base_env`. The default subprocess path
+        (`_run_click_command`) uses the helper itself. For the
+        CUSTOM EXECUTOR path (private GitHub App's `pdd-issue`
+        driver), the executor SHOULD call `subprocess_env(job)` and
+        pass the result as the `env=` kwarg to `subprocess.Popen` /
+        `asyncio.create_subprocess_*` when spawning child
+        processes. This is thread- and coroutine-safe at any
+        concurrency level.
+
+    (2) **Safety net — `max_concurrent == 1` only.** Legacy
+        executors that have not been updated to call
+        `subprocess_env(job)` would otherwise lose `PDD_JOB_ID` AND
+        `PDD_OUTPUT_COST_PATH` on subprocesses they spawn (child
+        `track_cost` would have no cost-CSV path and write no row,
+        leaving the watcher at `$0`). When `max_concurrent == 1`,
+        the manager temporarily sets both env vars in
+        `os.environ` for the duration of the custom executor's
+        coroutine (with try/finally restore of the prior values).
+        Sequential execution guarantees no other job overwrites
+        either var mid-flight, so this is race-free under the
+        `max_concurrent == 1` invariant. Under `max_concurrent
+        > 1` the manager leaves `os.environ` untouched — the
+        executor MUST use `subprocess_env()` or per-job
+        isolation breaks.
   - Robust fallback for `rich.console`.
   - Export: Job, JobManager, JobCallbacks.
 

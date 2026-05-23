@@ -134,9 +134,19 @@
     presence in the CSV header — legacy / mid-format CSVs without the
     column keep falling back to the command + timestamp filter rather
     than dropping every row (and freezing spend at `$0`). Concurrent
-    same-command jobs sharing a NEW-format CSV are per-job-isolated;
-    jobs sharing a LEGACY-format CSV are not (the caller opted into
-    the shared file).
+    same-command jobs sharing a NEW-format CSV are per-job-isolated.
+    When `track_cost` migrates a legacy/mid file in place (it
+    rewrites the file via `os.replace` when `PDD_JOB_ID` is set —
+    see `track_cost_python.prompt`'s "Legacy / mid → new header
+    migration" section), the file changes inode at the same path.
+    The watcher MUST detect that via `stat().st_ino` comparison
+    against a cached value and reset its tail state (offset,
+    fieldnames, accumulated spend) so the new header is re-parsed
+    on the next poll and the strict `job_id` filter activates.
+    Without inode-change detection the watcher keeps its pre-
+    migration fieldnames and the post-migration job_id filter
+    never enforces; per-job isolation on shared legacy/mid files
+    silently does not work.
   - **Returns**: a `Watcher` object with `.spent()`, `.update_cap(...)`, and
     `.stop()`.
 
