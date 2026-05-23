@@ -389,6 +389,74 @@ def _has_active_noemit(tokens: List[str]) -> bool:
     return False
 
 
+def _tsconfig_chain_signals_emit(
+    tsconfig_path: Path, worktree: Path, *, _depth: int = 0
+) -> bool:
+    """Return True iff ``tsconfig_path`` or any ``extends`` ancestor
+    sets ``incremental: true`` or ``composite: true``.
+
+    Both flags cause TypeScript to write ``tsconfig.tsbuildinfo``
+    (and ``composite: true`` also conflicts with ``--noEmit`` and
+    forces emit), so a script-based ``tsc`` gate cannot safely run
+    on such a repo: we cannot inject ``--incremental false`` /
+    ``--composite false`` like the direct gate does. iter-29
+    Finding 1: the iter-28 top-level-only scan missed extends-chain
+    bases (``tsconfig.base.json`` and friends).
+
+    Bounded by ``_MAX_TSCONFIG_EXTENDS_DEPTH`` to defend against
+    cyclic / pathological extends chains and to keep discovery
+    fast on the common case.
+    """
+    if _depth > _MAX_TSCONFIG_EXTENDS_DEPTH:
+        return False
+    if not tsconfig_path.is_file():
+        return False
+    try:
+        text = tsconfig_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if re.search(r'"incremental"\s*:\s*true', text) or re.search(
+        r'"composite"\s*:\s*true', text
+    ):
+        return True
+    # ``extends`` can be a single string or an array of strings.
+    # Regex is good enough — tsconfig.json allows comments + trailing
+    # commas so a strict json.loads would reject many real files.
+    extends_targets: List[str] = []
+    single = re.search(r'"extends"\s*:\s*"([^"]+)"', text)
+    if single:
+        extends_targets.append(single.group(1))
+    array = re.search(r'"extends"\s*:\s*\[([^\]]+)\]', text)
+    if array:
+        for m in re.finditer(r'"([^"]+)"', array.group(1)):
+            extends_targets.append(m.group(1))
+    for target in extends_targets:
+        # Only follow relative-path extends. Package-name extends
+        # (``"@tsconfig/strictest"``) come from ``node_modules`` and
+        # are not PR-controllable in the same way; we trust them.
+        if not (target.startswith("./") or target.startswith("../") or target.startswith("/")):
+            continue
+        candidate = (tsconfig_path.parent / target).resolve()
+        # Defense in depth: refuse to leave the worktree.
+        try:
+            candidate.relative_to(worktree.resolve())
+        except ValueError:
+            continue
+        # Allow either explicit path or ``<path>/tsconfig.json``.
+        if candidate.is_dir():
+            candidate = candidate / "tsconfig.json"
+        if not candidate.name.endswith(".json"):
+            candidate = candidate.with_suffix(candidate.suffix + ".json")
+        if _tsconfig_chain_signals_emit(
+            candidate, worktree, _depth=_depth + 1
+        ):
+            return True
+    return False
+
+
+_MAX_TSCONFIG_EXTENDS_DEPTH = 8
+
+
 def _discover_npm_gates(
     worktree: Path, changed_files: Sequence[str] = ()
 ) -> List[Gate]:
@@ -439,47 +507,36 @@ def _discover_npm_gates(
         or path.startswith("tsconfig.")
         for path in pr_changed_set
     )
-    # Iter-28 Finding 3: a PR can poison a JavaScript module that a
-    # config file references via ``require``/``import`` — e.g. a
-    # stable ``prettier.config.cjs`` pulling in PR-modified
-    # ``./local-plugin.cjs``. The iter-27 config-filename skip
-    # misses that path; widen the trigger to ANY PR-modified
-    # ``.cjs``/``.mjs`` file (those extensions are predominantly
-    # tooling/config code) plus ``.js`` files at the repo root
-    # (where config-related JS typically lives). Application
-    # ``.js`` files in subdirectories still let the gate run so we
-    # do not over-skip on JS-heavy repos.
+    # Iter-29 Finding 2: prettier/eslint configs ``require()``
+    # arbitrary local JavaScript — including files in subdirectories
+    # like ``./src/plugin.js``. The iter-28 heuristic that allowed
+    # subdir ``.js`` was too lax: a stable ``prettier.config.cjs``
+    # loading ``./src/plugin.js`` lets a PR modifying ONLY that
+    # plugin module achieve RCE through the gate even though no
+    # config filename changed. Widen the skip to ANY PR-modified
+    # ``.cjs`` / ``.mjs`` / ``.js`` file. This deliberately
+    # over-skips on JS-heavy PRs because we cannot statically
+    # follow the require chain — the safety contract from issue
+    # #1092 favours fewer-gates-running over potential RCE through
+    # PR-controlled tool config plugins.
     def _is_plugin_loadable(path: str) -> bool:
-        if path.endswith((".cjs", ".mjs")):
-            return True
-        if path.endswith(".js") and "/" not in path:
-            return True
-        return False
+        return path.endswith((".cjs", ".mjs", ".js"))
 
     js_plugin_module_changed = any(
         _is_plugin_loadable(path) for path in pr_changed_set
     )
-    # Iter-28 Finding 1: a script-based tsc gate runs the operator's
-    # script body unchanged, so even ``tsc --noEmit`` writes
-    # ``tsconfig.tsbuildinfo`` when the tsconfig sets
-    # ``incremental: true``. The direct gate injects
-    # ``--incremental false`` and a /dev/null buildinfo file, but
-    # we cannot rewrite operator-supplied script bodies. When the
-    # tsconfig signals an emit-or-buildinfo-producing mode
-    # (``incremental: true`` OR ``composite: true``), refuse to
-    # discover the tsc-flavoured script gates. The direct gate's
-    # own argv-level safeguards cover the non-script path.
-    tsconfig_path = worktree / "tsconfig.json"
-    tsconfig_signals_emit = False
-    if tsconfig_path.is_file():
-        try:
-            tscfg_text = tsconfig_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            tscfg_text = ""
-        if re.search(r'"incremental"\s*:\s*true', tscfg_text) or re.search(
-            r'"composite"\s*:\s*true', tscfg_text
-        ):
-            tsconfig_signals_emit = True
+    # Iter-28 Finding 1 + iter-29 Finding 1: a script-based tsc gate
+    # runs the operator's unmodified argv, so we cannot inject
+    # ``--incremental false`` / ``--tsBuildInfoFile <devnull>`` like
+    # the direct gate does. When ANY tsconfig in the extends chain
+    # sets ``incremental: true`` or ``composite: true``, running
+    # the script writes ``tsconfig.tsbuildinfo`` into the worktree.
+    # iter-28 only checked the top-level tsconfig.json; iter-29
+    # walks the extends chain so a base config a level (or two)
+    # below still trips the skip.
+    tsconfig_signals_emit = _tsconfig_chain_signals_emit(
+        worktree / "tsconfig.json", worktree
+    )
     # Map recognized scripts to which config-class they load. A
     # script can load multiple — e.g. ``lint:check`` could be
     # eslint or prettier — but we conservatively skip when ANY
@@ -574,21 +631,26 @@ def _discover_npm_gates(
             if isinstance(value, dict):
                 deps.update(value)
         tsc_local = worktree / "node_modules" / "typescript" / "bin" / "tsc"
+        # Iter-29 Finding 3: the local-binary precondition trusted
+        # ``node_modules/typescript/bin/tsc`` to be operator-supplied.
+        # A fork PR can ADD or MODIFY that file (or
+        # ``node_modules/.bin/tsc``) — the gate would then execute
+        # PR-controlled JavaScript via npx. Skip the gate when the
+        # PR diff includes ANY path under ``node_modules/typescript/``
+        # or ``node_modules/.bin/tsc``-like binaries.
+        tsc_binary_pr_touched = any(
+            path.startswith("node_modules/typescript/")
+            or path.startswith("node_modules/.bin/tsc")
+            for path in pr_changed_set
+        )
         if (
             "typescript" in deps
             and tsc_local.is_file()
             and shutil.which("npx")
             # Iter-27 Finding 3 + iter-28 Finding 2: skip when PR
-            # modified tsconfig OR the top-level tsconfig signals
-            # emit/buildinfo (we override with --composite false /
-            # --incremental false in the argv, but if the operator's
-            # extends chain sets composite: true a level deeper, the
-            # override is still safer than producing a false
-            # TS6379 blocker). The argv flags are belt-and-braces;
-            # this skip is the load-bearing safety guard for
-            # extends-chain composite, which we cannot detect by
-            # reading only the top-level tsconfig.
+            # modified tsconfig (RCE via compilerOptions/plugins).
             and not tsconfig_changed
+            and not tsc_binary_pr_touched
         ):
             gates.append(
                 Gate(

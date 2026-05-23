@@ -370,6 +370,72 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_npm_tsc_script_gate_skipped_when_extends_chain_signals_incremental(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-29 Finding 1: a top-level ``tsconfig.json`` with no
+        ``incremental``/``composite`` field but ``extends:
+        ./tsconfig.base.json`` where the base sets
+        ``incremental: true`` still emits ``tsconfig.tsbuildinfo``
+        when ``npm run typecheck`` runs. The script gate must walk
+        the extends chain to detect that.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.base.json").write_text(
+            '{"compilerOptions": {"incremental": true}}\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"extends": "./tsconfig.base.json"}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        assert "npm:typecheck" not in {g.name for g in gates}
+
+    def test_tsc_gate_skipped_when_pr_touches_local_tsc_binary(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-29 Finding 3: the direct tsc-noemit gate trusts
+        ``node_modules/typescript/bin/tsc`` to be operator-supplied,
+        but a fork PR can ADD or MODIFY that path (the file is
+        nominally part of installed dependencies, but the PR file
+        list is the source of truth). Skip when the PR diff
+        contains anything under ``node_modules/typescript/`` or
+        ``node_modules/.bin/tsc``.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0", "scripts": {},
+                "devDependencies": {"typescript": "^5.0.0"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text("{}\n", encoding="utf-8")
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        for changed in (
+            ("node_modules/typescript/bin/tsc",),
+            ("node_modules/typescript/package.json",),
+            ("node_modules/.bin/tsc",),
+        ):
+            gates = discover_gates(tmp_path, changed_files=changed)
+            assert "tsc-noemit" not in {g.name for g in gates}, (
+                f"direct tsc gate must skip when PR touches: {changed}"
+            )
+
     def test_npm_tsc_script_gate_skipped_when_tsconfig_signals_incremental_emit(
         self, tmp_path: Path
     ) -> None:
@@ -491,14 +557,43 @@ class TestDiscoverGates:
         )
         assert "npm:format:check" not in [g.name for g in gates]
 
-    def test_prettier_script_gate_still_fires_on_application_js_change(
+    def test_prettier_script_gate_skipped_on_any_js_change(
         self, tmp_path: Path
     ) -> None:
-        """Negative test for Finding 3: don't over-skip. Application
-        ``.js`` files in subdirectories are far more common than
-        plugin imports and skipping every JS-touching PR would
-        gut the gate. Only repo-root ``.js`` and ``.cjs``/``.mjs``
-        anywhere trip the skip."""
+        """Iter-29 Finding 2 (revises iter-28 behaviour). Prettier
+        configs ``require()`` arbitrary local JavaScript — including
+        files in subdirectories like ``./src/plugin.js``. The
+        iter-28 ``allow subdir .js`` heuristic was too lax: a
+        stable ``prettier.config.cjs`` pulling in PR-modified
+        ``./src/plugin.js`` still RCEs. The safer contract is to
+        skip the prettier/eslint script gate whenever ANY ``.js`` /
+        ``.cjs`` / ``.mjs`` file changed in the PR — we cannot
+        statically follow the require chain.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        # Subdirectory .js — iter-28 let this through; iter-29
+        # skips it.
+        for changed in (
+            ("src/app.js",),
+            ("src/components/foo.js",),
+            ("packages/x/src/y.js",),
+        ):
+            gates = discover_gates(tmp_path, changed_files=changed)
+            assert "npm:format:check" not in {g.name for g in gates}, (
+                f"prettier script gate must skip on JS change: {changed}"
+            )
+
+    def test_prettier_script_gate_still_fires_on_non_js_pr(
+        self, tmp_path: Path
+    ) -> None:
+        """Inverse of the above: a PR that touches only non-JS
+        files (markdown, YAML, Python) still gets the gate."""
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
@@ -508,10 +603,9 @@ class TestDiscoverGates:
         )
         gates = discover_gates(
             tmp_path,
-            changed_files=("src/app.js", "src/components/foo.js"),
+            changed_files=("README.md", "docs/guide.md", "pkg/foo.py"),
         )
-        names = [g.name for g in gates]
-        assert "npm:format:check" in names
+        assert "npm:format:check" in {g.name for g in gates}
 
     def test_tsc_noemit_substring_bypass_rejected(self) -> None:
         """Iter-27 Finding 2: ``tsc --noEmitOnError`` is a DIFFERENT
