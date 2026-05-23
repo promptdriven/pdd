@@ -235,8 +235,35 @@ async def websocket_job_stream(
         await manager.subscribe_to_job(websocket, job_id)
         console.print(f"[cyan]WS:[/cyan] Client connected to stream for job {job_id}")
 
-        # If job is already completed, send the result immediately
-        if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+        # If job is already in a terminal state, send the result immediately.
+        # BUDGET_EXCEEDED is terminal too — without it here a client
+        # reconnecting after the watcher tripped the cap would hang
+        # waiting for input, since the input loop below does not
+        # treat the job as finished.
+        if job.status in [
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+            JobStatus.BUDGET_EXCEEDED,
+        ]:
+            # For BUDGET_EXCEEDED, send the typed budget_exceeded
+            # message FIRST so a reconnecting client can render the
+            # cap-trip UI without an extra REST round-trip. Then
+            # send the standard `complete` summary and close.
+            if job.status == JobStatus.BUDGET_EXCEEDED:
+                try:
+                    budget_msg = BudgetExceededMessage(
+                        job_id=job.id,
+                        command=job.command,
+                        spent=float(job.cost or 0.0),
+                        effective_cap=float(job.cost or 0.0),
+                        node_budget=job.node_budget,
+                        max_total_cap=job.max_total_cap,
+                        node_count=job.node_count,
+                    )
+                    await websocket.send_text(budget_msg.model_dump_json())
+                except Exception:  # noqa: BLE001
+                    pass
             result_msg = WSMessage(
                 type="complete",
                 data={

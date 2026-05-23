@@ -3361,3 +3361,161 @@ class TestBudgetExceededBroadcastsToWebSocket:
         assert msg.node_budget == 80.0
         assert msg.max_total_cap == 400.0
         assert msg.node_count == 3
+
+
+class TestStartWatcherIsIdempotent:
+    """Fifth-pass finding A: ``_start_watcher_for`` used to overwrite
+    ``self._watchers[job.id]`` without stopping the previous Watcher.
+    A second call (e.g. update_budget started a watcher on a queued
+    job, then _execute_job started another when the job actually
+    ran) would orphan the first daemon thread; it kept polling
+    forever, double-counted spend, and could fire on_exceeded
+    against a job whose status had already moved on.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_orphan_watcher_when_started_twice(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        async def slow_executor(job):
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.3)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        job = await mgr.submit("change", args={}, options={})
+
+        # Force two consecutive _start_watcher_for calls on the SAME
+        # job (the queued-then-running scenario the bug reproduces).
+        job.budget_cap = 5.0
+        mgr._start_watcher_for(job)
+        first = mgr._watchers.get(job.id)
+        assert first is not None
+        first_thread = first._thread
+
+        # Second start: the new watcher must replace the first AND the
+        # first daemon thread must be told to stop.
+        mgr._start_watcher_for(job)
+        second = mgr._watchers.get(job.id)
+        assert second is not None
+        assert second is not first, (
+            "second _start_watcher_for did not create a new Watcher; "
+            "the old one may still be the active handle."
+        )
+        # Give the first watcher's poll loop a couple ticks to observe
+        # its stop event (poll_interval default 2.0s; wait a little
+        # more than that).
+        import time as _time
+        for _ in range(60):
+            if not first_thread.is_alive():
+                break
+            _time.sleep(0.05)
+        assert not first_thread.is_alive(), (
+            "Finding A regression: previous Watcher's daemon thread is "
+            "still alive after _start_watcher_for was called again — "
+            "it was orphaned instead of stopped."
+        )
+
+
+class TestWebSocketTreatsBudgetExceededAsTerminal:
+    """Fifth-pass finding B: ``websocket_job_stream`` used to enumerate
+    only COMPLETED/FAILED/CANCELLED for the "job already done — send
+    final + close" branch. A client reconnecting after the watcher
+    tripped the cap would fall through to the input-loop branch and
+    hang. Adding BUDGET_EXCEEDED to the terminal set makes the
+    reconnect path send the typed budget_exceeded payload + complete
+    summary + close.
+    """
+
+    def test_terminal_branch_includes_budget_exceeded(self):
+        """Read-only contract check: the source-level enumeration
+        must cover BUDGET_EXCEEDED. We grep the source rather than
+        spinning up a real WebSocket so the test stays deterministic
+        and dependency-light."""
+        ws_path = Path(__file__).resolve().parents[1] / "pdd" / "server" / "routes" / "websocket.py"
+        body = ws_path.read_text()
+        # Locate the terminal-status check we care about by anchoring
+        # on the JobStatus.COMPLETED literal that follows
+        # "If job is already" in the source.
+        idx = body.find("If job is already")
+        assert idx > 0, "could not locate the reconnect terminal-branch"
+        # The next ~600 chars should mention BUDGET_EXCEEDED.
+        window = body[idx:idx + 600]
+        assert "BUDGET_EXCEEDED" in window, (
+            "Finding B regression: websocket reconnect branch does "
+            "not include BUDGET_EXCEEDED in its terminal-state list; "
+            "a client reconnecting after the watcher tripped would "
+            "hang on receive_text."
+        )
+
+
+class TestBudgetExceededEmittedBeforeComplete:
+    """Fifth-pass finding C: ``_handle_budget_exceeded`` used to
+    ``await self.cancel(job_id)`` before
+    ``self.callbacks.emit_budget_exceeded(...)``. Cancel injects
+    asyncio.CancelledError into the executor task, whose finally
+    block then emits ``complete`` BEFORE the budget callback gets
+    its turn on the loop. Subscribers that close on ``complete``
+    miss the typed event. The handler now emits the typed callback
+    first, then cancels.
+    """
+
+    @pytest.mark.asyncio
+    async def test_emit_order_budget_then_complete(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        events: list = []
+
+        async def slow_executor(job):
+            cost_csv_path = Path(job.options["output_cost"])
+            import asyncio as _asyncio
+            # Let watcher start, then write a row that crosses the cap.
+            await _asyncio.sleep(0.2)
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            row = {
+                "timestamp": ts, "model": "m", "command": "change",
+                "cost": "50.0", "input_files": "", "output_files": "",
+                "attempted_models": "m", "job_id": job.id,
+            }
+            with cost_csv_path.open("w", newline="", encoding="utf-8") as fh:
+                import csv as _csv
+                w = _csv.DictWriter(fh, fieldnames=list(row.keys()))
+                w.writeheader()
+                w.writerow(row)
+            # Sleep enough for the watcher daemon to poll + fire.
+            await _asyncio.sleep(2.5)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+
+        async def _on_complete(job):
+            events.append(("complete", job.status))
+
+        async def _on_budget(job_id, spent, cap):
+            events.append(("budget", job_id, spent, cap))
+
+        mgr.callbacks.on_complete(_on_complete)
+        mgr.callbacks.on_budget_exceeded(_on_budget)
+
+        job = await mgr.submit("change", args={}, options={}, budget_cap=10.0)
+        import asyncio as _asyncio
+        if job.id in mgr._tasks:
+            try:
+                await _asyncio.wait_for(mgr._tasks[job.id], timeout=20.0)
+            except (_asyncio.CancelledError, Exception):
+                pass
+
+        # The "budget" event MUST be observed BEFORE "complete" so
+        # subscribers that close on `complete` still receive the typed
+        # budget_exceeded payload.
+        kinds = [e[0] for e in events]
+        assert "budget" in kinds and "complete" in kinds, (
+            f"missing expected events; got {events!r}"
+        )
+        budget_idx = kinds.index("budget")
+        complete_idx = kinds.index("complete")
+        assert budget_idx < complete_idx, (
+            f"Finding C regression: complete fired before budget_exceeded "
+            f"(events={events!r}). Subscribers closing on complete would "
+            f"miss the typed event."
+        )

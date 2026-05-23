@@ -705,9 +705,26 @@ class JobManager:
         return derived
 
     def _start_watcher_for(self, job: Job) -> None:
-        """Wire ``cost_budget_watcher`` around a job that has an effective cap."""
+        """Wire ``cost_budget_watcher`` around a job that has an effective cap.
+
+        Idempotent: if a watcher is already running for this job (e.g. a
+        late `/pdd budget N` started one while the job was still queued
+        AND `_execute_job` is now calling us a second time on the same
+        job), stop the existing watcher first. Without this, the dict
+        entry is replaced and the previous Watcher's daemon thread is
+        orphaned — it keeps polling the CSV forever, double-counts
+        rows against any still-active sibling watcher, and may even
+        fire `on_exceeded` against a job whose status path has moved
+        on (the handler then no-ops, masking the leak).
+        """
         if _watch_csv is None or _effective_cap_fn is None:
             return
+        # Stop any pre-existing watcher BEFORE computing a new cap so
+        # the reset path always runs (avoids a code path where the
+        # cap-recompute below returns None and we silently leak the
+        # old watcher because we never reached the new-watcher code
+        # that would have re-keyed `self._watchers`).
+        self._stop_watcher_for(job.id)
         cap = _effective_cap_fn(
             job.command,
             budget_cap=job.budget_cap,
@@ -849,13 +866,25 @@ class JobManager:
                 )
             except KeyError:
                 pass
+        # Emit the typed budget_exceeded callback BEFORE cancelling. cancel()
+        # injects asyncio.CancelledError into the executor task, which
+        # promptly runs `_execute_job`'s finally block and emits the
+        # `complete` message via `callbacks.emit_complete`. If we awaited
+        # emit_budget_exceeded AFTER cancel(), the event loop could
+        # schedule the cancellation handler and emit_complete first,
+        # delivering `complete` to subscribers before the typed
+        # `budget_exceeded` message. Subscribers that close on
+        # `complete` (the common client pattern) would never see the
+        # cap-trip event. Reordering puts the typed event first so the
+        # subscriber's last-seen pre-close event carries the budget
+        # context.
+        await self.callbacks.emit_budget_exceeded(
+            job_id, spent, current_cap if current_cap is not None else spent,
+        )
         try:
             await self.cancel(job_id)
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Cancel after budget exceeded failed: {exc}[/red]")
-        await self.callbacks.emit_budget_exceeded(
-            job_id, spent, current_cap if current_cap is not None else spent,
-        )
 
     async def submit(
         self,
