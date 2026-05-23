@@ -61,7 +61,7 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed
+  1.  Detects agentic CLI tools (Claude, Antigravity `agy` preferred / legacy Gemini `gemini` fallback, Codex, OpenCode) and offers installation and credential configuration if needed. The Google provider supports both the Antigravity CLI (installed via `curl -fsSL https://antigravity.google/install.sh | sh`) and the legacy Gemini CLI (`npm install -g @google/gemini-cli`); set `PDD_AGENTIC_PROVIDER=antigravity` or `PDD_GOOGLE_CLI=agy|gemini|auto` to control selection. Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; the legacy `gemini` binary remains the safe rollback (`PDD_GOOGLE_CLI=gemini`).
   2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
   4. Optionally creates a `.pddrc` project config
