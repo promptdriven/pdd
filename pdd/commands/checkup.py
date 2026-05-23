@@ -10,6 +10,7 @@ from ..agentic_checkup import run_agentic_checkup
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from .contracts import contracts_group
 from .prompt import prompt_lint
 
 
@@ -291,6 +292,8 @@ def checkup(
     architecture.json entries against module prompt <include> tags.
     Prompt lint:
       pdd checkup lint [OPTIONS] TARGET
+    Contract checks:
+      pdd checkup contract check [OPTIONS] TARGET
     """
     ctx.ensure_object(dict)
 
@@ -301,6 +304,19 @@ def checkup(
         exit_code = prompt_lint.main(
             args=lint_args,
             prog_name="pdd checkup lint",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+    if target in {"contract", "contracts"}:
+        contract_args = list(ctx.args)
+        if strict:
+            contract_args.insert(0, "--strict")
+        exit_code = contracts_group.main(
+            args=contract_args,
+            prog_name=f"pdd checkup {target}",
             standalone_mode=False,
             obj=ctx.obj,
         )
