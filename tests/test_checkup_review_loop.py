@@ -11314,6 +11314,77 @@ class TestReviewLoopDeterministicGates:
         assert refresh_calls, "base-ref refresh must run when gates are on"
         assert "gate:prettier-check" in report
 
+    def test_gate_discovery_crash_does_not_leak_exception_via_debug_log(
+        self, tmp_path: Path, monkeypatch: Any, caplog: Any
+    ) -> None:
+        """Iter-40 Finding 3: the gate discovery/run_gates crash paths
+        previously emitted ``logger.debug(..., exc_info=True)`` which
+        re-renders the raw exception message at DEBUG level —
+        bypassing the WARNING-line scrub above. A token in the
+        exception message (e.g. a path string that surfaced a Bearer
+        header) would land in DEBUG-captured log streams. Verify that
+        a crash whose exception contains a token-shaped string does
+        NOT cause the token to appear in captured DEBUG logs."""
+        import logging
+        from pdd import checkup_gates as cg
+
+        SECRET = "sk-proj-LEAK-CANARY-1234567890abcdef1234567890abcdef"
+
+        def _exploding_discover(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError(
+                f"discovery failed while reading {SECRET}/auth-cache"
+            )
+
+        # ``_enforce_gates_before_clean`` imports ``discover_gates``
+        # lazily from ``pdd.checkup_gates`` — patch at the source.
+        monkeypatch.setattr(cg, "discover_gates", _exploding_discover)
+
+        # Build a minimal state for the helper. The dataclass uses
+        # field defaults for everything; only ``enable_gates`` needs to
+        # be True (default).
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+
+        config = ReviewLoopConfig(enable_gates=True, gate_timeout=10.0)
+        state = ReviewLoopState()
+
+        with caplog.at_level(logging.DEBUG, logger="pdd.checkup_review_loop"):
+            findings = _enforce_gates_before_clean(
+                worktree=tmp_path,
+                config=config,
+                state=state,
+                reviewer="codex",
+                round_number=1,
+                mode="review",
+                artifacts_dir=tmp_path / "artifacts",
+                pr_metadata=None,
+            )
+
+        # The helper MUST produce a synthetic blocker finding (fail
+        # closed) without re-raising.
+        assert findings, "gate discovery crash must produce a blocker finding"
+
+        # The captured log output (WARNING + DEBUG) MUST NOT contain
+        # the secret.
+        captured = "\n".join(rec.getMessage() for rec in caplog.records)
+        # Also walk traceback renderings on any DEBUG record that
+        # carries ``exc_info``.
+        for rec in caplog.records:
+            if rec.exc_info:
+                import traceback
+                tb = "".join(
+                    traceback.format_exception(*rec.exc_info)
+                )
+                captured = captured + "\n" + tb
+        assert SECRET not in captured, (
+            "iter-40 Finding 3: exception text containing a secret leaked "
+            "into DEBUG log capture; check exc_info=True on log calls in "
+            "_enforce_gates_before_clean"
+        )
+
 
 class TestPrChangedFilesScannerBaseLocalRef:
     """Iter-18 Findings 2+3: the changed-file scanners that scope

@@ -34,6 +34,16 @@ Trust-boundary invariants:
   ``COREPACK_ENABLE_AUTO_PIN=0`` keeps Corepack-managed yarn/pnpm from
   mutating ``package.json`` (auto-pinning a ``packageManager`` field
   on first run) inside the loop-owned worktree (iter-39 Finding 1).
+* PATH is sanitized: empty entries, ``.``, relative entries, and any
+  entry that resolves inside the worktree are stripped before the
+  gate runs and before any tool-resolution (``shutil.which``) call
+  inside discovery. An operator with ``PATH=.:$PATH`` (or a PATH
+  entry that points at the loop's worktree) would otherwise let a
+  PR-shipped ``./mypy`` / ``./npm`` / ``./npx`` shim become the gate
+  binary (iter-40 Finding 1). Tool argv stored on ``Gate.cmd`` is
+  ALWAYS the absolute path returned by ``shutil.which`` against the
+  sanitized PATH, never the bare tool name, so ``subprocess.run``
+  cannot re-consult PATH at execution time.
 * The runner's ``cwd`` is always the loop-owned PR worktree.
 """
 
@@ -858,6 +868,40 @@ def _discover_npm_gates(
             "config can redirect script execution (iter-38 Finding 1)"
         )
         return []
+    # iter-40 Finding 2: a PR that modifies ``package.json`` can set or
+    # alter the top-level ``packageManager`` field. Corepack (default in
+    # Node 16+) then fetches and runs THAT PR-selected
+    # package-manager version on first invocation — turning the
+    # "local deterministic" gate into a registry download + exec of a
+    # PR-chosen binary, even if the validated script body is safe.
+    # iter-38 already covers ``.npmrc`` / ``.pnpmrc`` / ``.yarnrc`` /
+    # ``.yarnrc.yml`` / ``.yarn/``; ``package.json`` itself was
+    # explicitly scope-out in iter-38 but the corepack-via-
+    # ``packageManager`` vector was raised as a blocker in pass 4. Fail
+    # closed on any PR diff that touches ``package.json``.
+    if any(
+        path == "package.json" or path.endswith("/package.json")
+        for path in pr_changed_set
+    ):
+        logger.debug(
+            "checkup-gates: skipping all npm-family gates — PR modified "
+            "package.json (corepack-via-packageManager risk; iter-40 Finding 2)"
+        )
+        return []
+    # iter-40 Finding 1: resolve the runner to an absolute path against
+    # a sanitized PATH so a PR-shipped ``./npm`` / ``./pnpm`` / ``./yarn``
+    # / ``./bun`` shim cannot become the gate binary under
+    # ``PATH=.:$PATH``. Skip the entire npm path when the resolution
+    # fails (fail closed: unresolvable runner means we cannot ship a
+    # safe gate).
+    runner_abs = _resolve_tool(runner, worktree)
+    if runner_abs is None:
+        logger.debug(
+            "checkup-gates: skipping all npm-family gates — runner %r not on "
+            "sanitized PATH (iter-40 Finding 1)",
+            runner,
+        )
+        return []
     # Iter-27 Finding 3: PR-modified tool config files are RCE-equivalent.
     # ``prettier.config.{js,cjs,mjs,ts}``, ``.prettierrc.{js,cjs,mjs,ts}``,
     # ``eslint.config.{js,cjs,mjs,ts}``, ``.eslintrc.{js,cjs,mjs}``,
@@ -1096,7 +1140,12 @@ def _discover_npm_gates(
         gates.append(
             Gate(
                 name=f"npm:{script_name}",
-                cmd=[runner, "run", script_name],
+                # iter-40 Finding 1: store the absolute path so
+                # subprocess.run cannot re-consult PATH at execution
+                # time. The required_fix_hint keeps the bare name
+                # because it's documentation for a human operator
+                # running in their own shell.
+                cmd=[runner_abs, "run", script_name],
                 source=f"package.json:scripts.{script_name}",
                 required_fix_hint=(
                     f"Run `{runner} run {script_name}` locally and address the "
@@ -1139,10 +1188,14 @@ def _discover_npm_gates(
         # compiler would load via tsconfig. Generalise the guard:
         # skip the direct gate whenever the PR touched anything
         # under ``node_modules/``.
+        # iter-40 Finding 1: resolve ``npx`` to an absolute path against
+        # the sanitized PATH so a PR ``./npx`` shim cannot become the
+        # gate binary under ``PATH=.:$PATH``.
+        npx_abs = _resolve_tool("npx", worktree)
         if (
             "typescript" in deps
             and tsc_local.is_file()
-            and shutil.which("npx")
+            and npx_abs
             # Iter-27 Finding 3 + iter-28 Finding 2: skip when PR
             # modified tsconfig (RCE via compilerOptions/plugins).
             and not tsconfig_changed
@@ -1167,7 +1220,7 @@ def _discover_npm_gates(
                     # actually installed.
                     name="tsc-noemit",
                     cmd=[
-                        "npx",
+                        npx_abs,
                         "--no-install",
                         "tsc",
                         "--noEmit",
@@ -1332,16 +1385,23 @@ def _discover_python_gates(
     # and potentially altering its behaviour. ruff, black, and mypy
     # all support the POSIX-standard ``--`` separator to mark the end
     # of options.
+    # iter-40 Finding 1: resolve each tool to an absolute path via the
+    # sanitized PATH so a PR-shipped ``./mypy`` / ``./ruff`` / ``./black``
+    # shim cannot become the gate binary under an operator's
+    # ``PATH=.:$PATH``. Storing the absolute path on ``Gate.cmd`` also
+    # stops ``subprocess.run`` from re-consulting PATH at execution
+    # time.
+    ruff_abs = _resolve_tool("ruff", worktree)
     if (
         changed_py
         and _tool_section_present("ruff")
-        and shutil.which("ruff")
+        and ruff_abs
         and not python_tool_config_touched
     ):
         gates.append(
             Gate(
                 name="ruff",
-                cmd=["ruff", "check", "--", *changed_py],
+                cmd=[ruff_abs, "check", "--", *changed_py],
                 source="pyproject.toml:[tool.ruff]",
                 required_fix_hint=(
                     "Run `ruff check --fix` locally and address the remaining "
@@ -1349,33 +1409,35 @@ def _discover_python_gates(
                 ),
             )
         )
+    black_abs = _resolve_tool("black", worktree)
     if (
         changed_py
         and _tool_section_present("black")
-        and shutil.which("black")
+        and black_abs
         and not python_tool_config_touched
     ):
         gates.append(
             Gate(
                 name="black",
-                cmd=["black", "--check", "--", *changed_py],
+                cmd=[black_abs, "--check", "--", *changed_py],
                 source="pyproject.toml:[tool.black]",
                 required_fix_hint=(
                     "Run `black .` locally and commit the formatting changes."
                 ),
             )
         )
+    mypy_abs = _resolve_tool("mypy", worktree)
     if (
         changed_py
         and _tool_section_present("mypy")
-        and shutil.which("mypy")
+        and mypy_abs
         and not python_tool_config_touched
         and not local_mypy_plugin_declared
     ):
         gates.append(
             Gate(
                 name="mypy",
-                cmd=["mypy", "--", *changed_py],
+                cmd=[mypy_abs, "--", *changed_py],
                 source="pyproject.toml:[tool.mypy]",
                 required_fix_hint=(
                     "Run `mypy` locally and fix the reported type errors."
@@ -1985,7 +2047,74 @@ _STRIPPED_NODE_ENV_PREFIXES: Tuple[str, ...] = (
 )
 
 
-def _build_subprocess_env() -> Dict[str, str]:
+def _sanitized_path(worktree: Path) -> str:
+    """Return a PATH string with worktree-resolving and relative entries
+    stripped, suitable for both ``shutil.which`` discovery probes and
+    the runtime subprocess env.
+
+    iter-40 Finding 1: an operator whose shell sets ``PATH=.:$PATH``
+    (or any entry that resolves inside the loop-owned worktree) would
+    otherwise let a PR-shipped ``./mypy`` / ``./npm`` / ``./npx``
+    binary become the gate. ``shutil.which("mypy")`` against that
+    PATH returns the PR's shim, the gate runs it with ``cwd=worktree``,
+    and the malicious binary can exit 0, leak env, or mutate files.
+
+    The sanitization rules — all conservative — drop:
+      * empty entries (``::`` in PATH means "current directory" on
+        POSIX, equivalent to ``.``)
+      * ``.`` (current working directory)
+      * any entry that does not start with ``/`` (absolute) — pure
+        relative paths resolve against ``cwd``
+      * any entry whose resolved real-path is inside ``worktree``
+    """
+    raw_path = os.environ.get("PATH", "") or os.defpath
+    worktree_resolved: Optional[Path]
+    try:
+        worktree_resolved = worktree.resolve()
+    except (OSError, RuntimeError):
+        worktree_resolved = None
+    clean: List[str] = []
+    for entry in raw_path.split(os.pathsep):
+        if not entry or entry == ".":
+            continue
+        if not entry.startswith(os.sep):
+            # Pure relative — resolves against the gate's cwd, which
+            # IS the worktree. Reject.
+            continue
+        if worktree_resolved is not None:
+            try:
+                entry_resolved = Path(entry).resolve()
+            except (OSError, RuntimeError):
+                continue
+            try:
+                entry_resolved.relative_to(worktree_resolved)
+            except ValueError:
+                # Not inside the worktree — keep it.
+                clean.append(entry)
+            else:
+                # Inside the worktree — drop it.
+                continue
+        else:
+            clean.append(entry)
+    return os.pathsep.join(clean)
+
+
+def _resolve_tool(tool: str, worktree: Path) -> Optional[str]:
+    """Return the absolute path to ``tool`` via the sanitized PATH,
+    or ``None`` when the tool is not on the trusted PATH.
+
+    iter-40 Finding 1: every gate that previously stored a bare tool
+    name (``mypy`` / ``ruff`` / ``black`` / ``npx`` / ``npm`` / ``yarn``
+    / ``pnpm`` / ``bun``) in ``Gate.cmd`` re-consults PATH at
+    ``subprocess.run`` time. Resolving to an absolute path at discovery
+    time AND running with a sanitized PATH closes both halves of the
+    PATH-override attack: discovery cannot pick up the PR shim, and
+    the runner cannot fall back to it.
+    """
+    return shutil.which(tool, path=_sanitized_path(worktree))
+
+
+def _build_subprocess_env(worktree: Optional[Path] = None) -> Dict[str, str]:
     """Build the environment dict the runner injects for each gate.
 
     Inherits the caller's PATH/HOME (so tools resolve), strips ``PDD_*``
@@ -1999,6 +2128,16 @@ def _build_subprocess_env() -> Dict[str, str]:
     ``FORCE_COLOR=0`` for deterministic non-interactive output and
     ``COREPACK_ENABLE_AUTO_PIN=0`` so Corepack-managed yarn/pnpm
     cannot mutate ``package.json`` on first run (iter-39 Finding 1).
+
+    When ``worktree`` is supplied, the runtime ``PATH`` is also
+    sanitized (iter-40 Finding 1): empty entries, ``.``, relative
+    entries, and any entry that resolves inside ``worktree`` are
+    stripped. An operator with ``PATH=.:$PATH`` (or any entry that
+    points at the loop's worktree) would otherwise let a PR-shipped
+    ``./mypy`` / ``./npm`` / ``./npx`` shim become a downstream
+    tool spawn — ``Gate.cmd`` itself stores absolute paths so the
+    top-level binary is safe, but node/npm subprocesses re-consult
+    PATH for nested tools like ``prettier``.
     """
     env: Dict[str, str] = {}
     for key, value in os.environ.items():
@@ -2014,6 +2153,20 @@ def _build_subprocess_env() -> Dict[str, str]:
     env["CI"] = "1"
     env["NO_COLOR"] = "1"
     env["FORCE_COLOR"] = "0"
+    # iter-40 Finding 1: sanitize PATH so a node/npm sub-subprocess
+    # (e.g. ``npm run`` → shell → ``prettier``) cannot resolve a PR
+    # shim placed at the worktree root via an inherited
+    # ``PATH=.:$PATH``. ``Gate.cmd`` already stores absolute paths for
+    # the top-level tool, but downstream tool spawns by node go
+    # through PATH lookup. Defence in depth.
+    if worktree is not None:
+        sanitized_path = _sanitized_path(worktree)
+        if sanitized_path:
+            env["PATH"] = sanitized_path
+        else:
+            # Fall back to a minimal default PATH if every operator
+            # entry was rejected — keeps system binaries reachable.
+            env["PATH"] = os.defpath
     # iter-39 Finding 1: when Corepack manages the yarn/pnpm binary
     # (default in Node 16+) and ``package.json`` does not pin a
     # ``packageManager`` field, the first ``yarn run``/``pnpm run``
@@ -2055,7 +2208,7 @@ def _execute_one(
     started = _now_iso()
     started_monotonic = time.monotonic()
     timeout = gate.timeout if gate.timeout and gate.timeout > 0 else default_timeout
-    env = _build_subprocess_env()
+    env = _build_subprocess_env(worktree)
     try:
         proc = subprocess.run(
             list(gate.cmd),

@@ -1984,13 +1984,25 @@ def _collect_static_analysis_candidate_findings(
     try:
         from .list_drift_detection import detect_static_list_drift
     except Exception as exc:  # noqa: BLE001 - optional, never fail the review
-        logger.debug("list-drift module import failed: %s", exc, exc_info=True)
+        # iter-40 Finding 3: drop ``exc_info=True``. The raw traceback
+        # bypasses ``_scrub_secrets`` and can carry a path/token from
+        # the import chain. Scrub the message and log without the
+        # exception render. Operators who need the full traceback can
+        # reproduce locally.
+        logger.debug(
+            "list-drift module import failed: %s",
+            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+        )
         return []
 
     try:
         changed = _pr_changed_python_files(worktree, pr_metadata)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("list-drift changed-file resolution failed: %s", exc, exc_info=True)
+        # iter-40 Finding 3: scrub-before-log, no ``exc_info=True``.
+        logger.debug(
+            "list-drift changed-file resolution failed: %s",
+            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+        )
         changed = []
 
     if not changed:
@@ -2006,7 +2018,11 @@ def _collect_static_analysis_candidate_findings(
     try:
         findings = detect_static_list_drift(paths)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("list-drift scan failed: %s", exc, exc_info=True)
+        # iter-40 Finding 3: scrub-before-log, no ``exc_info=True``.
+        logger.debug(
+            "list-drift scan failed: %s",
+            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+        )
         return []
 
     # Filter: only emit findings where at least one side of the drift is
@@ -4060,7 +4076,11 @@ def _enforce_gates_before_clean(
         # logger surface fires first.
         scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
         logger.warning("gates: discovery crashed: %s", scrubbed_exc)
-        logger.debug("gates: discovery crash traceback", exc_info=True)
+        # iter-40 Finding 3: drop ``exc_info=True``. The DEBUG
+        # traceback render bypasses the WARNING-line scrub and can
+        # leak any token/path the discovery code surfaced into the
+        # exception message. Operators who need the full traceback
+        # can reproduce locally.
         state.gate_runs.append(
             {
                 "round": round_number,
@@ -4110,7 +4130,10 @@ def _enforce_gates_before_clean(
         # Bearer headers that travelled through to the failure.
         scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
         logger.warning("gates: run_gates crashed: %s", scrubbed_exc)
-        logger.debug("gates: run_gates crash traceback", exc_info=True)
+        # iter-40 Finding 3: drop ``exc_info=True``. The DEBUG
+        # traceback render bypasses the WARNING-line scrub above; any
+        # token surfaced via the failing gate's stderr/argv/path would
+        # otherwise land in DEBUG-captured log streams.
         state.gate_runs.append(
             {
                 "round": round_number,

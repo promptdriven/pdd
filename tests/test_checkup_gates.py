@@ -11,6 +11,7 @@ artifact persistence).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -56,7 +57,9 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "npm:format:check" in names
         gate = next(g for g in gates if g.name == "npm:format:check")
-        assert gate.cmd[0] in {"npm", "yarn", "pnpm", "bun"}
+        # iter-40 Finding 1: gate.cmd[0] is the absolute path to the
+        # runner, not the bare name; verify by basename.
+        assert Path(gate.cmd[0]).name in {"npm", "yarn", "pnpm", "bun"}
         assert "format:check" in gate.cmd
 
     def test_skips_non_check_scripts(self, tmp_path: Path) -> None:
@@ -2331,6 +2334,196 @@ class TestDiscoverGates:
         gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         assert "mypy" in names
+
+    # ------------------------------------------------------------------
+    # Iter-40 Finding 1: gate.cmd stores absolute paths; PATH is
+    # sanitized to drop ``.``, relative entries, and worktree entries.
+    # ------------------------------------------------------------------
+
+    def test_mypy_gate_cmd_uses_absolute_path_not_bare_name(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-40 Finding 1: an operator with ``PATH=.:$PATH`` (or any
+        PATH entry resolving inside the worktree) would otherwise let
+        a PR-shipped ``./mypy`` shim become the gate binary. Gate.cmd
+        MUST store the absolute path resolved against a sanitized
+        PATH so ``subprocess.run`` cannot re-consult PATH at execution
+        time."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text("[tool.mypy]\n", encoding="utf-8")
+        # Plant a fake ``./mypy`` at the worktree root.
+        (tmp_path / "mypy").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (tmp_path / "mypy").chmod(0o755)
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        mypy_gates = [g for g in gates if g.name == "mypy"]
+        if not mypy_gates:
+            return  # mypy not present, skip
+        gate = mypy_gates[0]
+        assert Path(gate.cmd[0]).is_absolute(), (
+            f"gate.cmd[0] must be an absolute path; got {gate.cmd[0]!r}"
+        )
+        # The absolute path MUST NOT resolve to the PR-planted shim.
+        resolved = Path(gate.cmd[0]).resolve()
+        try:
+            resolved.relative_to(tmp_path.resolve())
+        except ValueError:
+            pass  # not in worktree — good
+        else:
+            raise AssertionError(
+                f"gate.cmd[0] resolved inside the worktree ({resolved}); "
+                f"PATH sanitization failed"
+            )
+
+    def test_npm_gate_cmd_uses_absolute_runner_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-40 Finding 1: same as the mypy case but for the
+        npm-family runner."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        # PR-shipped ``./npm`` shim
+        (tmp_path / "npm").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (tmp_path / "npm").chmod(0o755)
+        gates = discover_gates(tmp_path, changed_files=())
+        npm_gates = [g for g in gates if g.name == "npm:format:check"]
+        if not npm_gates:
+            return
+        gate = npm_gates[0]
+        assert Path(gate.cmd[0]).is_absolute()
+        resolved = Path(gate.cmd[0]).resolve()
+        try:
+            resolved.relative_to(tmp_path.resolve())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"npm runner resolved inside the worktree ({resolved})"
+            )
+
+    def test_sanitized_path_strips_dot_and_relative_and_worktree_entries(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """Iter-40 Finding 1: ``_sanitized_path`` removes any PATH
+        entry that resolves inside the worktree, plus ``.`` and any
+        non-absolute entry."""
+        from pdd.checkup_gates import _sanitized_path
+
+        # Build a malicious PATH that mixes safe entries with risky ones.
+        risky_subdir = tmp_path / "bin"
+        risky_subdir.mkdir()
+        path_entries = [
+            "/usr/bin",          # safe absolute
+            ".",                 # cwd — risky
+            "",                  # empty — equivalent to cwd
+            "relative/path",     # relative — risky
+            str(risky_subdir),   # inside worktree — risky
+            "/usr/local/bin",    # safe absolute
+        ]
+        monkeypatch.setenv("PATH", os.pathsep.join(path_entries))
+        sanitized = _sanitized_path(tmp_path)
+        clean = sanitized.split(os.pathsep)
+        assert "/usr/bin" in clean
+        assert "/usr/local/bin" in clean
+        assert "." not in clean
+        assert "" not in clean
+        assert "relative/path" not in clean
+        assert str(risky_subdir) not in clean
+
+    def test_build_subprocess_env_sets_sanitized_path(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """Iter-40 Finding 1: the gate runner env MUST use the
+        sanitized PATH so node/npm sub-subprocesses (which spawn
+        nested tools like prettier via PATH) cannot pick up a PR-
+        shipped shim either."""
+        from pdd.checkup_gates import _build_subprocess_env
+
+        risky_bin = tmp_path / "shim"
+        risky_bin.mkdir()
+        monkeypatch.setenv(
+            "PATH",
+            os.pathsep.join([".", str(risky_bin), "/usr/bin"]),
+        )
+        env = _build_subprocess_env(tmp_path)
+        clean = env["PATH"].split(os.pathsep)
+        assert "/usr/bin" in clean
+        assert "." not in clean
+        assert str(risky_bin) not in clean
+
+    # ------------------------------------------------------------------
+    # Iter-40 Finding 2: PR-modified package.json can change
+    # ``packageManager`` and corepack downloads/runs the PR-selected
+    # version. Skip all npm-family gates on any package.json change.
+    # ------------------------------------------------------------------
+
+    def test_npm_gates_skip_when_pr_modifies_package_json(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-40 Finding 2: ``packageManager: pnpm@X.Y.Z+sha512:EVIL``
+        in PR-modified ``package.json`` makes corepack fetch and run
+        the PR-selected version on first invocation. The gate cannot
+        statically validate the version pin, so fail closed on any
+        PR diff touching ``package.json``."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        # Discovery normally emits npm:format:check — but the PR diff
+        # touches package.json, so we must skip.
+        gates = discover_gates(tmp_path, changed_files=("package.json",))
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_nested_package_json_pr_modified(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-40 Finding 2: monorepo workspaces have nested
+        ``packages/foo/package.json`` files that can also pin
+        packageManager. The skip uses an endswith check to cover both
+        root and nested paths."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        gates = discover_gates(
+            tmp_path, changed_files=("packages/foo/package.json",)
+        )
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_still_emit_when_package_json_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-40 Finding 2 regression bound: a PR that changes
+        unrelated files (no ``package.json``) must still emit the
+        gate. We do not want to disable npm gates on every PR."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=("src/foo.ts",))
+        names = {g.name for g in gates}
+        assert "npm:format:check" in names
 
 
 class TestRunGates:
