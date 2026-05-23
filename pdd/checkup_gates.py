@@ -859,6 +859,43 @@ def _discover_python_gates(
             )
         )
 
+    # Iter-32 Findings 2 + 3: the Python tool configs
+    # (``pyproject.toml``, ``setup.cfg``, ``ruff.toml`` / ``.ruff.toml``,
+    # ``mypy.ini`` / ``.mypy.ini``, ``tox.ini``) are read FROM THE
+    # WORKTREE. A fork PR can poison ``[tool.black] force-exclude =
+    # '.*'`` so black exits 0 over real formatting issues, or
+    # ``[tool.ruff] exclude = ['a.py']`` so ruff reports clean over
+    # a real lint failure. Skip ALL three Python tool gates when
+    # the PR touched any of the config files those tools load —
+    # matches the symmetric treatment we already apply to npm-side
+    # configs.
+    pr_changed_pyset = {f.lower() for f in changed_files}
+    python_tool_config_touched = any(
+        path.endswith("pyproject.toml")
+        or path.endswith("setup.cfg")
+        or path.endswith("ruff.toml")
+        or path.endswith(".ruff.toml")
+        or path.endswith("mypy.ini")
+        or path.endswith(".mypy.ini")
+        or path.endswith("tox.ini")
+        for path in pr_changed_pyset
+    )
+    # Iter-32 Finding 1: mypy honours ``plugins = ["evil_plugin.py"]``
+    # under ``[tool.mypy]``. The iter-31 config-touched skip caught
+    # the case where the PR adds the plugin declaration AND the
+    # plugin file in the same diff. But a STABLE pyproject.toml
+    # already declaring a local-path plugin still lets the PR
+    # achieve RCE by modifying just the plugin file. Inspect the
+    # declared plugin list: if ANY entry looks like a worktree-
+    # local path (relative, absolute, or ends in ``.py``), refuse
+    # to run the mypy gate at all — we cannot prove the operator's
+    # plugins are safe against the PR's diff. Pure-package plugins
+    # (``mypy_django_plugin.main``) stay supported because the only
+    # way a PR could change those is via dependency installation,
+    # which would land under ``node_modules``/``site-packages`` or
+    # in a PR-touched dependency file — handled separately.
+    local_mypy_plugin_declared = _mypy_declares_local_plugin(pyproject_text)
+
     # Iter-25 Finding 2: end-of-options ``--`` before the changed-file
     # list. Without it a PR that adds a file named ``--config=evil.py``
     # (or any path starting with ``-``) would feed that token to the
@@ -866,7 +903,12 @@ def _discover_python_gates(
     # and potentially altering its behaviour. ruff, black, and mypy
     # all support the POSIX-standard ``--`` separator to mark the end
     # of options.
-    if changed_py and _tool_section_present("ruff") and shutil.which("ruff"):
+    if (
+        changed_py
+        and _tool_section_present("ruff")
+        and shutil.which("ruff")
+        and not python_tool_config_touched
+    ):
         gates.append(
             Gate(
                 name="ruff",
@@ -878,7 +920,12 @@ def _discover_python_gates(
                 ),
             )
         )
-    if changed_py and _tool_section_present("black") and shutil.which("black"):
+    if (
+        changed_py
+        and _tool_section_present("black")
+        and shutil.which("black")
+        and not python_tool_config_touched
+    ):
         gates.append(
             Gate(
                 name="black",
@@ -889,27 +936,12 @@ def _discover_python_gates(
                 ),
             )
         )
-    # Iter-31 Finding 2: mypy supports ``plugins = ["evil_plugin.py"]``
-    # under ``[tool.mypy]`` (or in ``mypy.ini`` / ``setup.cfg``).
-    # When the plugin path resolves to a worktree file, mypy
-    # imports and executes it during type-checking — full RCE on a
-    # fork PR that ships both a plugin file and a config update.
-    # ruff is Rust and has no Python-plugin escape hatch; black has
-    # no plugins; only mypy needs this guard. Skip the mypy gate
-    # when the PR modified any of its config surfaces.
-    pr_changed_pyset = {f.lower() for f in changed_files}
-    mypy_config_pr_touched = any(
-        path.endswith("pyproject.toml")
-        or path.endswith("mypy.ini")
-        or path.endswith(".mypy.ini")
-        or path.endswith("setup.cfg")
-        for path in pr_changed_pyset
-    )
     if (
         changed_py
         and _tool_section_present("mypy")
         and shutil.which("mypy")
-        and not mypy_config_pr_touched
+        and not python_tool_config_touched
+        and not local_mypy_plugin_declared
     ):
         gates.append(
             Gate(
@@ -922,6 +954,62 @@ def _discover_python_gates(
             )
         )
     return gates
+
+
+def _mypy_declares_local_plugin(pyproject_text: str) -> bool:
+    """Return True iff ``[tool.mypy] plugins`` references a worktree path.
+
+    mypy plugin entries can be:
+      * a pure Python package import (``"mypy_django_plugin.main"``) — safe
+        because we never load anything from the worktree in this case
+      * a relative or absolute path to a ``.py`` file
+        (``"./local_mypy_plugin.py"``, ``"/abs/plugin.py"``) — UNSAFE
+        because a PR can modify the referenced file
+
+    iter-32 Finding 1 requires the second class to disable the gate
+    even when the PR does NOT touch pyproject.toml itself, because
+    the plugin file alone is sufficient to achieve RCE. We use a
+    loose regex to find the ``plugins`` setting under any
+    ``[tool.mypy]`` (or ``[tool.mypy.…]``) header and conservatively
+    flag any entry containing ``/``, ``\\``, ``./``, ``../``, or a
+    ``.py`` suffix as worktree-local.
+    """
+    if not pyproject_text:
+        return False
+    header = re.search(
+        r"^\s*\[\s*tool\.mypy[^\]]*\]\s*$",
+        pyproject_text,
+        re.MULTILINE,
+    )
+    if not header:
+        return False
+    # Slice from header to the next ``[`` table header (or EOF).
+    tail = pyproject_text[header.end():]
+    next_table = re.search(r"^\s*\[", tail, re.MULTILINE)
+    section = tail if not next_table else tail[: next_table.start()]
+    plugins_match = re.search(
+        r'^\s*plugins\s*=\s*(\[[^\]]*\]|"[^"\n]*"|\'[^\'\n]*\')',
+        section,
+        re.MULTILINE,
+    )
+    if not plugins_match:
+        return False
+    raw = plugins_match.group(1)
+    # Extract every quoted string entry from the value.
+    entries = re.findall(r'"([^"\n]*)"|\'([^\'\n]*)\'', raw)
+    for q1, q2 in entries:
+        entry = (q1 or q2).strip()
+        if not entry:
+            continue
+        if (
+            "/" in entry
+            or "\\" in entry
+            or entry.startswith("./")
+            or entry.startswith("../")
+            or entry.endswith(".py")
+        ):
+            return True
+    return False
 
 
 def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[str]:

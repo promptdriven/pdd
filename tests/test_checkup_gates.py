@@ -431,6 +431,98 @@ class TestDiscoverGates:
                 f"standalone forbidden token must be rejected: {payload!r}"
             )
 
+    def test_python_gates_skipped_when_pr_modifies_pyproject(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-32 Findings 2 + 3: ruff/black/mypy all read PR-trusted
+        configs from ``pyproject.toml``. A fork PR can poison
+        ``[tool.black] force-exclude = '.*'`` (black silently passes)
+        or ``[tool.ruff] exclude = ['a.py']`` (ruff silently passes).
+        Skip ALL three when the PR touched any of the config
+        surfaces those tools load.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\n[tool.black]\n[tool.mypy]\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        for changed in (
+            ("pyproject.toml", "a.py"),
+            ("setup.cfg", "a.py"),
+            (".ruff.toml", "a.py"),
+            ("ruff.toml", "a.py"),
+            ("tox.ini", "a.py"),
+            ("mypy.ini", "a.py"),
+        ):
+            gates = discover_gates(tmp_path, changed_files=changed)
+            names = {g.name for g in gates}
+            for tool in ("ruff", "black", "mypy"):
+                assert tool not in names, (
+                    f"{tool} must skip when PR touched {changed}"
+                )
+
+    def test_mypy_gate_skipped_when_local_plugin_declared(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-32 Finding 1: even when the PR does NOT modify
+        pyproject.toml, mypy will import and execute any
+        worktree-local plugin path the config already references.
+        A stable ``[tool.mypy] plugins = ['./local_mypy_plugin.py']``
+        plus a PR-modified plugin file is RCE. Skip the mypy gate
+        whenever any declared plugin entry looks like a local path
+        (relative, absolute, or ends in ``.py``).
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        for plugins_value in (
+            '["./local_mypy_plugin.py"]',
+            '["plugins/evil.py"]',
+            '["/abs/path/plugin.py"]',
+            '"./inline_plugin.py"',
+            '["mypy_django_plugin.main", "./local.py"]',
+        ):
+            (tmp_path / "pyproject.toml").write_text(
+                f"[tool.mypy]\nplugins = {plugins_value}\n",
+                encoding="utf-8",
+            )
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+            names = {g.name for g in gates}
+            assert "mypy" not in names, (
+                f"mypy must skip when local plugin declared: {plugins_value}"
+            )
+
+    def test_mypy_gate_still_fires_for_pure_package_plugins(
+        self, tmp_path: Path
+    ) -> None:
+        """Inverse of Finding 1: pure-package plugins (e.g.
+        ``"mypy_django_plugin.main"``) live in installed site-packages,
+        not in the worktree. A PR cannot modify them without
+        touching the dependency manifest (which the
+        pyproject-touched skip catches) or vendoring under
+        node_modules / site-packages. Pure-package plugins are
+        therefore safe and the mypy gate STILL fires for them when
+        mypy is on PATH.
+        """
+        import shutil as _shutil
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["mypy_django_plugin.main", '
+            '"some_other_package.helper"]\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        # Test only meaningful when mypy is on PATH in the sandbox.
+        if _shutil.which("mypy"):
+            assert "mypy" in {g.name for g in gates}
+
     def test_mypy_gate_skipped_when_pr_modifies_config(
         self, tmp_path: Path
     ) -> None:
