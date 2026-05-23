@@ -824,6 +824,32 @@ class JobManager:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _signal_cancel(self, job_id: str) -> None:
+        """Synchronous cancel signal: set cancel event + SIGTERM the
+        subprocess WITHOUT awaiting anything.
+
+        Used by `_handle_budget_exceeded` to halt subprocess spend
+        IMMEDIATELY, then proceed to (potentially slow) WebSocket
+        broadcast of the typed `budget_exceeded` message in parallel
+        with the subprocess teardown. Without this, awaiting
+        `emit_budget_exceeded` before `cancel()` lets a stalled
+        subscriber delay process termination by N seconds — and the
+        process keeps spending money during that window. The full
+        async `cancel()` is still awaited later for status updates
+        and process.wait()/kill escalation; this helper only sends
+        the kill signal so the subprocess starts winding down
+        immediately.
+        """
+        if job_id in self._cancel_events:
+            self._cancel_events[job_id].set()
+        with self._process_lock:
+            process = self._processes.get(job_id)
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def _handle_budget_exceeded(self, job_id: str, spent: float) -> None:
         """Final-status + cancel handler invoked by the watcher's
         on_exceeded callback.
@@ -866,18 +892,30 @@ class JobManager:
                 )
             except KeyError:
                 pass
-        # Emit the typed budget_exceeded callback BEFORE cancelling. cancel()
-        # injects asyncio.CancelledError into the executor task, which
-        # promptly runs `_execute_job`'s finally block and emits the
-        # `complete` message via `callbacks.emit_complete`. If we awaited
-        # emit_budget_exceeded AFTER cancel(), the event loop could
-        # schedule the cancellation handler and emit_complete first,
-        # delivering `complete` to subscribers before the typed
-        # `budget_exceeded` message. Subscribers that close on
-        # `complete` (the common client pattern) would never see the
-        # cap-trip event. Reordering puts the typed event first so the
-        # subscriber's last-seen pre-close event carries the budget
-        # context.
+        # Three-step termination so subprocess teardown does not wait
+        # on slow WebSocket subscribers AND the typed `budget_exceeded`
+        # message still beats `complete` to the wire:
+        #
+        #   1. `_signal_cancel(job_id)` — set the cancel event and
+        #      SIGTERM the subprocess WITHOUT awaiting anything. The
+        #      child process starts winding down immediately, so spend
+        #      stops accumulating regardless of how slow any
+        #      subscriber's callback is.
+        #   2. `await emit_budget_exceeded(...)` — broadcast the typed
+        #      message to subscribers. This may stall on a slow client
+        #      but the subprocess is already dead/dying by now.
+        #   3. `await self.cancel(job_id)` — finish the cancel path:
+        #      escalate to SIGKILL if needed, cancel the task,
+        #      run process.wait(). The task's finally block then
+        #      fires `emit_complete`, which lands AFTER step 2.
+        #
+        # Awaiting cancel() before emit reverses the
+        # subscriber-ordering contract (subscribers that close on
+        # `complete` would miss the typed event). Awaiting emit
+        # before signalling lets a stalled subscriber delay the
+        # subprocess kill — exactly the window the previous design
+        # collapsed.
+        self._signal_cancel(job_id)
         await self.callbacks.emit_budget_exceeded(
             job_id, spent, current_cap if current_cap is not None else spent,
         )
@@ -943,13 +981,23 @@ class JobManager:
         def _on_task_done(t: asyncio.Task):
             if job.id in self._tasks:
                 del self._tasks[job.id]
-            
+
             # If task was cancelled but job status wasn't updated (e.g. never started running)
             if t.cancelled() and job.status == JobStatus.QUEUED:
                 job.status = JobStatus.CANCELLED
                 if not job.completed_at:
                     job.completed_at = datetime.now(timezone.utc)
                 console.print(f"[yellow]Job cancelled (Task Done):[/yellow] {job.id}")
+
+            # Stop any watcher associated with this job. When a job is
+            # cancelled BEFORE `_execute_job` runs (e.g. /pdd budget set
+            # on a queued job started a watcher via update_budget, then
+            # /pdd stop cancels), `_execute_job`'s finally block — the
+            # usual cleanup site — never executes, and the watcher's
+            # daemon thread is orphaned. `_stop_watcher_for` is
+            # idempotent (pop()-based) so calling it here is a no-op
+            # when the normal path already cleaned up.
+            self._stop_watcher_for(job.id)
 
         task.add_done_callback(_on_task_done)
 

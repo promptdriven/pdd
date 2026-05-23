@@ -3519,3 +3519,230 @@ class TestBudgetExceededEmittedBeforeComplete:
             f"(events={events!r}). Subscribers closing on complete would "
             f"miss the typed event."
         )
+
+
+class TestCancelStopsWatcherOnQueuedJob:
+    """Sixth-pass finding A: ``/pdd budget N`` on a queued job spins
+    up a watcher via ``update_budget``. If ``/pdd stop`` then cancels
+    the job before ``_execute_job`` runs, ``_execute_job``'s finally
+    block — the usual cleanup site — never executes, and the
+    watcher's daemon thread is orphaned. The ``_on_task_done``
+    callback registered in ``submit`` now stops the watcher
+    unconditionally so queued-then-cancelled flows clean up too.
+    """
+
+    @pytest.mark.asyncio
+    async def test_queued_then_cancelled_does_not_orphan_watcher(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        # Build a job manager whose semaphore is held by a long
+        # placeholder task, so our test job stays QUEUED while we
+        # manipulate it.
+        import asyncio as _asyncio
+
+        async def placeholder_executor(job):
+            await _asyncio.sleep(10.0)
+            return {"cost": 0.0}
+
+        async def quick_executor(job):
+            await _asyncio.sleep(0.01)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=placeholder_executor, project_root=tmp_path)
+        # First job grabs the semaphore.
+        holder = await mgr.submit("change", args={}, options={})
+        # Second job stays queued behind it.
+        mgr._custom_executor = quick_executor  # for the queued job
+        queued = await mgr.submit("change", args={}, options={})
+        # Confirm queued.
+        for _ in range(20):
+            if queued.status == JobStatus.QUEUED:
+                break
+            await _asyncio.sleep(0.05)
+        assert queued.status == JobStatus.QUEUED
+
+        # Set a cap on the queued job — this spins up a watcher via
+        # update_budget's "no watcher running" branch.
+        await mgr.update_budget(queued.id, budget_cap=5.0)
+        watcher = mgr._watchers.get(queued.id)
+        assert watcher is not None, (
+            "update_budget should have started a watcher on the queued job"
+        )
+        watcher_thread = watcher._thread
+        assert watcher_thread.is_alive()
+
+        # Now cancel the queued job. The fix: _on_task_done must
+        # stop the watcher even though _execute_job never ran.
+        await mgr.cancel(queued.id)
+        # Give the cancel task and _on_task_done a tick to run.
+        for _ in range(20):
+            await _asyncio.sleep(0.05)
+            if queued.id not in mgr._watchers:
+                break
+        assert queued.id not in mgr._watchers, (
+            "Finding A regression: watcher dict still holds the cancelled "
+            "job's watcher."
+        )
+        # Watcher daemon should have observed its stop event by now.
+        import time as _time
+        for _ in range(60):
+            if not watcher_thread.is_alive():
+                break
+            _time.sleep(0.05)
+        assert not watcher_thread.is_alive(), (
+            "Finding A regression: watcher's daemon thread still alive "
+            "after cancel of queued job."
+        )
+
+        # Clean up the holder so the test session does not leave a
+        # 10s placeholder task hanging.
+        await mgr.cancel(holder.id)
+
+
+class TestSignalCancelIsSynchronous:
+    """Sixth-pass finding B: ``_handle_budget_exceeded`` used to
+    ``await emit_budget_exceeded`` BEFORE issuing the cancel signal.
+    A slow subscriber callback could delay subprocess termination by
+    seconds while spend kept accumulating. The fix adds a synchronous
+    ``_signal_cancel`` that sets the cancel event and SIGTERMs the
+    subprocess WITHOUT awaiting anything; ``_handle_budget_exceeded``
+    now calls signal first, emit second, full cancel third.
+    """
+
+    @pytest.mark.asyncio
+    async def test_signal_cancel_sets_event_immediately(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        mgr = JobManager(max_concurrent=1, project_root=tmp_path)
+
+        async def noop_executor(job):
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.5)
+            return {"cost": 0.0}
+
+        mgr._custom_executor = noop_executor
+        job = await mgr.submit("change", args={}, options={})
+        # Wait for execute to start.
+        import asyncio as _asyncio
+        for _ in range(40):
+            if job.status == JobStatus.RUNNING:
+                break
+            await _asyncio.sleep(0.02)
+        assert job.status == JobStatus.RUNNING
+
+        # _signal_cancel is a SYNCHRONOUS helper — no await. After it
+        # returns, the cancel event must already be set so the
+        # executor's check sees it on its next poll.
+        mgr._signal_cancel(job.id)
+        assert mgr._cancel_events[job.id].is_set(), (
+            "Finding B regression: _signal_cancel did not set the "
+            "cancel event synchronously."
+        )
+
+        # Clean up.
+        await mgr.cancel(job.id)
+
+    @pytest.mark.asyncio
+    async def test_budget_exceeded_signals_cancel_before_awaiting_emit(self, tmp_path):
+        """A slow `on_budget_exceeded` subscriber callback MUST NOT
+        delay the cancel signal — the subprocess termination has to
+        be initiated synchronously so spend stops accumulating
+        immediately.
+        """
+        import asyncio as _asyncio
+        from pdd.server.jobs import JobManager
+
+        signal_set_at: list = []
+        emit_done_at: list = []
+
+        async def slow_subscriber(job_id, spent, cap):
+            # Simulate a slow WebSocket subscriber — 0.5s blocking
+            # await. The signal-cancel must have run BEFORE this
+            # awaits.
+            await _asyncio.sleep(0.5)
+            emit_done_at.append(_asyncio.get_event_loop().time())
+
+        cost_csv = tmp_path / "cost.csv"
+
+        async def slow_executor(job):
+            await _asyncio.sleep(0.2)
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            row = {
+                "timestamp": ts, "model": "m", "command": "change",
+                "cost": "50.0", "input_files": "", "output_files": "",
+                "attempted_models": "m", "job_id": job.id,
+            }
+            with cost_csv.open("w", newline="", encoding="utf-8") as fh:
+                import csv as _csv
+                w = _csv.DictWriter(fh, fieldnames=list(row.keys()))
+                w.writeheader()
+                w.writerow(row)
+            await _asyncio.sleep(2.5)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        mgr.callbacks.on_budget_exceeded(slow_subscriber)
+
+        # Capture the moment the cancel event is set by patching
+        # _signal_cancel.
+        orig_signal_cancel = mgr._signal_cancel
+
+        def _signal_cancel_with_timestamp(jid):
+            signal_set_at.append(_asyncio.get_event_loop().time())
+            return orig_signal_cancel(jid)
+
+        mgr._signal_cancel = _signal_cancel_with_timestamp  # type: ignore[assignment]
+
+        job = await mgr.submit(
+            "change", args={}, options={"output_cost": str(cost_csv)},
+            budget_cap=10.0,
+        )
+        if job.id in mgr._tasks:
+            try:
+                await _asyncio.wait_for(mgr._tasks[job.id], timeout=20.0)
+            except (_asyncio.CancelledError, Exception):
+                pass
+
+        assert signal_set_at, "_signal_cancel was never invoked"
+        assert emit_done_at, "slow subscriber callback never completed"
+        # The signal must have run BEFORE the slow subscriber finished.
+        # Delta of at least 0.3s expected given the 0.5s subscriber
+        # sleep; tolerate clock noise.
+        assert signal_set_at[0] < emit_done_at[0] - 0.2, (
+            "Finding B regression: cancel signal was not issued "
+            "synchronously before emit_budget_exceeded; a slow "
+            "subscriber delayed subprocess termination.\n"
+            f"signal_at={signal_set_at[0]}, emit_done_at={emit_done_at[0]}"
+        )
+
+
+class TestReconnectPayloadCarriesRealCap:
+    """Sixth-pass finding C: the WebSocket reconnect branch for a
+    ``BUDGET_EXCEEDED`` job set ``effective_cap=float(job.cost)``,
+    so a job that crossed cap $400 at spend $401.23 reported back
+    ``effective_cap=$401.23`` — collapsing the two onto the same
+    value. The client then had no way to know what the active cap
+    was at the moment of crossing. Recompute the real cap from
+    ``budget_settings.effective_cap`` on the reconnect path.
+    """
+
+    def test_reconnect_payload_uses_real_effective_cap(self):
+        """Read the reconnect branch source and assert it calls
+        ``effective_cap(...)`` rather than only using ``job.cost``.
+        """
+        ws_path = Path(__file__).resolve().parents[1] / "pdd" / "server" / "routes" / "websocket.py"
+        body = ws_path.read_text()
+        # Locate the reconnect branch.
+        idx = body.find("If job is already")
+        assert idx > 0
+        window = body[idx:idx + 2500]
+        # The reconnect branch must reference budget_settings'
+        # `effective_cap` so the real cap is computed at reconnect
+        # time rather than aliased to job.cost.
+        assert "effective_cap" in window
+        assert "from pdd.server.budget_settings import" in window or "import effective_cap" in window, (
+            "Finding C regression: reconnect branch does not import "
+            "budget_settings.effective_cap to recompute the real cap; "
+            "the payload will collapse spent and effective_cap onto "
+            "the same value."
+        )

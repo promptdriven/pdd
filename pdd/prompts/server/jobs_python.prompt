@@ -100,8 +100,37 @@
        cancel path (same path `/pdd stop` drives), sets `Job.status` to the
        new `JobStatus.BUDGET_EXCEEDED` value (defined in `models.py`), records
        the final spend on `Job.cost`, and invokes
-       `JobCallbacks.on_budget_exceeded` once. The watcher is always stopped
-       in a `finally` block so it never outlives the job.
+       `JobCallbacks.on_budget_exceeded` once. The three-step termination
+       sequence MUST be: (1) set status to `BUDGET_EXCEEDED` + update the
+       budget store; (2) call a synchronous `_signal_cancel(job_id)` helper
+       that sets the cancel event and SIGTERMs the subprocess WITHOUT
+       awaiting anything (so spend stops accumulating even if a subscriber
+       callback is slow); (3) `await` `emit_budget_exceeded` to deliver
+       the typed `BudgetExceededMessage` to subscribers; (4) `await
+       self.cancel(job_id)` to finish task teardown (process.wait /
+       SIGKILL escalation / task.cancel) — the executor's finally then
+       emits `complete`. Awaiting emit BEFORE the signal lets a stalled
+       subscriber delay process termination by N seconds; awaiting
+       cancel() before emit reverses the event order on the wire
+       (subscribers that close on `complete` miss the typed event).
+       Both invariants matter and the three-step sequence is the
+       only ordering that satisfies both.
+     - **Watcher lifecycle**:
+       - `_start_watcher_for(job)` MUST be idempotent. A late
+         `/pdd budget N` arriving on a still-queued job may start a
+         watcher via `update_budget`; `_execute_job` then calls
+         `_start_watcher_for` AGAIN when the job actually runs. The
+         second call MUST stop the previous Watcher (call
+         `_stop_watcher_for(job.id)` first) before constructing a new
+         one — otherwise the prior daemon thread is orphaned and keeps
+         polling the CSV, double-counting spend against any sibling
+         watcher.
+       - Watcher cleanup runs in `_execute_job`'s `finally` block AND
+         in the `_on_task_done` callback registered by `submit`. The
+         task-done callback handles the "job cancelled while queued"
+         case where `_execute_job`'s finally never runs. Without it,
+         a `/pdd budget N` on a queued job followed by `/pdd stop`
+         leaves the watcher's daemon thread alive forever.
      - `cleanup_old_jobs`, `shutdown`, and query methods.
 
   4. **Subprocess Executor (`_run_click_command`)**:

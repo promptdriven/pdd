@@ -20,7 +20,21 @@
      - Client sends: cancel, input
      - Auto-close when job completes; handle disconnect gracefully
      - If job not found, close with WS_1008_POLICY_VIOLATION
-     - If job already completed, send result immediately and close
+     - If job is already in a terminal state (`completed`, `failed`,
+       `cancelled`, OR `budget_exceeded`), send the result immediately
+       and close. `budget_exceeded` MUST be treated as terminal here —
+       a client reconnecting after the watcher tripped the cap would
+       otherwise hang in the input loop. On `budget_exceeded`, send
+       the typed `BudgetExceededMessage` FIRST (so the client renders
+       the cap-trip UI without an extra REST round-trip), then the
+       standard `complete` summary, then close. The reconnect payload's
+       `effective_cap` field MUST be computed via
+       `budget_settings.effective_cap(job.command, ...)` against the
+       job's current `budget_cap` / `node_budget` / `max_total_cap` /
+       `node_count` — NOT a fallback to `job.cost`. Using
+       `job.cost` would collapse `spent` and `effective_cap` onto the
+       same value on the reconnect payload, and the client would have
+       no way to tell what the cap was when the crossing happened.
 
   2. **WS /ws/watch**:
      - Watches for file changes in project

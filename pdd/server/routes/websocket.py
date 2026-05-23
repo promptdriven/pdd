@@ -252,11 +252,37 @@ async def websocket_job_stream(
             # send the standard `complete` summary and close.
             if job.status == JobStatus.BUDGET_EXCEEDED:
                 try:
+                    # Recompute the real effective cap from the job's
+                    # budget fields. The earlier version used
+                    # `job.cost` as `effective_cap`, which produced
+                    # spent==effective_cap on the reconnect payload
+                    # (e.g. cap $400 with spend $401.23 was reported
+                    # as effective_cap=$401.23) — clients then had no
+                    # way to know what the active cap was at the
+                    # moment of crossing. Falling back to job.cost is
+                    # only used if the budget_settings module is
+                    # unavailable.
+                    cap_value: float = float(job.cost or 0.0)
+                    try:
+                        from pdd.server.budget_settings import (
+                            effective_cap as _effective_cap_fn,
+                        )
+                        real_cap = _effective_cap_fn(
+                            job.command,
+                            budget_cap=job.budget_cap,
+                            node_budget=job.node_budget,
+                            max_total_cap=job.max_total_cap,
+                            node_count=job.node_count,
+                        )
+                        if real_cap is not None:
+                            cap_value = float(real_cap)
+                    except Exception:  # noqa: BLE001
+                        pass
                     budget_msg = BudgetExceededMessage(
                         job_id=job.id,
                         command=job.command,
                         spent=float(job.cost or 0.0),
-                        effective_cap=float(job.cost or 0.0),
+                        effective_cap=cap_value,
                         node_budget=job.node_budget,
                         max_total_cap=job.max_total_cap,
                         node_count=job.node_count,
