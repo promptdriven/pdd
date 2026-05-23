@@ -732,6 +732,18 @@ class TestChangedFilesTracking:
             format_call_count.append(1)
             return "Base: main\n- M: pdd/example.py"
 
+        # Stable PR head metadata for both the entry capture and the
+        # post-Step-7 no-fix freshness refetch (issue #1116). Without
+        # this mock the orchestrator's gh-CLI call would fail in the
+        # test sandbox, leaving current_pr_head_sha empty and
+        # triggering the unverified-freshness fail-closed downgrade.
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef00000001",
+        }
         with patch(
             "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
             return_value=(wt, None),
@@ -747,6 +759,9 @@ class TestChangedFilesTracking:
         ), patch(
             "pdd.agentic_checkup_orchestrator.save_workflow_state",
             return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value=stable_metadata,
         ), patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"):
             success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
                 issue_url="https://github.com/o/r/issues/99",
