@@ -1708,7 +1708,7 @@ Options:
 - `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
   - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
   - `md`: Generates markdown format with `.md` extension
-  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly.
+  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly. When `--output` is provided with a non-empty file extension and `--format` is not specified, the supplied extension is honored verbatim (for example, `--output foo.yml` writes to `foo.yml`, not `foo.yaml`; `--output foo.md` writes to `foo.md`, not `foo.markdown`).
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.

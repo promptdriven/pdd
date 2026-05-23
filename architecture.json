@@ -1381,7 +1381,7 @@
         "commands": [
           {
             "name": "context_generator_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str]) -> Tuple[str, float, str]"
           }
         ]
       }
@@ -9143,6 +9143,30 @@
             "name": "set_quiet_logging",
             "signature": "()",
             "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Resolves PDD configuration, validates inputs, and computes output paths and language detection for all PDD commands.",
+    "description": "Resolves configuration hierarchy, validates input files, determines output paths, and handles overwrite confirmation for PDD commands.",
+    "dependencies": [],
+    "priority": 237,
+    "filename": "construct_paths_python.prompt",
+    "filepath": "pdd/construct_paths.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "construct_paths",
+            "signature": "(input_file_paths: dict, force: bool, quiet: bool, command: str, command_options: dict, create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None)",
+            "returns": "Tuple[Dict[str, Any], dict, Dict[str, str], str]"
           }
         ]
       }

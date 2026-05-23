@@ -4,6 +4,7 @@
 
 ### Fix
 
+- **example**: honor the user-supplied `--output` extension verbatim instead of silently rewriting `.yml` → `.yaml` or `.md` → `.markdown`. When `--output` is an explicit file path with a non-empty suffix and `--format` is not specified, the path is written exactly as supplied; `--format md` and `--format code` only rewrite the extension when the user-supplied path has no suffix or a conflicting one. Also adds `'markdown': '.md'` to `BUILTIN_EXT_MAP` so the default-output case for Markdown lands at `.md` (#1148).
 - **checkup**: enforce a SHA-backed verification trust boundary in `pdd checkup --pr --review-loop` so unverified fixer attempts are never rendered as completed fixes. `FixResult` now carries `fixer_result`/`push_status`/`local_fixer_commit_sha`/`pushed_head_sha`, `ReviewLoopState` carries `verified_head_sha`/`remote_pr_head_sha`/`verification_status_by_round`, and the final report renders fixed-field `### Fixes Attempted` bullets plus header `verified-head-sha:` / `remote-pr-head-sha:` lines. Before promoting `fresh-final-review: clean` or `verification=verified`, the loop re-fetches the remote PR head and downgrades to `verification=unverified` on mismatch or budget exhaustion (#1088).
 
 ## v0.0.241 (2026-05-17)
