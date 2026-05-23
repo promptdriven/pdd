@@ -176,6 +176,15 @@ def split(
 @click.option("--csv", is_flag=True, help="Use CSV input for batch processing.")
 @click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (agentic mode only).")
 @click.option("--no-github-state", is_flag=True, default=False, help="Disable GitHub state persistence (agentic mode only).")
+@click.option(
+    "--clean-restart",
+    is_flag=True,
+    default=False,
+    help=(
+        "Discard persisted solving state for this issue and start a fresh full "
+        "pdd-issue flow from the default base branch."
+    ),
+)
 @click.pass_context
 @track_cost
 def change(
@@ -187,6 +196,7 @@ def change(
     csv: bool,
     timeout_adder: float,
     no_github_state: bool,
+    clean_restart: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Modify an input prompt file based on a change prompt or issue.
@@ -198,6 +208,9 @@ def change(
         pdd change --manual CHANGE_PROMPT_FILE INPUT_CODE_FILE [INPUT_PROMPT_FILE]
     """
     ctx.ensure_object(dict)
+
+    if clean_restart and manual:
+        raise click.UsageError("--clean-restart is only valid in agentic mode and cannot be used with --manual")
     
     try:
         # Set budget in context for manual mode usage
@@ -272,6 +285,7 @@ def change(
                 quiet=quiet,
                 timeout_adder=timeout_adder,
                 use_github_state=not no_github_state,
+                clean_restart=clean_restart,
                 reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             )
 

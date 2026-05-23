@@ -30,8 +30,8 @@ from pdd.agentic_common import (
     set_agentic_progress,
     clear_agentic_progress,
     extract_step_report,
-    normalize_step_comments_state,
     post_step_comment_once,
+    normalize_step_comments_state,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -755,25 +755,26 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
     Only returns prompt and documentation files (matching step 9 scope),
     plus any files in the direct_edit_candidates list.
     """
-    # Use the structured ``--porcelain=v1 -z`` parser so paths with
-    # spaces, embedded quotes, or a literal " -> " substring round-trip
-    # verbatim (the old text-mode parser was lossy in all three cases).
-    # See issue #1080.
-    from pdd.git_porcelain import parse_porcelain_z
     try:
+        # Issue #1080: text-mode --porcelain output is lossy for paths
+        # containing spaces, quotes, or the literal " -> " substring.
+        # Use the structured -z parser instead.
+        from pdd.git_porcelain import parse_porcelain_z
         result = subprocess.run(
             ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             cwd=worktree_path,
             capture_output=True, check=True
         )
+        entries = parse_porcelain_z(result.stdout)
         files = []
         allowed_extensions = {".prompt", ".md"}
         direct_edit_set = set(direct_edit_candidates or [])
-        for entry in parse_porcelain_z(result.stdout):
-            # Use the new-side path verbatim — callers want current path.
+        for entry in entries:
             filepath = entry.path
+            if not filepath:
+                continue
             # Skip temp files from run_agentic_task
-            if filepath.startswith(".agentic_prompt_"):
+            if filepath.startswith(".agentic_prompt_") or "/.agentic_prompt_" in filepath:
                 continue
             # Include prompt/doc files (step 9 scope) OR direct edit candidates
             if any(filepath.endswith(ext) for ext in allowed_extensions):
@@ -997,15 +998,8 @@ def _preflight_drift_heal(
             # would pick up whatever pdd binary is on PATH, which can be
             # a different version when devs have a global install plus a
             # project-local one.
-            #
-            # `--sync-metadata` routes the heal through the shared
-            # `run_metadata_sync` orchestrator so prompt tags, architecture
-            # entries, run-report cleanup, and fingerprint state are all
-            # finalized atomically (issue #871). Without it, single-file
-            # `pdd update` leaves the fingerprint stale and the same drift is
-            # re-detected on the next preflight pass.
             result = subprocess.run(
-                [sys.executable, "-m", "pdd", "update", "--sync-metadata", drift.code_path],
+                [sys.executable, "-m", "pdd", "update", drift.code_path],
                 cwd=str(worktree_path),
                 capture_output=True,
                 text=True,
@@ -1019,14 +1013,16 @@ def _preflight_drift_heal(
                 if not quiet:
                     console.print(f"   [green]✓[/green] healed {drift.basename}")
             else:
-                combined_output = f"{result.stdout or ''}\n{result.stderr or ''}"
+                # Issue #1006: metadata-finalization failures are NOT advisory
+                combined = (result.stderr or "") + "\n" + (result.stdout or "")
                 if (
-                    "metadata finalization failed" in combined_output
-                    or "metadata staging verification failed" in combined_output
-                    or "[metadata-sync]" in combined_output
+                    "metadata finalization failed" in combined
+                    or "metadata staging verification failed" in combined
+                    or "[metadata-sync]" in combined
                 ):
                     raise RuntimeError(
-                        f"preflight metadata finalization failed for {drift.basename}"
+                        f"preflight metadata finalization failed for "
+                        f"{drift.basename}: {combined.strip()}"
                     )
                 failed.append(drift.basename)
                 if not quiet:
@@ -1042,6 +1038,7 @@ def _preflight_drift_heal(
                     f"   [red]✗[/red] heal timed out for {drift.basename}"
                 )
         except RuntimeError:
+            # Issue #1006: metadata finalization failures must propagate.
             raise
         except Exception as exc:
             failed.append(drift.basename)
@@ -1229,12 +1226,8 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language; preserve .pddrc dirs even if package data
-        # resolution is unavailable in a minimal test/runtime environment.
-        try:
-            ext = get_extension(language) if language else defaults["ext"]
-        except Exception:
-            ext = defaults["ext"]
+        # Derive ext from language
+        ext = get_extension(language) if language else defaults["ext"]
         if ext.startswith("."):
             ext = ext[1:]  # Remove leading dot if present
 
@@ -1421,9 +1414,10 @@ def run_agentic_change_orchestrator(
         github_comment_id = None
         worktree_path = None
 
-    step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
+    # Normalize step comments tracking (Set[int] of step indices already posted)
+    step_comments_set = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
-
+    
     pddrc_context = _load_pddrc_context(cwd)
 
     context = {
@@ -1700,7 +1694,6 @@ def run_agentic_change_orchestrator(
                         output=step_output, cwd=cwd,
                     )
                     state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-                    state["step_comments"] = sorted(step_comments_set)
                     save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                     return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, []
             else:
@@ -1724,7 +1717,6 @@ def run_agentic_change_orchestrator(
                     refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
                     if refreshed:
                         state["issue_updated_at"] = refreshed
-                state["step_comments"] = sorted(step_comments_set)
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
@@ -1747,7 +1739,6 @@ def run_agentic_change_orchestrator(
                 refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
                 if refreshed:
                     state["issue_updated_at"] = refreshed
-            state["step_comments"] = sorted(step_comments_set)
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
@@ -1780,7 +1771,6 @@ def run_agentic_change_orchestrator(
                 # Issue #467: Mark as FAILED instead of using step_num - 1
                 state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
                 # Don't advance last_completed_step — keep it at its current value
-                state["step_comments"] = sorted(step_comments_set)
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
@@ -1935,27 +1925,26 @@ def run_agentic_change_orchestrator(
             consecutive_provider_failures = 0
             state["step_outputs"][str(step_num)] = step_output
             state["last_completed_step"] = step_num
+            # Trusted per-step success comment (post once per step)
             try:
                 report_body = extract_step_report(step_output)
-                if not report_body:
+                if report_body is None:
                     report_body = (
-                        f"_Step {step_num} completed; no `<step_report>` block "
-                        "returned by agent. Raw output retained in workflow state._"
+                        f"Step {step_num} completed; no `<step_report>` block returned by agent. "
+                        "Raw output retained in workflow state."
                     )
-                comment_body = (
-                    f"## Step {step_num}/13: {description}\n\n{report_body}"
-                )
+                body = f"## Step {step_num}/13: {description}\n\n{report_body}"
                 post_step_comment_once(
                     repo_owner=repo_owner,
                     repo_name=repo_name,
                     issue_number=issue_number,
                     step_num=step_num,
-                    body=comment_body,
+                    body=body,
                     posted_steps=step_comments_set,
-                    cwd=current_work_dir,
+                    cwd=cwd,
                 )
-            except Exception as exc:  # pylint: disable=broad-except
-                console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+            except Exception as _exc:
+                console.print(f"[yellow]Warning: failed to post step comment for step {step_num}: {_exc}[/yellow]")
             state["step_comments"] = sorted(step_comments_set)
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
@@ -2002,33 +1991,26 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
-            # Round-2 of Greg's review: gate the trusted Step 11 post on
-            # s11_success. A failed task (e.g. provider exhaustion) still
-            # returns step output, and posting a "completed" fallback would
-            # both mislead the user and mark this iteration's composite key
-            # (review_iteration*100 + 11) as already-posted in
-            # state["step_comments"]. On a later resume/retry the real
-            # successful Step 11 report would be silently deduped away.
+            # Trusted post for Step 11 (iteration-keyed: iter * 100 + 11)
             if s11_success:
                 try:
+                    s11_iter_key = review_iteration * 100 + 11
                     s11_report = extract_step_report(s11_output)
-                    if not s11_report:
+                    if s11_report is None:
                         s11_report = (
-                            "_Step 11 completed; no `<step_report>` block returned "
-                            "by agent. Raw output retained in workflow state._"
+                            f"Step 11 (review iteration {review_iteration}) completed; "
+                            "no `<step_report>` block returned by agent. "
+                            "Raw output retained in workflow state."
                         )
                     post_step_comment_once(
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        issue_number=issue_number,
-                        step_num=review_iteration * 100 + 11,
-                        body=f"## Step 11/13: Review (iteration {review_iteration})\n\n{s11_report}",
-                        posted_steps=step_comments_set,
-                        cwd=current_work_dir,
+                        repo_owner=repo_owner, repo_name=repo_name,
+                        issue_number=issue_number, step_num=s11_iter_key,
+                        body=f"## Step 11/13: Identify Issues (iter {review_iteration})\n\n{s11_report}",
+                        posted_steps=step_comments_set, cwd=cwd,
                     )
                     state["step_comments"] = sorted(step_comments_set)
-                except Exception as exc:  # pylint: disable=broad-except
-                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+                except Exception as _exc:
+                    console.print(f"[yellow]Warning: failed to post step 11 comment: {_exc}[/yellow]")
             if _review_loop_no_issues(s11_output):
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
@@ -2046,32 +2028,28 @@ def run_agentic_change_orchestrator(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
-            previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
-            state["previous_fixes"] = previous_fixes
-            # Round-2 of Greg's review: gate the trusted Step 12 post on
-            # s12_success. Same reasoning as Step 11 above — a failed fix
-            # task must not burn the composite key, otherwise a later
-            # successful retry of the same iteration would be deduped.
+            # Trusted post for Step 12 (iteration-keyed: iter * 100 + 12)
             if s12_success:
                 try:
+                    s12_iter_key = review_iteration * 100 + 12
                     s12_report = extract_step_report(s12_output)
-                    if not s12_report:
+                    if s12_report is None:
                         s12_report = (
-                            "_Step 12 completed; no `<step_report>` block returned "
-                            "by agent. Raw output retained in workflow state._"
+                            f"Step 12 (review iteration {review_iteration}) completed; "
+                            "no `<step_report>` block returned by agent. "
+                            "Raw output retained in workflow state."
                         )
                     post_step_comment_once(
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        issue_number=issue_number,
-                        step_num=review_iteration * 100 + 12,
-                        body=f"## Step 12/13: Fix (iteration {review_iteration})\n\n{s12_report}",
-                        posted_steps=step_comments_set,
-                        cwd=current_work_dir,
+                        repo_owner=repo_owner, repo_name=repo_name,
+                        issue_number=issue_number, step_num=s12_iter_key,
+                        body=f"## Step 12/13: Fix Issues (iter {review_iteration})\n\n{s12_report}",
+                        posted_steps=step_comments_set, cwd=cwd,
                     )
                     state["step_comments"] = sorted(step_comments_set)
-                except Exception as exc:  # pylint: disable=broad-except
-                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+                except Exception as _exc:
+                    console.print(f"[yellow]Warning: failed to post step 12 comment: {_exc}[/yellow]")
+            previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
+            state["previous_fixes"] = previous_fixes
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
         if review_iteration >= MAX_REVIEW_ITERATIONS:
@@ -2180,28 +2158,25 @@ def run_agentic_change_orchestrator(
         if not s13_success:
              post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
              console.print("[red]Step 13 (PR Creation) failed.[/red]")
-             state["step_comments"] = sorted(step_comments_set)
              save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
              return False, "PR Creation failed", total_cost, model_used, changed_files
+        # Trusted per-step success comment for Step 13
         try:
             s13_report = extract_step_report(s13_output)
-            if not s13_report:
+            if s13_report is None:
                 s13_report = (
-                    "_Step 13 completed; no `<step_report>` block returned "
-                    "by agent. Raw output retained in workflow state._"
+                    "Step 13 completed; no `<step_report>` block returned by agent. "
+                    "Raw output retained in workflow state."
                 )
             post_step_comment_once(
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                issue_number=issue_number,
-                step_num=13,
+                repo_owner=repo_owner, repo_name=repo_name,
+                issue_number=issue_number, step_num=13,
                 body=f"## Step 13/13: Create PR and link to issue\n\n{s13_report}",
-                posted_steps=step_comments_set,
-                cwd=current_work_dir,
+                posted_steps=step_comments_set, cwd=cwd,
             )
             state["step_comments"] = sorted(step_comments_set)
-        except Exception as exc:  # pylint: disable=broad-except
-            console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+        except Exception as _exc:
+            console.print(f"[yellow]Warning: failed to post step 13 comment: {_exc}[/yellow]")
         pr_url = "Unknown"; url_match = re.search(r"https://github.com/\S+/pull/\d+", s13_output)
         if url_match: pr_url = url_match.group(0)
         if not quiet:
