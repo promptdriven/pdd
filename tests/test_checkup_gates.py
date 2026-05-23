@@ -406,6 +406,77 @@ class TestDiscoverGates:
         assert "npm:lint:check" in names
         assert "npm:format:check" in names
 
+    def test_script_gate_detects_hidden_dir_config(self) -> None:
+        """Iter-36 Finding 1: ``.config/lint.json`` previously
+        collapsed to ``config/lint.json`` because the normaliser
+        used ``str.lstrip("./")``, which strips any combination of
+        ``.`` and ``/``. Use a single-prefix removeprefix so
+        hidden-directory paths survive the comparison.
+        """
+        from pdd.checkup_gates import _script_references_pr_modified_config
+
+        pr_set = {".config/lint.json"}
+        for script in (
+            "eslint --no-fix --config .config/lint.json src",
+            "eslint --no-fix --config ./.config/lint.json src",
+            'eslint --no-fix --config ".config/lint.json" src',
+        ):
+            assert _script_references_pr_modified_config(script, pr_set), (
+                f"hidden-dir config path missed in {script!r}"
+            )
+
+    def test_script_gate_detects_quoted_path_with_spaces(self) -> None:
+        """Iter-36 Finding 2: ``.split()`` breaks
+        ``--config "./config/lint config.json"`` into multiple
+        tokens, so the equality check silently failed. Use
+        shlex-style quote-aware tokenisation.
+        """
+        from pdd.checkup_gates import _script_references_pr_modified_config
+
+        pr_set = {"config/lint config.json"}
+        for script in (
+            'eslint --no-fix --config "./config/lint config.json" src',
+            "eslint --no-fix --config './config/lint config.json' src",
+            'eslint --no-fix --config="./config/lint config.json" src',
+        ):
+            assert _script_references_pr_modified_config(script, pr_set), (
+                f"quoted-with-spaces config path missed in {script!r}"
+            )
+
+    def test_npm_tsc_script_gate_skipped_when_extends_chain_base_pr_modified(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-36 Finding 3: ``tsconfig.json`` extending ``base.json``
+        lets a PR modify ``base.json`` (a NON-``tsconfig*.json``
+        name) to relax compiler options. The iter-27
+        ``tsconfig*.json`` filename check missed it and the
+        iter-29 chain walk only checked emit flags. Collect every
+        local tsconfig in the chain and skip the script gate when
+        ANY chain file is in the PR diff.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc -p tsconfig.json --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "base.json").write_text(
+            '{"compilerOptions": {"strict": true}}\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"extends": "./base.json"}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(
+            tmp_path, changed_files=("base.json",)
+        )
+        assert "npm:typecheck" not in {g.name for g in gates}
+
     def test_script_gate_handles_equals_and_short_config_forms(self) -> None:
         """Iter-34 Finding 3: ``--config=<path>`` and ``-c <path>``
         shorthand forms must also be recognised. Iter-35 Findings

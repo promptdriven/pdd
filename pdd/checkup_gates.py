@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -476,6 +477,84 @@ def _has_active_noemit(tokens: List[str]) -> bool:
     return False
 
 
+def _collect_tsconfig_chain_paths(
+    tsconfig_path: Path,
+    worktree: Path,
+    *,
+    _depth: int = 0,
+    _seen: Optional[set] = None,
+) -> List[str]:
+    """Return the worktree-relative POSIX paths of every tsconfig in
+    the extends chain rooted at ``tsconfig_path``.
+
+    iter-36 Finding 3: ``tsconfig.json`` extending ``base.json`` lets
+    a PR modify ``base.json`` to relax compiler options without
+    touching any file the iter-27 ``tsconfig*.json`` filename check
+    or the iter-34 ``--config <path>`` parser would recognise. The
+    script-tsc gate would then run with PR-controlled compiler
+    config and could false-pass. ``_discover_npm_gates`` uses this
+    helper to gate on whether ANY file in the chain is in the PR
+    diff.
+
+    Bounded by ``_MAX_TSCONFIG_EXTENDS_DEPTH``. Refuses to leave the
+    worktree. Follows only relative-path extends (package-name
+    extends resolve through ``node_modules`` — already covered by
+    the ``node_modules_pr_touched`` skip).
+    """
+    if _seen is None:
+        _seen = set()
+    paths: List[str] = []
+    if _depth > _MAX_TSCONFIG_EXTENDS_DEPTH:
+        return paths
+    if not tsconfig_path.is_file():
+        return paths
+    try:
+        resolved = tsconfig_path.resolve()
+    except (OSError, RuntimeError):
+        return paths
+    if resolved in _seen:
+        return paths
+    _seen.add(resolved)
+    try:
+        rel = resolved.relative_to(worktree.resolve()).as_posix()
+    except ValueError:
+        # The resolved path escaped the worktree; treat as
+        # untrustworthy and stop the walk.
+        return paths
+    paths.append(rel)
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return paths
+    extends_targets: List[str] = []
+    single = re.search(r'"extends"\s*:\s*"([^"]+)"', text)
+    if single:
+        extends_targets.append(single.group(1))
+    array = re.search(r'"extends"\s*:\s*\[([^\]]+)\]', text)
+    if array:
+        for m in re.finditer(r'"([^"]+)"', array.group(1)):
+            extends_targets.append(m.group(1))
+    for target in extends_targets:
+        if not (
+            target.startswith("./")
+            or target.startswith("../")
+            or target.startswith("/")
+        ):
+            # Package-name extends — out of worktree, skip.
+            continue
+        candidate = (resolved.parent / target).resolve()
+        if candidate.is_dir():
+            candidate = candidate / "tsconfig.json"
+        elif not candidate.name.endswith(".json"):
+            candidate = candidate.with_suffix(candidate.suffix + ".json")
+        paths.extend(
+            _collect_tsconfig_chain_paths(
+                candidate, worktree, _depth=_depth + 1, _seen=_seen
+            )
+        )
+    return paths
+
+
 def _tsconfig_chain_signals_emit(
     tsconfig_path: Path, worktree: Path, *, _depth: int = 0
 ) -> bool:
@@ -621,6 +700,21 @@ def _discover_npm_gates(
         or path.startswith("tsconfig.")
         for path in pr_changed_set
     )
+    # Iter-36 Finding 3: a PR can also change a custom-named base
+    # tsconfig (``base.json``, ``shared.tsconfig.json``, etc.) that
+    # the worktree's top-level ``tsconfig.json`` extends. The
+    # iter-29 chain walk only checked emit-flag values; it did NOT
+    # surface the chain's filenames. Collect every local tsconfig
+    # in the chain so the PR-modified-config skip catches non-
+    # ``tsconfig*.json``-named extends bases too.
+    if not tsconfig_changed:
+        chain_paths = set(
+            _collect_tsconfig_chain_paths(worktree / "tsconfig.json", worktree)
+        )
+        if chain_paths:
+            lowered_chain = {p.lower() for p in chain_paths}
+            if lowered_chain & pr_changed_set:
+                tsconfig_changed = True
     # Iter-29 Finding 2: prettier/eslint configs ``require()``
     # arbitrary local JavaScript — including files in subdirectories
     # like ``./src/plugin.js``. The iter-28 heuristic that allowed
@@ -1061,7 +1155,19 @@ def _script_references_pr_modified_config(
     """
     if not script_command:
         return False
-    tokens = script_command.lower().split()
+    # Iter-36 Finding 2: ``.split()`` breaks quoted paths that
+    # contain spaces (``--config "./config/lint config.json"``)
+    # into multiple tokens, so the equality check below silently
+    # fails. ``shlex.split`` respects shell quoting and preserves
+    # the path as a single token (and conveniently also strips the
+    # surrounding quote characters). Fall back to plain ``.split``
+    # if shlex raises on a malformed script — we'd rather still
+    # try to detect the config than crash the whole gate layer.
+    lowered = script_command.lower()
+    try:
+        tokens = shlex.split(lowered, posix=True)
+    except ValueError:
+        tokens = lowered.split()
     config_paths: List[str] = []
     flag_words = ("--config", "-c", "--project", "-p")
     flag_equals = tuple(f + "=" for f in flag_words)
@@ -1080,17 +1186,21 @@ def _script_references_pr_modified_config(
     for raw in config_paths:
         if not raw:
             continue
-        # Iter-35 Finding 2: split() leaves shell quote characters
-        # (``"`` and ``'``) attached to the token, so a path like
-        # ``"./config/lint.json"`` becomes the literal string
-        # ``"./config/lint.json"`` and the equality check below
-        # silently fails. Strip ONE level of matching quotes from
-        # each end before any other normalisation.
+        # Belt-and-braces: if a non-shlex tokenizer kept matching
+        # quote chars attached, strip one level. (shlex already
+        # removes them in the success path, so this only fires on
+        # the fallback split.)
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
             raw = raw[1:-1]
-        # Normalise: drop leading ``./`` so the comparison matches
-        # how the changed-file inventory stores paths.
-        norm = raw.lstrip("./")
+        # Iter-36 Finding 1: ``.lstrip("./")`` strips ANY combination
+        # of ``.`` and ``/`` from the start — so a hidden-directory
+        # path like ``.config/lint.json`` collapses to
+        # ``config/lint.json`` and silently misses the changed
+        # file. Use ``str.removeprefix`` (a single literal prefix)
+        # so only the explicit ``./`` leader is removed.
+        norm = raw
+        if norm.startswith("./"):
+            norm = norm[2:]
         if not norm:
             continue
         for changed in pr_changed_set:
