@@ -3217,3 +3217,147 @@ class TestTrackCostDoesNotLeakAcrossCommands:
         assert observed.get('attempted_models') is None, (
             "track_cost did not clear attempted_models after the command finished."
         )
+
+
+class TestBudgetValidatorsRejectNonScalar:
+    """Fourth-pass finding: non-scalar JSON (`{"budget_cap": []}`) for a
+    budget field caused ``float([])`` to raise ``TypeError``, which
+    FastAPI translates to HTTP 500. The right behaviour is HTTP 422 (a
+    validation error). The shared coercion helper now rejects
+    non-numeric types with ``ValueError`` so pydantic surfaces the
+    standard validation error.
+    """
+
+    @pytest.mark.parametrize("bad", [[], {}, [1, 2], {"a": 1}])
+    def test_budget_update_request_rejects_non_scalar(self, bad):
+        from pdd.server.models import BudgetUpdateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            BudgetUpdateRequest.model_validate({"budget_cap": bad})
+
+    @pytest.mark.parametrize("bad", [[], {}, [10], {"value": 30}])
+    def test_command_request_rejects_non_scalar(self, bad):
+        from pdd.server.models import CommandRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            CommandRequest.model_validate({"command": "bug", "budget_cap": bad})
+
+
+class TestNullBudgetCapClearsAliasOnIssue:
+    """Fourth-pass finding: for a pdd-issue job, bare ``budget_cap``
+    aliases to ``max_total_cap``. The alias rule used to fire only on
+    non-None values, so sending ``{"budget_cap": null}`` left the old
+    ``max_total_cap`` active and the visible "clear" was a silent
+    no-op. The route now aliases an explicit None too so a clear
+    actually clears the field the cap math reads.
+    """
+
+    @pytest.mark.asyncio
+    async def test_null_budget_cap_on_issue_clears_max_total_cap(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes.commands import update_job_budget
+        from pdd.server.models import BudgetUpdateRequest
+
+        async def slow_executor(job):
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.5)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        job = await mgr.submit(
+            "issue", args={}, options={}, node_budget=80.0, max_total_cap=400.0,
+        )
+        assert job.max_total_cap == 400.0
+
+        # Webhook forwards a clear as {"budget_cap": null}; route MUST
+        # interpret that as "clear the aliased max_total_cap".
+        request = BudgetUpdateRequest.model_validate({"budget_cap": None})
+        result = await update_job_budget(job.id, request, manager=mgr)
+
+        assert job.max_total_cap is None, (
+            "Null budget_cap on pdd-issue should have cleared the aliased "
+            f"max_total_cap; it stayed {job.max_total_cap}."
+        )
+        # node_budget alone with no max_total_cap yields effective_cap
+        # = node_budget * max(node_count or 1, 1) = 80.
+        assert result.effective_cap == 80.0
+
+
+class TestBudgetExceededBroadcastsToWebSocket:
+    """Fourth-pass finding: ``JobManager.callbacks.emit_budget_exceeded``
+    fires when the watcher trips, but ``create_websocket_routes`` only
+    registered ``on_output`` and ``on_complete``. A subscribed client
+    therefore received no typed ``budget_exceeded`` event — only the
+    subsequent ``complete`` message, with no way to distinguish a clean
+    completion from a budget abort. ``create_websocket_routes`` now
+    registers ``on_budget_exceeded`` and the new
+    ``emit_job_budget_exceeded`` helper assembles the typed
+    ``BudgetExceededMessage``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_websocket_registration_includes_budget_exceeded(self, tmp_path):
+        from unittest.mock import AsyncMock, MagicMock
+        from fastapi import FastAPI
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes import websocket as ws_module
+        from pdd.server.routes.websocket import (
+            ConnectionManager, create_websocket_routes,
+        )
+
+        app = FastAPI()
+        cm = ConnectionManager()
+        mgr = JobManager(max_concurrent=1, project_root=tmp_path)
+
+        create_websocket_routes(app, cm, mgr)
+
+        # The callback list must have an on_budget_exceeded entry now
+        # — without it the JobManager emits but no client subscriber
+        # receives.
+        assert len(mgr.callbacks._on_budget_exceeded) >= 1, (
+            "create_websocket_routes must register an on_budget_exceeded "
+            "callback so subscribed clients see the BudgetExceededMessage."
+        )
+
+    @pytest.mark.asyncio
+    async def test_emit_job_budget_exceeded_sends_typed_message(self, tmp_path, monkeypatch):
+        """The emit helper must build a ``BudgetExceededMessage`` (not a
+        bare ``WSMessage``) and route it through
+        ``ConnectionManager.broadcast_job_message`` so subscribers
+        receive the typed payload.
+        """
+        from unittest.mock import AsyncMock
+        from pdd.server.jobs import Job
+        from pdd.server.models import BudgetExceededMessage
+        from pdd.server.routes import websocket as ws_module
+
+        sent = []
+
+        class _ManagerStub:
+            async def broadcast_job_message(self, job_id, msg):
+                sent.append((job_id, msg))
+
+        # The websocket module reads a module-global `manager`. Patch
+        # it directly so the helper's `manager.broadcast_job_message`
+        # call lands on our stub.
+        monkeypatch.setattr(ws_module, "manager", _ManagerStub())
+
+        job = Job(
+            command="issue", node_budget=80.0, max_total_cap=400.0,
+            node_count=3,
+        )
+        await ws_module.emit_job_budget_exceeded(job, spent=401.23, effective_cap=400.0)
+
+        assert len(sent) == 1
+        job_id, msg = sent[0]
+        assert job_id == job.id
+        assert isinstance(msg, BudgetExceededMessage), (
+            f"Expected BudgetExceededMessage, got {type(msg).__name__}; "
+            "clients cannot distinguish budget abort from clean completion "
+            "without the typed message."
+        )
+        assert msg.spent == 401.23
+        assert msg.effective_cap == 400.0
+        assert msg.node_budget == 80.0
+        assert msg.max_total_cap == 400.0
+        assert msg.node_count == 3

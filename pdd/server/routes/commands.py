@@ -399,16 +399,19 @@ async def update_job_budget(
     # The cap math in `effective_cap("issue", ...)` ignores `budget_cap`,
     # so a webhook forwarding `/pdd budget N` on an issue job as
     # `{"budget_cap": N}` would otherwise be a no-op. Re-alias it to
-    # `max_total_cap` here so the effective cap actually moves. Only
-    # applies when the caller sent budget_cap and did not also send
-    # max_total_cap (the latter wins because it is the more specific
-    # verb for issue jobs).
+    # `max_total_cap` here so the effective cap actually moves. Applies
+    # when the caller sent `budget_cap` (numeric OR explicit None) and
+    # did not also send `max_total_cap` (the latter wins because it is
+    # the more specific verb for issue jobs). Aliasing an explicit None
+    # is what lets a caller clear the aliased max_total_cap by sending
+    # `{"budget_cap": null}` — dropping the alias on None would leave
+    # the old max_total_cap active and the visible "clear" would be a
+    # silent no-op.
     job_for_alias = manager.get_job(job_id)
     if (
         job_for_alias is not None
         and job_for_alias.command == "issue"
         and "budget_cap" in kwargs
-        and kwargs["budget_cap"] is not None
         and "max_total_cap" not in kwargs
     ):
         kwargs["max_total_cap"] = kwargs.pop("budget_cap")

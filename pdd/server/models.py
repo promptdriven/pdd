@@ -45,8 +45,16 @@ def _coerce_budget_amount_value(value: Any) -> Optional[float]:
             parsed = float(stripped)
         except ValueError as exc:
             raise ValueError(f"Non-numeric budget amount: {value!r}") from exc
-    else:
+    elif isinstance(value, (int, float)):
+        # Explicit numeric check so list/dict/other types fall to the
+        # else branch below as a ValueError, not a TypeError from
+        # float(value). FastAPI converts uncaught TypeError to HTTP 500;
+        # we want HTTP 422 for invalid budget JSON.
         parsed = float(value)
+    else:
+        raise ValueError(
+            f"Unsupported budget amount type {type(value).__name__}: {value!r}"
+        )
     if parsed != parsed or parsed in (float("inf"), float("-inf")):
         raise ValueError(f"Budget amount must be finite: {value!r}")
     if parsed <= 0:

@@ -49,20 +49,47 @@ class ProgressMessage(WSMessage):
         super().__init__(type="progress", data=None, current=current, total=total, message=message, timestamp=timestamp)
 
 
+class BudgetExceededMessage(WSMessage):
+    """Mock BudgetExceededMessage matching the real model's signature.
+
+    Required by the websocket module's ``from ..models import
+    BudgetExceededMessage`` at import time. Without this stub the
+    real models module is bypassed by the fixture's mock_models
+    table and the import fails at collection time.
+    """
+    def __init__(self, job_id, command, spent, effective_cap,
+                 node_budget=None, max_total_cap=None, node_count=None,
+                 timestamp=None):
+        super().__init__(
+            type="budget_exceeded", data=None,
+            job_id=job_id, command=command, spent=spent,
+            effective_cap=effective_cap, node_budget=node_budget,
+            max_total_cap=max_total_cap, node_count=node_count,
+            timestamp=timestamp,
+        )
+
+
 class JobStatus(Enum):
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    BUDGET_EXCEEDED = "budget_exceeded"
 
 
 class Job:
-    def __init__(self, id, status=JobStatus.RUNNING, result=None, cost=0.0):
+    def __init__(self, id, status=JobStatus.RUNNING, result=None, cost=0.0,
+                 command="bug", node_budget=None, max_total_cap=None,
+                 node_count=None):
         self.id = id
         self.status = status
         self.result = result
         self.cost = cost
+        self.command = command
+        self.node_budget = node_budget
+        self.max_total_cap = max_total_cap
+        self.node_count = node_count
 
 
 class JobManager:
@@ -102,6 +129,7 @@ def websocket_module():
     mock_models.StdoutMessage = StdoutMessage
     mock_models.StderrMessage = StderrMessage
     mock_models.ProgressMessage = ProgressMessage
+    mock_models.BudgetExceededMessage = BudgetExceededMessage
     mock_models.JobStatus = JobStatus
     mock_models.ServerConfig = ServerConfig
     mock_models.ServerStatus = ServerStatus

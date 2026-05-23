@@ -20,6 +20,7 @@ from ..models import (
     StderrMessage,
     ProgressMessage,
     JobStatus,
+    BudgetExceededMessage,
 )
 from ..jobs import JobManager, Job, JobStatus as JobStatusEnum
 
@@ -420,6 +421,26 @@ async def emit_job_complete(job_id: str, result: Any, success: bool, cost: float
     await manager.broadcast_job_message(job_id, msg)
 
 
+async def emit_job_budget_exceeded(job: Job, spent: float, effective_cap: float):
+    """Broadcast a typed ``BudgetExceededMessage`` to the job's subscribers.
+
+    Fires exactly once when the watcher trips the active cap; the message
+    carries enough context (job_id, command, spent, effective_cap, plus
+    pdd-issue specifics) for clients to render the budget-exceeded UI
+    without an extra REST round-trip.
+    """
+    msg = BudgetExceededMessage(
+        job_id=job.id,
+        command=job.command,
+        spent=float(spent),
+        effective_cap=float(effective_cap),
+        node_budget=job.node_budget,
+        max_total_cap=job.max_total_cap,
+        node_count=job.node_count,
+    )
+    await manager.broadcast_job_message(job.id, msg)
+
+
 async def emit_spawned_job_complete(job_id: str, command: str, success: bool, exit_code: int):
     """
     Helper to emit spawned job completion to ALL connected clients.
@@ -469,5 +490,19 @@ def create_websocket_routes(app, connection_manager: ConnectionManager, job_mana
             success = job.status == JobStatusEnum.COMPLETED
             await emit_job_complete(job.id, job.result, success, job.cost)
 
+        async def on_job_budget_exceeded(job_id: str, spent: float, cap: float):
+            """Broadcast the typed ``BudgetExceededMessage`` once the watcher
+            trips. Without this registration the JobManager emits the event
+            internally but no client ever sees it, so a UI watching a
+            capped run would only learn about the cap crossing from the
+            subsequent ``complete`` message — and would have no way to
+            distinguish a successful completion from a budget abort.
+            """
+            job = job_manager.get_job(job_id)
+            if job is None:
+                return
+            await emit_job_budget_exceeded(job, spent, cap)
+
         job_manager.callbacks.on_output(on_job_output)
         job_manager.callbacks.on_complete(on_job_complete)
+        job_manager.callbacks.on_budget_exceeded(on_job_budget_exceeded)

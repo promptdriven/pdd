@@ -40,19 +40,32 @@
      - `emit_job_output(job_id, stream, text)`: Broadcast stdout/stderr with ANSI cleaning
      - `emit_job_progress(job_id, current, total, message)`: Broadcast progress
      - `emit_job_complete(job_id, result, success, cost)`: Broadcast completion
+     - `emit_job_budget_exceeded(job, spent, effective_cap)`: Broadcast a typed
+       `BudgetExceededMessage` (from `pdd.server.models`) to the job's
+       subscribers when the watcher trips. Includes the per-issue
+       fields `node_budget`, `max_total_cap`, and `node_count` so
+       clients can render the pdd-issue formula without an extra REST
+       round-trip.
      - `emit_spawned_job_complete(job_id, command, success, exit_code)`: Broadcast spawned terminal job completion to ALL clients (uses broadcast_to_all)
 
   5. **App Integration**:
      - `create_websocket_routes(app, connection_manager, job_manager)`: Register router and callbacks
      - Replaces global manager instance
-     - Registers on_output and on_complete callbacks with job_manager if provided
+     - Registers `on_output`, `on_complete`, AND `on_budget_exceeded`
+       callbacks with `job_manager` if provided. The
+       `on_budget_exceeded` registration MUST resolve the `Job` from
+       its `job_id` (the callback signature is
+       `(job_id, spent, cap)`) and call `emit_job_budget_exceeded(job,
+       spent, cap)` so the typed `BudgetExceededMessage` reaches
+       subscribed clients. Without this registration the JobManager
+       fires the event internally but no client ever observes it.
 
   6. **Dependencies**:
      - Dependency functions `get_job_manager()` and `get_project_root()` as injection points
      - Raise NotImplementedError to be overridden by app's dependency_overrides
 
 % Dependencies
-  Use models from pdd/server/models.py: WSMessage, StdoutMessage, StderrMessage, ProgressMessage, JobStatus
+  Use models from pdd/server/models.py: WSMessage, StdoutMessage, StderrMessage, ProgressMessage, JobStatus, BudgetExceededMessage
   <pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
 
   Use job manager for job status and control:
