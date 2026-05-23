@@ -96,4 +96,5 @@
   - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
   - Print out the commands as they run.
   - If the directory doesn't already exist, create it.
+  - Test and validation targets (including test, coverage, lint, and regression targets) MUST use the checked-in Makefile and MUST NOT regenerate Makefile through pdd generate before validation. Reserve Makefile generation for explicit generation or staging workflows.
   - To run 'pdd', use the command: ```python pdd/pdd.py`````

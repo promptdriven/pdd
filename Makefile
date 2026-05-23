@@ -92,6 +92,12 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
+# Validation targets should use the checked-in Makefile, not invoke generation first.
+NO_MAKEFILE_REGEN_GOALS := test coverage lint regression regression-public sync-regression all-regression cloud-regression
+ifneq ($(filter $(NO_MAKEFILE_REGEN_GOALS),$(MAKECMDGOALS)),)
+SKIP_MAKEFILE_REGEN := 1
+endif
+
 # Auto-skip Makefile regeneration if prompt file doesn't exist (e.g., public repo)
 ifeq ($(wildcard $(MAKEFILE_PROMPT)),)
 SKIP_MAKEFILE_REGEN := 1
