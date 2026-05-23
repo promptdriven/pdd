@@ -945,6 +945,7 @@ def sync_main(
                     # Phase 1: Run pdd generate to create the code file
                     pre_cost = 0.0
                     pre_model = ""
+                    _generate_ran = False
                     if not pdd_files["code"].exists() or force:
                         from .code_generator_main import (
                             code_generator_main,
@@ -1100,6 +1101,7 @@ def sync_main(
                         # code_generator_main returns (content, was_incremental, cost, model)
                         pre_cost += gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
                         pre_model = gen_result[3] if gen_result and len(gen_result) > 3 else pre_model
+                        _generate_ran = True
                     elif not quiet:
                         rprint("[dim]Code file exists, skipping generate.[/dim]")
 
@@ -1127,6 +1129,21 @@ def sync_main(
                         )
                         # Merge costs from both phases
                         one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
+
+                        # Surface the pre-generate phase in operations_completed and
+                        # summary so the Details column doesn't under-report when the
+                        # generate phase actually ran in one-session mode.
+                        if _generate_ran and one_session_result.get("success"):
+                            existing_ops = list(one_session_result.get("operations_completed") or [])
+                            if "generate" not in existing_ops:
+                                one_session_result["operations_completed"] = ["generate"] + existing_ops
+                            existing_summary = one_session_result.get("summary") or ""
+                            if "generate" not in existing_summary:
+                                merged_ops = ", ".join(one_session_result["operations_completed"])
+                                one_session_result["summary"] = (
+                                    f"One-session sync complete (operations: {merged_ops})"
+                                )
+
                         sync_result = one_session_result
 
                         # Post-sync: save fingerprint so next sync sees files as up-to-date
