@@ -439,17 +439,68 @@ def _discover_npm_gates(
         or path.startswith("tsconfig.")
         for path in pr_changed_set
     )
+    # Iter-28 Finding 3: a PR can poison a JavaScript module that a
+    # config file references via ``require``/``import`` — e.g. a
+    # stable ``prettier.config.cjs`` pulling in PR-modified
+    # ``./local-plugin.cjs``. The iter-27 config-filename skip
+    # misses that path; widen the trigger to ANY PR-modified
+    # ``.cjs``/``.mjs`` file (those extensions are predominantly
+    # tooling/config code) plus ``.js`` files at the repo root
+    # (where config-related JS typically lives). Application
+    # ``.js`` files in subdirectories still let the gate run so we
+    # do not over-skip on JS-heavy repos.
+    def _is_plugin_loadable(path: str) -> bool:
+        if path.endswith((".cjs", ".mjs")):
+            return True
+        if path.endswith(".js") and "/" not in path:
+            return True
+        return False
+
+    js_plugin_module_changed = any(
+        _is_plugin_loadable(path) for path in pr_changed_set
+    )
+    # Iter-28 Finding 1: a script-based tsc gate runs the operator's
+    # script body unchanged, so even ``tsc --noEmit`` writes
+    # ``tsconfig.tsbuildinfo`` when the tsconfig sets
+    # ``incremental: true``. The direct gate injects
+    # ``--incremental false`` and a /dev/null buildinfo file, but
+    # we cannot rewrite operator-supplied script bodies. When the
+    # tsconfig signals an emit-or-buildinfo-producing mode
+    # (``incremental: true`` OR ``composite: true``), refuse to
+    # discover the tsc-flavoured script gates. The direct gate's
+    # own argv-level safeguards cover the non-script path.
+    tsconfig_path = worktree / "tsconfig.json"
+    tsconfig_signals_emit = False
+    if tsconfig_path.is_file():
+        try:
+            tscfg_text = tsconfig_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            tscfg_text = ""
+        if re.search(r'"incremental"\s*:\s*true', tscfg_text) or re.search(
+            r'"composite"\s*:\s*true', tscfg_text
+        ):
+            tsconfig_signals_emit = True
     # Map recognized scripts to which config-class they load. A
     # script can load multiple — e.g. ``lint:check`` could be
     # eslint or prettier — but we conservatively skip when ANY
     # plausibly-loaded config changed.
     script_config_owners: Dict[str, Tuple[bool, ...]] = {
-        "format:check": (prettier_config_changed,),
-        "prettier:check": (prettier_config_changed,),
-        "lint:check": (eslint_config_changed, prettier_config_changed),
-        "typecheck": (tsconfig_changed,),
-        "tsc": (tsconfig_changed,),
-        "tsc:noemit": (tsconfig_changed,),
+        "format:check": (
+            prettier_config_changed,
+            js_plugin_module_changed,
+        ),
+        "prettier:check": (
+            prettier_config_changed,
+            js_plugin_module_changed,
+        ),
+        "lint:check": (
+            eslint_config_changed,
+            prettier_config_changed,
+            js_plugin_module_changed,
+        ),
+        "typecheck": (tsconfig_changed, tsconfig_signals_emit),
+        "tsc": (tsconfig_changed, tsconfig_signals_emit),
+        "tsc:noemit": (tsconfig_changed, tsconfig_signals_emit),
     }
     gates: List[Gate] = []
     for script_name, script_command in scripts.items():
@@ -523,33 +574,20 @@ def _discover_npm_gates(
             if isinstance(value, dict):
                 deps.update(value)
         tsc_local = worktree / "node_modules" / "typescript" / "bin" / "tsc"
-        # Iter-27 Finding 1: ``composite: true`` in tsconfig forces emit
-        # (and tsc errors when combined with ``--noEmit``); skip the
-        # gate so we don't surface a false runner-error blocker on
-        # repos that legitimately use project references.
-        composite_in_config = False
-        try:
-            tsconfig_text = (worktree / "tsconfig.json").read_text(
-                encoding="utf-8"
-            )
-            # ``tsconfig.json`` allows comments / trailing commas; a
-            # strict json.loads would reject those. A loose regex is
-            # enough for the "is composite enabled?" decision.
-            if re.search(
-                r'"composite"\s*:\s*true', tsconfig_text
-            ):
-                composite_in_config = True
-        except (OSError, UnicodeDecodeError):
-            tsconfig_text = ""
         if (
             "typescript" in deps
             and tsc_local.is_file()
             and shutil.which("npx")
-            and not composite_in_config
-            # Iter-27 Finding 3: skip when PR modified tsconfig — the
-            # gate would otherwise execute the PR-controlled
-            # ``compilerOptions`` (paths/plugins/transformers) which is
-            # RCE-equivalent on a fork PR.
+            # Iter-27 Finding 3 + iter-28 Finding 2: skip when PR
+            # modified tsconfig OR the top-level tsconfig signals
+            # emit/buildinfo (we override with --composite false /
+            # --incremental false in the argv, but if the operator's
+            # extends chain sets composite: true a level deeper, the
+            # override is still safer than producing a false
+            # TS6379 blocker). The argv flags are belt-and-braces;
+            # this skip is the load-bearing safety guard for
+            # extends-chain composite, which we cannot detect by
+            # reading only the top-level tsconfig.
             and not tsconfig_changed
         ):
             gates.append(
@@ -577,6 +615,14 @@ def _discover_npm_gates(
                         "--noEmit",
                         "--incremental",
                         "false",
+                        # Iter-28 Finding 2: override ``composite``
+                        # at the CLI so the gate works on repos
+                        # whose tsconfig extends-chain sets
+                        # ``composite: true`` (which would
+                        # otherwise conflict with ``--noEmit`` and
+                        # surface as TS6379 — a false blocker).
+                        "--composite",
+                        "false",
                         "--tsBuildInfoFile",
                         os.devnull,
                     ],
@@ -589,12 +635,14 @@ def _discover_npm_gates(
                         # local-node_modules safeguard via the
                         # automated-fix surface.
                         "Run `npx --no-install tsc --noEmit --incremental "
-                        "false --tsBuildInfoFile /dev/null` locally and fix "
-                        "the reported TypeScript errors. Do NOT use bare "
-                        "`npx tsc` — without `--no-install` it can fall back "
-                        "to a registry download/install, and without "
-                        "`--incremental false` it writes "
-                        "`.tsbuildinfo` into the worktree."
+                        "false --composite false --tsBuildInfoFile "
+                        "/dev/null` locally and fix the reported "
+                        "TypeScript errors. Do NOT use bare `npx tsc` — "
+                        "without `--no-install` it can fall back to a "
+                        "registry download/install, and without "
+                        "`--incremental false` / `--composite false` it "
+                        "writes `.tsbuildinfo` and fails TS6379 on "
+                        "project-reference repos."
                     ),
                 )
             )

@@ -370,6 +370,149 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_npm_tsc_script_gate_skipped_when_tsconfig_signals_incremental_emit(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-28 Finding 1: a script-based tsc gate (e.g.
+        ``"typecheck": "tsc --noEmit"``) runs the operator's
+        unmodified argv. When tsconfig has ``incremental: true`` even
+        the noEmit form writes ``tsconfig.tsbuildinfo`` into the
+        worktree. The script gate cannot inject ``--incremental
+        false`` like the direct gate can, so we MUST skip discovery
+        on those repos."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {"incremental": true}}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "npm:typecheck" not in names
+
+    def test_npm_tsc_script_gate_skipped_when_tsconfig_signals_composite(
+        self, tmp_path: Path
+    ) -> None:
+        """Same as above for ``composite: true`` (which conflicts
+        with --noEmit AND writes buildinfo)."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {"composite": true}}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "npm:typecheck" not in names
+
+    def test_tsc_direct_gate_passes_composite_false(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-28 Finding 2: ``composite: true`` set via the
+        tsconfig extends chain only surfaces at compile time. The
+        argv MUST pass ``--composite false`` to override regardless
+        of what the resolved tsconfig says, so the gate doesn't
+        produce a false TS6379 blocker on project-reference repos."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0", "scripts": {},
+                "devDependencies": {"typescript": "^5.0.0"},
+            }),
+            encoding="utf-8",
+        )
+        # tsconfig itself does NOT enable composite — the extends
+        # chain is what would trip TS6379. The argv defense fires
+        # regardless of the top-level value.
+        (tmp_path / "tsconfig.json").write_text("{}\n", encoding="utf-8")
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=())
+        tsc_gates = [g for g in gates if g.name == "tsc-noemit"]
+        if not tsc_gates:  # ``npx`` not on PATH in sandbox
+            return
+        cmd = tsc_gates[0].cmd
+        assert "--composite" in cmd, cmd
+        idx = cmd.index("--composite")
+        assert cmd[idx + 1] == "false", cmd
+
+    def test_prettier_script_gate_skipped_when_pr_changes_plugin_module(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-28 Finding 3: an unchanged ``prettier.config.cjs``
+        can ``require('./local-plugin.cjs')`` — a PR that only
+        modifies the plugin module still achieves RCE through the
+        prettier gate. The iter-27 config-filename skip misses it.
+        Widen the skip to ANY PR-modified ``.cjs``/``.mjs`` file
+        plus any ``.js`` at the repo root (the common locations
+        for tooling/plugin code).
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        # PR ONLY touched a plugin module loaded transitively.
+        gates = discover_gates(
+            tmp_path, changed_files=("local-plugin.cjs",)
+        )
+        names = [g.name for g in gates]
+        assert "npm:format:check" not in names
+        # ``.mjs`` plugin module same.
+        gates = discover_gates(
+            tmp_path, changed_files=("plugins/foo.mjs",)
+        )
+        assert "npm:format:check" not in [g.name for g in gates]
+        # ``.js`` at the repo root (common for ``prettier.config.js``
+        # plugin imports) same.
+        gates = discover_gates(
+            tmp_path, changed_files=("plugin.js",)
+        )
+        assert "npm:format:check" not in [g.name for g in gates]
+
+    def test_prettier_script_gate_still_fires_on_application_js_change(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative test for Finding 3: don't over-skip. Application
+        ``.js`` files in subdirectories are far more common than
+        plugin imports and skipping every JS-touching PR would
+        gut the gate. Only repo-root ``.js`` and ``.cjs``/``.mjs``
+        anywhere trip the skip."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        gates = discover_gates(
+            tmp_path,
+            changed_files=("src/app.js", "src/components/foo.js"),
+        )
+        names = [g.name for g in gates]
+        assert "npm:format:check" in names
+
     def test_tsc_noemit_substring_bypass_rejected(self) -> None:
         """Iter-27 Finding 2: ``tsc --noEmitOnError`` is a DIFFERENT
         TypeScript flag that does NOT suppress emit; the prior
@@ -435,13 +578,16 @@ class TestDiscoverGates:
         idx = cmd.index("--tsBuildInfoFile")
         assert cmd[idx + 1] == os.devnull, cmd
 
-    def test_tsc_direct_gate_skipped_when_composite_config(
+    def test_tsc_direct_gate_emits_with_composite_false_even_on_composite_config(
         self, tmp_path: Path
     ) -> None:
-        """Iter-27 Finding 1: ``composite: true`` conflicts with
-        ``--noEmit`` (tsc errors). Skip the gate so we don't spam
-        false runner-error blockers on legitimate project-reference
-        repos."""
+        """Iter-28 Finding 2 replaces iter-27's top-level composite
+        skip. The argv now passes ``--composite false`` to override
+        whatever the tsconfig (or its extends chain) says, so the
+        gate STILL emits — and the tsc invocation no longer hits
+        TS6379. The top-level skip is removed because it only
+        covered top-level composite, while extends-chain composite
+        was still a false-blocker hazard."""
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
@@ -460,7 +606,14 @@ class TestDiscoverGates:
         tsc_dir.mkdir(parents=True)
         (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
         gates = discover_gates(tmp_path, changed_files=())
-        assert "tsc-noemit" not in {g.name for g in gates}
+        tsc_gates = [g for g in gates if g.name == "tsc-noemit"]
+        if not tsc_gates:  # ``npx`` not on PATH in sandbox
+            return
+        cmd = tsc_gates[0].cmd
+        # The argv carries the composite override; top-level
+        # composite must NOT cause discovery to skip.
+        idx = cmd.index("--composite")
+        assert cmd[idx + 1] == "false", cmd
 
     def test_npm_gate_skipped_when_pr_modified_prettier_config(
         self, tmp_path: Path
