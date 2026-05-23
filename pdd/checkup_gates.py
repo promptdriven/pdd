@@ -708,6 +708,23 @@ def _discover_npm_gates(
                 script_name,
             )
             continue
+        # Iter-34 Finding 3: stable script bodies can also reference
+        # an EXPLICIT custom config via ``--config <path>`` (or
+        # ``--config=<path>``, ``-c <path>``). The iter-27 well-known-
+        # config skip only catches default-named config files
+        # (``prettier.config.*`` / ``.eslintrc*`` / ``tsconfig*``);
+        # an operator-supplied custom path slips through. Parse the
+        # script body for any ``--config`` / ``-c`` argument and
+        # skip when that path is in the PR diff.
+        if _script_references_pr_modified_config(
+            script_command, pr_changed_set
+        ):
+            logger.debug(
+                "checkup-gates: skipping npm:%s — script body references "
+                "a PR-modified --config path",
+                script_name,
+            )
+            continue
         # npm/yarn/pnpm/bun all execute ``pre<name>`` and ``post<name>``
         # lifecycle hooks around ``<runner> run <name>``. Discovery only
         # inspects the named script; if a malicious or untrusted PR adds
@@ -948,21 +965,16 @@ def _discover_python_gates(
         or path.endswith("tox.ini")
         for path in pr_changed_pyset
     )
-    # Iter-32 Finding 1: mypy honours ``plugins = ["evil_plugin.py"]``
-    # under ``[tool.mypy]``. The iter-31 config-touched skip caught
-    # the case where the PR adds the plugin declaration AND the
-    # plugin file in the same diff. But a STABLE pyproject.toml
-    # already declaring a local-path plugin still lets the PR
-    # achieve RCE by modifying just the plugin file. Inspect the
-    # declared plugin list: if ANY entry looks like a worktree-
-    # local path (relative, absolute, or ends in ``.py``), refuse
-    # to run the mypy gate at all — we cannot prove the operator's
-    # plugins are safe against the PR's diff. Pure-package plugins
-    # (``mypy_django_plugin.main``) stay supported because the only
-    # way a PR could change those is via dependency installation,
-    # which would land under ``node_modules``/``site-packages`` or
-    # in a PR-touched dependency file — handled separately.
-    local_mypy_plugin_declared = _mypy_declares_local_plugin(pyproject_text)
+    # Iter-32 Finding 1 + iter-34 Finding 2: mypy honours
+    # ``plugins = ["evil_plugin.py"]`` from MULTIPLE config
+    # surfaces — ``[tool.mypy]`` under pyproject.toml AND ``[mypy]``
+    # under mypy.ini / .mypy.ini / setup.cfg. The iter-32 helper
+    # only parsed pyproject.toml, missing a stable mypy.ini that
+    # references a worktree-local plugin file the PR can then
+    # modify in isolation. Now we check every mypy config surface.
+    local_mypy_plugin_declared = _mypy_declares_local_plugin_anywhere(
+        worktree, pyproject_text
+    )
 
     # Iter-25 Finding 2: end-of-options ``--`` before the changed-file
     # list. Without it a PR that adds a file named ``--config=evil.py``
@@ -1022,6 +1034,125 @@ def _discover_python_gates(
             )
         )
     return gates
+
+
+def _script_references_pr_modified_config(
+    script_command: str, pr_changed_set: set
+) -> bool:
+    """Return True iff the script body's ``--config`` / ``-c`` argument
+    references a PR-modified file.
+
+    iter-34 Finding 3: an operator who points eslint/prettier/tsc at
+    a custom config file (``eslint --no-fix --config config/lint.json
+    src``) bypasses the iter-27 well-known-config skip — that skip
+    only watches default-named configs. We scan the script tokens
+    for ``--config <path>`` (and ``--config=<path>``, ``-c <path>``,
+    ``-c=<path>``) and treat the gate as unsafe when the cited path
+    appears in the PR diff. Path comparison is case-insensitive and
+    tolerant of leading ``./``.
+    """
+    if not script_command:
+        return False
+    tokens = script_command.lower().split()
+    config_paths: List[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("--config", "-c") and i + 1 < len(tokens):
+            config_paths.append(tokens[i + 1])
+            i += 2
+            continue
+        if tok.startswith("--config=") or tok.startswith("-c="):
+            config_paths.append(tok.split("=", 1)[1])
+        i += 1
+    for path in config_paths:
+        if not path:
+            continue
+        # Normalise: drop leading ``./`` so the comparison matches
+        # how the changed-file inventory stores paths.
+        norm = path.lstrip("./")
+        for changed in pr_changed_set:
+            if changed == norm or changed.endswith("/" + norm):
+                return True
+    return False
+
+
+def _mypy_declares_local_plugin_anywhere(
+    worktree: Path, pyproject_text: str
+) -> bool:
+    """Return True iff ANY mypy config surface declares a local plugin.
+
+    iter-34 Finding 2 generalises iter-32 Finding 1's check from
+    pyproject.toml to every config surface mypy actually reads:
+      * pyproject.toml ``[tool.mypy] plugins = ...``
+      * mypy.ini ``[mypy] plugins = ...``
+      * .mypy.ini ``[mypy] plugins = ...``
+      * setup.cfg ``[mypy] plugins = ...``
+
+    A "local plugin" is any entry that contains ``/`` or ``\\``,
+    starts with ``./`` / ``../``, or ends in ``.py``. Pure package
+    imports (``mypy_django_plugin.main``) stay supported because
+    PR diffs cannot rename or replace them without also touching
+    a dependency manifest the config-touched skip already catches.
+    """
+    if _mypy_declares_local_plugin(pyproject_text):
+        return True
+    for name, header_pattern in (
+        ("mypy.ini", r"^\s*\[\s*mypy\s*\]\s*$"),
+        (".mypy.ini", r"^\s*\[\s*mypy\s*\]\s*$"),
+        ("setup.cfg", r"^\s*\[\s*mypy\s*\]\s*$"),
+    ):
+        path = worktree / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _ini_section_has_local_plugin(text, header_pattern):
+            return True
+    return False
+
+
+def _ini_section_has_local_plugin(text: str, header_pattern: str) -> bool:
+    """Return True iff the ``[mypy]`` section of an INI/CFG file declares
+    a worktree-local plugin path.
+
+    INI plugin syntax: ``plugins = pkg.main, ./local_plugin.py`` (comma-
+    or whitespace-separated). We tokenize on commas and whitespace and
+    apply the same local-path heuristic as the pyproject helper.
+    """
+    if not text:
+        return False
+    header = re.search(header_pattern, text, re.MULTILINE)
+    if not header:
+        return False
+    tail = text[header.end():]
+    next_section = re.search(r"^\s*\[", tail, re.MULTILINE)
+    section = tail if not next_section else tail[: next_section.start()]
+    plugins_match = re.search(
+        r"^\s*plugins\s*=\s*(.+?)\s*$",
+        section,
+        re.MULTILINE,
+    )
+    if not plugins_match:
+        return False
+    # INI plugin list: comma- or whitespace-separated bare tokens
+    # (no quoting). Split on either.
+    raw = plugins_match.group(1).strip()
+    for entry in re.split(r"[,\s]+", raw):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if (
+            "/" in entry
+            or "\\" in entry
+            or entry.startswith("./")
+            or entry.startswith("../")
+            or entry.endswith(".py")
+        ):
+            return True
+    return False
 
 
 def _mypy_declares_local_plugin(pyproject_text: str) -> bool:

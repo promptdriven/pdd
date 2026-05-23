@@ -370,6 +370,94 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_script_gate_skipped_when_custom_config_pr_modified(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-34 Finding 3: stable script bodies can point at a
+        custom config via ``--config <path>``. The iter-27
+        well-known-config skip misses these because it only checks
+        default-named files. Skip the gate when the cited path is
+        in the PR diff.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({
+                "lint:check": "eslint --no-fix --config config/lint.json src",
+                "format:check": "prettier --check --config tools/p.json .",
+            }),
+            encoding="utf-8",
+        )
+        # PR modifies the custom config path — corresponding gate skips.
+        gates = discover_gates(
+            tmp_path, changed_files=("config/lint.json",)
+        )
+        assert "npm:lint:check" not in {g.name for g in gates}
+        gates = discover_gates(
+            tmp_path, changed_files=("tools/p.json",)
+        )
+        assert "npm:format:check" not in {g.name for g in gates}
+        # Sanity: a non-config / non-JS PR touch still lets the
+        # gates fire (subject to other iter-29/30 skips — use a
+        # markdown file so the JS-plugin skip does not trip).
+        gates = discover_gates(tmp_path, changed_files=("README.md",))
+        names = {g.name for g in gates}
+        assert "npm:lint:check" in names
+        assert "npm:format:check" in names
+
+    def test_script_gate_handles_equals_and_short_config_forms(self) -> None:
+        """Iter-34 Finding 3: ``--config=<path>`` and ``-c <path>``
+        shorthand forms must also be recognised."""
+        from pdd.checkup_gates import _script_references_pr_modified_config
+
+        pr_set = {"config/lint.json"}
+        for script in (
+            "eslint --no-fix --config config/lint.json src",
+            "eslint --no-fix --config=config/lint.json src",
+            "eslint --no-fix -c config/lint.json src",
+            "eslint --no-fix -c=config/lint.json src",
+        ):
+            assert _script_references_pr_modified_config(script, pr_set), (
+                f"missed --config reference in {script!r}"
+            )
+        # Unrelated PR-modified file does NOT trip the skip.
+        assert not _script_references_pr_modified_config(
+            "eslint --no-fix --config config/lint.json src",
+            {"src/foo.ts"},
+        )
+
+    def test_mypy_gate_skipped_when_mypy_ini_declares_local_plugin(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-34 Finding 2: mypy.ini / setup.cfg ``[mypy] plugins``
+        was not parsed by iter-32. A stable mypy.ini referencing a
+        worktree-local plugin plus a PR modifying ONLY that plugin
+        file slipped past the pyproject-only check.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.mypy]\n", encoding="utf-8"
+        )
+        # mypy.ini variant.
+        (tmp_path / "mypy.ini").write_text(
+            "[mypy]\nplugins = ./evil_plugin.py\n",
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        assert "mypy" not in {g.name for g in gates}
+        # setup.cfg variant with a mixed package/local plugin list.
+        (tmp_path / "mypy.ini").unlink()
+        (tmp_path / "setup.cfg").write_text(
+            "[mypy]\nplugins = some_pkg.main, plugins/evil.py\n",
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        assert "mypy" not in {g.name for g in gates}
+
     def test_script_rejects_tsc_unsafe_runtime_flags(self) -> None:
         """Iter-33: ``--noEmit`` only suppresses ``.js``/``.d.ts``
         emission. A long tail of OTHER tsc flags still hang the

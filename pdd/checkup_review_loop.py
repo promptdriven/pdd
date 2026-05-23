@@ -3817,7 +3817,30 @@ def _pr_changed_files_all(
         ):
             return names
 
-    # HEAD~1 fallback — better than ``[]`` on a single-commit smoke test.
+    # Iter-34 Finding 1: every authoritative base resolution
+    # failed. The previous behaviour fell back to ``HEAD~1...HEAD``
+    # which silently returned a TRUNCATED view — earlier commits on
+    # a multi-commit PR were invisible. The iter-30
+    # ``node_modules`` skip and the iter-27/iter-32 config-touched
+    # skips all depend on a complete changed-file inventory; a
+    # truncated list lets a PR-controlled shim slip through.
+    # Signal the fallback ONLY when the caller actually expected a
+    # PR-range diff (pr_metadata carried base_ref / base_local_ref).
+    # When the caller passed an empty metadata dict — e.g. unit
+    # tests exercising other fail-closed branches against a
+    # non-PR-shaped tmp_path — the fallback is the only sensible
+    # path and should NOT trigger the iter-34 blocker.
+    if (
+        pr_metadata is not None
+        and isinstance(pr_metadata, dict)
+        and (pr_metadata.get("base_ref") or pr_metadata.get("base_local_ref"))
+    ):
+        pr_metadata["changed_files_fallback"] = (
+            "PR-range diff against every base candidate failed; "
+            "fell back to HEAD~1...HEAD which truncates multi-commit "
+            "PRs and lets node_modules / config skips miss earlier "
+            "commits"
+        )
     try:
         diff = subprocess.run(
             ["git", "diff", "--name-only", "HEAD~1...HEAD"],
@@ -3930,6 +3953,60 @@ def _enforce_gates_before_clean(
     except Exception as exc:  # noqa: BLE001 - defensive: never raise
         logger.debug("gates: changed-files resolution crashed: %s", exc, exc_info=True)
         changed_files = []
+    # Iter-34 Finding 1: if the scanner had to fall back to
+    # ``HEAD~1...HEAD`` (set on ``pr_metadata['changed_files_fallback']``),
+    # the changed-file inventory is TRUNCATED — earlier commits on a
+    # multi-commit PR are invisible. Several safety skips
+    # (``node_modules_pr_touched``, the iter-27/iter-32 config-touched
+    # rules) depend on a complete inventory; a truncated list lets
+    # earlier-commit poisoning slip through. Fail closed with a
+    # synthetic blocker just like the base-ref-refresh failure path.
+    if pr_metadata and pr_metadata.get("changed_files_fallback"):
+        scrubbed_err = _scrub_secrets(
+            str(pr_metadata["changed_files_fallback"])
+        )
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": scrubbed_err,
+                "phase": "changed-files-resolution",
+            }
+        )
+        return [
+            ReviewFinding(
+                severity="blocker",
+                reviewer="gate:changed-files",
+                area="deterministic-gate",
+                evidence=scrubbed_err,
+                finding=(
+                    "Deterministic gate layer cannot prove the PR's "
+                    "changed-file inventory is complete: every "
+                    "merge-base diff candidate failed and the scanner "
+                    "fell back to HEAD~1...HEAD. Several safety skips "
+                    "(node_modules, tool-config) depend on the full "
+                    "inventory, so the gate set may admit code paths "
+                    "the operator did not intend to verify. Refusing "
+                    "clean verdict until the diff resolution works."
+                ),
+                required_fix=(
+                    "Verify the PR base branch was fetched into the "
+                    "loop's worktree (the orchestrator's "
+                    "_refresh_pr_base_ref helper should populate "
+                    "refs/remotes/pdd-checkup/pr-<N>/base) and that "
+                    "the head was checked out with full history. "
+                    "Then re-run `pdd checkup --pr --review-loop`. "
+                    "Pass `--no-gates` only as a last-resort "
+                    "diagnostic; never as a workaround on a PR-side "
+                    "ship gate."
+                ),
+                location="pdd/checkup_review_loop.py:_pr_changed_files_all",
+                status="open",
+                round_number=round_number,
+            )
+        ]
     base_ref_value: Optional[str] = None
     # Issue #1092: prefer the dedicated tracking ref populated by
     # ``_refresh_pr_base_ref`` (``refs/remotes/pdd-checkup/pr-<N>/base``)

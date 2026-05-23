@@ -356,6 +356,7 @@ class TestCheckupReviewLoopRuntime:
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def test_clean_pass_requires_primary_reviewer_only(
         self, monkeypatch: Any, tmp_path: Path
@@ -776,6 +777,7 @@ class TestCheckupReviewLoopRuntime:
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
         calls: List[Tuple[str, str]] = []
         finding = {
             "severity": "critical",
@@ -1037,6 +1039,7 @@ class TestCheckupReviewLoopRuntime:
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
         calls: List[Tuple[str, str]] = []
         finding = {
@@ -3298,6 +3301,7 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _fake_task(
         self,
@@ -3463,6 +3467,7 @@ class TestShaBackedVerificationTrustBoundary:
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
         monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -3777,6 +3782,7 @@ class TestShaBackedVerificationTrustBoundary:
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
         calls: List[str] = []
 
@@ -3863,6 +3869,7 @@ class TestShaBackedVerificationTrustBoundary:
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
         monkeypatch.setattr(
             mod,
             "_run_role_task",
@@ -6809,6 +6816,7 @@ class TestPromptSourceGuardIntegration:
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _seed_registry(
         self, tmp_path: Path, modules: List[Dict[str, Any]]
@@ -8011,6 +8019,7 @@ class TestArchitectureRegistryEditGuardIntegration:
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -8595,6 +8604,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -9127,6 +9137,7 @@ class TestRound7SymlinkedPackageBypassIntegration:
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -10097,6 +10108,19 @@ class TestReviewLoopDeterministicGates:
             "_refresh_pr_base_ref",
             lambda *a, **k: None,
         )
+        # Iter-34 Finding 1: ``_pr_changed_files_all`` falls back to
+        # ``HEAD~1...HEAD`` and sets a sentinel on pr_metadata when
+        # the PR-range diff fails. The default _patch_io tmp_path is
+        # not a multi-commit PR worktree, so the real scanner would
+        # always set the sentinel and trip the fail-closed path —
+        # masking what the gate-specific tests are trying to
+        # exercise. Stub to a clean empty inventory; tests that
+        # exercise the fallback path override this.
+        monkeypatch.setattr(
+            mod,
+            "_pr_changed_files_all",
+            lambda *a, **k: [],
+        )
         monkeypatch.setattr(
             mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
         )
@@ -10999,6 +11023,62 @@ class TestReviewLoopDeterministicGates:
         assert refresh_calls == []
         assert "gate:base-ref" in report
         assert "reviewer-status: codex=clean" not in report
+
+    def test_changed_files_fallback_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-34 Finding 1: when ``_pr_changed_files_all`` falls back
+        to ``HEAD~1...HEAD`` (every base-range diff failed), the
+        changed-file inventory is TRUNCATED on a multi-commit PR —
+        earlier commits are invisible. The iter-30 ``node_modules``
+        skip and the iter-27/iter-32 config-touched skips all
+        depend on a complete inventory; a truncated list lets
+        earlier-commit poisoning slip through. Fail closed with a
+        ``gate:changed-files`` blocker.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_review_loop as mod
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        pr_metadata = {
+            "base_ref": "main",
+            # Pre-populated by the scanner when it fell back.
+            "changed_files_fallback": (
+                "PR-range diff against every base candidate failed; "
+                "fell back to HEAD~1...HEAD"
+            ),
+        }
+        # Stub the scanner so it doesn't actually run git in the
+        # test's tmp_path. The fail-closed branch fires BEFORE the
+        # scan, so the stub need only return something innocuous.
+        monkeypatch.setattr(
+            mod, "_pr_changed_files_all", lambda *a, **k: []
+        )
+
+        findings = _enforce_gates_before_clean(
+            state=state,
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata=pr_metadata,
+            reviewer="codex",
+        )
+        assert findings, "changed-files fallback must fail closed"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "blocker"
+        assert f.reviewer == "gate:changed-files"
+        assert "changed-files" in f.location or "_pr_changed_files_all" in f.location
+        # A crash-row is recorded so the rendered report's
+        # Deterministic Gates section surfaces the failure.
+        assert state.gate_runs, "fallback must record a gate_runs row"
+        assert state.gate_runs[-1]["phase"] == "changed-files-resolution"
 
     def test_unexpected_refresh_exception_sets_base_ref_fetch_error(
         self, monkeypatch: Any, tmp_path: Path
