@@ -234,16 +234,35 @@ def track_cost(func):
         result = None
         exception_raised = None
 
-        # Snapshot any prior `attempted_models` so it cannot leak from an
-        # earlier tracked command into this one. We clear it before invoking
-        # the wrapped command and restore the prior value (or remove the key)
-        # after the row is written.
+        # Snapshot prior LLM-call state on ctx.obj so it cannot leak from
+        # an earlier tracked command into this one. Three keys are at
+        # risk: `attempted_models`, `partial_cost`, and `last_model`.
+        # All three are populated by `llm_invoke._publish_call_outcome_to_ctx`
+        # for the BENEFIT of the currently-wrapped track_cost call (so a
+        # failed command still writes a row carrying real spend). If we
+        # do not clear them here, a second tracked command that fails
+        # BEFORE invoking the LLM would write the first command's spend
+        # and model into its own row — inflating spend and potentially
+        # tripping a budget cap on a command that itself spent nothing.
+        # We pop+restore so a nested/parent command's accumulated state
+        # is not destroyed by a child track_cost invocation.
         prior_attempted_models = None
         had_prior_attempted_models = False
+        prior_partial_cost = None
+        had_prior_partial_cost = False
+        prior_last_model = None
+        had_prior_last_model = False
         try:
-            if ctx.obj is not None and isinstance(ctx.obj, dict) and 'attempted_models' in ctx.obj:
-                prior_attempted_models = ctx.obj.pop('attempted_models')
-                had_prior_attempted_models = True
+            if ctx.obj is not None and isinstance(ctx.obj, dict):
+                if 'attempted_models' in ctx.obj:
+                    prior_attempted_models = ctx.obj.pop('attempted_models')
+                    had_prior_attempted_models = True
+                if 'partial_cost' in ctx.obj:
+                    prior_partial_cost = ctx.obj.pop('partial_cost')
+                    had_prior_partial_cost = True
+                if 'last_model' in ctx.obj:
+                    prior_last_model = ctx.obj.pop('last_model')
+                    had_prior_last_model = True
         except Exception:
             pass
 
@@ -415,14 +434,27 @@ def track_cost(func):
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")
 
-            # Always clear/restore `attempted_models` so it cannot leak into a
-            # subsequent tracked command sharing the same ctx.obj.
+            # Always clear/restore the per-command LLM keys so they cannot
+            # leak into a subsequent tracked command sharing the same
+            # ctx.obj. `attempted_models`, `partial_cost`, and `last_model`
+            # are all populated for the benefit of THIS command's row
+            # write (especially the failure-path fallback that reads
+            # partial_cost/last_model); leaving them set would let a
+            # later failed command write the prior command's spend.
             try:
                 if ctx.obj is not None and isinstance(ctx.obj, dict):
                     if had_prior_attempted_models:
                         ctx.obj['attempted_models'] = prior_attempted_models
                     else:
                         ctx.obj.pop('attempted_models', None)
+                    if had_prior_partial_cost:
+                        ctx.obj['partial_cost'] = prior_partial_cost
+                    else:
+                        ctx.obj.pop('partial_cost', None)
+                    if had_prior_last_model:
+                        ctx.obj['last_model'] = prior_last_model
+                    else:
+                        ctx.obj.pop('last_model', None)
             except Exception:
                 pass
 

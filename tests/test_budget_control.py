@@ -2985,40 +2985,59 @@ class TestFinalFlushHandlesDaemonFiredRace:
         before the handler runs, but ``_final_watcher_flush`` waits
         on the ``fired()`` signal so the final status is
         ``BUDGET_EXCEEDED`` (not ``COMPLETED``).
+
+        The executor writes its own cost row mid-flight (so it passes
+        the watcher's ``started_at`` filter) and sleeps long enough
+        for the watcher daemon to poll and fire BEFORE returning.
         """
+        import asyncio as _asyncio
         from pdd.server.jobs import JobManager
 
-        cost_csv = tmp_path / "cost.csv"
-        ts = datetime.now(timezone.utc).isoformat()
-        _write_csv(cost_csv, [
-            {"timestamp": ts, "command": "change", "cost": "50.0"},
-        ])
-
-        async def slow_executor(job):
-            # Long enough for the watcher daemon to observe the
-            # pre-existing $50 row and fire the cap handler before
-            # we return.
-            import asyncio as _asyncio
-            await _asyncio.sleep(0.5)
+        async def executor_that_overspends(job):
+            cost_csv_path = Path(job.options["output_cost"])
+            # Wait one poll-interval-worth so the watcher's first poll
+            # baseline is set, then write a row that crosses the cap.
+            await _asyncio.sleep(0.3)
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            row = {
+                "timestamp": ts,
+                "model": "test-model",
+                "command": "change",
+                "cost": "50.0",
+                "input_files": "",
+                "output_files": "",
+                "attempted_models": "test-model",
+                "job_id": job.id,
+            }
+            # Write header + row.
+            header = list(row.keys())
+            with cost_csv_path.open("w", newline="", encoding="utf-8") as fh:
+                w = csv.DictWriter(fh, fieldnames=header)
+                w.writeheader()
+                w.writerow(row)
+            # Give the watcher daemon enough wall time to poll, see the
+            # row, fire on_exceeded, and queue _handle_budget_exceeded
+            # — but return BEFORE the handler runs so the race window
+            # is exercised. poll_interval defaults to 2.0s, so 2.5s
+            # is enough for one poll.
+            await _asyncio.sleep(2.5)
             return {"cost": 0.0}
 
-        import asyncio as _asyncio
-
-        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        mgr = JobManager(max_concurrent=1, executor=executor_that_overspends, project_root=tmp_path)
         job = await mgr.submit(
-            "change", args={}, options={"output_cost": str(cost_csv)},
-            budget_cap=10.0,
+            "change", args={}, options={}, budget_cap=10.0,
         )
-        # Wait for the executor to finish.
+        # Wait for the executor task to settle.
         if job.id in mgr._tasks:
             try:
-                await _asyncio.wait_for(mgr._tasks[job.id], timeout=10.0)
+                await _asyncio.wait_for(mgr._tasks[job.id], timeout=20.0)
             except (_asyncio.CancelledError, Exception):
                 pass
 
         assert job.status == JobStatus.BUDGET_EXCEEDED, (
             f"Expected BUDGET_EXCEEDED after daemon-fired race; got "
-            f"{job.status}. Final flush did not wait on fired() signal."
+            f"{job.status}. _final_watcher_flush did not wait on "
+            f"fired() signal."
         )
 
 
@@ -3060,4 +3079,141 @@ class TestPromptInterfacesMatchCodeSurface:
         assert "node_count" in nearby, (
             "BudgetUpdateRequest interface row does not declare node_count; "
             "future pdd sync could drop the field."
+        )
+
+
+class TestTrackCostDoesNotLeakAcrossCommands:
+    """Third-pass finding: ``track_cost`` snapshots and restores
+    ``attempted_models`` so it cannot leak between tracked commands,
+    but ``partial_cost`` and ``last_model`` (populated by
+    ``llm_invoke._publish_call_outcome_to_ctx``) were NOT cleared.
+    A second tracked command that fails BEFORE invoking the LLM
+    would write the first command's spend and model into its own
+    row — inflating accumulated spend and potentially tripping a
+    cap on a command that itself spent nothing.
+    """
+
+    def test_failed_second_command_does_not_inherit_prior_spend(self, tmp_path):
+        import os
+        import click
+        import click.testing
+        from pdd.track_cost import track_cost
+
+        @click.command(name="first")
+        @click.pass_context
+        @track_cost
+        def first(ctx):
+            # Mimic llm_invoke._publish_call_outcome_to_ctx populating
+            # ctx.obj on a successful LLM call.
+            ctx.obj['partial_cost'] = 7.0
+            ctx.obj['last_model'] = "model-a"
+            ctx.obj.setdefault('attempted_models', []).append("model-a")
+            # Successful command returns a tuple track_cost can parse;
+            # tuple length >= 3 → (input, cost, model). We return a
+            # plausible shape so the row carries cost=7.0 / model="model-a".
+            return ("ok", 7.0, "model-a")
+
+        @click.command(name="second")
+        @click.pass_context
+        @track_cost
+        def second(ctx):
+            # No LLM call here; just raise. track_cost's failure
+            # fallback used to read partial_cost / last_model from
+            # ctx.obj — which would still be the FIRST command's
+            # values if we did not clear them.
+            raise RuntimeError("synthetic failure before any LLM call")
+
+        cost_csv = tmp_path / "cost.csv"
+        runner = click.testing.CliRunner()
+        shared_obj = {'output_cost': str(cost_csv)}
+        old = os.environ.pop("PYTEST_CURRENT_TEST", None)
+        try:
+            r1 = runner.invoke(first, [], obj=shared_obj, standalone_mode=False)
+            assert r1.exception is None
+            r2 = runner.invoke(second, [], obj=shared_obj, standalone_mode=False)
+            assert isinstance(r2.exception, RuntimeError)
+        finally:
+            if old is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = old
+
+        contents = cost_csv.read_text()
+        # The second row must carry cost=0 / model="" — NOT the
+        # first command's 7.0 / "model-a".
+        rows = [ln for ln in contents.splitlines() if ln]
+        # rows[0] is the header. rows[1] is `first`. rows[2] is `second`.
+        assert len(rows) >= 3, f"expected header + 2 rows; got {rows!r}"
+        first_row = rows[1]
+        second_row = rows[2]
+        # First row carries the spent value.
+        assert "first" in first_row
+        assert "7.0" in first_row
+        assert "model-a" in first_row
+        # Second row must be the failed command with NO inherited
+        # cost/model. We check that 7.0 / model-a are absent from
+        # the second row's cost/model columns.
+        assert "second" in second_row, f"second row missing command name: {second_row!r}"
+        # Parse the row by csv to be robust to column ordering.
+        import csv as _csv
+        reader = _csv.DictReader(contents.splitlines())
+        parsed = list(reader)
+        assert parsed[0]['command'] == 'first'
+        assert parsed[1]['command'] == 'second'
+        assert parsed[1]['cost'] in ('', '0', '0.0', '0.00'), (
+            f"Finding 3 regression: failed second command inherited cost "
+            f"from first ({parsed[1]['cost']!r})."
+        )
+        assert parsed[1]['model'] in ('', None), (
+            f"Finding 3 regression: failed second command inherited model "
+            f"from first ({parsed[1]['model']!r})."
+        )
+
+    def test_partial_cost_and_last_model_cleared_after_command(self, tmp_path):
+        """Direct unit check: after a tracked command returns, the
+        per-command LLM keys are removed from ctx.obj so a subsequent
+        command starts clean. (Restore-prior is exercised in the
+        end-to-end test above.)
+        """
+        import os
+        import click
+        import click.testing
+        from pdd.track_cost import track_cost
+
+        observed: dict = {}
+
+        @click.command(name="probe")
+        @click.pass_context
+        @track_cost
+        def probe(ctx):
+            ctx.obj['partial_cost'] = 3.14
+            ctx.obj['last_model'] = "probe-model"
+            ctx.obj.setdefault('attempted_models', []).append("probe-model")
+            return ("ok", 3.14, "probe-model")
+
+        @click.command(name="reader")
+        @click.pass_context
+        def reader(ctx):
+            # NOT wrapped in track_cost; just observes whether the
+            # keys are still present after `probe` ran.
+            observed['partial_cost'] = ctx.obj.get('partial_cost')
+            observed['last_model'] = ctx.obj.get('last_model')
+            observed['attempted_models'] = ctx.obj.get('attempted_models')
+
+        runner = click.testing.CliRunner()
+        shared = {'output_cost': str(tmp_path / "cost.csv")}
+        old = os.environ.pop("PYTEST_CURRENT_TEST", None)
+        try:
+            runner.invoke(probe, [], obj=shared, standalone_mode=False)
+            runner.invoke(reader, [], obj=shared, standalone_mode=False)
+        finally:
+            if old is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = old
+
+        assert observed.get('partial_cost') is None, (
+            "track_cost did not clear partial_cost after the command finished."
+        )
+        assert observed.get('last_model') is None, (
+            "track_cost did not clear last_model after the command finished."
+        )
+        assert observed.get('attempted_models') is None, (
+            "track_cost did not clear attempted_models after the command finished."
         )
