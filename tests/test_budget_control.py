@@ -1901,6 +1901,219 @@ class TestConcurrentMigrationSafe:
         )
 
 
+class TestUpdateBudgetAwaitsHandler:
+    """Finding 1 (14th pass): update_budget calls watcher.flush() which
+    schedules _handle_budget_exceeded asynchronously. If the caller
+    returns to the executor's exit path before the handler runs, the
+    COMPLETED branch beats BUDGET_EXCEEDED to the punch and the
+    handler's status-active gate short-circuits the cancel.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_budget_blocks_until_status_flipped(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        async def slow_executor(job):
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        events: list = []
+
+        async def on_be(job_id, spent, cap):
+            events.append((job_id, spent, cap))
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        mgr.callbacks.on_budget_exceeded(on_be)
+
+        job = await mgr.submit("bug", args={}, options={})
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Pre-write $5 of spend (uncapped window).
+        from datetime import datetime, timezone
+        csv_path = Path(job.options["output_cost"])
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            w.writerow([ts, "gpt-4", "bug", "5.0", "", "",
+                        "gpt-4", job.id])
+
+        # Apply a tight cap. update_budget MUST block until the
+        # _handle_budget_exceeded coroutine actually runs (status
+        # flips to BUDGET_EXCEEDED) — otherwise a fast exit can
+        # race with it.
+        await mgr.update_budget(job.id, budget_cap=1.0)
+
+        # The next assertion must hold immediately after
+        # update_budget returns — no extra sleep, no polling.
+        assert job.status == JobStatus.BUDGET_EXCEEDED, (
+            f"Finding 1 (14th pass) regression: update_budget returned "
+            f"before _handle_budget_exceeded applied the status. "
+            f"status={job.status}, events={events}"
+        )
+        assert events, "on_budget_exceeded was never invoked"
+
+
+class TestQueuedJobHistoricalRowsIgnored:
+    """Finding 2 (14th pass): a queued job (started_at is None) using a
+    shared legacy CSV with historical rows must not be cancelled by
+    those pre-existing rows when a budget is set before it runs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_historical_legacy_rows_do_not_count_for_queued_job(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        # Seed an explicit legacy-format CSV with a day-old $99 row
+        # under the same command this job will use.
+        from datetime import datetime, timedelta, timezone
+        shared_csv = tmp_path / "shared.csv"
+        old_ts = (
+            datetime.now(timezone.utc) - timedelta(days=1)
+        ).isoformat(timespec="milliseconds")
+        with shared_csv.open("w", encoding="utf-8", newline="") as f:
+            w = _csv.writer(f)
+            # Legacy header — no attempted_models, no job_id.
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files"])
+            w.writerow([old_ts, "gpt-4", "bug", "99.0", "", ""])
+
+        # An executor that blocks; we'll only get to "running" then
+        # cancel from outside. The bug was: the queued job was
+        # cancelled BEFORE running because the watcher fired on the
+        # historical row.
+        executor_ran = asyncio.Event()
+
+        async def block_executor(job):
+            executor_ran.set()
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        # Use max_concurrent=1 and submit a long-running job FIRST so
+        # our test job stays QUEUED.
+        async def hold(job):
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=hold,
+                          project_root=tmp_path)
+        # The hold job occupies the slot.
+        hold_job = await mgr.submit("change", args={}, options={})
+        for _ in range(50):
+            if hold_job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Now submit the QUEUED test job (still waiting on the
+        # semaphore behind hold_job). Use the explicit shared CSV.
+        mgr._custom_executor = block_executor
+        test_job = await mgr.submit(
+            "bug",
+            args={},
+            options={"output_cost": str(shared_csv)},
+            budget_cap=50.0,  # cap is set; watcher starts immediately
+        )
+        # Give the watcher a chance to fire if the bug is present.
+        await asyncio.sleep(0.3)
+
+        assert test_job.status in (JobStatus.QUEUED, JobStatus.RUNNING), (
+            f"Finding 2 (14th pass) regression: queued job was "
+            f"cancelled by a historical $99 row before it could "
+            f"even start. status={test_job.status}"
+        )
+        # Clean up: cancel both jobs to let the test finish quickly.
+        await mgr.cancel(hold_job.id)
+        await mgr.cancel(test_job.id)
+
+
+class TestJobCostMatchesCsvSpend:
+    """Finding 3 (14th pass): job.cost (returned by /jobs/{job_id})
+    must match the CSV spend (returned by /pdd settings) when the job
+    completes. Previously job.cost reflected only the executor's
+    returned cost — often 0 for custom executors — even though
+    track_cost rows recorded real spend.
+    """
+
+    @pytest.mark.asyncio
+    async def test_job_cost_synced_to_csv_at_completion(
+        self, tmp_path, monkeypatch,
+    ):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        async def write_and_finish(job):
+            csv_path = Path(job.options["output_cost"])
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime, timezone
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            with csv_path.open("w", encoding="utf-8", newline="") as f:
+                w = _csv.writer(f)
+                w.writerow(["timestamp", "model", "command", "cost",
+                            "input_files", "output_files",
+                            "attempted_models", "job_id"])
+                w.writerow([ts, "gpt-4", "bug", "5.0", "", "",
+                            "gpt-4", job.id])
+            # Executor reports zero — but CSV says $5. job.cost
+            # should be reconciled to $5 on completion.
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=write_and_finish,
+                          project_root=tmp_path)
+        # Big cap so we don't trigger BUDGET_EXCEEDED.
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=1000.0)
+        for _ in range(50):
+            if job.status in (
+                JobStatus.COMPLETED, JobStatus.FAILED,
+                JobStatus.BUDGET_EXCEEDED,
+            ):
+                break
+            await asyncio.sleep(0.05)
+
+        assert job.status == JobStatus.COMPLETED
+        assert job.cost == pytest.approx(5.0), (
+            f"Finding 3 (14th pass) regression: job.cost={job.cost} "
+            f"but CSV had $5 of spend; /jobs/{{job_id}} and /pdd "
+            f"settings would disagree."
+        )
+
+
 class TestNoDoubleCount:
     """Finding 1 (13th pass): concurrent daemon + flush callers must not
     double-count the same CSV bytes. The _consume_new_bytes operation

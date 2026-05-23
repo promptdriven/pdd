@@ -747,18 +747,57 @@ class JobManager:
                 self._handle_budget_exceeded(job_id_capture, spent), loop
             )
 
+        # Use `job.started_at` when the job is already running, otherwise
+        # fall back to NOW so historical rows in a shared cost CSV cannot
+        # count toward a queued job's budget. Without this fallback, an
+        # explicit legacy/mid CSV with no job_id column would let
+        # day-old rows trigger BUDGET_EXCEEDED on a job that hasn't even
+        # spawned a subprocess yet — reproduced as a $99 historical
+        # row cancelling a queued job under /pdd budget 50.
+        started_at_for_watcher = job.started_at or datetime.now(timezone.utc)
         try:
             self._watchers[job.id] = _watch_csv(
                 csv_path,
                 cap,
                 _on_exceeded,
                 commands=self._commands_filter_for(job.command),
-                started_at=job.started_at,
+                started_at=started_at_for_watcher,
                 poll_interval=2.0,
                 job_id=job.id,
             )
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Failed to start budget watcher: {exc}[/red]")
+
+    def _compute_csv_spend(self, job: Job) -> float:
+        """Return the current cumulative spend for ``job`` from the cost
+        CSV, preferring the watcher's incremental view when available.
+
+        Shared by ``get_budget`` (for /pdd settings) and the final
+        ``job.cost`` sync in ``_execute_job``'s finally block so the
+        REST job-result endpoint and the budget endpoint always agree.
+        """
+        watcher = self._watchers.get(job.id)
+        if watcher is not None:
+            try:
+                watcher.flush()
+                return float(watcher.spent())
+            except Exception:  # noqa: BLE001
+                return 0.0
+        csv_path_str = (
+            (job.options or {}).get("output_cost")
+            if job.options else None
+        ) or os.environ.get("PDD_OUTPUT_COST_PATH")
+        if csv_path_str and _read_spent_now is not None:
+            try:
+                return float(_read_spent_now(
+                    Path(csv_path_str),
+                    commands=self._commands_filter_for(job.command),
+                    started_at=job.started_at,
+                    job_id=job.id,
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+        return 0.0
 
     def _stop_watcher_for(self, job_id: str) -> None:
         watcher = self._watchers.pop(job_id, None)
@@ -1071,6 +1110,19 @@ class JobManager:
                         f"{job.id}; budget may not have been "
                         f"enforced on the final row.[/red]"
                     )
+            # Sync job.cost to the freshest CSV spend so /jobs/{job_id}
+            # reports the same number /pdd settings would (and the
+            # final BudgetExceededMessage carries the right cost).
+            # Previously job.cost only reflected whatever the executor
+            # returned — often 0 for custom executors that spawn
+            # subprocesses they don't track themselves — even when
+            # track_cost rows recorded real spend.
+            try:
+                final_spent = self._compute_csv_spend(job)
+                if final_spent > job.cost:
+                    job.cost = final_spent
+            except Exception:  # noqa: BLE001
+                pass
             self._stop_watcher_for(job.id)
             await self.callbacks.emit_complete(job)
 
@@ -1328,29 +1380,41 @@ class JobManager:
             existing = self._budget_store.get(job_id)
             if existing is not None and existing.spent_so_far > spent:
                 spent = existing.spent_so_far
-        # ALWAYS do a synchronous one-shot CSV read for the freshest
-        # spend, regardless of whether a watcher is running. The
-        # watcher's cached value is up to ``poll_interval`` (2s)
-        # stale; /pdd settings users expect fresh-as-of-now numbers,
-        # not whatever the daemon last polled. read_spent_now is a
-        # pure function — no thread, no shared state, no
-        # double-count race.
-        csv_path_str = (
-            (job.options or {}).get("output_cost")
-            if job.options else None
-        ) or os.environ.get("PDD_OUTPUT_COST_PATH")
-        if csv_path_str and _read_spent_now is not None:
+        # Source the freshest spend. Two paths:
+        #   - Capped run with active watcher: call flush() so the
+        #     watcher's cached value is current (incremental tail —
+        #     only newly appended bytes are parsed, NOT the whole
+        #     file). This keeps /pdd settings cheap even when the
+        #     CSV is huge (the reviewer's 10MB / 200k-row scenario).
+        #   - Uncapped run with no watcher: read_spent_now does a
+        #     one-shot full scan. Per-job CSVs are naturally small
+        #     since they were created when the job was submitted;
+        #     the full scan is bounded by the job's own row count.
+        watcher = self._watchers.get(job_id)
+        if watcher is not None:
             try:
-                fresh = _read_spent_now(
-                    Path(csv_path_str),
-                    commands=self._commands_filter_for(job.command),
-                    started_at=job.started_at,
-                    job_id=job.id,
-                )
-                if fresh > spent:
-                    spent = fresh
+                watcher.flush()
+                fresh = watcher.spent()
             except Exception:  # noqa: BLE001
-                pass
+                fresh = 0.0
+        else:
+            csv_path_str = (
+                (job.options or {}).get("output_cost")
+                if job.options else None
+            ) or os.environ.get("PDD_OUTPUT_COST_PATH")
+            fresh = 0.0
+            if csv_path_str and _read_spent_now is not None:
+                try:
+                    fresh = _read_spent_now(
+                        Path(csv_path_str),
+                        commands=self._commands_filter_for(job.command),
+                        started_at=job.started_at,
+                        job_id=job.id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        if fresh > spent:
+            spent = fresh
         return BudgetSettings(
             command=job.command,
             node_budget=job.node_budget,
@@ -1437,13 +1501,32 @@ class JobManager:
         # /pdd budget arrives on a fast-exiting uncapped job: the new
         # cap would otherwise only be checked at the next 2s poll,
         # which never runs because the subprocess finishes first and
-        # the cleanup stops the watcher. With flush(), any pre-update
-        # spend rows trigger budget_exceeded immediately.
+        # the cleanup stops the watcher.
+        #
+        # After flushing, wait for the budget_exceeded coroutine to
+        # apply the terminal status whenever cumulative spend already
+        # crosses the new cap — regardless of WHO fired on_exceeded
+        # (inline flush, or the watcher's daemon thread which may
+        # have polled between _start_watcher_for and our flush, in
+        # which case flush returns False because _state.fired is
+        # already True). Without this wait, update_budget can return
+        # while _handle_budget_exceeded is still queued, the caller
+        # releases control to the executor's exit path, the
+        # COMPLETED branch runs first, and _handle_budget_exceeded's
+        # status-active gate then short-circuits — final status is
+        # COMPLETED instead of BUDGET_EXCEEDED.
         if watcher is not None:
             try:
                 watcher.flush()
+                spent_now = float(watcher.spent())
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[red]flush after update_budget failed for {job_id}: {exc}[/red]")
+                spent_now = 0.0
+            if new_cap is not None and spent_now >= new_cap:
+                for _ in range(50):
+                    if job.status in _TERMINAL_STATUSES:
+                        break
+                    await asyncio.sleep(0.01)
 
         if self._budget_store is not None:
             try:
