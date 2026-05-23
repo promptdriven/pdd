@@ -12,6 +12,55 @@ from typing import Any, List, Tuple
 _legacy_csv_warned: set = set()
 
 
+def _migrate_mid_to_new_header(path: str) -> None:
+    """Rewrite a mid-format cost CSV in place to add the ``job_id`` column.
+
+    The CSV reader contract permits a one-time legacy-header migration
+    when the server needs per-job isolation; without this, two same-
+    command jobs sharing a pre-existing mid-format CSV would each
+    count the other's spend because the watcher's ``job_id`` filter
+    requires the column to be present in the header.
+
+    Atomic via ``os.replace`` of a temp file. Existing rows get an
+    empty ``job_id`` value, so they fall under the "untagged" cohort
+    that the watcher's legacy fallback handles via command+timestamp.
+    Safe under one writer; concurrent writers to the same CSV are a
+    misuse case the reader contract already calls out.
+    """
+    legacy_fieldnames = [
+        'timestamp', 'model', 'command', 'cost',
+        'input_files', 'output_files',
+    ]
+    mid_fieldnames = legacy_fieldnames + ['attempted_models']
+    new_fieldnames = mid_fieldnames + ['job_id']
+    tmp_path = path + '.migrate.tmp'
+    try:
+        with open(path, 'r', encoding='utf-8', newline='') as src:
+            reader = csv.DictReader(src)
+            rows = list(reader)
+        with open(tmp_path, 'w', encoding='utf-8', newline='') as dst:
+            writer = csv.DictWriter(dst, fieldnames=new_fieldnames)
+            writer.writeheader()
+            for r in rows:
+                r.setdefault('job_id', '')
+                # Drop any unknown columns the reader picked up so the
+                # writer does not raise on extras.
+                writer.writerow({k: r.get(k, '') for k in new_fieldnames})
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        # Best-effort: if migration fails (perms, disk full), fall back
+        # to the legacy-fallback path. Clean up the temp file.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        rprint(
+            f"[yellow]Could not migrate cost CSV {path} to add job_id "
+            f"column: {exc}. Per-job isolation will degrade to "
+            f"command+timestamp filtering for this file.[/yellow]"
+        )
+
+
 def looks_like_file(path_str) -> bool:
     """Check if string looks like a file path."""
     if not path_str or not isinstance(path_str, str):
@@ -172,10 +221,25 @@ def track_cost(func):
                                     )
                             elif 'job_id' not in first_line:
                                 # Mid-era layout — has attempted_models but
-                                # no job_id. Write without job_id so the
-                                # row continues to fit the existing header.
-                                fieldnames = mid_fieldnames
-                                del row['job_id']
+                                # no job_id. When the env supplies a
+                                # PDD_JOB_ID and this is a server-managed
+                                # run that needs per-job isolation, MIGRATE
+                                # the file in place: rewrite the header to
+                                # add the job_id column and backfill empty
+                                # job_id on existing rows. The CSV reader
+                                # contract allows this explicitly under
+                                # "legacy-header migration path" so it is
+                                # not a breaking change. When PDD_JOB_ID
+                                # is empty (CLI use outside the server),
+                                # leave the file alone and write the row
+                                # without job_id.
+                                if job_id:
+                                    _migrate_mid_to_new_header(output_cost_path)
+                                    # Header now includes job_id; fall
+                                    # through to the new_fieldnames write.
+                                else:
+                                    fieldnames = mid_fieldnames
+                                    del row['job_id']
 
                     with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)

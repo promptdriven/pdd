@@ -109,6 +109,18 @@ Changing this contract is a breaking change.
    is gated on the column being present in the CSV header — legacy and
    mid-format CSVs without it fall back to the command + timestamp
    filter so existing files keep working.
+8. **Mid → new header migration.** When `track_cost` would append to a
+   pre-existing mid-format CSV (has `attempted_models` but no `job_id`)
+   AND `PDD_JOB_ID` is set on the writer's env (signalling a server-
+   managed run that needs per-job isolation), the file is migrated in
+   place — implemented as a helper that rewrites the file with the new
+   header and an empty `job_id` value on each pre-existing row, then
+   `os.replace`s the temp file atomically. The CSV reader contract
+   permits this one-time legacy-header migration. Without it, two
+   same-command jobs sharing an explicit mid-format CSV would still
+   count each other's spend even after `PDD_JOB_ID` was wired
+   through. When `PDD_JOB_ID` is empty (CLI use outside the server),
+   no migration runs and the row is appended without a `job_id` cell.
 
 % Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
 ```@cli.command()

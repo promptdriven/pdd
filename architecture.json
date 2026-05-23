@@ -9028,13 +9028,23 @@
           },
           {
             "name": "JobManager.update_budget",
-            "signature": "async (job_id, *, budget_cap=None, node_budget=None, max_total_cap=None) -> Job",
+            "signature": "async (job_id, *, budget_cap=_UNSET, node_budget=_UNSET, max_total_cap=_UNSET, node_count=_UNSET) -> Job",
+            "returns": "Job"
+          },
+          {
+            "name": "JobManager.update_node_count",
+            "signature": "(job_id: str, node_count: int) -> Job",
             "returns": "Job"
           },
           {
             "name": "JobManager.get_budget",
             "signature": "(job_id: str) -> BudgetSettings",
             "returns": "BudgetSettings"
+          },
+          {
+            "name": "JobManager.subprocess_env",
+            "signature": "(job: Job, *, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]",
+            "returns": "Dict[str, str]"
           },
           {
             "name": "JobManager.cleanup_old_jobs",
@@ -9183,7 +9193,7 @@
         "functions": [
           {
             "name": "watch",
-            "signature": "(csv_path, cap, on_exceeded, *, commands=None, started_at=None, poll_interval=2.0) -> Watcher",
+            "signature": "(csv_path, cap, on_exceeded, *, commands=None, started_at=None, poll_interval=2.0, job_id=None) -> Watcher",
             "returns": "Watcher"
           },
           {

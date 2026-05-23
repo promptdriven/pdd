@@ -594,6 +594,33 @@ class JobManager:
             return PDD_ISSUE_NESTED_COMMANDS
         return frozenset({command})
 
+    def subprocess_env(
+        self, job: Job, *, base_env: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        """Build the subprocess environment for ``job``'s spawned children.
+
+        Custom executors (the GitHub App's pdd-issue driver, etc.) MUST
+        pass the returned dict as ``env=`` to ``subprocess.Popen`` /
+        ``asyncio.create_subprocess_*`` instead of relying on
+        ``os.environ``. This makes per-job isolation safe under
+        ``max_concurrent > 1``: each spawned child sees its own
+        ``PDD_JOB_ID`` and ``PDD_OUTPUT_COST_PATH`` regardless of which
+        other jobs the manager is concurrently driving.
+
+        The default-subprocess path (``_run_click_command``) uses this
+        helper too, so both code paths share one implementation.
+        """
+        env = dict(base_env if base_env is not None else os.environ)
+        env['PDD_JOB_ID'] = job.id
+        per_job_csv = (job.options or {}).get("output_cost")
+        if per_job_csv:
+            env['PDD_OUTPUT_COST_PATH'] = str(per_job_csv)
+        else:
+            # No per-job CSV resolved — clear any inherited shared path so
+            # the child cannot write to a foreign file we never read.
+            env.pop('PDD_OUTPUT_COST_PATH', None)
+        return env
+
     def _resolve_cost_csv_path(self, job: Job) -> Optional[Path]:
         """Resolve the cost-CSV path for this job.
 
@@ -892,28 +919,20 @@ class JobManager:
             if self._custom_executor:
                 # Custom executors (the private GitHub App's pdd-issue
                 # path) spawn their own subprocesses; they do NOT go
-                # through _run_click_command, where PDD_JOB_ID would
-                # otherwise be injected into the subprocess env. Set
-                # the env var in the manager's own process for the
-                # duration of the custom executor call so any
-                # subprocess the executor spawns inherits it and
-                # track_cost can write the job_id column. The
-                # try/finally restore prevents leakage to other
-                # jobs running on this manager (best-effort under
-                # max_concurrent>1 — the documented integration
-                # contract is that the executor itself read job.id
-                # and propagate PDD_JOB_ID to its subprocess env
-                # explicitly so concurrent jobs do not race on
-                # os.environ).
-                _prior_job_id = os.environ.get('PDD_JOB_ID')
-                os.environ['PDD_JOB_ID'] = job.id
-                try:
-                    result = await self._custom_executor(job)
-                finally:
-                    if _prior_job_id is None:
-                        os.environ.pop('PDD_JOB_ID', None)
-                    else:
-                        os.environ['PDD_JOB_ID'] = _prior_job_id
+                # through _run_click_command. We do NOT mutate
+                # os.environ here because async coroutines running
+                # concurrently (max_concurrent > 1) would race on the
+                # global env var — job A's await yields while job B
+                # overwrites PDD_JOB_ID; A then sees B's id when it
+                # resumes, and B's finally restores env to A's
+                # leaked value. The integration contract is instead:
+                # the custom executor calls `JobManager.subprocess_env(
+                # job)` (or reads `job.id` directly) and passes the
+                # resulting dict as the `env=` kwarg to
+                # `subprocess.Popen` / `asyncio.create_subprocess_*`.
+                # That keeps each spawned child isolated from other
+                # concurrent jobs without any shared mutable state.
+                result = await self._custom_executor(job)
             else:
                 result = await self._run_click_command(job)
 
@@ -998,35 +1017,16 @@ class JobManager:
         options_with_force['force'] = True  # Skip all confirmation prompts
         cmd_args = _build_subprocess_command_args(job.command, job.args, options_with_force)
 
-        # Set up environment for headless execution
-        env = os.environ.copy()
+        # Set up environment for headless execution. Per-job env keys
+        # (PDD_JOB_ID, PDD_OUTPUT_COST_PATH) live in subprocess_env so
+        # custom executors can share one helper without re-implementing
+        # the isolation logic.
+        env = self.subprocess_env(job)
         env['CI'] = '1'
         env['PDD_FORCE'] = '1'
         env['TERM'] = 'dumb'
         env['PDD_SKIP_UPDATE_CHECK'] = '1'  # Skip update prompts
         env['PDD_JOB_DEADLINE'] = str(time.time() + JOB_TIMEOUT)  # Budget for agentic retries
-
-        # Per-job cost-CSV isolation. If options.output_cost was resolved at
-        # submit time to a per-job path, OVERRIDE PDD_OUTPUT_COST_PATH in
-        # the subprocess env so a process-wide value cannot quietly route
-        # writes to a shared file and cross-contaminate spend across
-        # concurrent same-command jobs. The --output-cost CLI flag will
-        # also be emitted from options below, but track_cost falls back
-        # to PDD_OUTPUT_COST_PATH when the flag is absent, so we belt-
-        # and-braces this with both.
-        per_job_csv = (job.options or {}).get("output_cost")
-        if per_job_csv:
-            env['PDD_OUTPUT_COST_PATH'] = str(per_job_csv)
-        elif 'PDD_OUTPUT_COST_PATH' in env:
-            # Remove inherited shared path so subprocess can't write to a
-            # foreign file the JobManager's watcher will never read.
-            del env['PDD_OUTPUT_COST_PATH']
-
-        # Per-job attribution column. track_cost writes the value of
-        # PDD_JOB_ID into the CSV's new `job_id` column; the watcher
-        # filters rows by job_id so two jobs sharing an explicit
-        # output_cost path do not count each other's spend.
-        env['PDD_JOB_ID'] = job.id
 
         stdout_lines = []
         stderr_lines = []

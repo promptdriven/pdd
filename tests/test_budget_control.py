@@ -1517,45 +1517,156 @@ class TestJobIdScopedWatcherFilter:
             watcher.stop()
 
 
-class TestCustomExecutorPdJobIdEnv:
-    """Sixth-pass Finding 2: custom executors bypass _run_click_command
-    (where PDD_JOB_ID is set on the subprocess env). The manager MUST
-    set os.environ['PDD_JOB_ID'] around the custom executor call so
-    any subprocess the executor spawns inherits it.
+class TestSubprocessEnvHelper:
+    """Eighth-pass Finding 1: the previous os.environ mutation around the
+    custom executor races under max_concurrent>1. We now provide a
+    thread-safe `JobManager.subprocess_env(job)` helper that custom
+    executors call to build per-spawn env dicts without touching
+    process-global state.
     """
 
     @pytest.mark.asyncio
-    async def test_pdd_job_id_set_around_custom_executor(self, tmp_path):
+    async def test_subprocess_env_carries_per_job_id(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+        monkeypatch.delenv("PDD_JOB_ID", raising=False)
+
         import asyncio
         import os as _os
-
         from pdd.server.jobs import JobManager
-
-        observed: dict = {}
+        from pdd.server.models import JobStatus
 
         async def custom_executor(job):
-            observed["pdd_job_id"] = _os.environ.get("PDD_JOB_ID")
+            env = job._observed_env  # type: ignore[attr-defined]
+            return {"cost": 0.0, "env": env}
+
+        mgr = JobManager(max_concurrent=2, executor=custom_executor,
+                          project_root=tmp_path)
+        # Submit two concurrent jobs. Each builds its env via the helper
+        # and stashes the result so the test can verify isolation.
+        job_a = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        job_a._observed_env = mgr.subprocess_env(job_a)  # type: ignore[attr-defined]
+        job_b = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        job_b._observed_env = mgr.subprocess_env(job_b)  # type: ignore[attr-defined]
+        for _ in range(50):
+            if (job_a.status in (JobStatus.COMPLETED, JobStatus.FAILED)
+                    and job_b.status in (JobStatus.COMPLETED, JobStatus.FAILED)):
+                break
+            await asyncio.sleep(0.05)
+
+        env_a = job_a._observed_env  # type: ignore[attr-defined]
+        env_b = job_b._observed_env  # type: ignore[attr-defined]
+        assert env_a["PDD_JOB_ID"] == job_a.id
+        assert env_b["PDD_JOB_ID"] == job_b.id
+        assert env_a["PDD_JOB_ID"] != env_b["PDD_JOB_ID"], (
+            "Finding 1 (8th pass) regression: subprocess_env returned "
+            "the same PDD_JOB_ID for two concurrent jobs."
+        )
+        # The helper takes a base_env override so test code can build
+        # against a clean slate.
+        explicit = mgr.subprocess_env(job_a, base_env={"FOO": "bar"})
+        assert explicit["FOO"] == "bar"
+        assert explicit["PDD_JOB_ID"] == job_a.id
+
+    @pytest.mark.asyncio
+    async def test_custom_executor_does_not_mutate_os_environ(
+        self, tmp_path, monkeypatch,
+    ):
+        """Regression guard: the prior implementation set os.environ
+        around the custom executor call, which raced under concurrency.
+        os.environ must remain untouched by the manager itself; the
+        executor is responsible for passing env= to subprocess.
+        """
+        monkeypatch.delenv("PDD_JOB_ID", raising=False)
+
+        import asyncio
+        import os as _os
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        observations = []
+
+        async def custom_executor(job):
+            observations.append(_os.environ.get("PDD_JOB_ID"))
             return {"cost": 0.0}
 
-        # Make sure the env doesn't already have it.
-        _os.environ.pop("PDD_JOB_ID", None)
         mgr = JobManager(max_concurrent=1, executor=custom_executor,
                           project_root=tmp_path)
         job = await mgr.submit("issue", args={}, options={},
                                  node_budget=80.0, max_total_cap=400.0)
-        from pdd.server.models import JobStatus
         for _ in range(50):
             if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
                 break
             await asyncio.sleep(0.05)
-        assert observed.get("pdd_job_id") == job.id, (
-            "Finding 2 (7th pass) regression: PDD_JOB_ID not set in "
-            "os.environ while the custom executor ran; subprocesses "
-            "it spawns would write rows with empty job_id and the "
-            "watcher would never count them."
-        )
-        # Env is restored after the executor returns.
+
+        # Manager must NOT have mutated process-global env. Executors that
+        # want PDD_JOB_ID in subprocess env must call subprocess_env().
+        assert observations == [None]
         assert _os.environ.get("PDD_JOB_ID") is None
+
+
+class TestMidFormatCsvMigration:
+    """Eighth-pass Finding 2: a server-managed run writing to a
+    pre-existing mid-format CSV must migrate the header in place to add
+    the job_id column so per-job isolation actually works for shared
+    files. Without migration, two same-command jobs on the same legacy
+    CSV count each other's spend.
+    """
+
+    def test_track_cost_migrates_mid_header_when_pdd_job_id_set(
+        self, tmp_path, monkeypatch,
+    ):
+        import os
+        import click
+        import click.testing
+        from pdd.track_cost import track_cost
+
+        cost_csv = tmp_path / "cost.csv"
+        # Seed a mid-format CSV (has attempted_models, no job_id).
+        cost_csv.write_text(
+            "timestamp,model,command,cost,input_files,output_files,attempted_models\n"
+            "2026-01-01T00:00:00.000,old-model,gen,1.5,/i,/o,old-model\n",
+            encoding="utf-8",
+        )
+
+        @click.command(name="bug")
+        @click.pass_context
+        @track_cost
+        def bug(ctx):
+            return ("result", 0.25, "gpt-4")
+
+        # Temporarily clear PYTEST_CURRENT_TEST so the production write
+        # path runs (track_cost skips writes during pytest by default).
+        monkeypatch.setenv("PDD_JOB_ID", "job-a")
+        prior_pytest = os.environ.pop("PYTEST_CURRENT_TEST", None)
+        try:
+            runner = click.testing.CliRunner()
+            runner.invoke(
+                bug, [],
+                obj={"output_cost": str(cost_csv)},
+                standalone_mode=False,
+            )
+        finally:
+            if prior_pytest is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = prior_pytest
+
+        # File must now have the new-format header (migration ran).
+        text = cost_csv.read_text(encoding="utf-8")
+        first_line = text.splitlines()[0]
+        assert "job_id" in first_line, (
+            f"Finding 2 (8th pass) regression: track_cost did not migrate "
+            f"the mid-format header to add job_id. Header was: {first_line!r}"
+        )
+        data_lines = text.splitlines()[1:]
+        # New row carries job-a.
+        assert any(line.endswith(",job-a") for line in data_lines), (
+            f"Expected a row ending with ',job-a'; got rows: {data_lines!r}"
+        )
+        # Old row is preserved with an empty trailing job_id field.
+        assert any("old-model,gen,1.5" in line and line.endswith(",")
+                   for line in data_lines), (
+            f"Old row should be preserved with empty trailing job_id; "
+            f"got rows: {data_lines!r}"
+        )
 
 
 class TestLlmInvokePublishesPartialCost:
