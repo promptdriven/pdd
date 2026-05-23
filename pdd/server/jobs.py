@@ -581,6 +581,12 @@ class JobManager:
         # so projects that never touch the GitHub App control surface don't pay
         # for the threading.Lock.
         self._budget_store: Optional["BudgetStore"] = None
+        # Per-job asyncio.Event signalling the typed
+        # ``emit_budget_exceeded`` callback chain has finished. Used by
+        # ``_execute_job``'s finally to gate ``emit_complete`` behind
+        # the budget broadcast so subscribers always see the typed
+        # event before close-on-complete.
+        self._budget_broadcast_done: Dict[str, "asyncio.Event"] = {}
 
     def _ensure_budget_store(self) -> "BudgetStore":
         if BudgetStore is None:
@@ -826,27 +832,52 @@ class JobManager:
 
     def _signal_cancel(self, job_id: str) -> None:
         """Synchronous cancel signal: set cancel event + SIGTERM the
-        subprocess WITHOUT awaiting anything.
-
-        Used by `_handle_budget_exceeded` to halt subprocess spend
-        IMMEDIATELY, then proceed to (potentially slow) WebSocket
-        broadcast of the typed `budget_exceeded` message in parallel
-        with the subprocess teardown. Without this, awaiting
-        `emit_budget_exceeded` before `cancel()` lets a stalled
-        subscriber delay process termination by N seconds — and the
-        process keeps spending money during that window. The full
-        async `cancel()` is still awaited later for status updates
-        and process.wait()/kill escalation; this helper only sends
-        the kill signal so the subprocess starts winding down
-        immediately.
+        subprocess + spawn a background SIGKILL escalator (only when
+        a real subprocess is actually running). Awaits nothing.
         """
         if job_id in self._cancel_events:
             self._cancel_events[job_id].set()
+        had_process = False
+        with self._process_lock:
+            process = self._processes.get(job_id)
+            if process is not None and process.poll() is None:
+                had_process = True
+                try:
+                    process.terminate()
+                except Exception:  # noqa: BLE001
+                    pass
+        if had_process:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._escalate_kill(job_id))
+            except RuntimeError:
+                pass
+
+    async def _escalate_kill(
+        self,
+        job_id: str,
+        sigterm_grace_seconds: float = 2.0,
+        poll_interval: float = 0.1,
+    ) -> None:
+        """Poll the subprocess and SIGKILL it if it ignores SIGTERM.
+
+        Runs independently of the ``_handle_budget_exceeded`` await
+        chain so a slow ``emit_budget_exceeded`` subscriber cannot
+        delay the kill. Idempotent: a no-op once the process exits
+        or once another path has killed it.
+        """
+        deadline_iters = max(1, int(sigterm_grace_seconds / max(poll_interval, 0.01)))
+        for _ in range(deadline_iters):
+            with self._process_lock:
+                process = self._processes.get(job_id)
+            if process is None or process.poll() is not None:
+                return
+            await asyncio.sleep(poll_interval)
         with self._process_lock:
             process = self._processes.get(job_id)
             if process is not None and process.poll() is None:
                 try:
-                    process.terminate()
+                    process.kill()
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -892,37 +923,46 @@ class JobManager:
                 )
             except KeyError:
                 pass
-        # Three-step termination so subprocess teardown does not wait
-        # on slow WebSocket subscribers AND the typed `budget_exceeded`
-        # message still beats `complete` to the wire:
+        # Termination sequence designed to satisfy three invariants:
         #
-        #   1. `_signal_cancel(job_id)` — set the cancel event and
-        #      SIGTERM the subprocess WITHOUT awaiting anything. The
-        #      child process starts winding down immediately, so spend
-        #      stops accumulating regardless of how slow any
-        #      subscriber's callback is.
-        #   2. `await emit_budget_exceeded(...)` — broadcast the typed
-        #      message to subscribers. This may stall on a slow client
-        #      but the subprocess is already dead/dying by now.
-        #   3. `await self.cancel(job_id)` — finish the cancel path:
-        #      escalate to SIGKILL if needed, cancel the task,
-        #      run process.wait(). The task's finally block then
-        #      fires `emit_complete`, which lands AFTER step 2.
+        #   I1 — subprocess kill is NEVER blocked by callbacks.
+        #        `_signal_cancel` does SIGTERM synchronously AND spawns
+        #        `_escalate_kill` so SIGKILL also escalates independent
+        #        of the callback await chain.
         #
-        # Awaiting cancel() before emit reverses the
-        # subscriber-ordering contract (subscribers that close on
-        # `complete` would miss the typed event). Awaiting emit
-        # before signalling lets a stalled subscriber delay the
-        # subprocess kill — exactly the window the previous design
-        # collapsed.
-        self._signal_cancel(job_id)
-        await self.callbacks.emit_budget_exceeded(
-            job_id, spent, current_cap if current_cap is not None else spent,
-        )
+        #   I2 — typed `budget_exceeded` ALWAYS precedes `complete`.
+        #        We expose `self._budget_broadcast_done[job_id]` before
+        #        signalling cancel; the executor's finally block waits
+        #        on this event before emitting `complete`.
+        #
+        #   I3 — `_handle_budget_exceeded` does NOT call
+        #        `self.cancel(job_id)`. That would invoke
+        #        `task.cancel()`, which injects CancelledError into
+        #        the executor task — and the executor's finally is
+        #        currently awaiting on `broadcast_done`. The
+        #        CancelledError propagates out of `asyncio.wait_for`
+        #        and SKIPS `emit_complete`, breaking I2. Letting the
+        #        executor exit naturally (subprocess termination via
+        #        signal_cancel / escalate_kill handles the kill;
+        #        custom executors that have no subprocess simply
+        #        return when their coroutine completes) preserves the
+        #        emit_complete contract.
+        broadcast_done = asyncio.Event()
+        self._budget_broadcast_done[job_id] = broadcast_done
         try:
-            await self.cancel(job_id)
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[red]Cancel after budget exceeded failed: {exc}[/red]")
+            self._signal_cancel(job_id)
+            try:
+                await self.callbacks.emit_budget_exceeded(
+                    job_id, spent, current_cap if current_cap is not None else spent,
+                )
+            finally:
+                broadcast_done.set()
+        finally:
+            # Yield once so the executor's finally has a chance to
+            # observe the set event before we pop the entry; then
+            # remove it.
+            await asyncio.sleep(0)
+            self._budget_broadcast_done.pop(job_id, None)
 
     async def submit(
         self,
@@ -1222,6 +1262,17 @@ class JobManager:
             except Exception:  # noqa: BLE001
                 pass
             self._stop_watcher_for(job.id)
+            # If a budget broadcast is in flight, wait for it to
+            # finish BEFORE emitting `complete` so subscribers always
+            # see the typed ``budget_exceeded`` event before the
+            # close-on-complete signal. Bounded wait so a hung
+            # subscriber cannot block job teardown forever.
+            broadcast_done = self._budget_broadcast_done.get(job.id) if hasattr(self, "_budget_broadcast_done") else None
+            if broadcast_done is not None:
+                try:
+                    await asyncio.wait_for(broadcast_done.wait(), timeout=10.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
             await self.callbacks.emit_complete(job)
 
             if job.id in self._cancel_events:

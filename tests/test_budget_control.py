@@ -3610,7 +3610,9 @@ class TestSignalCancelIsSynchronous:
     """
 
     @pytest.mark.asyncio
-    async def test_signal_cancel_sets_event_immediately(self, tmp_path):
+    async def test_signal_cancel_sets_event_immediately(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_JOB_ID", raising=False)
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
         from pdd.server.jobs import JobManager
 
         mgr = JobManager(max_concurrent=1, project_root=tmp_path)
@@ -3643,12 +3645,16 @@ class TestSignalCancelIsSynchronous:
         await mgr.cancel(job.id)
 
     @pytest.mark.asyncio
-    async def test_budget_exceeded_signals_cancel_before_awaiting_emit(self, tmp_path):
+    async def test_budget_exceeded_signals_cancel_before_awaiting_emit(
+        self, tmp_path, monkeypatch,
+    ):
         """A slow `on_budget_exceeded` subscriber callback MUST NOT
         delay the cancel signal — the subprocess termination has to
         be initiated synchronously so spend stops accumulating
         immediately.
         """
+        monkeypatch.delenv("PDD_JOB_ID", raising=False)
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
         import asyncio as _asyncio
         from pdd.server.jobs import JobManager
 
@@ -3746,3 +3752,218 @@ class TestReconnectPayloadCarriesRealCap:
             "the payload will collapse spent and effective_cap onto "
             "the same value."
         )
+
+
+class TestEmitCompleteWaitsForBudgetBroadcast:
+    """Seventh-pass finding A: even after `_signal_cancel` was added,
+    a slow `on_budget_exceeded` subscriber could let
+    `_execute_job.finally` emit `complete` BEFORE
+    `emit_budget_exceeded` finished — subscribers that close on
+    `complete` would still miss the typed event. The executor's
+    finally now waits on a per-job `_budget_broadcast_done` event
+    (bounded by a timeout) before emitting `complete`.
+    """
+
+    @pytest.mark.asyncio
+    async def test_complete_waits_for_budget_broadcast_even_with_slow_subscriber(
+        self, tmp_path, monkeypatch,
+    ):
+        # env_safety_net in `_execute_job` sets PDD_JOB_ID for the
+        # duration of the custom executor and restores in a finally.
+        # If pytest tears down the loop while a task is mid-finally,
+        # the restore can be skipped and PDD_JOB_ID leaks into the
+        # next test. Force the state via monkeypatch.delenv so the
+        # next test starts clean regardless.
+        monkeypatch.delenv("PDD_JOB_ID", raising=False)
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        import asyncio as _asyncio
+        from pdd.server.jobs import JobManager
+
+        events: list = []
+
+        cost_csv = tmp_path / "cost.csv"
+
+        async def slow_executor(job):
+            await _asyncio.sleep(0.2)
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            row = {
+                "timestamp": ts, "model": "m", "command": "change",
+                "cost": "50.0", "input_files": "", "output_files": "",
+                "attempted_models": "m", "job_id": job.id,
+            }
+            with cost_csv.open("w", newline="", encoding="utf-8") as fh:
+                import csv as _csv
+                w = _csv.DictWriter(fh, fieldnames=list(row.keys()))
+                w.writeheader()
+                w.writerow(row)
+            # Sleep long enough for the daemon to poll + fire.
+            await _asyncio.sleep(2.5)
+            return {"cost": 0.0}
+
+        async def slow_budget_subscriber(job_id, spent, cap):
+            # Hold the budget broadcast for a full second.
+            await _asyncio.sleep(1.0)
+            events.append(("budget_done", _asyncio.get_event_loop().time()))
+
+        async def complete_subscriber(job):
+            events.append(("complete", _asyncio.get_event_loop().time()))
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        mgr.callbacks.on_budget_exceeded(slow_budget_subscriber)
+        mgr.callbacks.on_complete(complete_subscriber)
+
+        job = await mgr.submit("change", args={}, options={"output_cost": str(cost_csv)}, budget_cap=10.0)
+        if job.id in mgr._tasks:
+            try:
+                await _asyncio.wait_for(mgr._tasks[job.id], timeout=20.0)
+            except (_asyncio.CancelledError, Exception):
+                pass
+
+        kinds = [e[0] for e in events]
+        assert "budget_done" in kinds and "complete" in kinds, (
+            f"missing events; got {events!r}"
+        )
+        budget_idx = kinds.index("budget_done")
+        complete_idx = kinds.index("complete")
+        assert budget_idx < complete_idx, (
+            f"Finding A regression: complete fired before budget broadcast "
+            f"completed despite slow subscriber. events={events!r}"
+        )
+
+
+class TestSigkillEscalatesIndependently:
+    """Seventh-pass finding B: ``_signal_cancel`` only sends SIGTERM.
+    A subprocess that ignores SIGTERM was only SIGKILLed later
+    inside the async ``cancel()`` — which was awaited AFTER
+    ``emit_budget_exceeded``. A slow callback could leave a
+    SIGTERM-ignoring process running for the full callback duration.
+    The new ``_escalate_kill`` background task SIGKILLs after a
+    bounded grace period regardless of the callback chain.
+    """
+
+    @pytest.mark.asyncio
+    async def test_escalate_kill_sigkills_unresponsive_process(self, tmp_path):
+        import asyncio as _asyncio
+        from unittest.mock import MagicMock
+        from pdd.server.jobs import JobManager
+
+        mgr = JobManager(max_concurrent=1, project_root=tmp_path)
+
+        # Fake subprocess that "ignores" SIGTERM (terminate is a
+        # no-op; poll() keeps returning None until kill() is called).
+        kill_called = {"flag": False}
+
+        class _FakeProc:
+            def __init__(self):
+                self._killed = False
+            def poll(self):
+                return None if not self._killed else 0
+            def terminate(self):
+                pass  # ignored
+            def kill(self):
+                kill_called["flag"] = True
+                self._killed = True
+            def wait(self, timeout=None):
+                return 0
+
+        fake = _FakeProc()
+        job_id = "fake-job-1"
+        mgr._processes[job_id] = fake
+        mgr._cancel_events[job_id] = _asyncio.Event()
+
+        # Run the escalator with a tight grace window so the test
+        # is fast.
+        await mgr._escalate_kill(
+            job_id,
+            sigterm_grace_seconds=0.3,
+            poll_interval=0.05,
+        )
+        assert kill_called["flag"], (
+            "Finding B regression: _escalate_kill did not call .kill() "
+            "on a subprocess that ignored SIGTERM within the grace window."
+        )
+
+
+class TestLiveWebSocketStreamClosesOnTerminal:
+    """Seventh-pass finding C: the live WebSocket stream's input loop
+    only waited on ``receive_text()``. When the job completed (or hit
+    a terminal state via budget_exceeded), the route had no signal
+    to break the receive_text wait, so the connection stayed open
+    indefinitely. The loop now races receive_text against a status
+    poll and closes when the job becomes terminal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_live_stream_closes_when_job_completes(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_JOB_ID", raising=False)
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+        import asyncio as _asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes import websocket as ws_module
+
+        # Build a minimal manager whose get_job returns a job that
+        # flips from RUNNING to COMPLETED mid-stream.
+        mgr = JobManager(max_concurrent=1, project_root=tmp_path)
+
+        async def quick_executor(job):
+            await _asyncio.sleep(10.0)
+            return {"cost": 0.0}
+
+        mgr._custom_executor = quick_executor
+        job = await mgr.submit("change", args={}, options={})
+
+        # Stub the connection manager so the route's subscribe + close
+        # calls don't need a real WebSocket. We capture
+        # `websocket.close()` calls to assert the route closed the
+        # connection when the job terminated.
+        close_called = _asyncio.Event()
+        hang_event = _asyncio.Event()  # never set: receive_text blocks forever
+
+        async def _hangs_forever(*a, **kw):
+            await hang_event.wait()
+            return "{}"
+
+        async def _close(*a, **kw):
+            close_called.set()
+
+        ws = MagicMock()
+        ws.accept = AsyncMock()
+        ws.receive_text = _hangs_forever
+        ws.close = _close
+        ws.send_text = AsyncMock()
+        ws.client_state = None
+
+        class _StubMgr:
+            async def connect(self, w): pass
+            def disconnect(self, w, job_id=None): pass
+            async def subscribe_to_job(self, w, job_id): pass
+
+        monkeypatch.setattr(ws_module, "manager", _StubMgr())
+
+        # Drive the route in a task; flip the job to COMPLETED
+        # mid-run; assert close was called shortly afterwards.
+        route_task = _asyncio.create_task(
+            ws_module.websocket_job_stream(ws, job.id, job_manager=mgr)
+        )
+        await _asyncio.sleep(0.4)
+        # Flip status to terminal.
+        job.status = JobStatus.COMPLETED
+        try:
+            await _asyncio.wait_for(close_called.wait(), timeout=2.0)
+        finally:
+            route_task.cancel()
+            try:
+                await route_task
+            except (_asyncio.CancelledError, Exception):
+                pass
+
+        assert close_called.is_set(), (
+            "Finding C regression: live WebSocket stream did not close "
+            "when the job reached a terminal state; the connection would "
+            "stay open indefinitely."
+        )
+
+        # Cleanup.
+        await mgr.cancel(job.id)

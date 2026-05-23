@@ -96,25 +96,29 @@
      - `get_budget`: Read-only accessor returning a `BudgetSettings` snapshot
        (command, node_budget, max_total_cap, budget_cap, effective_cap,
        spent_so_far, status) suitable for the `/pdd settings` reply.
-     - When the watcher fires `on_exceeded`, the manager triggers the existing
-       cancel path (same path `/pdd stop` drives), sets `Job.status` to the
-       new `JobStatus.BUDGET_EXCEEDED` value (defined in `models.py`), records
+     - When the watcher fires `on_exceeded`, the manager sets `Job.status`
+       to `JobStatus.BUDGET_EXCEEDED` (defined in `models.py`), records
        the final spend on `Job.cost`, and invokes
-       `JobCallbacks.on_budget_exceeded` once. The three-step termination
-       sequence MUST be: (1) set status to `BUDGET_EXCEEDED` + update the
-       budget store; (2) call a synchronous `_signal_cancel(job_id)` helper
-       that sets the cancel event and SIGTERMs the subprocess WITHOUT
-       awaiting anything (so spend stops accumulating even if a subscriber
-       callback is slow); (3) `await` `emit_budget_exceeded` to deliver
-       the typed `BudgetExceededMessage` to subscribers; (4) `await
-       self.cancel(job_id)` to finish task teardown (process.wait /
-       SIGKILL escalation / task.cancel) — the executor's finally then
-       emits `complete`. Awaiting emit BEFORE the signal lets a stalled
-       subscriber delay process termination by N seconds; awaiting
-       cancel() before emit reverses the event order on the wire
-       (subscribers that close on `complete` miss the typed event).
-       Both invariants matter and the three-step sequence is the
-       only ordering that satisfies both.
+       `JobCallbacks.on_budget_exceeded` once. The termination sequence
+       MUST satisfy three invariants:
+       (I1) subprocess kill is NEVER blocked by callbacks; (I2) typed
+       `budget_exceeded` ALWAYS precedes `complete` on the wire; (I3)
+       the budget handler MUST NOT call `self.cancel(job_id)` because
+       that injects `CancelledError` into the executor task while its
+       finally block is awaiting the broadcast-done gate, which
+       short-circuits `emit_complete` and breaks I2. The implementation:
+       (1) set status to `BUDGET_EXCEEDED` + update the budget store
+       + create `self._budget_broadcast_done[job_id] = asyncio.Event()`;
+       (2) call a SYNCHRONOUS `_signal_cancel(job_id)` helper that
+       sets the cancel event, SIGTERMs the subprocess, AND spawns a
+       background `_escalate_kill(job_id)` task that SIGKILLs after
+       a bounded grace period if the child ignored SIGTERM — so the
+       kill is independent of any pending callback await; (3) `await`
+       `emit_budget_exceeded(...)`; (4) set the broadcast-done event;
+       (5) yield once, then pop the dict entry. `_execute_job`'s
+       finally then waits on the broadcast-done event (bounded
+       timeout) before emitting `complete`, so subscribers always
+       see the typed event before the close signal.
      - **Watcher lifecycle**:
        - `_start_watcher_for(job)` MUST be idempotent. A late
          `/pdd budget N` arriving on a still-queued job may start a

@@ -303,9 +303,50 @@ async def websocket_job_stream(
             await websocket.close()
             return
 
-        # Listen for client messages (input/cancel)
+        # Listen for client messages (input/cancel). The loop races
+        # `receive_text()` against a poll of `job.status` so the
+        # WebSocket closes when the job reaches a terminal state —
+        # otherwise a live stream would keep waiting on client input
+        # indefinitely after the job completed.
+        _terminal_statuses = {
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+            JobStatus.BUDGET_EXCEEDED,
+        }
+
+        async def _watch_for_terminal():
+            while True:
+                current = job_manager.get_job(job_id)
+                if current is None or current.status in _terminal_statuses:
+                    return current
+                await asyncio.sleep(0.25)
+
         while True:
-            data = await websocket.receive_text()
+            receive_task = asyncio.create_task(websocket.receive_text())
+            done_task = asyncio.create_task(_watch_for_terminal())
+            done, pending = await asyncio.wait(
+                [receive_task, done_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in pending:
+                t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            if done_task in done:
+                try:
+                    await websocket.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+
+            try:
+                data = receive_task.result()
+            except Exception:  # noqa: BLE001
+                return
             try:
                 message = json.loads(data)
                 msg_type = message.get("type")
@@ -313,13 +354,13 @@ async def websocket_job_stream(
                 if msg_type == "cancel":
                     console.print(f"[cyan]WS:[/cyan] Cancel request for job {job_id}")
                     await job_manager.cancel(job_id)
-                
+
                 elif msg_type == "input":
                     # In a real implementation, this would pipe data to the job's stdin
                     user_input = message.get("data", "")
                     console.print(f"[cyan]WS:[/cyan] Input received for job {job_id}: {len(user_input)} chars")
                     # TODO: Implement stdin piping in JobManager
-                    
+
             except json.JSONDecodeError:
                 error_msg = WSMessage(
                     type="error",
