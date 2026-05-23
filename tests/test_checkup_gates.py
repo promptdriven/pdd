@@ -406,6 +406,94 @@ class TestDiscoverGates:
         assert "npm:lint:check" in names
         assert "npm:format:check" in names
 
+    def test_script_gate_detects_dotdot_normalised_config_path(self) -> None:
+        """Iter-37 Finding 3: ``--config config/../config/lint.json``
+        is the same target as ``config/lint.json`` once collapsed.
+        The pre-fix code only stripped ``./`` and compared raw
+        strings, so the equality check missed. Use os.path.normpath
+        on both sides.
+        """
+        from pdd.checkup_gates import _script_references_pr_modified_config
+
+        pr_set = {"config/lint.json"}
+        for script in (
+            "eslint --no-fix --config config/../config/lint.json src",
+            "eslint --no-fix --config ./config/./lint.json src",
+            "eslint --no-fix --config config//lint.json src",
+        ):
+            assert _script_references_pr_modified_config(script, pr_set), (
+                f"non-canonical config path missed in {script!r}"
+            )
+
+    def test_npm_tsc_script_gate_skipped_when_custom_p_extends_base_pr_modified(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-37 Finding 1: ``tsc -p config/build.json --noEmit``
+        where ``config/build.json`` extends ``./base.json`` and the
+        PR modifies ``config/base.json`` — iter-36 only walked the
+        ROOT tsconfig's extends chain and missed this path.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {
+                    "typecheck": "tsc -p config/build.json --noEmit",
+                },
+            }),
+            encoding="utf-8",
+        )
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        (cfg_dir / "base.json").write_text(
+            '{"compilerOptions": {"strict": true}}\n',
+            encoding="utf-8",
+        )
+        (cfg_dir / "build.json").write_text(
+            '{"extends": "./base.json"}\n',
+            encoding="utf-8",
+        )
+        # No top-level tsconfig.json — iter-36's root-only walk
+        # would emit the gate. iter-37 walks from the -p target.
+        gates = discover_gates(
+            tmp_path, changed_files=("config/base.json",)
+        )
+        assert "npm:typecheck" not in {g.name for g in gates}
+
+    def test_npm_tsc_script_gate_skipped_when_p_dir_extends_base_pr_modified(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-37 Finding 2: tsc accepts ``-p <directory>`` and
+        looks for ``<dir>/tsconfig.json``. Same RCE/false-pass
+        scenario as Finding 1 via the directory form.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc -p config --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        (cfg_dir / "base.json").write_text(
+            '{"compilerOptions": {"strict": true}}\n',
+            encoding="utf-8",
+        )
+        (cfg_dir / "tsconfig.json").write_text(
+            '{"extends": "./base.json"}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(
+            tmp_path, changed_files=("config/base.json",)
+        )
+        assert "npm:typecheck" not in {g.name for g in gates}
+
     def test_script_gate_detects_hidden_dir_config(self) -> None:
         """Iter-36 Finding 1: ``.config/lint.json`` previously
         collapsed to ``config/lint.json`` because the normaliser

@@ -477,6 +477,58 @@ def _has_active_noemit(tokens: List[str]) -> bool:
     return False
 
 
+def _extract_tsc_project_paths(
+    script_command: str, worktree: Path
+) -> List[Path]:
+    """Return the worktree-resolved paths a tsc-flavoured script
+    targets via ``-p <path>`` / ``--project <path>``.
+
+    Handles all the shapes ``_script_references_pr_modified_config``
+    already covers (``-p path`` / ``-p=path`` / quoted forms) and
+    resolves each against the worktree. Directory targets stay as
+    directories — ``_collect_tsconfig_chain_paths`` knows to look
+    for ``<dir>/tsconfig.json`` (iter-37 Finding 2).
+    """
+    if not script_command:
+        return []
+    lowered = script_command.lower()
+    try:
+        tokens = shlex.split(lowered, posix=True)
+    except ValueError:
+        tokens = lowered.split()
+    flag_words = ("--project", "-p")
+    flag_equals = tuple(f + "=" for f in flag_words)
+    raw_paths: List[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in flag_words and i + 1 < len(tokens):
+            raw_paths.append(tokens[i + 1])
+            i += 2
+            continue
+        for prefix in flag_equals:
+            if tok.startswith(prefix):
+                raw_paths.append(tok[len(prefix):])
+                break
+        i += 1
+    resolved: List[Path] = []
+    for raw in raw_paths:
+        if not raw:
+            continue
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
+            raw = raw[1:-1]
+        if not raw:
+            continue
+        candidate = (worktree / raw).resolve()
+        try:
+            candidate.relative_to(worktree.resolve())
+        except ValueError:
+            # Refuse to follow paths outside the worktree.
+            continue
+        resolved.append(candidate)
+    return resolved
+
+
 def _collect_tsconfig_chain_paths(
     tsconfig_path: Path,
     worktree: Path,
@@ -506,6 +558,11 @@ def _collect_tsconfig_chain_paths(
     paths: List[str] = []
     if _depth > _MAX_TSCONFIG_EXTENDS_DEPTH:
         return paths
+    # Iter-37 Finding 2: tsc accepts ``-p <directory>`` and looks
+    # for ``<dir>/tsconfig.json``. Normalise the initial call so a
+    # directory root walks the dir's tsconfig.
+    if tsconfig_path.is_dir():
+        tsconfig_path = tsconfig_path / "tsconfig.json"
     if not tsconfig_path.is_file():
         return paths
     try:
@@ -700,17 +757,41 @@ def _discover_npm_gates(
         or path.startswith("tsconfig.")
         for path in pr_changed_set
     )
-    # Iter-36 Finding 3: a PR can also change a custom-named base
-    # tsconfig (``base.json``, ``shared.tsconfig.json``, etc.) that
-    # the worktree's top-level ``tsconfig.json`` extends. The
-    # iter-29 chain walk only checked emit-flag values; it did NOT
-    # surface the chain's filenames. Collect every local tsconfig
-    # in the chain so the PR-modified-config skip catches non-
-    # ``tsconfig*.json``-named extends bases too.
+    # Iter-36 Finding 3 + iter-37 Findings 1 + 2: walk the extends
+    # chain from EVERY tsconfig the discovery might reach — the
+    # worktree's top-level ``tsconfig.json`` AND every custom
+    # project path the recognised tsc-flavoured scripts reference
+    # via ``-p`` / ``--project``. iter-36 only walked from the root
+    # tsconfig, so a script ``tsc -p config/build.json --noEmit``
+    # whose ``config/build.json`` extended ``./base.json`` slipped
+    # past when the PR modified ``base.json`` alone. The custom
+    # path can also be a DIRECTORY (tsc looks for
+    # ``<dir>/tsconfig.json``), which ``_collect_tsconfig_chain_paths``
+    # already handles.
     if not tsconfig_changed:
-        chain_paths = set(
-            _collect_tsconfig_chain_paths(worktree / "tsconfig.json", worktree)
-        )
+        chain_roots: List[Path] = [worktree / "tsconfig.json"]
+        for script_name, script_command in scripts.items():
+            if script_name not in _RECOGNIZED_NPM_SCRIPTS:
+                continue
+            if not isinstance(script_command, str):
+                continue
+            for project_path in _extract_tsc_project_paths(
+                script_command, worktree
+            ):
+                chain_roots.append(project_path)
+        chain_paths: set = set()
+        seen_roots: set = set()
+        for root in chain_roots:
+            try:
+                rkey = root.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if rkey in seen_roots:
+                continue
+            seen_roots.add(rkey)
+            chain_paths.update(
+                _collect_tsconfig_chain_paths(root, worktree)
+            )
         if chain_paths:
             lowered_chain = {p.lower() for p in chain_paths}
             if lowered_chain & pr_changed_set:
@@ -1183,6 +1264,14 @@ def _script_references_pr_modified_config(
                 config_paths.append(tok[len(prefix):])
                 break
         i += 1
+    # Iter-37 Finding 3: ``--config config/../config/lint.json``
+    # is the same target as ``config/lint.json`` once you collapse
+    # the ``..``. Use ``os.path.normpath`` on BOTH sides of the
+    # comparison so a PR-modified file isn't missed because the
+    # script wrote a non-canonical path.
+    normalised_changed = {
+        os.path.normpath(p) for p in pr_changed_set
+    }
     for raw in config_paths:
         if not raw:
             continue
@@ -1192,18 +1281,17 @@ def _script_references_pr_modified_config(
         # the fallback split.)
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
             raw = raw[1:-1]
-        # Iter-36 Finding 1: ``.lstrip("./")`` strips ANY combination
-        # of ``.`` and ``/`` from the start — so a hidden-directory
-        # path like ``.config/lint.json`` collapses to
-        # ``config/lint.json`` and silently misses the changed
-        # file. Use ``str.removeprefix`` (a single literal prefix)
-        # so only the explicit ``./`` leader is removed.
-        norm = raw
-        if norm.startswith("./"):
-            norm = norm[2:]
-        if not norm:
+        if not raw:
             continue
-        for changed in pr_changed_set:
+        # Iter-37 Finding 3: normalise ``./``, ``..``, and double
+        # slashes via os.path.normpath. iter-36's single-literal
+        # ``./``-strip is still useful as a quick path, but
+        # normpath is the load-bearing canonical form for the
+        # comparison.
+        norm = os.path.normpath(raw)
+        if not norm or norm == ".":
+            continue
+        for changed in normalised_changed:
             if changed == norm or changed.endswith("/" + norm):
                 return True
     return False
