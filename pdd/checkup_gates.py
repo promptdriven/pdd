@@ -20,7 +20,12 @@ Trust-boundary invariants:
   rendering.
 * Environment is scrubbed: ``CI=1``, ``NO_COLOR=1``, ``FORCE_COLOR=0`` are
   injected; ``PDD_*`` mutating envs are stripped so a gate cannot inherit
-  reviewer/fixer state.
+  reviewer/fixer state. The Python import-path family
+  (``PYTHONPATH``/``PYTHONHOME``/``PYTHONSTARTUP``/``PYTHONUSERBASE``/
+  ``PYTHONNOUSERSITE``) is also stripped: a developer with
+  ``PYTHONPATH=.`` (or any worktree-resolving value) in their shell
+  would otherwise let mypy/ruff/black resolve a PR-controlled plugin
+  module from the gate's ``cwd`` (iter-38 Finding 3).
 * The runner's ``cwd`` is always the loop-owned PR worktree.
 """
 
@@ -624,7 +629,11 @@ def _tsconfig_chain_signals_emit(
     on such a repo: we cannot inject ``--incremental false`` /
     ``--composite false`` like the direct gate does. iter-29
     Finding 1: the iter-28 top-level-only scan missed extends-chain
-    bases (``tsconfig.base.json`` and friends).
+    bases (``tsconfig.base.json`` and friends). iter-38 Finding 2
+    extends the scan starting point to every custom ``-p`` /
+    ``--project`` target a recognised tsc-flavoured script references,
+    so this helper now also accepts the directory shape (``tsc -p
+    config/build/`` resolves to ``config/build/tsconfig.json``).
 
     Bounded by ``_MAX_TSCONFIG_EXTENDS_DEPTH`` to defend against
     cyclic / pathological extends chains and to keep discovery
@@ -632,6 +641,11 @@ def _tsconfig_chain_signals_emit(
     """
     if _depth > _MAX_TSCONFIG_EXTENDS_DEPTH:
         return False
+    # iter-38 Finding 2: tsc's ``-p <dir>`` shape resolves to
+    # ``<dir>/tsconfig.json``. Mirror ``_collect_tsconfig_chain_paths``
+    # so a directory root walks the same chain.
+    if tsconfig_path.is_dir():
+        tsconfig_path = tsconfig_path / "tsconfig.json"
     if not tsconfig_path.is_file():
         return False
     try:
@@ -693,6 +707,123 @@ def _tsconfig_chain_signals_emit(
 _MAX_TSCONFIG_EXTENDS_DEPTH = 8
 
 
+# Iter-38 Finding 1: package-manager config files in the worktree
+# redirect script execution at the npm/pnpm/yarn level — well below
+# the script-body allowlist the discovery code enforces. ``.npmrc``'s
+# ``script-shell`` key replaces ``/bin/sh`` with any binary the PR
+# can ship in the worktree, turning the validated argv
+# ``prettier --check .`` into ``./evil-sh -c "prettier --check ."``.
+# yarn's ``yarn-path`` (yarn 1) and ``yarnPath`` (yarn 2+) replace the
+# yarn binary itself with a PR-controlled JS file. yarn 2+ also boots
+# from ``.yarn/releases/yarn-*.cjs`` which is PR-controllable. The
+# direct ``npx --no-install tsc`` gate is ALSO vulnerable: npx reads
+# ``.npmrc`` and honours ``script-shell``, confirmed against
+# npm 10.x. This whole family must short-circuit the npm gate path
+# (iter-38 Finding 1, validated repro).
+_PACKAGE_MANAGER_CONFIG_BASENAMES: Tuple[str, ...] = (
+    ".npmrc",
+    ".pnpmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+)
+
+
+def _npm_runner_redirect_unsafe(
+    worktree: Path, pr_changed_set: set
+) -> bool:
+    """Return True iff a package-manager config can redirect npm-family
+    script execution to a PR-controlled binary or runtime.
+
+    iter-38 Finding 1: kills the entire npm gate path (script gates AND
+    the direct ``npx --no-install tsc`` gate) when ANY of these hold:
+      * ``.npmrc`` / ``.pnpmrc`` declares ``script-shell``
+      * ``.yarnrc`` declares ``script-shell`` or ``yarn-path``
+      * ``.yarnrc.yml`` declares ``yarnPath``
+      * ``.yarn/releases/`` exists (yarn 2+ boots from this directory)
+      * PR diff modifies any of ``.npmrc``/``.pnpmrc``/``.yarnrc``/``.yarnrc.yml``
+      * PR diff modifies any path under ``.yarn/`` (yarn 2+ plugins and
+        releases live here and load arbitrary JS at every yarn boot)
+
+    Defence-in-depth scope-outs (intentional, follow-up territory):
+      * Yarn 2+'s ``.yarnrc.yml`` ``plugins:`` key loads ``.cjs`` files
+        from ``.yarn/plugins/`` at every yarn invocation. A PR diff in
+        ``.yarn/`` or ``.yarnrc.yml`` catches the new-plugin case; a
+        pre-existing ``plugins:`` block with pre-existing plugin files
+        is treated as "trusted base" by the iter-37 model (same shape
+        we already use for pre-existing ``.eslintrc`` config).
+      * ``package.json:packageManager`` (corepack) can pin a specific
+        package-manager version that corepack will fetch on first run.
+        Not gated here in iter-38; a PR diff touching ``package.json``
+        itself is not yet a kill-switch (the existing tool-config
+        skips do not cover ``package.json`` at the top level).
+
+    The check is fail-closed: an unreadable config or unexpected I/O
+    error returns True so the gate path skips rather than running with
+    an unvalidated runner.
+    """
+    # PR-modified config → poisoned baseline, skip outright.
+    for path in pr_changed_set:
+        base = path.rsplit("/", 1)[-1]
+        if base in _PACKAGE_MANAGER_CONFIG_BASENAMES:
+            return True
+        if path.startswith(".yarn/"):
+            return True
+
+    # Stable config that already declares a runner-redirect → skip.
+    npmrc_pattern = re.compile(
+        r"^\s*script[-_]?shell\s*=", re.MULTILINE | re.IGNORECASE
+    )
+    for name in (".npmrc", ".pnpmrc"):
+        path = worktree / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return True
+        if npmrc_pattern.search(text):
+            return True
+
+    yarnrc = worktree / ".yarnrc"
+    if yarnrc.is_file():
+        try:
+            text = yarnrc.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return True
+        if re.search(
+            r"^\s*(script[-_]?shell|yarn-path)\b",
+            text,
+            re.MULTILINE | re.IGNORECASE,
+        ):
+            return True
+
+    yarnrc_yml = worktree / ".yarnrc.yml"
+    if yarnrc_yml.is_file():
+        try:
+            text = yarnrc_yml.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return True
+        # yarn 2+: yarnPath redirects the yarn binary. plugins ALSO
+        # load arbitrary JS from the worktree at startup, but the
+        # presence of ``.yarn/releases/`` already implies yarn 2+ boot
+        # so the yarn-path key check is the load-bearing signal.
+        if re.search(
+            r"^\s*yarnPath\s*:",
+            text,
+            re.MULTILINE,
+        ):
+            return True
+
+    # yarn 2+ Plug'n'Play boot loads ``.yarn/releases/yarn-*.cjs``. The
+    # file is PR-controllable and runs JS at every yarn invocation, so
+    # its mere presence in the worktree is unsafe for the gate path.
+    yarn_releases = worktree / ".yarn" / "releases"
+    if yarn_releases.is_dir():
+        return True
+
+    return False
+
+
 def _discover_npm_gates(
     worktree: Path, changed_files: Sequence[str] = ()
 ) -> List[Gate]:
@@ -708,6 +839,17 @@ def _discover_npm_gates(
     if not isinstance(scripts, dict):
         return []
     runner = _detect_node_runner(worktree)
+    pr_changed_set = {f.lower() for f in changed_files}
+    # Iter-38 Finding 1: short-circuit the entire npm gate path when a
+    # package-manager config file in the worktree can redirect script
+    # execution to a PR-controlled binary. See
+    # ``_npm_runner_redirect_unsafe`` for the precise rules.
+    if _npm_runner_redirect_unsafe(worktree, pr_changed_set):
+        logger.debug(
+            "checkup-gates: skipping all npm-family gates — package-manager "
+            "config can redirect script execution (iter-38 Finding 1)"
+        )
+        return []
     # Iter-27 Finding 3: PR-modified tool config files are RCE-equivalent.
     # ``prettier.config.{js,cjs,mjs,ts}``, ``.prettierrc.{js,cjs,mjs,ts}``,
     # ``eslint.config.{js,cjs,mjs,ts}``, ``.eslintrc.{js,cjs,mjs}``,
@@ -715,7 +857,6 @@ def _discover_npm_gates(
     # by the corresponding tool — running ``prettier --check`` after a
     # fork PR shipped a poisoned ``prettier.config.cjs`` is RCE. Skip
     # the gate that would load each config when the PR modified it.
-    pr_changed_set = {f.lower() for f in changed_files}
     # Iter-30 Finding 1: every npm script gate invokes a binary from
     # ``node_modules`` (directly or via npm's PATH-injection of
     # ``node_modules/.bin``). A fork PR can ADD or MODIFY any path
@@ -814,18 +955,43 @@ def _discover_npm_gates(
     js_plugin_module_changed = any(
         _is_plugin_loadable(path) for path in pr_changed_set
     )
-    # Iter-28 Finding 1 + iter-29 Finding 1: a script-based tsc gate
-    # runs the operator's unmodified argv, so we cannot inject
-    # ``--incremental false`` / ``--tsBuildInfoFile <devnull>`` like
-    # the direct gate does. When ANY tsconfig in the extends chain
-    # sets ``incremental: true`` or ``composite: true``, running
-    # the script writes ``tsconfig.tsbuildinfo`` into the worktree.
-    # iter-28 only checked the top-level tsconfig.json; iter-29
-    # walks the extends chain so a base config a level (or two)
-    # below still trips the skip.
-    tsconfig_signals_emit = _tsconfig_chain_signals_emit(
-        worktree / "tsconfig.json", worktree
-    )
+    # Iter-28 Finding 1 + iter-29 Finding 1 + iter-38 Finding 2: a
+    # script-based tsc gate runs the operator's unmodified argv, so we
+    # cannot inject ``--incremental false`` / ``--tsBuildInfoFile
+    # <devnull>`` like the direct gate does. When ANY tsconfig in the
+    # extends chain sets ``incremental: true`` or ``composite: true``,
+    # running the script writes ``tsconfig.tsbuildinfo`` into the
+    # worktree. iter-28 only checked the top-level tsconfig.json;
+    # iter-29 walked the extends chain from the root; iter-38 widens
+    # the walk to ALSO start from every custom ``-p <path>`` /
+    # ``--project <path>`` target referenced by a recognised
+    # tsc-flavoured script. A script ``tsc -p config/build.json
+    # --noEmit`` whose ``config/build.json`` sets ``incremental: true``
+    # would otherwise slip past the root-only check and emit
+    # ``.tsbuildinfo`` into the worktree (iter-38 Finding 2).
+    tsconfig_signal_roots: List[Path] = [worktree / "tsconfig.json"]
+    for script_name, script_command in scripts.items():
+        if script_name not in _RECOGNIZED_NPM_SCRIPTS:
+            continue
+        if not isinstance(script_command, str):
+            continue
+        for project_path in _extract_tsc_project_paths(
+            script_command, worktree
+        ):
+            tsconfig_signal_roots.append(project_path)
+    tsconfig_signals_emit = False
+    seen_emit_roots: set = set()
+    for root in tsconfig_signal_roots:
+        try:
+            resolved_root = root.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if resolved_root in seen_emit_roots:
+            continue
+        seen_emit_roots.add(resolved_root)
+        if _tsconfig_chain_signals_emit(root, worktree):
+            tsconfig_signals_emit = True
+            break
     # Map recognized scripts to which config-class they load. A
     # script can load multiple — e.g. ``lint:check`` could be
     # eslint or prettier — but we conservatively skip when ANY
@@ -1310,10 +1476,16 @@ def _mypy_declares_local_plugin_anywhere(
       * setup.cfg ``[mypy] plugins = ...``
 
     A "local plugin" is any entry that contains ``/`` or ``\\``,
-    starts with ``./`` / ``../``, or ends in ``.py``. Pure package
-    imports (``mypy_django_plugin.main``) stay supported because
-    PR diffs cannot rename or replace them without also touching
-    a dependency manifest the config-touched skip already catches.
+    starts with ``./`` / ``../``, or ends in ``.py``. iter-38 Finding 3
+    extends the check: pure-package plugin names (``my_project.mypy_plugin``)
+    ALSO count as local when the worktree contains a top-level package
+    of the same name — under an editable install or an inherited
+    ``PYTHONPATH=.``-style env, mypy's plugin import would resolve to
+    the PR-modified module rather than a stable site-packages copy.
+    The env scrub in ``_build_subprocess_env`` strips ``PYTHONPATH`` so
+    the inherited-shell vector is defanged at runtime; this discovery
+    skip is belt-and-braces for the editable-install case where the
+    worktree IS the editable target.
     """
     if _mypy_declares_local_plugin(pyproject_text):
         return True
@@ -1331,7 +1503,138 @@ def _mypy_declares_local_plugin_anywhere(
             continue
         if _ini_section_has_local_plugin(text, header_pattern):
             return True
+    # iter-38 Finding 3 defence-in-depth: a "pure package" entry whose
+    # top-level name maps to a worktree package directory could still
+    # resolve to PR-controlled code under an editable install whose
+    # editable target IS the worktree. The env scrub handles the
+    # PYTHONPATH case at runtime; this catches the editable-install
+    # case at discovery time.
+    if _mypy_pure_package_plugin_resolves_to_worktree(worktree, pyproject_text):
+        return True
     return False
+
+
+def _mypy_pure_package_plugin_resolves_to_worktree(
+    worktree: Path, pyproject_text: str
+) -> bool:
+    """Return True iff any "pure package" mypy plugin entry's top-level
+    name matches a package directory or module file in the worktree.
+
+    iter-38 Finding 3: ``plugins = ["my_project.mypy_plugin"]`` is
+    treated as a local plugin when the worktree has ``my_project/``
+    (with an ``__init__.py``) or a ``my_project.py`` file, because an
+    editable install of the worktree (or any setup that adds the
+    worktree to ``sys.path``) makes mypy import the PR-controlled
+    module rather than a stable site-packages copy.
+
+    Only pure-package entries are inspected here. Path-shaped entries
+    (``./plugin.py``, ``/abs/plugin.py``, ``a/b/c.py``) are already
+    caught by ``_mypy_declares_local_plugin``/``_ini_section_has_local_plugin``.
+    """
+    entries: List[str] = []
+    entries.extend(_extract_mypy_plugin_entries(pyproject_text))
+    for name, header_pattern in (
+        ("mypy.ini", r"^\s*\[\s*mypy\s*\]\s*$"),
+        (".mypy.ini", r"^\s*\[\s*mypy\s*\]\s*$"),
+        ("setup.cfg", r"^\s*\[\s*mypy\s*\]\s*$"),
+    ):
+        path = worktree / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        entries.extend(_extract_ini_mypy_plugin_entries(text, header_pattern))
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+        # Skip path-shaped entries — already handled by the local-path
+        # heuristic above.
+        if (
+            "/" in entry
+            or "\\" in entry
+            or entry.startswith("./")
+            or entry.startswith("../")
+            or entry.endswith(".py")
+        ):
+            continue
+        top_level = entry.split(".", 1)[0]
+        # Defence: top-level identifier must be a plausible Python
+        # package name; otherwise skip (avoids treating something like
+        # an empty string or a weird config entry as a directory).
+        if not top_level or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", top_level):
+            continue
+        pkg_dir = worktree / top_level
+        if (pkg_dir / "__init__.py").is_file():
+            return True
+        if (worktree / f"{top_level}.py").is_file():
+            return True
+        # PEP 420 namespace packages — a worktree directory with no
+        # ``__init__.py`` can still expose ``top_level.submodule`` via
+        # namespace-package discovery on ``sys.path``. Conservatively
+        # treat a same-named directory as worktree-resolvable.
+        if pkg_dir.is_dir():
+            return True
+    return False
+
+
+def _extract_mypy_plugin_entries(pyproject_text: str) -> List[str]:
+    """Return every plugin entry under ``[tool.mypy]`` in pyproject.toml.
+
+    Mirrors the loose regex in ``_mypy_declares_local_plugin`` but
+    returns the raw entries instead of a boolean. Used by the
+    pure-package worktree-resolution check (iter-38 Finding 3).
+    """
+    if not pyproject_text:
+        return []
+    header = re.search(
+        r"^\s*\[\s*tool\.mypy[^\]]*\]\s*$",
+        pyproject_text,
+        re.MULTILINE,
+    )
+    if not header:
+        return []
+    tail = pyproject_text[header.end():]
+    next_table = re.search(r"^\s*\[", tail, re.MULTILINE)
+    section = tail if not next_table else tail[: next_table.start()]
+    plugins_match = re.search(
+        r'^\s*plugins\s*=\s*(\[[^\]]*\]|"[^"\n]*"|\'[^\'\n]*\')',
+        section,
+        re.MULTILINE,
+    )
+    if not plugins_match:
+        return []
+    raw = plugins_match.group(1)
+    entries = re.findall(r'"([^"\n]*)"|\'([^\'\n]*)\'', raw)
+    return [(q1 or q2) for q1, q2 in entries]
+
+
+def _extract_ini_mypy_plugin_entries(text: str, header_pattern: str) -> List[str]:
+    """Return every plugin entry under an INI ``[mypy]`` section.
+
+    Mirrors ``_ini_section_has_local_plugin`` but returns the raw
+    entries. Used by the pure-package worktree-resolution check
+    (iter-38 Finding 3).
+    """
+    if not text:
+        return []
+    header = re.search(header_pattern, text, re.MULTILINE)
+    if not header:
+        return []
+    tail = text[header.end():]
+    next_section = re.search(r"^\s*\[", tail, re.MULTILINE)
+    section = tail if not next_section else tail[: next_section.start()]
+    plugins_match = re.search(
+        r"^\s*plugins\s*=\s*(.+?)\s*$",
+        section,
+        re.MULTILINE,
+    )
+    if not plugins_match:
+        return []
+    raw = plugins_match.group(1).strip()
+    return [entry.strip() for entry in re.split(r"[,\s]+", raw) if entry.strip()]
 
 
 def _ini_section_has_local_plugin(text: str, header_pattern: str) -> bool:
@@ -1603,18 +1906,38 @@ def _safe_slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:120] or "gate"
 
 
+# Iter-38 Finding 3: Python's module resolver consults these env vars
+# when an installed tool (mypy/ruff/black) imports a plugin. A developer
+# whose shell sets ``PYTHONPATH=.`` (or any path that resolves inside
+# the gate's ``cwd``) would otherwise let a tool import a PR-controlled
+# module from the worktree even when the plugin entry in the tool's
+# config is a "pure package" name like ``my_project.mypy_plugin``.
+# Strip the whole family at the gate boundary so a PR cannot escalate
+# through inherited interpreter configuration.
+_STRIPPED_PYTHON_ENV_KEYS: Tuple[str, ...] = (
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "PYTHONUSERBASE",
+    "PYTHONNOUSERSITE",
+)
+
+
 def _build_subprocess_env() -> Dict[str, str]:
     """Build the environment dict the runner injects for each gate.
 
     Inherits the caller's PATH/HOME (so tools resolve), strips ``PDD_*``
     envs (so the gate cannot inherit reviewer/fixer state or token
-    files), and forces ``CI=1``, ``NO_COLOR=1``, ``FORCE_COLOR=0`` for
-    deterministic non-interactive output.
+    files) AND the Python import-path family (``PYTHONPATH`` etc., so
+    a PR-controlled module under the worktree cannot be imported by a
+    pure-package plugin reference; iter-38 Finding 3), and forces
+    ``CI=1``, ``NO_COLOR=1``, ``FORCE_COLOR=0`` for deterministic
+    non-interactive output.
     """
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith("PDD_")
+        if not key.startswith("PDD_") and key not in _STRIPPED_PYTHON_ENV_KEYS
     }
     env["CI"] = "1"
     env["NO_COLOR"] = "1"

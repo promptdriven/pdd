@@ -1683,6 +1683,466 @@ class TestDiscoverGates:
             gate = next(g for g in gates if g.name == "tsc-noemit")
             assert "--no-install" in gate.cmd
 
+    # ------------------------------------------------------------------
+    # Iter-38 Finding 1: package-manager config can redirect script
+    # execution to a PR-controlled binary.
+    # ------------------------------------------------------------------
+
+    def test_npm_gates_skip_when_npmrc_sets_script_shell(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: ``.npmrc``'s ``script-shell`` key lets a PR
+        redirect ``npm run`` (and ``npx``) to a PR-controlled shell
+        binary. Confirmed against npm 10.x: writing
+        ``script-shell=./evil-sh`` plus ``./evil-sh`` makes
+        ``npm run format:check`` execute ``./evil-sh -c "prettier
+        --check ."`` before the allowlisted argv even runs. The entire
+        npm gate path must short-circuit when this config is present.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        (tmp_path / ".npmrc").write_text(
+            "script-shell=./evil-sh\n", encoding="utf-8"
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_pnpmrc_sets_script_shell(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: pnpm reads ``.pnpmrc`` (in addition to
+        ``.npmrc``) and honours ``script-shell``."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '6.0'\n", encoding="utf-8")
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        (tmp_path / ".pnpmrc").write_text(
+            "script-shell=./evil-sh\n", encoding="utf-8"
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_yarnrc_sets_script_shell(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: yarn 1's ``.yarnrc`` honours
+        ``script-shell``."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        (tmp_path / ".yarnrc").write_text(
+            'script-shell "./evil-sh"\n', encoding="utf-8"
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_yarnrc_sets_yarn_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: yarn 1's ``yarn-path`` redirects the yarn
+        binary itself to a PR-controlled JavaScript file."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        (tmp_path / ".yarnrc").write_text(
+            'yarn-path "./evil-yarn.cjs"\n', encoding="utf-8"
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_yarnrc_yml_sets_yarn_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: yarn 2+'s ``.yarnrc.yml`` ``yarnPath`` key
+        redirects yarn boot to a PR-controlled ``.cjs`` runtime."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        (tmp_path / ".yarnrc.yml").write_text(
+            'yarnPath: "./.yarn/releases/yarn-evil.cjs"\n', encoding="utf-8"
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_yarn_releases_directory_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: yarn 2+ boots from ``.yarn/releases/yarn-*.cjs``.
+        The file is PR-controllable and runs JS at every yarn invocation."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n", encoding="utf-8")
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        releases = tmp_path / ".yarn" / "releases"
+        releases.mkdir(parents=True)
+        (releases / "yarn-3.6.0.cjs").write_text("// yarn release\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_pr_modifies_npmrc(self, tmp_path: Path) -> None:
+        """Iter-38 Finding 1: a PR that adds or modifies ``.npmrc`` can
+        introduce ``script-shell`` even if discovery didn't catch the
+        config text — fail-closed on any PR diff that touches the file.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        # Note: even an empty .npmrc not in the worktree — the PR
+        # diff alone makes us assume the runner is poisoned.
+        gates = discover_gates(tmp_path, changed_files=(".npmrc",))
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_npm_gates_skip_when_pr_modifies_yarn_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: yarn 2+ boots from anything under
+        ``.yarn/`` (releases, plugins, sdks). A PR diff in that tree
+        controls the runtime."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        gates = discover_gates(
+            tmp_path,
+            changed_files=(".yarn/releases/yarn-3.6.0.cjs",),
+        )
+        names = {g.name for g in gates}
+        assert "npm:format:check" not in names
+
+    def test_direct_tsc_gate_skips_when_npmrc_sets_script_shell(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1: the direct ``npx --no-install tsc --noEmit``
+        gate is ALSO vulnerable to ``.npmrc`` script-shell redirect —
+        npx reads ``.npmrc`` and honours the key. Confirmed against
+        npx 10.x."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0", "scripts": {},
+                "devDependencies": {"typescript": "^5.0.0"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text("{}", encoding="utf-8")
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        (tmp_path / ".npmrc").write_text(
+            "script-shell=./evil-sh\n", encoding="utf-8"
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "tsc-noemit" not in names
+
+    def test_npm_gates_still_emit_on_normal_npmrc_without_script_shell(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 1 regression bound: a benign ``.npmrc``
+        (registry, save-exact, etc.) must NOT disable npm gates.
+        The redirect check is precise to the keys that actually
+        change script execution."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json({"format:check": "prettier --check ."}),
+            encoding="utf-8",
+        )
+        (tmp_path / ".npmrc").write_text(
+            "registry=https://registry.npmjs.org/\nsave-exact=true\n",
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:format:check" in names
+
+    # ------------------------------------------------------------------
+    # Iter-38 Finding 2: per-script tsconfig emit-signal walk.
+    # ------------------------------------------------------------------
+
+    def test_tsc_script_skipped_when_custom_p_path_signals_emit(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 2: ``tsc -p config/build.json --noEmit`` whose
+        ``config/build.json`` sets ``incremental: true`` writes
+        ``tsconfig.tsbuildinfo`` even with ``--noEmit``. The iter-29
+        emit-signal walk only checked the worktree-root
+        ``tsconfig.json``; iter-38 extends the walk to every ``-p``
+        target referenced by a recognised tsc-flavoured script."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc -p config/build.json --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        # Root tsconfig is benign — no incremental — so iter-29's
+        # root-only walk would NOT flag this case.
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {}}\n', encoding="utf-8"
+        )
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "build.json").write_text(
+            '{"compilerOptions": {"incremental": true}}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:typecheck" not in names
+
+    def test_tsc_script_skipped_when_custom_p_extends_chain_signals_emit(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 2 + iter-29: the per-script walk must also
+        traverse the extends chain of the custom ``-p`` target."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc -p config/build.json --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {}}\n', encoding="utf-8"
+        )
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "base.json").write_text(
+            '{"compilerOptions": {"composite": true}}\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "config" / "build.json").write_text(
+            '{"extends": "./base.json"}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:typecheck" not in names
+
+    def test_tsc_script_skipped_when_custom_p_directory_signals_emit(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 2: tsc's ``-p <dir>`` resolves to
+        ``<dir>/tsconfig.json``. The emit-signal walk must follow the
+        directory shape too."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps({
+                "name": "fake", "version": "0.0.0",
+                "scripts": {"typecheck": "tsc -p config/build --noEmit"},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {}}\n', encoding="utf-8"
+        )
+        (tmp_path / "config" / "build").mkdir(parents=True)
+        (tmp_path / "config" / "build" / "tsconfig.json").write_text(
+            '{"compilerOptions": {"incremental": true}}\n',
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = {g.name for g in gates}
+        assert "npm:typecheck" not in names
+
+    # ------------------------------------------------------------------
+    # Iter-38 Finding 3: pure-package mypy plugin that resolves to a
+    # worktree package directory must disable the mypy gate.
+    # ------------------------------------------------------------------
+
+    def test_mypy_gate_skipped_when_pure_package_plugin_matches_worktree_package(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 3: a "pure package" mypy plugin name like
+        ``my_project.mypy_plugin`` can still resolve to PR-controlled
+        worktree code when the project is installed editable (or
+        ``PYTHONPATH=`` points at the worktree). Confirmed against
+        mypy 1.20: setting ``PYTHONPATH=.`` (or ``pip install -e .``)
+        makes mypy import the worktree module rather than a stable
+        site-packages copy. Skip the gate when the plugin's top-level
+        name maps to a worktree package directory."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["my_project.mypy_plugin"]\n',
+            encoding="utf-8",
+        )
+        # Worktree contains a top-level ``my_project/`` package that
+        # an editable install (or PYTHONPATH=.) would resolve to.
+        (tmp_path / "my_project").mkdir()
+        (tmp_path / "my_project" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "my_project" / "mypy_plugin.py").write_text(
+            "from mypy.plugin import Plugin\nclass P(Plugin): pass\ndef plugin(v): return P\n",
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" not in names
+
+    def test_mypy_gate_skipped_when_pure_package_plugin_matches_worktree_module(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 3: single-file modules (``my_plugin.py`` at
+        worktree root) are also editable-importable, so the skip must
+        catch ``plugins = ["my_plugin"]`` against ``./my_plugin.py``."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["my_plugin"]\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "my_plugin.py").write_text(
+            "from mypy.plugin import Plugin\nclass P(Plugin): pass\ndef plugin(v): return P\n",
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" not in names
+
+    def test_mypy_gate_skipped_when_ini_pure_package_plugin_matches_worktree(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 3 also fires from ``mypy.ini`` / ``.mypy.ini``
+        / ``setup.cfg``'s ``[mypy] plugins =`` line."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        # pyproject.toml needs the [tool.mypy] section to even get the
+        # mypy gate considered for discovery.
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.mypy]\n", encoding="utf-8"
+        )
+        (tmp_path / "mypy.ini").write_text(
+            "[mypy]\nplugins = my_project.mypy_plugin\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "my_project").mkdir()
+        (tmp_path / "my_project" / "__init__.py").write_text("", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" not in names
+
+    def test_mypy_gate_emits_when_pure_package_plugin_has_no_worktree_match(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-38 Finding 3 regression bound: third-party pure-package
+        plugins (``mypy_django_plugin.main``) whose top-level name does
+        NOT exist in the worktree still produce a mypy gate. We do not
+        want to drop legitimate third-party plugin use."""
+        import shutil as _shutil
+        if not _shutil.which("mypy"):  # pragma: no cover
+            return
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mypy]\nplugins = ["mypy_django_plugin.main"]\n',
+            encoding="utf-8",
+        )
+        # No ``mypy_django_plugin/`` directory in the worktree.
+        gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "mypy" in names
+
+    def test_build_subprocess_env_strips_pythonpath_family(
+        self, monkeypatch: Any
+    ) -> None:
+        """Iter-38 Finding 3 (primary defence): the runner's env scrub
+        MUST strip the Python import-path family so a developer with
+        ``PYTHONPATH=.`` in their shell cannot let a "pure package"
+        plugin in a stable config resolve to a PR-controlled module
+        in the gate's cwd."""
+        from pdd.checkup_gates import _build_subprocess_env
+
+        for key, value in (
+            ("PYTHONPATH", "/some/path:./more"),
+            ("PYTHONHOME", "/opt/python"),
+            ("PYTHONSTARTUP", "/some/start.py"),
+            ("PYTHONUSERBASE", "/usr/local"),
+            ("PYTHONNOUSERSITE", "1"),
+        ):
+            monkeypatch.setenv(key, value)
+        env = _build_subprocess_env()
+        for key in (
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "PYTHONSTARTUP",
+            "PYTHONUSERBASE",
+            "PYTHONNOUSERSITE",
+        ):
+            assert key not in env, (
+                f"_build_subprocess_env must strip {key} so a stale shell "
+                f"env cannot escalate a pure-package mypy plugin into a "
+                f"worktree import"
+            )
+
 
 class TestRunGates:
     """``run_gates`` executes each discovered gate and persists artifacts."""
