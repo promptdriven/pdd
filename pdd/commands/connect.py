@@ -17,6 +17,8 @@ from typing import Optional
 
 import click
 
+from ..cli_branding import PDD_POSITIONING
+
 
 # Default port and range for auto-assignment
 DEFAULT_PORT = 9876
@@ -308,6 +310,7 @@ def connect(
         ctx.exit(1)
 
     # 6. Print Status Messages
+    click.echo(click.style(PDD_POSITIONING, fg="cyan"))
     click.echo(click.style(f"Starting PDD server on {server_url}", fg="green", bold=True))
     click.echo(f"Project Root: {click.style(str(project_root), fg='blue')}")
     click.echo(f"API Documentation: {click.style(f'{server_url}/docs', underline=True)}")

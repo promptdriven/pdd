@@ -22,6 +22,7 @@
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>auto_update_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>
+<pdd-dependency>cli_branding_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the core CLI logic for PDD in `pdd/core/cli.py`.
 
@@ -37,7 +38,7 @@
      - `_strip_ansi_codes(text)`: Remove ANSI sequences via `r'\x1b\[[0-9;]*m'`.
 
   2. **PDDCLI (click.Group)**:
-     - `format_help`: Add a "Generate Suite" section for `generate`, `test`, and `example` commands as described in README.
+     - `format_help`: After usage, print `PDD_FULL_TAGLINE` and `PDD_POSITIONING` from `pdd.cli_branding`, then add a "Generate Suite" section for `generate`, `test`, and `example` commands as described in README.
      - `invoke`: Centralized exception handling.
        - `click.Abort`: Exit code 1, silent (no error report).
        - `KeyboardInterrupt`, `Exception`: Pass to `handle_error`.
@@ -79,7 +80,7 @@
   </pdd.agentic_common>
 
 % Instructions
-  - Imports: `os`, `sys`, `io`, `re`, `click`, `typing`. From package/submodules: `DEFAULT_STRENGTH`, `__version__`, `DEFAULT_TIME`, `auto_update`, `list_available_contexts`, `get_local_pdd_path`, `handle_error`, `clear_core_dump_errors`, `_first_pending_command`, `_should_show_onboarding_reminder`, `_write_core_dump`, `garbage_collect_core_dumps`.
+  - Imports: `os`, `sys`, `io`, `re`, `click`, `typing`. From package/submodules: `DEFAULT_STRENGTH`, `__version__`, `DEFAULT_TIME`, `auto_update`, `PDD_FULL_TAGLINE`, `PDD_POSITIONING`, `list_available_contexts`, `get_local_pdd_path`, `handle_error`, `clear_core_dump_errors`, `_first_pending_command`, `_should_show_onboarding_reminder`, `_write_core_dump`, `garbage_collect_core_dumps`.
   - Use `click.version_option(version=__version__, package_name="pdd-cli")`.
 
 % Deliverables

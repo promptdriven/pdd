@@ -62,6 +62,8 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
+PR_API_CHANGED_FILES_MAX_LINES = 300
+PR_API_CHANGED_FILES_MAX_CHARS = 20000
 # R8: cover every suffix Python can import as a module under ``pdd/``.
 # A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
 # imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
@@ -3812,7 +3814,85 @@ def _summary_from_output(output: str) -> str:
     return text.splitlines()[0][:500]
 
 
-def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
+def _format_pr_api_changed_files(
+    output: str,
+    *,
+    max_lines: int = PR_API_CHANGED_FILES_MAX_LINES,
+    max_chars: int = PR_API_CHANGED_FILES_MAX_CHARS,
+) -> str:
+    """Format ``gh api pulls/{n}/files --jq ...`` rows for prompt context."""
+    lines: List[str] = []
+    total = 0
+    char_count = 0
+    for raw_line in (output or "").splitlines():
+        parts = raw_line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0].strip()
+        filename = parts[1].strip()
+        previous_filename = parts[2].strip() if len(parts) > 2 else ""
+        if not status or not filename:
+            continue
+
+        status_label = status.upper()
+        if status.lower() == "renamed" and previous_filename:
+            path = f"{previous_filename} -> {filename}"
+        else:
+            path = filename
+        total += 1
+
+        line = f"- {status_label}: {path}"
+        next_char_count = char_count + len(line) + (1 if lines else 0)
+        if len(lines) >= max_lines or next_char_count > max_chars:
+            continue
+        lines.append(line)
+        char_count = next_char_count
+
+    if total > len(lines):
+        lines.append(
+            "NOTE: GitHub PR files API list truncated; showing "
+            f"{len(lines)} of {total} files to keep checkup prompt context bounded. "
+            "Refresh the local PR base ref for the complete git diff."
+        )
+    return "\n".join(lines)
+
+
+def _fetch_pr_api_changed_files(
+    owner: str,
+    repo: str,
+    pr_number: int,
+) -> Tuple[str, str, str]:
+    """Return prompt-ready changed files from GitHub's PR files API."""
+    success, output = _run_gh_command(
+        [
+            "api",
+            "--paginate",
+            f"repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100",
+            "--jq",
+            '.[] | [.status, .filename, (.previous_filename // "")] | @tsv',
+        ]
+    )
+    if not success:
+        return "", "", _summary_from_output(output) or "gh api failed"
+
+    changed_files = _format_pr_api_changed_files(output)
+    full_changed_files = _format_pr_api_changed_files(
+        output,
+        max_lines=10**9,
+        max_chars=10**9,
+    )
+    if not changed_files:
+        return "", "", "GitHub PR files API returned no changed files"
+    return changed_files, full_changed_files, ""
+
+
+def _fetch_pr_metadata(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    *,
+    include_changed_files: bool = False,
+) -> Dict[str, str]:
     success, output = _run_gh_command(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
     if not success:
         return {}
@@ -3823,7 +3903,7 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
     head = data.get("head") or {}
     head_repo = head.get("repo") or {}
     base = data.get("base") or {}
-    return {
+    metadata = {
         "head_ref": str(head.get("ref") or ""),
         "head_owner": str((head_repo.get("owner") or {}).get("login") or ""),
         "head_repo": str(head_repo.get("name") or ""),
@@ -3836,6 +3916,17 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
         # advanced after the verifier cleared an earlier SHA.
         "head_sha": str(head.get("sha") or ""),
     }
+    if include_changed_files:
+        changed_files, full_changed_files, error = _fetch_pr_api_changed_files(
+            owner, repo, pr_number
+        )
+        if changed_files:
+            metadata["api_changed_files"] = changed_files
+            if full_changed_files and full_changed_files != changed_files:
+                metadata["api_changed_files_full"] = full_changed_files
+        elif error:
+            metadata["api_changed_files_error"] = error
+    return metadata
 
 
 def _git_rev_parse_head(worktree: Path) -> str:
@@ -5008,7 +5099,10 @@ def _git_has_staged_changes(worktree: Path) -> bool:
 
 def _is_untracked_pdd_meta_artifact(path: str) -> bool:
     rel = path.replace(os.sep, "/")
-    return rel.startswith(".pdd/meta/") and rel.endswith(".json")
+    return (
+        rel.startswith(".pdd/checkup-context/")
+        or (rel.startswith(".pdd/meta/") and rel.endswith(".json"))
+    )
 
 
 def _artifacts_dir(cwd: Path, issue_number: int, pr_number: int) -> Path:

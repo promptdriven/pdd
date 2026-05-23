@@ -1,0 +1,31 @@
+<pdd-reason>Centralizes concise user-facing CLI branding strings for orientation surfaces.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "PDD_TAGLINE", "type": "str"},
+      {"name": "PDD_FULL_TAGLINE", "type": "str"},
+      {"name": "PDD_POSITIONING", "type": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write `pdd/cli_branding.py`.
+
+% Role & Scope
+  This module centralizes short, user-facing CLI branding strings used only on
+  orientation surfaces such as root help, setup onboarding, and connect startup.
+  It must not print anything or import heavy dependencies.
+
+% Requirements
+  1. Define `PDD_TAGLINE = "The Last Programming Language™"`.
+  2. Define `PDD_FULL_TAGLINE` as `"PDD: {PDD_TAGLINE}"`.
+  3. Define `PDD_POSITIONING = "Prompt files are source; code is generated output."`.
+  4. Define `__all__` with the three public constants.
+  5. Do not add functions, side effects, environment access, or runtime imports.
+
+% Deliverables
+  - Code: `pdd/cli_branding.py`

@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from rich.console import Console as _RichConsole
+
+from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
+
 _console = _RichConsole(highlight=False)
 
 # ANSI escape codes for coloring (works without rich)
@@ -42,8 +45,8 @@ def _print_pdd_logo() -> None:
             "xxx      x+           xx+           DRIVEN",
             "xxx        x+         xxx           DEVELOPMENT\u00a9",
             "xxx         x+        xx+",
-            "xxx        x+         xx+           COMMAND LINE INTERFACE",
-            "xxx      x+          xxx",
+            "xxx        x+         xx+           THE LAST",
+            "xxx      x+          xxx            PROGRAMMING LANGUAGE",
             "xxx                +xx+ ",
             "xxx     +xxxxxxxxxxx+",
             "xxx   +xx+",
@@ -54,6 +57,9 @@ def _print_pdd_logo() -> None:
         ]
     )
     print(f"{CYAN}{logo}{RESET}")
+    print()
+    print(f"{BOLD}{WHITE}{PDD_FULL_TAGLINE}{RESET}")
+    print(f"{WHITE}{PDD_POSITIONING}{RESET}")
     print()
     print(f"{BOLD}{WHITE}Let's get set up quickly with a solid basic configuration!{RESET}")
     print()

@@ -1,10 +1,17 @@
-# PDD (Prompt-Driven Development) Command Line Interface
+# PDD: The Last Programming Language™
 
 ![PyPI version](https://img.shields.io/pypi/v/pdd-cli.svg) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
-PDD (Prompt-Driven Development) is a toolkit for AI-powered code generation and maintenance.
+PDD (Prompt-Driven Development) is a prompt-native programming system. `.prompt`
+files are the human-authored source language; Python, TypeScript, Go, and other
+traditional languages are generated artifacts.
+
+PDD is the last programming language in this specific sense: developers author
+durable intent, constraints, examples, and tests, then compile that source into
+whatever implementation language the project needs. Code remains real and
+reviewable, but it is no longer the primary source of truth.
 
 **Getting started is simple:**
 
@@ -35,6 +42,8 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
+
+For the positioning essay behind this shift, read [The Last Programming Language](docs/the-last-programming-language.md).
 
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
@@ -2745,6 +2754,7 @@ Arguments:
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--start-step STEP`: Recovery override for the legacy checkup flow; accepted values are `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, and `8`. Not compatible with `--review-loop`.
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 - `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
 - `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
@@ -2778,7 +2788,7 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, `checkup/pr-{N}` for PR mode), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, checkout-scoped `checkup/pr-{N}-<scope>` branch for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
@@ -2787,6 +2797,8 @@ Options:
 In **issue mode**, each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail. In **PR mode** (see below), step-level posting is suppressed — the orchestrator posts a single canonical final report on the PR thread and the issue thread once it knows the outcome (gate pass after push, gate fail, push failure, refusal, or `--no-fix` pass/fail). If GitHub commenting fails, the report body is also saved to `.pdd/checkup-pr-<n>/final-report.md` so it is never lost; the failure is surfaced via the run's returned message and persisted as `step_outputs["pr_post_status"]`, but it does not flip the gate outcome.
 
 **PR Mode**: Use `--pr` and `--issue` to run checkup against an existing PR and the issue it is intended to resolve. By default this runs the full standard checkup flow on the PR worktree, commits eligible generated fixes, pushes them back to the same PR branch, and skips step 8 because the PR already exists. Add `--no-fix` when you want verification-only behavior. PR mode reloads `architecture.json` and `.pddrc` from the PR worktree before running, so audits see the PR's project state and not the parent checkout's.
+
+**PR-Head Freshness Lease (auto-rerun on advance)**: In PR fix mode, if the remote PR head advances mid-checkup (a teammate pushes while PDD is auditing), the orchestrator transparently restarts the workflow against the new head rather than publishing a stale verdict. Restarts are capped at `MAX_PR_HEAD_REFRESHES = 2`, so the worst case is three inner attempts before exhaustion. The current restart count persists at `.pdd/checkup-pr-{pr_number}/pr_head_refreshes` (a single-int sidecar outside the workflow-state dir, so Ctrl-C + manual resume cannot bypass the bound); it is cleared automatically on a clean terminal success. When budget is exhausted, the run returns a failure message that lists every observed `old_sha->new_sha` transition and cites `max_pr_head_refreshes=2`, e.g.: `PR head kept advancing during checkup (aaaaaaaa->bbbbbbbb, bbbbbbbb->cccccccc, cccccccc->dddddddd); exhausted max_pr_head_refreshes=2. Rerun pdd checkup once the PR branch stabilizes.` The lease triggers at four checkpoints inside the inner orchestrator (post-Step-7 gate, pre-guards, push failure, post-push), and never force-pushes. `--no-fix --pr` does NOT consume restart budget; instead it fails closed (`Verdict downgraded — unverified:` banner over the clean Step 7 body) when post-Step-7 freshness cannot be confirmed — head advance, post-run refetch failure, or pre-run refetch failure (transient `_fetch_pr_metadata` flake at entry). Fix mode similarly fails closed at entry when `_fetch_pr_metadata` returns an empty head SHA — a fix-mode push requires a known baseline to validate freshness.
 
 **Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the active reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the active reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification, and active reviewer provider failures remain not-clean. Use `--reviewer-fallback` when the primary reviewer is known to be fragile in a given environment; the fallback reviewer is opt-in and distinct from the fixer.
 
@@ -3662,7 +3674,7 @@ One or more patent applications covering aspects of the PDD workflows and system
 
 ## Conclusion
 
-PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
+PDD (Prompt-Driven Development) is a prompt-native programming system for managing `.prompt` source files, generating code, creating examples, running tests, and keeping implementation artifacts synchronized with durable intent. By treating prompts and tests as the source of truth, PDD turns conventional code into reviewable output that can be regenerated as requirements evolve.
 
 The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
 
@@ -3672,4 +3684,4 @@ As you become more familiar with PDD, you can compose richer workflows by chaini
 
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
-Happy coding with PDD!
+Keep prompts as source; regenerate with PDD.

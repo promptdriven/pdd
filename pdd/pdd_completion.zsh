@@ -456,6 +456,7 @@ _pdd_checkup() {
     '--strict[Strict checks]' \
     '--no-fix[Do not apply fixes]' \
     '--timeout-adder[Add seconds to step timeouts]:seconds:' \
+    '--start-step[Recovery override for legacy checkup step]:step:(1 2 3 4 5 6.1 6.2 6.3 7 8)' \
     '--no-github-state[Skip GitHub state checks]' \
     '--pr[Target PR number or URL]:pr:' \
     '--issue[Target issue number or URL]:issue:' \

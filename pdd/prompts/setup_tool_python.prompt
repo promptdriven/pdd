@@ -12,6 +12,7 @@
 </pdd-interface>
 
 <pdd-dependency>cli_detector_python.prompt</pdd-dependency>
+<pdd-dependency>cli_branding_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the pdd/setup_tool.py module.
 
@@ -23,7 +24,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 1. Function: `run_setup()` — main entry point. Two-phase flow:
 
    **Banner:**
-   Print the PDD ASCII art logo in cyan via `_print_pdd_logo()`, followed by bold white tagline: "Let's get set up quickly with a solid basic configuration!" Use ANSI escape codes (CYAN="\033[36m", WHITE="\033[37m", BOLD="\033[1m", RESET="\033[0m").
+   Print the PDD ASCII art logo in cyan via `_print_pdd_logo()`. The logo should replace the old "COMMAND LINE INTERFACE" wording with "THE LAST" and "PROGRAMMING LANGUAGE". After the logo, print `PDD_FULL_TAGLINE` in bold white, then `PDD_POSITIONING` in white, then the existing bold white setup line: "Let's get set up quickly with a solid basic configuration!" Use ANSI escape codes (CYAN="\033[36m", WHITE="\033[37m", BOLD="\033[1m", RESET="\033[0m").
 
    **Phase 1 — CLI Bootstrap (interactive, 0–2 user inputs):**
    a. Call `cli_detector.detect_and_bootstrap_cli()` which returns `List[CliBootstrapResult]`.
@@ -98,7 +99,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
    - From `pdd.provider_manager`: `_read_csv`, `_write_csv_atomic`, `_get_user_csv_path`, `_save_key_to_api_env`, `_get_shell_rc_path`, `parse_api_key_vars`, `add_provider_from_registry`
    - From `pdd.pddrc_initializer`: `_detect_language`, `_build_pddrc_content`
    - From `pdd.model_tester`: `_run_test`, `test_model_interactive`
-   - Top-level: `getpass`, `os`, `sys`, `pathlib.Path`, `threading`
+   - Top-level: `getpass`, `os`, `sys`, `pathlib.Path`, `threading`, `PDD_FULL_TAGLINE`, `PDD_POSITIONING` from `pdd.cli_branding`
    - Optional: `litellm` (import-guarded), `dotenv` (import-guarded)
 
 % Dependencies

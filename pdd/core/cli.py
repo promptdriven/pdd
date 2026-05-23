@@ -16,6 +16,7 @@ except ImportError:
     DEFAULT_TIME = 0.25
     __version__ = "unknown"
 from ..auto_update import auto_update
+from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
@@ -97,6 +98,9 @@ class PDDCLI(click.Group):
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         self.format_usage(ctx, formatter)
+        formatter.write_text(PDD_FULL_TAGLINE)
+        formatter.write_text(PDD_POSITIONING)
+        formatter.write_paragraph()
         with formatter.section("Generate Suite (related commands)"):
             formatter.write_dl([
                 ("generate", "Create runnable code from a prompt file."),
@@ -245,7 +249,7 @@ class PDDCLI(click.Group):
 @click.group(
     cls=PDDCLI,
     invoke_without_command=True,
-    help="PDD (Prompt-Driven Development) Command Line Interface.",
+    help="PDD prompt-native programming system.",
 )
 @click.option(
     "--force",

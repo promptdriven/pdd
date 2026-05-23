@@ -5,12 +5,14 @@
    :alt: Join us on Discord
    :target: https://discord.gg/Yp4RTh8bG7
 
-PDD (Prompt-Driven Development) Command Line Interface
-======================================================
+PDD: The Last Programming Language™
+====================================
+
+PDD (Prompt-Driven Development) is a prompt-native programming system. ``.prompt`` files are the human-authored source language; Python, TypeScript, Go, and other traditional languages are generated artifacts.
+
+PDD is the last programming language in this specific sense: developers author durable intent, constraints, examples, and tests, then compile that source into whatever implementation language the project needs. Code remains real and reviewable, but it is no longer the primary source of truth.
 
 The primary command is ``sync``, which automatically executes the complete PDD workflow loop—from dependency injection through code generation, testing, and verification. For most use cases, ``sync`` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
-
-PDD (Prompt-Driven Development) is a command-line interface that harnesses AI models to generate and maintain code from prompt files. Whether you want to create new features, fix bugs, enhance unit tests, or manage complex prompt structures, pdd-cli streamlines your workflow through an intuitive interface and powerful automation.
 
 .. image:: https://img.youtube.com/vi/5lBxpTSnjqo/0.jpg
    :alt: Watch a video demonstration of PDD
@@ -25,6 +27,7 @@ Why Choose Prompt-Driven Development?
 *   **Enhance Code Quality and Consistency**: By using prompts as a single source of truth, PDD ensures your code, tests, and documentation never drift out of sync. This regenerative process produces a more reliable and understandable codebase compared to the tangled results of repeated patching.
 *   **Improve Collaboration**: Prompts are written in natural language, making them accessible to both technical and non-technical stakeholders. This fosters clearer communication and ensures the final product aligns with business requirements.
 *   **Reduce LLM Costs**: PDD's structured, batch-oriented nature is inherently more token-efficient and allows you to take advantage of significant discounts offered by LLM providers for batch processing APIs, making it a more cost-effective solution than many interactive tools.
+*   **Compile to Any Stack**: PDD does not ask teams to abandon Python, TypeScript, Java, Go, or C++. It treats those languages as targets emitted from a higher-level prompt source.
 
 
 Key Features
@@ -242,6 +245,10 @@ Yes. PDD is designed for both new and existing projects. You can start by creati
 **Do I need to be an expert prompt engineer?**
 
 Not at all. Effective prompts are more about clearly defining your requirements in natural language than about complex "engineering." If you can write a good specification or a clear bug report, you can write a good prompt. The goal is to describe *what* you want the code to do, not how to write it.
+
+**Is PDD really a programming language?**
+
+Yes, in the source-of-truth sense. A PDD program is the versioned prompt suite plus its includes, examples, tests, architecture metadata, and configuration. ``pdd sync`` compiles that source into conventional code and validates the result.
 
 
 Getting Help

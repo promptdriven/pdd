@@ -2,6 +2,11 @@
 
 This guide shows how to write effective prompts for Prompt‑Driven Development (PDD). It distills best practices from the PDD whitepaper, the PDD doctrine, and working patterns in this repo. It also contrasts PDD prompts with interactive agentic coding tools (e.g., Claude Code, Cursor) where prompts act as ad‑hoc patches instead of the source of truth.
 
+Think of PDD prompts as source files in a prompt-native programming system. The
+prompt suite, includes, examples, tests, architecture metadata, and `.pddrc`
+configuration form the source; `pdd sync` compiles that source into conventional
+code artifacts.
+
 References: pdd/docs/whitepaper.md, pdd/docs/prompt-driven-development-doctrine.md, README.md (repo structure, conventions), [Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), [Anthropic Prompt Engineering Overview](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview).
 
 ---
@@ -28,6 +33,8 @@ If you are new to Prompt-Driven Development (PDD), follow this recipe:
 - **Shared Preamble:** A standard text file (e.g., `project_preamble.prompt`) included in every prompt to enforce common rules like coding style, forbidden libraries, and formatting.
 - **PDD Directive:** Special tags like `<include>` or `<shell>` that the PDD tool processes *before* sending the text to the AI. The AI sees the *result* (the file content), not the tag.
 - **Source of Truth:** The definitive record. In PDD, the **Prompt** is the source of truth; the code is just a temporary artifact generated from it.
+- **PDD Program:** A versioned prompt suite plus its includes, examples, tests, architecture metadata, and configuration.
+- **Compilation:** Running `pdd sync` or related commands to regenerate conventional code artifacts from PDD source and validate them.
 - **Grounding (Few-Shot History):** The process where the PDD system automatically uses successful past pairs of (Prompt, Code) as "few-shot" examples during generation. This ensures that regenerated code adheres to the established style and logic of the previous version, preventing the model from hallucinating a completely different implementation.
 - **Drift:** When the generated code slowly diverges from the prompt's intent over time, or when manual edits to code make it inconsistent with the prompt.
 
