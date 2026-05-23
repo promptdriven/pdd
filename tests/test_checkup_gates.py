@@ -370,6 +370,46 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_script_rejects_tsc_unsafe_runtime_flags(self) -> None:
+        """Iter-33: ``--noEmit`` only suppresses ``.js``/``.d.ts``
+        emission. A long tail of OTHER tsc flags still hang the
+        gate (``--watch``) or write artifacts into the worktree
+        (``--incremental`` without an explicit ``false``,
+        ``--generateTrace``, ``--generateCpuProfile``, the
+        diagnostic-dump flags). The script-based tsc gate cannot
+        inject overrides like the direct gate, so it must reject
+        any of these flags outright.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "tsc --noEmit --watch",
+            "tsc --noEmit -w",
+            "tsc --watch=true --noEmit",
+            "tsc --noEmit --incremental",
+            "tsc --noEmit --incremental=true",
+            "tsc --noEmit --incremental --tsBuildInfoFile foo",
+            "tsc --noEmit --generateTrace trace-out",
+            "tsc --noEmit --generateCpuProfile profile.cpuprofile",
+            "tsc --noEmit --listFiles",
+            "tsc --noEmit --listEmittedFiles",
+            "tsc --noEmit --diagnostics",
+            "tsc --noEmit --extendedDiagnostics",
+            "tsc --noEmit --traceResolution",
+            "tsc -p tsconfig.json --noEmit --watch",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"unsafe tsc flag must be rejected: {payload!r}"
+            )
+        # Sanity: explicit disables of the only-with-value flags
+        # are accepted.
+        assert _script_is_acceptable(
+            "tsc --noEmit --incremental false"
+        ) is True
+        assert _script_is_acceptable(
+            "tsc --noEmit --incremental=false"
+        ) is True
+
     def test_script_rejects_nested_package_manager_run_prefix(self) -> None:
         """Iter-31 Finding 1: ``npm run X`` / ``yarn run X`` / ``pnpm
         run X`` / ``bun run X`` / bare ``yarn X`` / ``pnpm X`` /

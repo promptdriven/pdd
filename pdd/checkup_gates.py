@@ -375,6 +375,13 @@ def _script_is_acceptable(command: str) -> bool:
                 # Catches ``tsc --noEmit false`` which started with
                 # the head but explicitly disables emit-skipping.
                 return False
+            # Iter-33: tsc supports a long tail of flags that either
+            # hang the process or write artifacts into the worktree.
+            # ``--noEmit`` only suppresses ``.js`` / ``.d.ts`` emit —
+            # not these. Reject any tsc-flavoured script whose argv
+            # carries one of them.
+            if head.startswith("tsc") and _tsc_argv_is_unsafe(tokens):
+                return False
             # Iter-26 Finding 2: ``eslint`` requires explicit
             # ``--no-fix``. The prior rule (accept unless ``--fix`` is
             # present) was too permissive: ESLint config files can
@@ -385,6 +392,67 @@ def _script_is_acceptable(command: str) -> bool:
             if head == "eslint" and "--no-fix" not in stripped:
                 return False
             return True
+    return False
+
+
+def _tsc_argv_is_unsafe(tokens: List[str]) -> bool:
+    """Return True iff a tsc-flavoured script argv carries a flag
+    that either hangs the gate or writes artifacts into the worktree.
+
+    iter-33: ``--noEmit`` only suppresses ``.js``/``.d.ts`` emit. A
+    long tail of OTHER tsc flags still mutates the worktree or
+    blocks indefinitely:
+
+    * ``--watch`` / ``-w`` — never exits; the gate will fire its
+      timeout and surface a false runner-error blocker.
+    * ``--incremental`` (without an explicit ``false`` value) —
+      writes ``tsconfig.tsbuildinfo`` even when ``--noEmit`` is set.
+    * ``--generateTrace <dir>`` — writes ``trace.json`` /
+      ``types.json`` into the named directory inside the worktree.
+    * ``--generateCpuProfile <file>`` — writes a CPU profile to
+      the worktree.
+
+    The direct ``tsc-noemit`` gate explicitly emits
+    ``--incremental false`` / ``--tsBuildInfoFile <devnull>`` and
+    skips when the operator's tsconfig signals emit, so it is not
+    affected — this helper guards the script-based path that runs
+    the operator's argv verbatim.
+    """
+    unsafe_simple = {
+        "--watch",
+        "-w",
+        "--generatetrace",
+        "--generatecpuprofile",
+        # Diagnostic dumps that go to stdout/disk depending on
+        # the operator's redirection. Reject defensively; the
+        # gate doesn't need them.
+        "--listfiles",
+        "--listemittedfiles",
+        "--diagnostics",
+        "--extendeddiagnostics",
+        "--traceresolution",
+    }
+    for i, t in enumerate(tokens):
+        if t in unsafe_simple:
+            return True
+        if t == "--incremental":
+            # Allowed ONLY when the value is an explicit disable.
+            if i + 1 < len(tokens) and tokens[i + 1] in (
+                "false",
+                "0",
+                "no",
+            ):
+                continue
+            return True
+        # ``--incremental=true`` / ``--watch=true`` short forms.
+        if t.startswith("--incremental="):
+            value = t.split("=", 1)[1]
+            if value not in ("false", "0", "no"):
+                return True
+        if t.startswith("--watch="):
+            value = t.split("=", 1)[1]
+            if value not in ("false", "0", "no"):
+                return True
     return False
 
 
