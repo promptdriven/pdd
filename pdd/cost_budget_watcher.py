@@ -176,6 +176,21 @@ class Watcher:
         with self._lock:
             self._state.cap = new_cap
 
+    def fired(self) -> bool:
+        """Return ``True`` once ``on_exceeded`` has been scheduled by
+        any path (daemon poll or inline ``flush``). Callers use this
+        to distinguish "this flush() fired" (flush returns True) from
+        "the daemon already fired and the handler may still be in
+        flight" (``fired()`` True, ``flush()`` returns False). Without
+        the second signal a final cleanup that calls flush() right
+        after a daemon poll wins the race would see flush=False and
+        skip the wait-for-terminal-status loop, letting the job's
+        COMPLETED status race past the still-pending BUDGET_EXCEEDED
+        handler.
+        """
+        with self._lock:
+            return self._state.fired
+
     def flush(self) -> bool:
         """Synchronously consume any new bytes and fire ``on_exceeded``
         if the cap is now crossed. Returns ``True`` iff the callback
@@ -194,6 +209,10 @@ class Watcher:
         ``flush()`` runs the same consume + check logic the daemon
         thread uses, but inline on the calling thread. The fire-once
         invariant (R1) is preserved by the same ``_state.fired`` flag.
+
+        Note: a return of ``False`` does NOT mean the cap is uncrossed —
+        the daemon thread may have already fired between two flush()
+        calls. Use :meth:`fired` for that "fired-by-anyone" signal.
         """
         try:
             self._consume_new_bytes()

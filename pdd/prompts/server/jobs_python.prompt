@@ -8,10 +8,12 @@
       {"name": "Job", "signature": "(id, command, args, options, status, result, error, cost, budget_cap, node_budget, max_total_cap, node_count, ...)", "returns": "Job"},
       {"name": "JobCallbacks", "signature": "()", "returns": "JobCallbacks"},
       {"name": "JobManager", "signature": "(max_concurrent: int = 1, executor=None, project_root=None)", "returns": "JobManager"},
-      {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None, budget_cap: Optional[float] = None, node_budget: Optional[float] = None, max_total_cap: Optional[float] = None) -> Job", "returns": "Job"},
+      {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None, *, budget_cap: Optional[float] = None, node_budget: Optional[float] = None, max_total_cap: Optional[float] = None) -> Job", "returns": "Job"},
       {"name": "JobManager.cancel", "signature": "async (job_id: str) -> bool", "returns": "bool"},
-      {"name": "JobManager.update_budget", "signature": "async (job_id: str, *, budget_cap: Optional[float] = None, node_budget: Optional[float] = None, max_total_cap: Optional[float] = None) -> Job", "returns": "Job"},
+      {"name": "JobManager.update_budget", "signature": "async (job_id: str, *, budget_cap=..., node_budget=..., max_total_cap=..., node_count=...) -> Job", "returns": "Job"},
+      {"name": "JobManager.update_node_count", "signature": "(job_id: str, node_count: int) -> Job", "returns": "Job"},
       {"name": "JobManager.get_budget", "signature": "(job_id: str) -> BudgetSettings", "returns": "BudgetSettings"},
+      {"name": "JobManager.subprocess_env", "signature": "(job: Job, *, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]", "returns": "Dict[str, str]"},
       {"name": "JobManager.cleanup_old_jobs", "signature": "(max_age_seconds: float = 3600) -> int", "returns": "int"},
       {"name": "JobManager.shutdown", "signature": "async () -> None", "returns": "None"}
     ]

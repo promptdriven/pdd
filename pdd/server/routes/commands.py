@@ -304,6 +304,21 @@ async def execute_command(
     budget_cap = request.budget_cap
     node_budget = request.node_budget
     max_total_cap = request.max_total_cap
+
+    # pdd-issue alias: a bare `budget_cap` on an issue command is an alias
+    # for `max_total_cap` (per slash_command_parser_python.prompt R6 and
+    # budget_settings_python.prompt R3). The cap math in
+    # `effective_cap("issue", ...)` IGNORES `budget_cap` entirely, so
+    # passing it through unchanged would set a field the cap formula
+    # never reads and the watcher would never enforce the requested
+    # limit. Re-aliasing here makes a webhook handler's literal
+    # forward of a `/pdd budget N` on an issue job behave the same
+    # as `/pdd budget max N`.
+    if request.command == "issue" and budget_cap is not None:
+        if max_total_cap is None:
+            max_total_cap = budget_cap
+        budget_cap = None
+
     if (
         request.command == "issue"
         and budget_cap is None
@@ -379,6 +394,24 @@ async def update_job_budget(
         for name in ("budget_cap", "node_budget", "max_total_cap", "node_count")
         if name in set_fields
     }
+
+    # pdd-issue alias for bare `budget_cap`: see execute_command above.
+    # The cap math in `effective_cap("issue", ...)` ignores `budget_cap`,
+    # so a webhook forwarding `/pdd budget N` on an issue job as
+    # `{"budget_cap": N}` would otherwise be a no-op. Re-alias it to
+    # `max_total_cap` here so the effective cap actually moves. Only
+    # applies when the caller sent budget_cap and did not also send
+    # max_total_cap (the latter wins because it is the more specific
+    # verb for issue jobs).
+    job_for_alias = manager.get_job(job_id)
+    if (
+        job_for_alias is not None
+        and job_for_alias.command == "issue"
+        and "budget_cap" in kwargs
+        and kwargs["budget_cap"] is not None
+        and "max_total_cap" not in kwargs
+    ):
+        kwargs["max_total_cap"] = kwargs.pop("budget_cap")
 
     try:
         await manager.update_budget(job_id, **kwargs)

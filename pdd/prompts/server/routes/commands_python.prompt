@@ -46,7 +46,14 @@
        command) and the request does not supply explicit budget fields, apply
        the `pdd-issue` defaults from `budget_settings.pdd_issue_defaults()`
        (`node_budget=$80`, `max_total_cap=$400`) so every label-triggered run
-       starts with the documented default budget.
+       starts with the documented default budget. For `command == "issue"`, a
+       bare `budget_cap` value MUST be re-aliased to `max_total_cap` BEFORE
+       the submit call: the cap math in
+       `budget_settings.effective_cap("issue", ...)` ignores `budget_cap`
+       entirely, so passing it through unchanged would silently set a field
+       the cap formula never reads and the watcher would never enforce
+       the requested limit. The alias preserves the more-specific
+       `max_total_cap` when both are sent.
      - GET /commands/jobs/{job_id}: Get job status/result (404 if not found)
      - POST /commands/jobs/{job_id}/cancel: Cancel running job (404/409 on error)
      - GET /commands/history: Paginated job history with status filter
@@ -54,19 +61,29 @@
        (404 if job not found). Powers the `/pdd settings` reply rendered by
        `budget_comments.render_settings(...)` in the GitHub App.
      - POST /commands/jobs/{job_id}/budget: Apply a `BudgetUpdateRequest` to
-       the active job. The route MUST map `JobManager.update_budget`'s
-       declared exception types as follows (matching the contract in
-       `jobs_python.prompt`): `KeyError` -> HTTP 404 (job not found);
-       `RuntimeError` -> HTTP 409 (job no longer active —
-       completed/failed/cancelled/budget_exceeded); `ValueError` -> HTTP 400
-       (invalid amount). Discriminate on exception type only, never on
-       message text. On success, returns the updated `BudgetSettings`. This
-       is the endpoint the GitHub App's webhook calls when a `/pdd budget`,
-       `/pdd budget node`, or `/pdd budget max` comment is accepted by the
-       slash-command parser. For a `pdd-issue` job, a bare `budget_cap` is
-       treated as an alias for `max_total_cap` (the App passes it through as
-       `max_total_cap` already, but the route accepts either field name for
-       forward-compatibility).
+       the active job. The route MUST forward only the fields the caller
+       actually sent (use pydantic's `model_fields_set`), NOT
+       value-is-None — `JobManager.update_budget` distinguishes
+       "field omitted" (leave unchanged) from "field explicitly None"
+       (clear that cap), and the route must preserve that distinction
+       so a caller can drop a previously-set cap back to "no cap" by
+       sending `{"budget_cap": null}`. An empty body (`{}`) is still
+       rejected by `BudgetUpdateRequest`'s validator.
+       For a `pdd-issue` job, a bare `budget_cap` MUST be re-aliased to
+       `max_total_cap` (same rationale as POST /commands/execute above):
+       `effective_cap("issue", ...)` ignores `budget_cap`, so without
+       the alias a `/pdd budget N` forwarded by the App as
+       `{"budget_cap": N}` would be a silent no-op. The alias yields to
+       an explicit `max_total_cap` when both are sent.
+       The route MUST map `JobManager.update_budget`'s declared exception
+       types as follows (matching the contract in `jobs_python.prompt`):
+       `KeyError` -> HTTP 404 (job not found); `RuntimeError` -> HTTP 409
+       (job no longer active — completed/failed/cancelled/budget_exceeded);
+       `ValueError` -> HTTP 400 (invalid amount). Discriminate on
+       exception type only, never on message text. On success, returns
+       the updated `BudgetSettings`. This is the endpoint the GitHub
+       App's webhook calls when a `/pdd budget`, `/pdd budget node`, or
+       `/pdd budget max` comment is accepted by the slash-command parser.
 
   2. **Synchronous Terminal API** (subprocess-based):
      - POST /commands/run: Execute command as subprocess, block until done

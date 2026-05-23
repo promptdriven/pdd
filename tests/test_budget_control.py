@@ -2883,3 +2883,181 @@ class TestParserRejectsNodeMaxOnNonIssue:
         )
         assert result.kind == "budget_node_set"
         assert result.metadata.get("amount") == 50.0
+
+
+class TestIssueBudgetCapAliasInRoute:
+    """Second-pass finding 1: a bare ``budget_cap`` on a ``pdd-issue`` job
+    was a silent no-op because ``effective_cap("issue", ...)`` ignores
+    ``budget_cap``. The routes must re-alias ``budget_cap`` to
+    ``max_total_cap`` so a webhook literally forwarding
+    ``/pdd budget N`` as ``{"budget_cap": N}`` actually moves the cap.
+    """
+
+    @pytest.mark.asyncio
+    async def test_execute_aliases_budget_cap_to_max_total_cap_for_issue(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes.commands import execute_command
+        from pdd.server.models import CommandRequest
+
+        async def noop_executor(job):
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=noop_executor, project_root=tmp_path)
+        request = CommandRequest(command="issue", budget_cap=30.0)
+        handle = await execute_command(request, manager=mgr)
+
+        job = mgr.get_job(handle.job_id)
+        # budget_cap must be cleared and max_total_cap must carry the value.
+        assert job.budget_cap is None, (
+            "budget_cap should have been aliased away — leaving it set "
+            "would let effective_cap silently ignore the cap."
+        )
+        assert job.max_total_cap == 30.0
+        # Effective cap reflects the alias.
+        snapshot = mgr.get_budget(handle.job_id)
+        assert snapshot.effective_cap == 30.0
+
+    @pytest.mark.asyncio
+    async def test_update_aliases_budget_cap_to_max_total_cap_for_issue(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes.commands import update_job_budget
+        from pdd.server.models import BudgetUpdateRequest
+
+        async def slow_executor(job):
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.5)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        job = await mgr.submit("issue", args={}, options={}, node_budget=80.0, max_total_cap=400.0)
+
+        # Webhook forwards /pdd budget 30 as budget_cap; route MUST re-alias.
+        request = BudgetUpdateRequest.model_validate({"budget_cap": 30.0})
+        result = await update_job_budget(job.id, request, manager=mgr)
+
+        assert job.max_total_cap == 30.0, (
+            "Route should have aliased budget_cap to max_total_cap on "
+            "this pdd-issue job; the cap stayed at 400 instead."
+        )
+        # effective_cap = min(80 * node_count_or_1, 30) = 30.
+        assert result.effective_cap == 30.0
+
+
+class TestFinalFlushHandlesDaemonFiredRace:
+    """Second-pass finding 2: when the watcher daemon fires the cap
+    handler but the coroutine has not yet run, an inline final flush
+    returned False (because ``_state.fired`` was already set) and the
+    executor went on to set ``COMPLETED``, racing past the still-pending
+    ``BUDGET_EXCEEDED`` assignment. The fix uses the watcher's
+    ``fired()`` signal as a second wait condition.
+    """
+
+    def test_watcher_exposes_fired_signal(self, tmp_path):
+        """Direct contract test: after a daemon poll fires, ``fired()``
+        returns True even though a subsequent ``flush()`` returns False.
+        """
+        from pdd.cost_budget_watcher import watch
+
+        csv_path = tmp_path / "cost.csv"
+        ts = datetime.now(timezone.utc).isoformat()
+        _write_csv(csv_path, [
+            {"timestamp": ts, "command": "change", "cost": "50.0"},
+        ])
+        fired_event = threading.Event()
+        w = watch(
+            csv_path, cap=10.0, on_exceeded=lambda s: fired_event.set(),
+            commands={"change"}, poll_interval=0.05,
+        )
+        try:
+            assert fired_event.wait(2.0), "daemon never fired"
+            # fired() is True because the daemon already fired.
+            assert w.fired() is True
+            # A subsequent flush returns False (fire-once invariant),
+            # but fired() still reports True so callers can wait.
+            assert w.flush() is False
+            assert w.fired() is True
+        finally:
+            w.stop()
+
+    @pytest.mark.asyncio
+    async def test_daemon_fired_job_ends_as_budget_exceeded_not_completed(self, tmp_path):
+        """End-to-end: the daemon fires the cap, the executor exits
+        before the handler runs, but ``_final_watcher_flush`` waits
+        on the ``fired()`` signal so the final status is
+        ``BUDGET_EXCEEDED`` (not ``COMPLETED``).
+        """
+        from pdd.server.jobs import JobManager
+
+        cost_csv = tmp_path / "cost.csv"
+        ts = datetime.now(timezone.utc).isoformat()
+        _write_csv(cost_csv, [
+            {"timestamp": ts, "command": "change", "cost": "50.0"},
+        ])
+
+        async def slow_executor(job):
+            # Long enough for the watcher daemon to observe the
+            # pre-existing $50 row and fire the cap handler before
+            # we return.
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.5)
+            return {"cost": 0.0}
+
+        import asyncio as _asyncio
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        job = await mgr.submit(
+            "change", args={}, options={"output_cost": str(cost_csv)},
+            budget_cap=10.0,
+        )
+        # Wait for the executor to finish.
+        if job.id in mgr._tasks:
+            try:
+                await _asyncio.wait_for(mgr._tasks[job.id], timeout=10.0)
+            except (_asyncio.CancelledError, Exception):
+                pass
+
+        assert job.status == JobStatus.BUDGET_EXCEEDED, (
+            f"Expected BUDGET_EXCEEDED after daemon-fired race; got "
+            f"{job.status}. Final flush did not wait on fired() signal."
+        )
+
+
+class TestPromptInterfacesMatchCodeSurface:
+    """Second-pass finding 3: the prompt ``<pdd-interface>`` blocks
+    must declare every runtime API the rest of the package depends on,
+    otherwise a future ``pdd sync`` could regenerate the module without
+    those APIs and silently break enforcement.
+    """
+
+    def test_watcher_module_runtime_apis_declared(self):
+        """``Watcher.flush``, ``Watcher.fired`` and ``read_spent_now``
+        are runtime contract surface; declare them in the watcher prompt.
+        """
+        prompt = Path(__file__).resolve().parents[1] / "pdd" / "prompts" / "cost_budget_watcher_python.prompt"
+        body = prompt.read_text()
+        for symbol in ("Watcher.flush", "Watcher.fired", "read_spent_now"):
+            assert symbol in body, f"watcher prompt missing pdd-interface entry for {symbol}"
+
+    def test_jobs_module_runtime_apis_declared(self):
+        prompt = Path(__file__).resolve().parents[1] / "pdd" / "prompts" / "server" / "jobs_python.prompt"
+        body = prompt.read_text()
+        for symbol in (
+            "JobManager.subprocess_env",
+            "JobManager.update_node_count",
+            "node_count",  # update_budget kwarg
+        ):
+            assert symbol in body, f"jobs prompt missing pdd-interface entry for {symbol}"
+
+    def test_models_budget_update_request_declares_node_count(self):
+        prompt = Path(__file__).resolve().parents[1] / "pdd" / "prompts" / "server" / "models_python.prompt"
+        body = prompt.read_text()
+        # The signature row for BudgetUpdateRequest must mention node_count.
+        assert "BudgetUpdateRequest" in body
+        # crude regex: the BudgetUpdateRequest signature substring must
+        # carry node_count. Tolerant of formatting variations.
+        idx = body.find("BudgetUpdateRequest")
+        nearby = body[idx:idx + 200]
+        assert "node_count" in nearby, (
+            "BudgetUpdateRequest interface row does not declare node_count; "
+            "future pdd sync could drop the field."
+        )

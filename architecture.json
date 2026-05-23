@@ -9207,9 +9207,24 @@
             "returns": "None"
           },
           {
+            "name": "Watcher.flush",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "Watcher.fired",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
             "name": "Watcher.stop",
             "signature": "() -> None",
             "returns": "None"
+          },
+          {
+            "name": "read_spent_now",
+            "signature": "(csv_path, *, commands=None, started_at=None, job_id=None) -> float",
+            "returns": "float"
           }
         ]
       }
@@ -9409,7 +9424,7 @@
           },
           {
             "name": "BudgetUpdateRequest",
-            "signature": "(budget_cap?, node_budget?, max_total_cap?)",
+            "signature": "(budget_cap?, node_budget?, max_total_cap?, node_count?)",
             "returns": "BudgetUpdateRequest"
           },
           {

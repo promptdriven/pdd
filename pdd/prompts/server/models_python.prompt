@@ -9,7 +9,7 @@
       {"name": "JobHandle", "signature": "(job_id, status, created_at)", "returns": "JobHandle"},
       {"name": "JobResult", "signature": "(job_id, status, result, error, cost, duration_seconds, completed_at)", "returns": "JobResult"},
       {"name": "BudgetSettings", "signature": "(command, node_budget, max_total_cap, budget_cap, effective_cap, spent_so_far, status, node_count)", "returns": "BudgetSettings"},
-      {"name": "BudgetUpdateRequest", "signature": "(budget_cap?, node_budget?, max_total_cap?)", "returns": "BudgetUpdateRequest"},
+      {"name": "BudgetUpdateRequest", "signature": "(budget_cap?, node_budget?, max_total_cap?, node_count?)", "returns": "BudgetUpdateRequest"},
       {"name": "BudgetExceededMessage", "signature": "(job_id, command, spent, effective_cap, node_budget?, max_total_cap?, node_count?)", "returns": "BudgetExceededMessage"},
       {"name": "SlashCommandResult", "signature": "(kind, message, settings?, original_comment_id?, metadata?)", "returns": "SlashCommandResult"}
     ]
@@ -71,11 +71,17 @@
        handles `node_count is None` before the tree has expanded); other
        commands => `budget_cap`. `None` for `effective_cap` means "no cap".
      - `BudgetUpdateRequest`: optional `budget_cap`, optional `node_budget`,
-       optional `max_total_cap`. At least one field must be provided.
-       Validation: each numeric field MUST be > 0 and <= 10000 (the project's
-       hard ceiling); reject negatives, zero, NaN, and overflow. Use
-       `field_validator` to coerce string forms like `"$30"`, `"30.00"`, or
-       `30` to `float`.
+       optional `max_total_cap`, optional `node_count`. At least one field
+       must be PROVIDED in the request body (use pydantic's
+       `model_fields_set` rather than value-is-None — explicit `null` on
+       any field is the contract for "clear that cap" via the route's
+       sentinel forwarding to `JobManager.update_budget`). Empty body
+       (`{}`) is rejected. Numeric budget fields MUST be > 0 and <=
+       10000 (the project's hard ceiling); reject negatives, zero, NaN,
+       and overflow. `node_count` MUST be a non-negative integer <=
+       10000; reject fractional floats/strings, bools, and overflow.
+       Use `field_validator` to coerce string forms like `"$30"`,
+       `"30.00"`, or `30` to `float`.
      - `SlashCommandResult`: kind (Literal["budget_set", "budget_node_set",
        "budget_max_set", "settings", "stop", "invalid", "ignored"]),
        message (str, the rendered reply body), settings

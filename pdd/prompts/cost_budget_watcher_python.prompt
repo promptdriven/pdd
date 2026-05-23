@@ -8,7 +8,10 @@
       {"name": "watch", "signature": "(csv_path: pathlib.Path, cap: Optional[float], on_exceeded: Callable[[float], None], *, commands: Optional[Iterable[str]] = None, started_at: Optional[datetime] = None, poll_interval: float = 2.0, job_id: Optional[str] = None) -> Watcher", "returns": "Watcher"},
       {"name": "Watcher.spent", "signature": "() -> float", "returns": "float"},
       {"name": "Watcher.update_cap", "signature": "(new_cap: Optional[float]) -> None", "returns": "None"},
-      {"name": "Watcher.stop", "signature": "() -> None", "returns": "None"}
+      {"name": "Watcher.flush", "signature": "() -> bool", "returns": "bool"},
+      {"name": "Watcher.fired", "signature": "() -> bool", "returns": "bool"},
+      {"name": "Watcher.stop", "signature": "() -> None", "returns": "None"},
+      {"name": "read_spent_now", "signature": "(csv_path: pathlib.Path, *, commands: Optional[Iterable[str]] = None, started_at: Optional[datetime] = None, job_id: Optional[str] = None) -> float", "returns": "float"}
     ]
   }
 }
@@ -97,6 +100,29 @@
   `.stop()` MUST be safe to call multiple times. After `.stop()`, the
   watcher thread MUST exit promptly (within `poll_interval`) and MUST NOT
   invoke `on_exceeded` again.
+
+  R5a - Inline flush + fired signal.
+  The module MUST expose two synchronous methods callers use to close
+  the "subprocess-exits-before-the-next-poll" race:
+    - `.flush()` — synchronously consume any new bytes, fire
+      `on_exceeded` if the cap is now crossed AND not yet fired, and
+      return `True` iff this call fired. A `False` return does NOT
+      mean the cap is uncrossed — only that THIS call did not fire.
+    - `.fired()` — return `True` once `on_exceeded` has been scheduled
+      by any path (daemon or inline). This is the watcher-wide
+      counterpart to flush()'s "this-call-only" signal; callers MUST
+      use it to detect the case where the daemon fired between two
+      flushes (so flush() short-circuits via `_state.fired`) and the
+      handler is still queued. Without this signal, a final cleanup
+      that only consults flush()'s return value would race past the
+      handler and let the wrong terminal status stick.
+  `read_spent_now(csv_path, *, commands=None, started_at=None,
+  job_id=None) -> float` is the module-level pure-function counterpart:
+  one-shot full scan of the CSV with the same filtering rules as
+  `Watcher`, no daemon thread, no shared state. Used by callers that
+  need fresh spend without a long-lived watcher (notably
+  `JobManager.get_budget` for uncapped runs and the fresh
+  `/pdd settings` reply on capped runs).
 
   R6 - No mid-call kill.
   The watcher MUST NOT interrupt the caller's subprocess directly. It only

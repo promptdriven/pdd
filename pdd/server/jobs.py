@@ -969,19 +969,40 @@ class JobManager:
                 times so that coroutine actually sets
                 ``BUDGET_EXCEEDED`` before the post-executor code below
                 gets a chance to set ``COMPLETED``.
+
+                A return of False from flush() does NOT mean we are
+                safe to set COMPLETED — the daemon thread may have
+                fired between this flush() and a previous poll,
+                meaning ``_state.fired`` was already True and flush
+                short-circuited. We check the watcher's
+                ``fired()`` signal afterward and wait for terminal
+                status in either case. Without this second check, a
+                daemon-fired job whose handler is still queued can
+                race past the COMPLETED assignment and end with the
+                wrong terminal status.
                 """
                 watcher = self._watchers.get(job.id)
                 if watcher is None:
                     return
                 try:
-                    fired = watcher.flush()
+                    flush_fired = watcher.flush()
                 except Exception:  # noqa: BLE001
                     console.print(
                         f"[red]Watcher flush raised for {job.id}; "
                         "budget may not be enforced on the final row.[/red]"
                     )
                     return
-                if not fired:
+                # Wait for terminal status if EITHER flush fired now OR the
+                # watcher's daemon already fired previously (in which case
+                # the _handle_budget_exceeded coroutine may still be queued
+                # on the loop). `fired()` is the watcher-wide signal that
+                # complements flush()'s "this-call-only" return value.
+                pending_fire = False
+                try:
+                    pending_fire = watcher.fired() if hasattr(watcher, "fired") else False
+                except Exception:  # noqa: BLE001
+                    pending_fire = False
+                if not (flush_fired or pending_fire):
                     return
                 # Cooperatively wait for _handle_budget_exceeded to flip
                 # the status. Bounded retries so a hung coroutine cannot
