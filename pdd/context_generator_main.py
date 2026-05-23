@@ -1,209 +1,352 @@
 from __future__ import annotations
+
 import ast
 import asyncio
-import json
-import os
-import sys
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple
+
 import click
-import httpx
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
+
 from .construct_paths import construct_paths, BUILTIN_EXT_MAP
 from .context_generator import context_generator
-from .core.cloud import CloudConfig
-# get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
 from .preprocess import preprocess
-from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
+from .core.cloud import CloudConfig
+from . import DEFAULT_STRENGTH
 
 console = Console()
-CLOUD_TIMEOUT_SECONDS = 400.0
 
-def _validate_and_fix_python_syntax(code: str, quiet: bool) -> str:
-    try:
-        ast.parse(code)
-        return code
-    except SyntaxError:
-        if not quiet:
-            console.print("[yellow]Warning: Generated code has syntax errors. Attempting to fix...[/yellow]")
-    lines = code.splitlines()
-    json_markers = ['"explanation":', '"focus":', '"description":', '"code":', '"filename":']
-    cut_index = -1
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip()
-        if any(marker in line for marker in json_markers) or line == "}" or line == "},":
-            cut_index = i
-    if cut_index != -1:
-        candidate = "\n".join(lines[:cut_index])
-        try:
-            ast.parse(candidate)
-            if not quiet:
-                console.print("[green]Fix successful: Removed trailing metadata.[/green]")
-            return candidate
-        except SyntaxError:
-            pass
-    low = 0
-    high = cut_index if cut_index != -1 else len(lines)
-    valid_len = 0
-    while low < high:
-        mid = (low + high + 1) // 2
-        candidate = "\n".join(lines[:mid])
-        try:
-            ast.parse(candidate)
-            valid_len = mid
-            low = mid
-        except SyntaxError:
-            high = mid - 1
-    for i in range(len(lines), max(0, len(lines) - 50), -1):
-        candidate = "\n".join(lines[:i])
-        try:
-            ast.parse(candidate)
-            if not quiet:
-                console.print("[green]Fix successful: Truncated invalid tail content.[/green]")
-            return candidate
-        except SyntaxError:
-            continue
-    if not quiet:
-        console.print("[red]Fix failed: Could not automatically repair syntax.[/red]")
-    return code
 
-async def _run_cloud_generation(prompt_content: str, code_content: str, language: str, strength: float, temperature: float, verbose: bool, pdd_env: str, token: str) -> Tuple[Optional[str], float, str]:
-    """Run cloud generation with the provided JWT token.
+def _validate_and_fix_python_syntax(example_code: str, quiet: bool = False) -> str:
+    """
+    Validate that ``example_code`` parses as Python; if not, attempt a fix.
 
-    Note: JWT token must be obtained BEFORE calling this async function to avoid
-    nested asyncio.run() calls (CloudConfig.get_jwt_token() uses asyncio.run internally).
+    Common LLM failure mode: trailing JSON metadata garbage (lines like
+    ``"explanation":``, ``"focus":``, etc.) appended to the end of the file.
+    Strategy: binary-search the trailing lines to find the longest prefix that
+    parses with ``ast.parse``.
+
+    Returns the fixed code, or the original ``example_code`` if no fix
+    improves parseability.
     """
     try:
-        processed_prompt = preprocess(prompt_content, recursive=True, double_curly_brackets=False)
-    except Exception as e:
-        return None, 0.0, f"Preprocessing failed: {e}"
-    if verbose:
-        console.print(Panel(Text(processed_prompt[:500] + "..." if len(processed_prompt) > 500 else processed_prompt, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {"promptContent": processed_prompt, "codeContent": code_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
-    async with httpx.AsyncClient(timeout=CLOUD_TIMEOUT_SECONDS) as client:
-        try:
-            cloud_url = CloudConfig.get_endpoint_url("generateExample")
-            response = await client.post(cloud_url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            generated_code = data.get("generatedExample", "")
-            total_cost = float(data.get("totalCost", 0.0))
-            model_name = data.get("modelName", "cloud-model")
-            if not generated_code:
-                return None, 0.0, "Cloud function returned empty code."
-            return generated_code, total_cost, model_name
-        except Exception as e:
-            return None, 0.0, f"Cloud error: {e}"
+        ast.parse(example_code)
+        return example_code
+    except SyntaxError:
+        if not quiet:
+            console.print(
+                "[bold yellow]Warning:[/bold yellow] Syntax error detected in generated "
+                "Python code. Attempting to strip trailing JSON garbage..."
+            )
 
-def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str] = None) -> Tuple[str, float, str]:
+    lines = example_code.split("\n")
+    low = 0
+    high = len(lines)
+    best_valid_lines = 0
+
+    while low <= high:
+        mid = (low + high) // 2
+        test_code = "\n".join(lines[:mid])
+        try:
+            ast.parse(test_code)
+            best_valid_lines = mid
+            low = mid + 1
+        except SyntaxError:
+            high = mid - 1
+
+    if best_valid_lines > 0 and best_valid_lines < len(lines):
+        fixed_code = "\n".join(lines[:best_valid_lines])
+        if not quiet:
+            console.print(
+                "[bold green]Successfully stripped trailing garbage from Python output.[/bold green]"
+            )
+        return fixed_code
+
+    # No improvement possible — preserve original so caller can inspect it.
+    if not quiet:
+        console.print(
+            "[bold yellow]Could not auto-fix syntax error. Saving code as-is.[/bold yellow]"
+        )
+    return example_code
+
+
+async def _run_cloud_generation(
+    token: str,
+    prompt_text: str,
+    code_content: str,
+    language: str,
+    strength: float,
+    temperature: float,
+    verbose: bool,
+) -> Tuple[str, float, str]:
+    """
+    Call the cloud example-generation endpoint.
+
+    The JWT ``token`` must be obtained BEFORE entering ``asyncio.run`` and
+    passed in as a parameter — see CloudConfig.get_jwt_token nested-event-loop
+    notes in the spec.
+    """
+    import httpx
+
+    endpoint = CloudConfig.get_endpoint_url("generateExample")
+    processed_prompt = preprocess(prompt_text, recursive=True, double_curly_brackets=False)
+
+    if verbose:
+        console.print(Panel(processed_prompt[:500] + "...", title="Preprocessed Prompt for Cloud"))
+        console.print(f"Attempting cloud example generation at {endpoint}...")
+
+    payload = {
+        "promptContent": processed_prompt,
+        "codeContent": code_content,
+        "language": language,
+        "strength": strength,
+        "temperature": temperature,
+        "verbose": verbose,
+    }
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=400.0) as client:
+        response = await client.post(endpoint, json=payload, headers=headers)
+
+        if response.status_code == 401:
+            raise click.UsageError("Authentication failed (401). Please login again.")
+        elif response.status_code == 402:
+            raise click.UsageError("Insufficient credits (402).")
+        elif response.status_code == 403:
+            raise click.UsageError("Access denied (403).")
+
+        response.raise_for_status()
+        data = response.json()
+
+        generated_code = data.get("generatedExample", "")
+        if not generated_code:
+            raise ValueError("Cloud returned empty code content.")
+
+        total_cost = float(data.get("totalCost", 0.0))
+        model_name = data.get("modelName", "cloud-model")
+
+        if verbose:
+            console.print(
+                Panel(
+                    f"Model: {model_name}\nCost: ${total_cost:.6f}",
+                    title="Cloud Success",
+                    style="green",
+                )
+            )
+
+        return generated_code, total_cost, model_name
+
+
+def context_generator_main(
+    ctx: click.Context,
+    prompt_file: str,
+    code_file: str,
+    output: Optional[str],
+    format: Optional[str] = None,
+) -> Tuple[str, float, str]:
+    """
+    CLI wrapper that generates example code from a prompt and code file.
+
+    Honors user-supplied ``--output`` extensions per issue #1148: when
+    ``format`` is ``None`` the user's path is used verbatim; otherwise the
+    extension rules described in the spec apply.
+
+    Args:
+        ctx: Click context (uses ``ctx.obj`` for verbose/strength/temperature/
+            time/force/quiet/local/context/confirm_callback).
+        prompt_file: Path to the .prompt file that generated ``code_file``.
+        code_file: Path to the existing code file.
+        output: Optional path for the generated example. ``None`` →
+            default naming convention computed by ``construct_paths``.
+        format: Optional ``"code"`` or ``"md"`` constraint on the output
+            extension. ``None`` means "honor user's --output verbatim".
+
+    Returns:
+        (example_code, total_cost, model_name)
+    """
+    obj = ctx.obj or {}
+    verbose = obj.get("verbose", False)
+    quiet = obj.get("quiet", False)
+    force = obj.get("force", False)
+    local = obj.get("local", False)
+    strength = obj.get("strength", DEFAULT_STRENGTH if isinstance(DEFAULT_STRENGTH, float) else 0.5)
+    if not isinstance(strength, (int, float)):
+        strength = 0.5
+    temperature = obj.get("temperature", 0.0)
+    # `time` may be None — preserved here per spec note that `time` has no default.
+    time_param = obj.get("time")
+    context_override = obj.get("context")
+    confirm_callback = obj.get("confirm_callback")
+
+    input_file_paths = {
+        "prompt_file": prompt_file,
+        "code_file": code_file,
+    }
+
+    # Forward CLI options that construct_paths consumes (e.g. for default-path
+    # computation and format-aware extension selection).
+    command_options: dict = {}
+    if output is not None:
+        command_options["output"] = output
+    if format is not None:
+        command_options["format"] = format
+
     try:
-        input_file_paths = {"prompt_file": prompt_file, "code_file": code_file}
-        command_options = {"output": output}
-        if format is not None:
-            command_options["format"] = format
-        resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
-        prompt_content = input_strings.get("prompt_file", "")
-        code_content = input_strings.get("code_file", "")
-        if output and not output.endswith("/") and not Path(output).is_dir():
-            # When format is specified, ensure the output path uses the correct extension
-            if format is not None:
-                output_path = Path(output)
-                format_lower = format.lower()
-                if format_lower == "md":
-                    # Replace extension with .md to match format constraint
-                    resolved_output = str(output_path.with_suffix(".md"))
-                elif format_lower == "code":
-                    # For code format, determine the correct language extension based on language
-                    lang_key = language.lower() if language else ''
-                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
-                    resolved_output = str(output_path.with_suffix(lang_ext))
-                else:
-                    # Fallback (shouldn't happen due to click.Choice validation)
-                    resolved_output = output
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=force,
+            quiet=quiet,
+            command="example",
+            command_options=command_options,
+            context_override=context_override,
+            confirm_callback=confirm_callback,
+        )
+    except Exception as e:
+        if not quiet:
+            console.print(f"[bold red]Error resolving paths:[/bold red] {e}")
+        raise
+
+    prompt_content = input_strings.get("prompt_file", "")
+    code_content = input_strings.get("code_file", "")
+
+    # --- Resolve the final output path -------------------------------------
+    default_output_path = output_file_paths.get("output", "") if output_file_paths else ""
+
+    if output is None or output.endswith("/") or (Path(output).exists() and Path(output).is_dir()):
+        # Use default path computed by construct_paths.
+        final_output_path = Path(default_output_path) if default_output_path else Path("example_output.py")
+    else:
+        user_path = Path(output)
+        if format is None:
+            # Issue #1148: honor user-supplied path verbatim — no with_suffix,
+            # no BUILTIN_EXT_MAP lookup. `foo.yml` stays `foo.yml`.
+            final_output_path = user_path
+        elif format == "md":
+            # Honor .md verbatim; otherwise rewrite suffix to .md.
+            if user_path.suffix == ".md":
+                final_output_path = user_path
             else:
-                resolved_output = output
+                final_output_path = user_path.with_suffix(".md")
+        elif format == "code":
+            # Honor any user-supplied suffix verbatim; only fall back to the
+            # language-derived extension when no suffix was supplied.
+            if user_path.suffix:
+                final_output_path = user_path
+            else:
+                lang_key = (language or "python").lower()
+                ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}")
+                if not ext:
+                    ext = ".py"
+                final_output_path = user_path.with_suffix(ext)
         else:
-            resolved_output = output_file_paths.get("output")
-        is_local = ctx.obj.get("local", False)
-        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
-        temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
-        verbose = ctx.obj.get('verbose', False)
-        quiet = ctx.obj.get('quiet', False)
-        pdd_env = os.environ.get("PDD_ENV", "local")
-        generated_code = None
-        total_cost = 0.0
-        model_name = ""
-        if not is_local:
+            final_output_path = user_path
+
+    source_file_path = str(Path(code_file).resolve())
+    example_file_path = str(final_output_path.resolve()) if final_output_path else ""
+    module_name = Path(code_file).stem
+
+    example_code = ""
+    total_cost = 0.0
+    model_name = ""
+    cloud_success = False
+
+    # --- Cloud-first execution unless --local was requested ----------------
+    if not local:
+        token: Optional[str] = None
+        try:
+            # CRITICAL: get JWT BEFORE asyncio.run (see CloudConfig docs).
+            token = CloudConfig.get_jwt_token(verbose=verbose)
+        except click.UsageError:
+            raise
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[bold yellow]Could not obtain auth token ({e}). "
+                    "Falling back to local execution...[/bold yellow]"
+                )
+            token = None
+
+        if token:
             if verbose:
                 console.print("Attempting cloud example generation...")
-
-            # Get JWT token BEFORE entering async context to avoid nested asyncio.run() calls
-            # (CloudConfig.get_jwt_token() uses asyncio.run internally for device flow auth)
-            jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
-            if not jwt_token:
+            try:
+                example_code, total_cost, model_name = asyncio.run(
+                    _run_cloud_generation(
+                        token=token,
+                        prompt_text=prompt_content,
+                        code_content=code_content,
+                        language=language or "python",
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                    )
+                )
+                cloud_success = True
+            except click.UsageError:
+                raise
+            except Exception as e:
                 if not quiet:
-                    console.print("[yellow]Cloud authentication failed. Falling back to local.[/yellow]")
-                is_local = True
-            else:
-                try:
-                    generated_code, total_cost, model_name = asyncio.run(_run_cloud_generation(prompt_content, code_content, language, strength, temperature, verbose, pdd_env, jwt_token))
-                    if generated_code:
-                        if verbose:
-                            console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
-                except httpx.TimeoutException:
-                    if not quiet:
-                        console.print(f"[yellow]Cloud execution timed out ({CLOUD_TIMEOUT_SECONDS}s). Falling back to local.[/yellow]")
-                    generated_code = None
-                except httpx.HTTPStatusError as e:
-                    status_code = e.response.status_code
-                    response_text = e.response.text or ""
-                    err_content = response_text[:200] if response_text else "No response content"
-                    if status_code == 402:
-                        console.print(f"[red]Insufficient credits: {err_content}[/red]")
-                        raise click.UsageError("Insufficient credits for cloud example generation")
-                    elif status_code == 401:
-                        console.print(f"[red]Authentication failed: {err_content}[/red]")
-                        raise click.UsageError("Cloud authentication failed")
-                    elif status_code == 403:
-                        console.print(f"[red]Access denied: {err_content}[/red]")
-                        raise click.UsageError("Access denied - user not approved")
-                    else:
-                        if not quiet:
-                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
-                        generated_code = None
-                except Exception as e:
-                    if verbose:
-                        console.print(f"[yellow]Cloud error: {e}. Falling back to local.[/yellow]")
-                    generated_code = None
+                    console.print(
+                        f"[bold yellow]Cloud generation failed ({e}). "
+                        "Falling back to local execution...[/bold yellow]"
+                    )
+                cloud_success = False
 
-                if generated_code is None:
-                    if not quiet:
-                        console.print("[yellow]Cloud execution failed. Falling back to local.[/yellow]")
-                    is_local = True
-        if is_local:
-            # Compute file path info if not already computed (when --local flag is used from start)
-            source_file_path = str(Path(code_file).resolve())
-            example_file_path = str(Path(resolved_output).resolve()) if resolved_output else ""
-            module_name = Path(code_file).stem
-            generated_code, total_cost, model_name = context_generator(code_module=code_content, prompt=prompt_content, language=language, strength=strength, temperature=temperature, verbose=not quiet, source_file_path=source_file_path, example_file_path=example_file_path, module_name=module_name, time=ctx.obj.get('time'))
-        if not generated_code:
-            raise click.UsageError("Example generation failed, no code produced.")
-        # Only validate Python syntax when format is "code" (default) or None, not when format is "md"
-        if language and language.lower() == "python" and (format is None or format.lower() == "code"):
-            generated_code = _validate_and_fix_python_syntax(generated_code, quiet)
-        if resolved_output:
-            out_path = Path(resolved_output)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(generated_code, encoding="utf-8")
+    # --- Local fallback ----------------------------------------------------
+    if not cloud_success:
+        if verbose:
+            console.print("Running local example generation...")
+        try:
+            # Try to pass the contextual path/name parameters; fall back
+            # gracefully if the local context_generator signature doesn't
+            # accept them.
+            try:
+                example_code, total_cost, model_name = context_generator(
+                    code_module=code_content,
+                    prompt=prompt_content,
+                    language=language or "python",
+                    strength=strength,
+                    temperature=temperature,
+                    source_file_path=source_file_path,
+                    example_file_path=example_file_path,
+                    module_name=module_name,
+                )
+            except TypeError:
+                example_code, total_cost, model_name = context_generator(
+                    code_module=code_content,
+                    prompt=prompt_content,
+                    language=language or "python",
+                    strength=strength,
+                    temperature=temperature,
+                )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[bold red]Local generation error:[/bold red] {e}")
+            raise
+
+    if not example_code or not example_code.strip():
+        raise click.UsageError("Example generation failed, no code produced.")
+
+    # --- Optional Python syntax validation ---------------------------------
+    # Skip for markdown output (format="md") — markdown is intentionally not
+    # Python and would always fail ast.parse.
+    if (language or "python").lower() == "python" and format != "md":
+        example_code = _validate_and_fix_python_syntax(example_code, quiet=quiet)
+
+    # --- Write output ------------------------------------------------------
+    try:
+        final_output_path.parent.mkdir(parents=True, exist_ok=True)
+        final_output_path.write_text(example_code, encoding="utf-8")
         if not quiet:
-            console.print("[bold green]Example generation completed successfully.[/bold green]")
-            console.print(f"[bold]Model used:[/bold] {model_name}")
-            console.print(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-        return generated_code, total_cost, model_name
+            console.print(
+                f"[bold green]Success:[/bold green] Example code written to {final_output_path}"
+            )
+            console.print(f"Model: {model_name} | Cost: ${total_cost:.6f}")
     except Exception as e:
-        if not ctx.obj.get('quiet', False):
-            console.print(f"[bold red]Error:[/bold red] {str(e)}")
-        raise e
+        if not quiet:
+            console.print(f"[bold red]Error writing output file:[/bold red] {e}")
+        raise
+
+    return example_code, total_cost, model_name
