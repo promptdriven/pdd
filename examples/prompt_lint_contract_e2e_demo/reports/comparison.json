@@ -1,0 +1,65 @@
+{
+  "mode": "deterministic",
+  "commands": [
+    "pdd prompt lint",
+    "pdd prompt lint --json",
+    "pdd contracts check --json --stories user_stories",
+    "pdd contracts compile --json",
+    "pdd coverage --contracts --json --stories-dir user_stories --tests-dir tests",
+    "pdd prompt lint --contracts --json",
+    "pdd prompt lint --report formalization --json"
+  ],
+  "rows": [
+    {
+      "label": "vague",
+      "prompt": "prompts/foo_vague_python.prompt",
+      "lint_warn_count": 22,
+      "lint_error_count": 0,
+      "lint_by_code": {
+        "VAGUE_TERM_UNDEFINED": 17,
+        "VAGUE_NO_OBSERVABLE_OUTCOME": 5
+      },
+      "contracts_check_issues": 15,
+      "compile_rules": 4,
+      "compile_obligations": 1,
+      "compile_errors": 6,
+      "coverage_summary": {
+        "total": 4,
+        "checked": 0,
+        "story_only": 2,
+        "test_only": 0,
+        "unchecked": 2,
+        "waived": 0,
+        "failed": 0,
+        "formal_only": 0,
+        "needs_human": 0
+      },
+      "formalization_issues": 22
+    },
+    {
+      "label": "formalized",
+      "prompt": "prompts/foo_formalized_python.prompt",
+      "lint_warn_count": 3,
+      "lint_error_count": 0,
+      "lint_by_code": {
+        "FORMAL_UNBOUNDED_DOMAIN": 3
+      },
+      "contracts_check_issues": 4,
+      "compile_rules": 4,
+      "compile_obligations": 8,
+      "compile_errors": 0,
+      "coverage_summary": {
+        "total": 4,
+        "checked": 0,
+        "story_only": 4,
+        "test_only": 0,
+        "unchecked": 0,
+        "waived": 0,
+        "failed": 0,
+        "formal_only": 0,
+        "needs_human": 0
+      },
+      "formalization_issues": 3
+    }
+  ]
+}

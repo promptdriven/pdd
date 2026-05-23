@@ -123,3 +123,37 @@ def test_compile_missing_target_is_usage_error(runner):
 
     assert result.exit_code != 0
     assert "does not exist" in result.output
+
+
+def test_checkup_contract_compile_alias(runner):
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--quiet",
+            "checkup",
+            "contract",
+            "compile",
+            str(FIXTURES / "refund_payment_python.prompt"),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert "compiled" in result.output
+
+
+def test_checkup_contracts_compile_alias(runner):
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--quiet",
+            "checkup",
+            "contracts",
+            "compile",
+            str(FIXTURES / "refund_payment_python.prompt"),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert "compiled" in result.output

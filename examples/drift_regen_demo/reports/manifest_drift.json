@@ -1,0 +1,23 @@
+{
+  "has_drift": true,
+  "findings": [
+    {
+      "kind": "prompt_hash",
+      "message": "Prompt file hash changed between manifests.",
+      "before": "eff383950da7bea6",
+      "after": "445e483e5bd6e844"
+    },
+    {
+      "kind": "gate_regression",
+      "message": "Gate passed before but fails now (0 \u2192 2).",
+      "before": "0",
+      "after": "2"
+    },
+    {
+      "kind": "rule_count",
+      "message": "Compiled rule count changed (0 \u2192 3).",
+      "before": "0",
+      "after": "3"
+    }
+  ]
+}

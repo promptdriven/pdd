@@ -62,3 +62,21 @@ def test_checkup_review_only_requires_review_loop() -> None:
 
     assert result.exit_code == 2
     assert "--review-only requires --review-loop" in result.output
+
+
+def test_checkup_issue_url_still_supported() -> None:
+    runner = CliRunner()
+
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.25, "codex")
+
+        result = runner.invoke(
+            checkup,
+            ["https://github.com/org/repo/issues/6", "--no-fix"],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0
+    kwargs = run_checkup.call_args.kwargs
+    assert kwargs["issue_url"] == "https://github.com/org/repo/issues/6"
+    assert kwargs["no_fix"] is True

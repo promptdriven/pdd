@@ -1,0 +1,278 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.247.dev24",
+  "timestamp_utc": "20260522T021039Z",
+  "argv": [
+    "--force",
+    "test",
+    "--manual",
+    "prompts/foo_work_python.prompt",
+    "src/foo_work_before.py",
+    "--output",
+    "tests/test_foo_work_before.py"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": true,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [
+    "test"
+  ],
+  "total_cost": 0.13044180000000002,
+  "steps": [
+    {
+      "step": 1,
+      "command": "test",
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7"
+    }
+  ],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_FORCE": "1",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {
+    ".pdd/meta/foo_work_python_sync.log": "{\"timestamp\": \"2026-05-20T14:19:38.544164\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 94.7483868598938, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:21:20.004387\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 181.3877351284027, \"actual_cost\": 0.3361487, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:27:04.707318\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.93177604675293, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:27:16.927566\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 20.26871681213379, \"actual_cost\": 0.3361487, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:40:45.652496\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 13.683010816574097, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:41:04.948877\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 177.16943311691284, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:44:43.853294\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.151504039764404, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:44:56.142296\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 168.79310393333435, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:52:14.666058\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.492659091949463, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T15:04:02.816130\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.513398885726929, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T15:06:17.899170\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.571554899215698, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:03:08.196176\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 58.812579870224, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:04:30.277578\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 58.683647871017456, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:24:56.953053\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 118.65742897987366, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:49:08.922838\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": false, \"duration\": 395.1108720302582, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:55:56.135573\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": false, \"duration\": 36.3282470703125, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T19:08:09.556084\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 59.6483039855957, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T19:10:15.490201\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 23.736063241958618, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n",
+    "tests/test_foo_work_before.py": "\nimport sys\nfrom pathlib import Path\n\n# Add project root to sys.path to ensure local code is prioritized\n# This allows testing local changes without installing the package\nproject_root = Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(project_root))\n\n\"\"\"Tests for src/foo_work_before.py - idempotent request handler.\"\"\"\n\nimport base64\nimport json\nimport sys\nimport threading\nimport time\nimport uuid\nfrom datetime import datetime, timedelta, timezone\nfrom pathlib import Path\n\nimport pytest\n\n# Ensure the project root is on sys.path so `src.foo_work_before` is importable\n_PROJECT_ROOT = Path(__file__).resolve().parent\nif str(_PROJECT_ROOT) not in sys.path:\n\nfrom src.foo_work_before import (\n    AUDIT_LOG,\n    HandlerResult,\n    IdempotencyStore,\n    RequestContext,\n    UserProfile,\n    handle_request,\n    is_active_user,\n    parse_bearer_jwt,\n)\n\n\n# ---------------------------------------------------------------------------\n# Helpers\n# ---------------------------------------------------------------------------\n\ndef _b64url(data: bytes) -> str:\n    return base64.urlsafe_b64encode(data).rstrip(b\"=\").decode(\"ascii\")\n\n\ndef make_jwt(claims: dict, header: dict | None = None, signature: str = \"sig\") -> str:\n    header = header or {\"alg\": \"none\", \"typ\": \"JWT\"}\n    header_seg = _b64url(json.dumps(header).encode(\"utf-8\"))\n    payload_seg = _b64url(json.dumps(claims).encode(\"utf-8\"))\n    return f\"{header_seg}.{payload_seg}.{signature}\"\n\n\ndef valid_token(sub: str = \"user-123\", scopes: str = \"foo:invoke other:read\", ttl: int = 3600) -> str:\n    exp = int(time.time()) + ttl\n    return make_jwt({\"sub\": sub, \"exp\": exp, \"scope\": scopes})\n\n\ndef auth_header(token: str | None = None) -> str:\n    if token is None:\n        token = valid_token()\n    return f\"Bearer {token}\"\n\n\n@pytest.fixture\ndef store():\n    return IdempotencyStore()\n\n\n@pytest.fixture\ndef now_utc():\n    return datetime.now(timezone.utc)\n\n\n@pytest.fixture\ndef active_user(now_utc):\n    return UserProfile(user_id=\"user-123\", last_login_at=now_utc - timedelta(days=1))\n\n\n@pytest.fixture\ndef inactive_user(now_utc):\n    return UserProfile(user_id=\"user-123\", last_login_at=now_utc - timedelta(days=30))\n\n\n@pytest.fixture(autouse=True)\ndef _snapshot_audit_log():\n    \"\"\"Snapshot and restore AUDIT_LOG so tests do not leak audit lines across runs.\"\"\"\n    original = list(AUDIT_LOG)\n    yield\n    AUDIT_LOG.clear()\n    AUDIT_LOG.extend(original)\n\n\ndef make_ctx(\n    *,\n    token: str | None = None,\n    idempotency_key: str | None = \"key-1\",\n    body: bytes | None = None,\n    received_at: datetime | None = None,\n) -> RequestContext:\n    if token == \"__missing__\":\n        auth = None\n    elif token is None:\n        auth = auth_header(valid_token())\n    else:\n        auth = auth_header(token)\n    return RequestContext(\n        authorization=auth,\n        idempotency_key=idempotency_key,\n        request_received_at=received_at or datetime.now(timezone.utc),\n        body_bytes=body,\n    )\n\n\n# ---------------------------------------------------------------------------\n# parse_bearer_jwt\n# ---------------------------------------------------------------------------\n\ndef test_parse_bearer_jwt_valid():\n    ok, claims, err = parse_bearer_jwt(auth_header(valid_token(sub=\"alice\")))\n    assert ok is True\n    assert err is None\n    assert claims[\"sub\"] == \"alice\"\n    assert \"foo:invoke\" in claims[\"scope\"].split()\n\n\ndef test_parse_bearer_jwt_missing_header():\n    ok, claims, err = parse_bearer_jwt(None)\n    assert ok is False\n    assert claims is None\n    assert err  # some error reason\n\n\ndef test_parse_bearer_jwt_empty_string():\n    ok, claims, err = parse_bearer_jwt(\"\")\n    assert ok is False\n    assert claims is None\n    assert err\n\n\ndef test_parse_bearer_jwt_no_bearer_prefix():\n    ok, _, err = parse_bearer_jwt(\"Token abc.def.ghi\")\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_malformed_segments():\n    ok, _, err = parse_bearer_jwt(\"Bearer not-a-jwt\")\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_empty_token_after_bearer():\n    ok, _, err = parse_bearer_jwt(\"Bearer    \")\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_bad_payload_base64():\n    # Middle segment not valid base64 JSON\n    token = \"aGVhZGVy.@@@@.sig\"\n    ok, _, err = parse_bearer_jwt(f\"Bearer {token}\")\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_payload_not_json_object():\n    # Payload decodes but is a JSON list, not a dict\n    seg = _b64url(b'[\"not\", \"a\", \"dict\"]')\n    token = f\"hdr.{seg}.sig\"\n    ok, _, err = parse_bearer_jwt(f\"Bearer {token}\")\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_expired():\n    expired = make_jwt({\"sub\": \"u\", \"exp\": int(time.time()) - 60, \"scope\": \"foo:invoke\"})\n    ok, _, err = parse_bearer_jwt(auth_header(expired))\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_missing_exp():\n    token = make_jwt({\"sub\": \"u\", \"scope\": \"foo:invoke\"})\n    ok, _, err = parse_bearer_jwt(auth_header(token))\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_wrong_scope():\n    token = make_jwt({\"sub\": \"u\", \"exp\": int(time.time()) + 3600, \"scope\": \"other:read\"})\n    ok, _, err = parse_bearer_jwt(auth_header(token))\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_missing_scope():\n    token = make_jwt({\"sub\": \"u\", \"exp\": int(time.time()) + 3600})\n    ok, _, err = parse_bearer_jwt(auth_header(token))\n    assert ok is False\n    assert err\n\n\ndef test_parse_bearer_jwt_scope_as_list():\n    token = make_jwt({\"sub\": \"u\", \"exp\": int(time.time()) + 3600,\n                      \"scope\": [\"foo:invoke\", \"other\"]})\n    ok, claims, err = parse_bearer_jwt(auth_header(token))\n    assert ok is True\n    assert err is None\n    assert claims is not None\n\n\n# ---------------------------------------------------------------------------\n# is_active_user\n# ---------------------------------------------------------------------------\n\ndef test_is_active_user_recent_login(now_utc):\n    user = UserProfile(user_id=\"u\", last_login_at=now_utc - timedelta(days=1))\n    assert is_active_user(user, now_utc) is True\n\n\ndef test_is_active_user_exactly_at_boundary(now_utc):\n    # delta.days == 5 should still be active (<= 5)\n    user = UserProfile(user_id=\"u\", last_login_at=now_utc - timedelta(days=5, hours=0, minutes=0))\n    assert is_active_user(user, now_utc) is True\n\n\ndef test_is_active_user_beyond_window(now_utc):\n    user = UserProfile(user_id=\"u\", last_login_at=now_utc - timedelta(days=6))\n    assert is_active_user(user, now_utc) is False\n\n\ndef test_is_active_user_old_login(now_utc):\n    user = UserProfile(user_id=\"u\", last_login_at=now_utc - timedelta(days=365))\n    assert is_active_user(user, now_utc) is False\n\n\n# ---------------------------------------------------------------------------\n# IdempotencyStore\n# ---------------------------------------------------------------------------\n\ndef test_store_has_returns_false_for_unknown_key(store):\n    assert store.has(\"nope\") is False\n    assert store.get_request_id(\"nope\") is None\n\n\ndef test_store_record_then_has(store):\n    store.record(\"k1\", \"req-1\")\n    assert store.has(\"k1\") is True\n    assert store.get_request_id(\"k1\") == \"req-1\"\n\n\ndef test_store_ttl_eviction_on_read():\n    # short TTL store to test eviction\n    s = IdempotencyStore(ttl_seconds=0)  # immediately expired\n    s.record(\"k1\", \"req-1\")\n    # Sleep tiny bit to ensure (now - recorded_at) >= 0\n    time.sleep(0.01)\n    assert s.has(\"k1\") is False\n    assert s.get_request_id(\"k1\") is None\n\n\ndef test_store_get_key_lock_returns_same_lock_per_key(store):\n    a = store.get_key_lock(\"k\")\n    b = store.get_key_lock(\"k\")\n    assert a is b\n    c = store.get_key_lock(\"other\")\n    assert c is not a\n\n\n# ---------------------------------------------------------------------------\n# handle_request - happy path & auth (R1, R3)\n# ---------------------------------------------------------------------------\n\ndef test_handle_request_success_minimal(store, active_user):\n    audit_before = len(AUDIT_LOG)\n    ctx = make_ctx(idempotency_key=\"abc\")\n    result = handle_request(ctx, active_user, store)\n    assert isinstance(result, HandlerResult)\n    assert result.status_code == 200\n    assert result.body[\"result\"] == \"ok\"\n    assert isinstance(result.body[\"request_id\"], str)\n    # Must be a valid uuid4 string\n    uuid.UUID(result.body[\"request_id\"])\n    assert result.body[\"amount_cents\"] is None\n    # R6: audit logged on success\n    assert len(AUDIT_LOG) == audit_before + 1\n\n\ndef test_handle_request_success_with_body(store, active_user):\n    body = json.dumps({\"amount_cents\": 500, \"note\": \"hello\"}).encode(\"utf-8\")\n    ctx = make_ctx(idempotency_key=\"key-body\", body=body)\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 200\n    assert result.body[\"amount_cents\"] == 500\n\n\ndef test_handle_request_unauthorized_missing(store, active_user):\n    ctx = make_ctx(token=\"__missing__\", idempotency_key=\"k-x\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 401\n    # R2/R3: no store mutation on auth failure\n    assert store.has(\"k-x\") is False\n\n\ndef test_handle_request_unauthorized_expired(store, active_user):\n    expired = make_jwt({\"sub\": \"u\", \"exp\": int(time.time()) - 5, \"scope\": \"foo:invoke\"})\n    ctx = make_ctx(token=expired, idempotency_key=\"k-exp\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 401\n    assert store.has(\"k-exp\") is False\n\n\ndef test_handle_request_unauthorized_wrong_scope(store, active_user):\n    bad = make_jwt({\"sub\": \"u\", \"exp\": int(time.time()) + 3600, \"scope\": \"other:read\"})\n    ctx = make_ctx(token=bad, idempotency_key=\"k-scope\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 401\n    assert store.has(\"k-scope\") is False\n\n\n# ---------------------------------------------------------------------------\n# handle_request - active user (R4)\n# ---------------------------------------------------------------------------\n\ndef test_handle_request_inactive_user_blocked(store, inactive_user):\n    ctx = make_ctx(idempotency_key=\"k-inactive\")\n    result = handle_request(ctx, inactive_user, store)\n    assert result.status_code == 403\n    assert store.has(\"k-inactive\") is False\n\n\ndef test_handle_request_inactive_user_no_audit(store, inactive_user):\n    audit_before = len(AUDIT_LOG)\n    ctx = make_ctx(idempotency_key=\"k-inactive-2\")\n    handle_request(ctx, inactive_user, store)\n    assert len(AUDIT_LOG) == audit_before\n\n\n# ---------------------------------------------------------------------------\n# handle_request - idempotency (R2)\n# ---------------------------------------------------------------------------\n\ndef test_handle_request_missing_idempotency_key(store, active_user):\n    ctx = make_ctx(idempotency_key=None)\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 400\n\n\ndef test_handle_request_empty_idempotency_key(store, active_user):\n    ctx = make_ctx(idempotency_key=\"\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 400\n\n\ndef test_handle_request_duplicate_returns_409(store, active_user):\n    first = handle_request(make_ctx(idempotency_key=\"dup\"), active_user, store)\n    assert first.status_code == 200\n    original_id = first.body[\"request_id\"]\n\n    second = handle_request(make_ctx(idempotency_key=\"dup\"), active_user, store)\n    assert second.status_code == 409\n    assert second.body[\"reason\"] == \"duplicate\"\n    assert second.body[\"original_request_id\"] == original_id\n    # store still has the original request id\n    assert store.get_request_id(\"dup\") == original_id\n\n\ndef test_handle_request_duplicate_does_not_audit_again(store, active_user):\n    handle_request(make_ctx(idempotency_key=\"dup2\"), active_user, store)\n    audit_after_first = len(AUDIT_LOG)\n    handle_request(make_ctx(idempotency_key=\"dup2\"), active_user, store)\n    assert len(AUDIT_LOG) == audit_after_first\n\n\n# ---------------------------------------------------------------------------\n# handle_request - body validation (R5)\n# ---------------------------------------------------------------------------\n\ndef test_handle_request_malformed_json_returns_400(store, active_user):\n    ctx = make_ctx(idempotency_key=\"bad-json\", body=b\"{not json\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 400\n    # No store mutation\n    assert store.has(\"bad-json\") is False\n\n\ndef test_handle_request_malformed_json_does_not_corrupt_other_keys(store, active_user):\n    # Record a good key first\n    good = handle_request(make_ctx(idempotency_key=\"good-key\"), active_user, store)\n    assert good.status_code == 200\n    good_id = good.body[\"request_id\"]\n\n    # Now send malformed JSON under a different key\n    bad = handle_request(\n        make_ctx(idempotency_key=\"bad-key\", body=b\"<<<>>>\"),\n        active_user,\n        store,\n    )\n    assert bad.status_code == 400\n\n    # The good key is still intact\n    assert store.get_request_id(\"good-key\") == good_id\n    # Bad key was not written\n    assert store.has(\"bad-key\") is False\n\n\ndef test_handle_request_non_object_json_rejected(store, active_user):\n    ctx = make_ctx(idempotency_key=\"arr\", body=b\"[1,2,3]\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 400\n\n\ndef test_handle_request_negative_amount_returns_422(store, active_user):\n    body = json.dumps({\"amount_cents\": -10}).encode(\"utf-8\")\n    ctx = make_ctx(idempotency_key=\"neg\", body=body)\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 422\n    assert store.has(\"neg\") is False\n\n\ndef test_handle_request_zero_amount_returns_422(store, active_user):\n    body = json.dumps({\"amount_cents\": 0}).encode(\"utf-8\")\n    ctx = make_ctx(idempotency_key=\"zero\", body=body)\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 422\n\n\ndef test_handle_request_amount_not_int_returns_422(store, active_user):\n    body = json.dumps({\"amount_cents\": \"100\"}).encode(\"utf-8\")\n    ctx = make_ctx(idempotency_key=\"strnum\", body=body)\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 422\n\n\ndef test_handle_request_amount_bool_rejected_as_invalid(store, active_user):\n    # bool is a subclass of int; the handler explicitly rejects bool\n    body = json.dumps({\"amount_cents\": True}).encode(\"utf-8\")\n    ctx = make_ctx(idempotency_key=\"boolamt\", body=body)\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 422\n\n\ndef test_handle_request_empty_body_is_ok(store, active_user):\n    ctx = make_ctx(idempotency_key=\"empty\", body=b\"\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 200\n    assert result.body[\"amount_cents\"] is None\n\n\n# ---------------------------------------------------------------------------\n# Processing order: auth precedes idempotency-key check\n# ---------------------------------------------------------------------------\n\ndef test_auth_failure_takes_precedence_over_missing_idem_key(store, active_user):\n    ctx = make_ctx(token=\"__missing__\", idempotency_key=None)\n    result = handle_request(ctx, active_user, store)\n    # Auth runs first per declared processing order\n    assert result.status_code == 401\n\n\ndef test_idem_key_check_runs_before_active_user_check(store, inactive_user):\n    # Inactive user but missing idem key: per spec order auth->idem-key->active-user,\n    # so missing key should yield 400 before 403. (We don't over-constrain: simply\n    # assert that the response is one of those two but document expected order.)\n    ctx = make_ctx(idempotency_key=None)\n    result = handle_request(ctx, inactive_user, store)\n    assert result.status_code in (400, 403)\n\n\n# ---------------------------------------------------------------------------\n# Concurrency (R2 + spec #6)\n# ---------------------------------------------------------------------------\n\ndef test_handle_request_concurrent_same_key_one_success_one_duplicate(store, active_user):\n    results: list[HandlerResult] = []\n    barrier = threading.Barrier(2)\n\n    def worker():\n        barrier.wait()\n        # Build ctx inside thread so request_received_at and token are fresh\n        ctx = make_ctx(idempotency_key=\"race-key\")\n        results.append(handle_request(ctx, active_user, store))\n\n    threads = [threading.Thread(target=worker) for _ in range(2)]\n    for t in threads:\n        t.start()\n    for t in threads:\n        t.join()\n\n    status_codes = sorted(r.status_code for r in results)\n    assert status_codes == [200, 409]\n\n    # The 409 must reference the 200 request id\n    ok_result = next(r for r in results if r.status_code == 200)\n    dup_result = next(r for r in results if r.status_code == 409)\n    assert dup_result.body[\"original_request_id\"] == ok_result.body[\"request_id\"]\n\n\n# ---------------------------------------------------------------------------\n# Audit logging (R6)\n# ---------------------------------------------------------------------------\n\ndef test_audit_log_records_caller_and_request_id(store, active_user):\n    audit_before = len(AUDIT_LOG)\n    token = valid_token(sub=\"audit-user\")\n    ctx = make_ctx(token=token, idempotency_key=\"aud-1\")\n    result = handle_request(ctx, active_user, store)\n    assert result.status_code == 200\n    assert len(AUDIT_LOG) == audit_before + 1\n    last_line = AUDIT_LOG[-1]\n    # The audit line is a JSON string per the implementation - parse defensively.\n    try:\n        parsed = json.loads(last_line)\n        assert parsed[\"caller_id\"] == \"audit-user\"\n        assert parsed[\"request_id\"] == result.body[\"request_id\"]\n    except (json.JSONDecodeError, TypeError):\n        # If implementation changes format, at least the request_id should appear\n        assert result.body[\"request_id\"] in last_line\n\n\ndef test_no_audit_on_unauthorized(store, active_user):\n    audit_before = len(AUDIT_LOG)\n    ctx = make_ctx(token=\"__missing__\", idempotency_key=\"noaud\")\n    handle_request(ctx, active_user, store)\n    assert len(AUDIT_LOG) == audit_before\n\n\ndef test_no_audit_on_duplicate(store, active_user):\n    handle_request(make_ctx(idempotency_key=\"ad-dup\"), active_user, store)\n    audit_after_first = len(AUDIT_LOG)\n    second = handle_request(make_ctx(idempotency_key=\"ad-dup\"), active_user, store)\n    assert second.status_code == 409\n    assert len(AUDIT_LOG) == audit_after_first\n\n\ndef test_no_audit_on_bad_body(store, active_user):\n    audit_before = len(AUDIT_LOG)\n    ctx = make_ctx(idempotency_key=\"ad-bad\", body=b\"not-json\")\n    handle_request(ctx, active_user, store)\n    assert len(AUDIT_LOG) == audit_before",
+    ".pdd/meta/foo_work_python.json": "{\n  \"pdd_version\": \"0.0.247.dev24\",\n  \"timestamp\": \"2026-05-22T02:09:09.407697+00:00\",\n  \"command\": \"generate\",\n  \"prompt_hash\": \"a955109c5e356f1c5eea8c29919a8e32806abe47d0e68c83199fa8ab5d512ef1\",\n  \"code_hash\": null,\n  \"example_hash\": null,\n  \"test_hash\": null,\n  \"test_files\": {\n    \"test_foo_work_before.py\": \"05ee6b63d7b3bf91842d4a60a35a12b1e1dda9d40da6be86e036ffa205098e8d\"\n  },\n  \"include_deps\": {}\n}"
+  },
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\nUsing .pddrc context: default\nInput files:\n  prompt_file     /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/prompts/foo_work_python.prompt\n  code_file       /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/src/foo_work_before.py\nOutput files:\n  output          /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/tests/test_foo_work_before.py\nDetected language: python\nBasename: foo_work\nCloud Success\nSuccessfully wrote tests to /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/tests/test_foo_work_before.py\n\n--- Command Execution Summary ---\n  Step 1 (test): Cost: $0.130442, Model: claude-opus-4-7\nTotal Estimated Cost: $0.130442\n-------------------------------------\n",
+  "sync_steps": [
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 94.7483868598938,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3361487,
+      "model": "claude-opus-4-7",
+      "duration": 181.3877351284027,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.93177604675293,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3361487,
+      "model": "claude-opus-4-7",
+      "duration": 20.26871681213379,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 13.683010816574097,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 177.16943311691284,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.151504039764404,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 168.79310393333435,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.492659091949463,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.513398885726929,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.571554899215698,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 58.812579870224,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 58.683647871017456,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 118.65742897987366,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": false,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 395.1108720302582,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": false,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 36.3282470703125,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 59.6483039855957,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 23.736063241958618,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    }
+  ]
+}

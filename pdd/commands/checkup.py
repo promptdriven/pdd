@@ -10,9 +10,14 @@ from ..agentic_checkup import run_agentic_checkup
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from .contracts import contracts_group
+from .prompt import prompt_lint
 
 
-@click.command("checkup")
+@click.command(
+    "checkup",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
 @click.argument("target", required=False, default=None)
 @click.option(
     "--validate-arch-includes",
@@ -261,8 +266,36 @@ def checkup(
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Prompt checkup aliases:
+      pdd checkup lint [pdd lint options] TARGET
+      pdd checkup converge [pdd lint options] TARGET
+      pdd checkup contract compile [pdd contracts compile options] TARGET
     """
     ctx.ensure_object(dict)
+
+    if target in {"lint", "converge"}:
+        lint_args = list(ctx.args)
+        if target == "converge":
+            if "--contracts" not in lint_args:
+                lint_args.insert(0, "--contracts")
+            if "--report" not in lint_args:
+                lint_args[0:0] = ["--report", "formalization"]
+        return prompt_lint.main(
+            args=lint_args,
+            prog_name=f"pdd checkup {target}",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+    if target in {"contract", "contracts"}:
+        return contracts_group.main(
+            args=list(ctx.args),
+            prog_name=f"pdd checkup {target}",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+
+    if ctx.args:
+        raise click.UsageError(f"Got unexpected extra arguments ({' '.join(ctx.args)})")
 
     if validate_arch_includes:
         if target is not None or pr_url is not None or issue_url_opt is not None:

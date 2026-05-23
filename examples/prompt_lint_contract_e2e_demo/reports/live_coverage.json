@@ -1,0 +1,134 @@
+{
+  "results": [
+    {
+      "path": "prompts/foo_work_python.prompt",
+      "has_contract_rules": true,
+      "error": null,
+      "rules": [
+        {
+          "rule_id": "R1",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r1_first_request_returns_200_and_records_key",
+            "test_r1_no_body_returns_200_with_null_amount",
+            "test_r1_empty_body_returns_200",
+            "test_r1_body_without_amount_returns_200"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R2",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r2_duplicate_key_returns_409_unchanged",
+            "test_r2_duplicate_does_not_add_audit_entry"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R3",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r3_missing_or_malformed_auth_returns_401",
+            "test_r3_expired_token_returns_401",
+            "test_r3_wrong_scope_returns_401",
+            "test_r3_undecodable_payload_returns_401"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R4",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r4_inactive_user_returns_403",
+            "test_r4_boundary_five_days_is_active"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R5",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r5_invalid_json_returns_400_no_mutation",
+            "test_r5_amount_cents_zero_returns_422",
+            "test_r5_amount_cents_negative_returns_422",
+            "test_r5_amount_cents_positive_returns_200",
+            "test_r5_bad_payload_does_not_add_audit"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R6",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r6_audit_appended_on_200",
+            "test_r6_audit_failure_sets_flag_but_keeps_200",
+            "test_r6_no_audit_on_non_200"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        }
+      ],
+      "summary": {
+        "total": 6,
+        "checked": 0,
+        "story_only": 0,
+        "test_only": 0,
+        "unchecked": 0,
+        "waived": 0,
+        "failed": 6,
+        "formal_only": 0,
+        "needs_human": 0
+      }
+    }
+  ],
+  "total_prompts": 1,
+  "prompts_with_contracts": 1
+}

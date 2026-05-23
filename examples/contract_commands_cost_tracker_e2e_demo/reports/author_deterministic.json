@@ -1,0 +1,52 @@
+{
+  "exit_code": 0,
+  "steps": [
+    {
+      "name": "prompt_lint_ambiguity",
+      "exit_code": 0,
+      "message": "errors=0 warns=0"
+    },
+    {
+      "name": "contracts_check",
+      "exit_code": 0,
+      "message": "errors=0 warns=0"
+    },
+    {
+      "name": "contracts_compile",
+      "exit_code": 0,
+      "message": "errors=0"
+    },
+    {
+      "name": "coverage_contracts",
+      "exit_code": 0,
+      "message": "unchecked=0"
+    },
+    {
+      "name": "evidence_emit",
+      "exit_code": 0,
+      "message": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/reports/evidence_work.json"
+    }
+  ],
+  "summary": {
+    "work_path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+    "lint_warns": 0,
+    "lint_errors": 0,
+    "unchecked_rules": 0,
+    "coverage_gaps": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+        "unchecked_must": [],
+        "story_only_must_not": [],
+        "unlinked_formalizations": [],
+        "failed_evidence": []
+      }
+    ],
+    "formalization_rejected": [],
+    "hints": [
+      "pdd contracts check /Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+      "pdd coverage --contracts /Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+      "pdd contracts compile --json /Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt"
+    ]
+  },
+  "work_exists": true
+}

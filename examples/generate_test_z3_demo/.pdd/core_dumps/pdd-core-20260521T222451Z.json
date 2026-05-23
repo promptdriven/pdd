@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.246.dev49",
+  "timestamp_utc": "20260521T222451Z",
+  "argv": [
+    "contracts",
+    "author",
+    "prompts/token_bucket_python.prompt",
+    "--formalize",
+    "--force"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:12:32) [Clang 20.1.8 ]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [],
+  "total_cost": 0.0,
+  "steps": [],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {},
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Starting prompt preprocessing                                \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Preprocessing complete                                       \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\nmode: greenfield\n\nSuggested <contract_rules>\n  R1 - Reject non-positive capacity\nWhen capacity is not a positive integer, the TokenBucket \nconstructor MUST raise ValueError.\n  R2 - Default tokens to capacity\nWhen tokens_available is not provided to the constructor, the \nTokenBucket MUST return tokens_available equal to capacity.\n  R3 - Consume with sufficient tokens\nWhen requested_tokens is less than or equal to current \ntokens_available, consume MUST return True and tokens_available \nequal to prior tokens_available minus requested_tokens.\n  R4 - Consume with insufficient tokens\nWhen requested_tokens is greater than current tokens_available, \nconsume MUST return False.\n  R5 - Failed consume preserves state\nWhen consume returns False, the consume call MUST NOT mutate \ntokens_available.\n  R6 - Refill caps at capacity\nWhen refill is called with any amount, the TokenBucket MUST NOT \nreturn tokens_available greater than capacity.\n  R7 - Refill adds tokens below capacity\nWhen refill is called with amount such that prior \ntokens_available plus amount is less than or equal to capacity, \nthe TokenBucket MUST return tokens_available equal to prior \ntokens_available plus amount.\n\nSuggested <vocabulary>\n  positive integer: an integer value strictly greater than zero.\n  capacity: the maximum number of tokens the bucket can hold, \nfixed at construction.\n  tokens_available: the current non-negative integer count of \ntokens currently held in the bucket.\n  requested_tokens: the integer number of tokens a caller asks \nconsume to remove from the bucket.\n  amount: the integer number of tokens passed to refill to be \nadded to the bucket.\n  prior tokens_available: the value of tokens_available \nimmediately before the operation under test.\n\nSuggested <acceptance_tests>\n  - R1: Given capacity = 0, when TokenBucket(0) is constructed, \nthen ValueError is raised.\n  - R2: Given capacity = 10 and no tokens_available argument, \nwhen TokenBucket(10) is constructed, then tokens_available \nequals 10.\n  - R3: Given a TokenBucket(10) with tokens_available = 10, when\nconsume(4) is called, then it returns True and tokens_available \nequals 6.\n  - R4: Given a TokenBucket(10) with tokens_available = 3, when \nconsume(5) is called, then it returns False.\n  - R5: Given a TokenBucket(10) with tokens_available = 3, when \nconsume(5) is called, then tokens_available remains 3.\n  - R6: Given a TokenBucket(10) with tokens_available = 8, when \nrefill(5) is called, then tokens_available equals 10.\n  - R7: Given a TokenBucket(10) with tokens_available = 2, when \nrefill(3) is called, then tokens_available equals 5.\n\nwrote: 0 rule(s), 0 acceptance test(s), 7 formalization(s)\n\n--- Command Execution Summary ---\n-------------------------------------\n"
+}

@@ -1,0 +1,7 @@
+{
+  "prompt_path": "/Users/yifeitao/Desktop/pdd/examples/cost_tracker_strict_ab/prompts/cost_tracker_work_python.prompt",
+  "meta_path": "/Users/yifeitao/Desktop/pdd/examples/cost_tracker_strict_ab/.pdd/meta/cost_tracker_work_python.json",
+  "has_drift": false,
+  "findings": [],
+  "error": null
+}

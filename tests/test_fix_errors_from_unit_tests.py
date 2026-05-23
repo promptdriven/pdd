@@ -736,7 +736,7 @@ def test_add_with_none():
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
+def test_integration_prompt_authoritative_with_live_llm(temp_error_file, monkeypatch):
     """
     INTEGRATION TEST: Verify live LLM respects prompt as authoritative.
 
@@ -745,6 +745,9 @@ def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
 
     Run with: pytest -m integration tests/test_fix_errors_from_unit_tests.py
     """
+    # Enforce non-interactive mode during automated test suites to avoid hanging on device auth prompts
+    monkeypatch.setenv("PDD_NO_INTERACTIVE", "1")
+
     # Prompt clearly specifies ONLY tracking specific file types
     prompt = """
 Write a Python function `track_file_changes` that:
@@ -819,9 +822,9 @@ E   AssertionError: assert '/tmp/random_data.json' in []
 
     update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, cost, model = result
 
-    # Skip if cloud LLM call failed due to insufficient credits
-    if cost == 0.0 and "InsufficientCredits" in str(model):
-        pytest.skip("Cloud LLM call failed: insufficient credits")
+    # Skip if cloud LLM call failed due to insufficient credits or authentication error
+    if cost == 0.0 and ("InsufficientCredits" in str(model) or str(model).startswith("Error:")):
+        pytest.skip(f"Cloud LLM call failed: {model}")
 
     # Verify the call returned a well-formed result. cost may legitimately be
     # 0 on a LiteLLM cache hit (the GCS-backed cache short-circuits the API

@@ -1,0 +1,13 @@
+[
+  {
+    "version": "pdd.contract_ir.v1",
+    "path": "prompts/token_bucket_plain_python.prompt",
+    "has_contract_rules": false,
+    "rule_count": 0,
+    "error_count": 0,
+    "rules": [],
+    "compile_errors": [],
+    "ir_kind": "pdd.contract_ir.v1"
+  }
+]
+

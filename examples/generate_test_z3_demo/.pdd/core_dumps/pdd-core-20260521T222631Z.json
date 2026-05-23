@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.246.dev49",
+  "timestamp_utc": "20260521T222631Z",
+  "argv": [
+    "contracts",
+    "compile",
+    "prompts/token_bucket_python.prompt",
+    "--json"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:12:32) [Clang 20.1.8 ]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [],
+  "total_cost": 0.0,
+  "steps": [],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_DEBUG_SNAPSHOT": "0",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd"
+  },
+  "file_contents": {},
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\n[\n  {\n    \"version\": \"pdd.contract_ir.v1\",\n    \"path\": \"prompts/token_bucket_python.prompt\",\n    \"has_contract_rules\": true,\n    \"rule_count\": 7,\n    \"error_count\": 0,\n    \"rules\": [\n      {\n        \"id\": \"R1\",\n        \"title\": \"Reject non-positive capacity\",\n        \"modal\": \"MUST\",\n        \"condition\": \"capacity is not a positive integer\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST\",\n            \"type\": \"raise\",\n            \"value\": {\n              \"target\": \"ValueError\"\n            },\n            \"text\": \"MUST raise ValueError\"\n          }\n        ],\n        \"raw\": \"R1 - Reject non-positive capacity\\nWhen capacity is not a positive integer, the TokenBucket constructor MUST raise ValueError.\"\n      },\n      {\n        \"id\": \"R2\",\n        \"title\": \"Default tokens to capacity\",\n        \"modal\": \"MUST\",\n        \"condition\": \"tokens_available is not provided to\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST\",\n            \"type\": \"return\",\n            \"value\": {\n              \"target\": \"tokens_available equal to capacity\"\n            },\n            \"text\": \"MUST return tokens_available equal to capacity\"\n          }\n        ],\n        \"raw\": \"R2 - Default tokens to capacity\\nWhen tokens_available is not provided to the constructor, the TokenBucket MUST return tokens_available equal to capacity.\"\n      },\n      {\n        \"id\": \"R3\",\n        \"title\": \"Consume with sufficient tokens\",\n        \"modal\": \"MUST\",\n        \"condition\": \"requested_tokens is less than or equal to current tokens_available, consume MUST return True and tokens_available equal to prior tokens_available minus requested_tokens\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST\",\n            \"type\": \"return\",\n            \"value\": {\n              \"target\": \"True and tokens_available equal to prior tokens_available minus requested_tokens\"\n            },\n            \"text\": \"MUST return True and tokens_available equal to prior tokens_available minus requested_tokens\"\n          }\n        ],\n        \"raw\": \"R3 - Consume with sufficient tokens\\nWhen requested_tokens is less than or equal to current tokens_available, consume MUST return True and tokens_available equal to prior tokens_available minus requested_tokens.\"\n      },\n      {\n        \"id\": \"R4\",\n        \"title\": \"Consume with insufficient tokens\",\n        \"modal\": \"MUST\",\n        \"condition\": \"requested_tokens is greater than current tokens_available, consume MUST return False\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST\",\n            \"type\": \"return\",\n            \"value\": {\n              \"target\": \"False\"\n            },\n            \"text\": \"MUST return False\"\n          }\n        ],\n        \"raw\": \"R4 - Consume with insufficient tokens\\nWhen requested_tokens is greater than current tokens_available, consume MUST return False.\"\n      },\n      {\n        \"id\": \"R5\",\n        \"title\": \"Failed consume preserves state\",\n        \"modal\": \"MUST NOT\",\n        \"condition\": \"consume returns False\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST NOT\",\n            \"type\": \"state_mutation\",\n            \"value\": {\n              \"verb\": \"mutate\",\n              \"target\": \"tokens_available\"\n            },\n            \"text\": \"MUST NOT mutate tokens_available\"\n          }\n        ],\n        \"raw\": \"R5 - Failed consume preserves state\\nWhen consume returns False, the consume call MUST NOT mutate tokens_available.\"\n      },\n      {\n        \"id\": \"R6\",\n        \"title\": \"Refill caps at capacity\",\n        \"modal\": \"MUST NOT\",\n        \"condition\": \"refill is called with any amount\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST NOT\",\n            \"type\": \"return\",\n            \"value\": {\n              \"target\": \"tokens_available greater than capacity\"\n            },\n            \"text\": \"MUST NOT return tokens_available greater than capacity\"\n          }\n        ],\n        \"raw\": \"R6 - Refill caps at capacity\\nWhen refill is called with any amount, the TokenBucket MUST NOT return tokens_available greater than capacity.\"\n      },\n      {\n        \"id\": \"R7\",\n        \"title\": \"Refill adds tokens below capacity\",\n        \"modal\": \"MUST\",\n        \"condition\": \"refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity\",\n        \"obligations\": [\n          {\n            \"modal\": \"MUST\",\n            \"type\": \"return\",\n            \"value\": {\n              \"target\": \"tokens_available equal to prior tokens_available plus amount\"\n            },\n            \"text\": \"MUST return tokens_available equal to prior tokens_available plus amount\"\n          }\n        ],\n        \"raw\": \"R7 - Refill adds tokens below capacity\\nWhen refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity, the TokenBucket MUST return tokens_available equal to prior tokens_available plus amount.\"\n      }\n    ],\n    \"compile_errors\": [],\n    \"ir_kind\": \"pdd.contract_ir.v1\"\n  }\n]\n\n--- Command Execution Summary ---\n-------------------------------------\n"
+}

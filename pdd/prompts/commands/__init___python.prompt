@@ -39,6 +39,10 @@
     - `auth_group` (from `.auth`)
     - `sessions` (from `.sessions`)
     - `firecrawl_cache` (from `.firecrawl`)
+    - `prompt_group`, `prompt_lint` (from `.prompt`)
+    - `contracts_group` (from `.contracts`)
+    - `coverage_cmd` (from `.coverage`)
+  - Register `prompt_group`, then register the top-level short alias with `cli.add_command(prompt_lint, name="lint")`, then register `contracts_group`, then `coverage_cmd` as `name="coverage"`. Keep `pdd prompt lint` available through `prompt_group`; `pdd lint` is the preferred user-facing spelling.
 
 % Deliverables
   - Code: `pdd/commands/__init__.py`

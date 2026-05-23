@@ -1,5 +1,5 @@
 """
-Orchestration for `pdd prompt lint`.
+Orchestration for `pdd lint`.
 
 Runs deterministic scan first, then optional staged LLM pipeline:
 ambiguity → coach → clarify (vocabulary) → formalize → gates → apply.
@@ -386,7 +386,7 @@ def _post_pipeline_closure(
     ]
     ir = parse_prompt_contracts(path)
     if ir.formalizations:
-        hints.append(f"pdd prompt lint --report formalization {path}")
+        hints.append(f"pdd lint --report formalization {path}")
     pipeline.hints.extend(hints)
 
 

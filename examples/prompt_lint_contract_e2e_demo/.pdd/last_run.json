@@ -1,0 +1,16 @@
+{
+  "80716e0e685ff6df": {
+    "argv": [
+      "--force",
+      "generate",
+      "prompts/foo_work_python.prompt",
+      "--output",
+      "src/foo_work_after.py"
+    ],
+    "project_root": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo",
+    "fingerprint": "e4b4ee5c35b09a3e14b3c2c3ed40c08fdb1e125c12458eae48fe80af1d485098",
+    "git_head": "a00aee5e66a20df8855af995b8ecaf7061566b93",
+    "subcommand": "generate",
+    "timestamp": 1779416880.4858801
+  }
+}

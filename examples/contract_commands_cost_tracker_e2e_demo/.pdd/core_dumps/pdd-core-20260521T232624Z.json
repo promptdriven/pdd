@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.246.dev95",
+  "timestamp_utc": "20260521T232624Z",
+  "argv": [],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.11.5 (main, Sep 11 2023, 08:17:37) [Clang 14.0.6 ]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": true,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [],
+  "total_cost": 0.0,
+  "steps": [],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Applications/Cursor.app/Contents/Resources/app/resources/helpers:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin",
+    "PDD_RUN_ALL_TESTS": "0",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PYTHONPATH": "/Users/yifeitao/Desktop/pdd",
+    "PDD_ALLOW_DUPLICATE_RUN": "1",
+    "PDD_QUIET": "1"
+  },
+  "file_contents": {},
+  "terminal_output": "=== STDOUT ===\n[\n  {\n    \"path\": \"prompts/cost_tracker_with_contracts_python.prompt\",\n    \"warn_count\": 0,\n    \"error_count\": 0,\n    \"issues\": []\n  },\n  {\n    \"path\": \"user_stories/story__cost_tracker.md\",\n    \"warn_count\": 0,\n    \"error_count\": 0,\n    \"issues\": []\n  }\n]\n"
+}

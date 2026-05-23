@@ -95,6 +95,27 @@ def _restore_captured_streams(ctx: click.Context) -> None:
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
+    def _maybe_register_commands(self) -> None:
+        """Lazily and safely register subcommands if not already present."""
+        if not getattr(self, "_commands_registered", False):
+            if "generate" in self.commands:
+                self._commands_registered = True
+                return
+            self._commands_registered = True
+            try:
+                from ..commands import register_commands
+                register_commands(self)
+            except Exception:
+                self._commands_registered = False
+
+    def get_command(self, ctx: click.Context, name: str) -> Optional[click.Command]:
+        self._maybe_register_commands()
+        return super().get_command(ctx, name)
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        self._maybe_register_commands()
+        return super().list_commands(ctx)
+
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         self.format_usage(ctx, formatter)
         with formatter.section("Generate Suite (related commands)"):

@@ -6,6 +6,7 @@
     d) Examples (e.g. *_example.py)
     e) Tests (e.g. test_*.py)
   - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules. Also, use unittest to run the tests.
+  - Prompt lint helper: include a `prompt-lint` phony target that runs `pdd lint $${ARGS:-} $${TARGET:-$(PROMPTS_DIR)}` through the pdd conda environment, list it in `help`, and include a `prompt: prompt-lint` alias so `make prompt lint` can run the prompt-lint helper before the existing pylint `lint` target.
   - Cleaning
     - Remove the 'output' directory.
     - Remove the 'pdd/code_fixed.py' file.

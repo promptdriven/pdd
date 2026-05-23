@@ -1,0 +1,11 @@
+{
+  "has_drift": true,
+  "findings": [
+    {
+      "kind": "prompt_hash",
+      "message": "Prompt file hash changed between manifests.",
+      "before": "eff383950da7bea6",
+      "after": "6f9ab947a5db44a7"
+    }
+  ]
+}

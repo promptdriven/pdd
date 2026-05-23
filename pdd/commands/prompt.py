@@ -362,12 +362,12 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
 
     \b
     Examples:
-      pdd prompt lint prompts/foo_python.prompt
-      pdd prompt lint --stories user_stories/
-      pdd prompt lint --json prompts/foo_python.prompt
-      pdd prompt lint --ambiguity prompts/foo_python.prompt
-      pdd prompt lint --ambiguity --non-interactive prompts/foo_python.prompt
-      pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
+      pdd lint prompts/foo_python.prompt
+      pdd lint --stories user_stories/
+      pdd lint --json prompts/foo_python.prompt
+      pdd lint --ambiguity prompts/foo_python.prompt
+      pdd lint --ambiguity --non-interactive prompts/foo_python.prompt
+      pdd lint --ambiguity --apply prompts/foo_python.prompt
 
     \b
     Exit codes:
@@ -391,7 +391,7 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
                 hint = (
                     "\n\nTo scan a prompt and stories together, pass the story "
                     "directory after --stories and the prompt as TARGET, for example:\n"
-                    "  pdd prompt lint --stories user_stories/prompt_lint_samples/ "
+                    "  pdd lint --stories user_stories/prompt_lint_samples/ "
                     "prompts/foo_python.prompt"
                 )
             raise click.UsageError(

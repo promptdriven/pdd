@@ -3,9 +3,9 @@
 <include>context/python_preamble.prompt</include>
 
 % Requirements
-- Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
+- Click command: `@click.command("checkup", context_settings={"ignore_unknown_options": True, "allow_extra_args": True})`, `@click.pass_context`, `@track_cost`.
 - Params:
-  - `target` arg (positional, optional — required for issue mode)
+  - `target` arg (positional, optional — required for issue mode; also dispatches local checkup aliases below)
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
   - `--no-github-state` flag
@@ -30,6 +30,12 @@
   - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
   - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
 - Signature returns `Optional[Tuple[str, float, str]]`.
+- Local alias dispatch before mode validation:
+  - Import `prompt_lint` from `.prompt` and `contracts_group` from `.contracts`.
+  - If `target` is `"lint"`, delegate to `prompt_lint.main(args=list(ctx.args), prog_name="pdd checkup lint", standalone_mode=False, obj=ctx.obj)`. This preserves interactive `--ambiguity` behavior under `pdd checkup lint --ambiguity ...`.
+  - If `target` is `"converge"`, delegate to the same lint command but default the delegated args to include `--contracts` and `--report formalization` when the caller did not already pass them. This gives `pdd checkup converge ...` the prompt-lint + contract/coverage closure defaults while still accepting normal lint options such as `--ambiguity` and `--non-interactive`.
+  - If `target` is `"contract"` or `"contracts"`, delegate to `contracts_group.main(args=list(ctx.args), prog_name=f"pdd checkup {target}", standalone_mode=False, obj=ctx.obj)`, enabling `pdd checkup contract compile ...` and `pdd checkup contracts compile ...`.
+  - If `ctx.args` remains non-empty after a non-alias target, raise `click.UsageError` for unexpected extra arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.

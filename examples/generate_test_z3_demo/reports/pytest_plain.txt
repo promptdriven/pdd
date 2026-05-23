@@ -1,0 +1,60 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.5, pytest-8.3.5, pluggy-1.6.0 -- /Users/yifeitao/Desktop/pdd/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/yifeitao/Desktop/pdd
+configfile: pytest.ini
+plugins: mock-3.15.1, cov-5.0.0, xdist-3.8.0, timeout-2.4.0, asyncio-1.3.0, testmon-2.2.0, anyio-4.13.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 49 items
+
+tests/test_plain.py::test_init_default_starts_full PASSED                [  2%]
+tests/test_plain.py::test_init_with_initial_tokens PASSED                [  4%]
+tests/test_plain.py::test_init_with_zero_initial_tokens PASSED           [  6%]
+tests/test_plain.py::test_init_initial_equal_to_capacity PASSED          [  8%]
+tests/test_plain.py::test_init_non_positive_capacity_raises[0] PASSED    [ 10%]
+tests/test_plain.py::test_init_non_positive_capacity_raises[-1] PASSED   [ 12%]
+tests/test_plain.py::test_init_non_positive_capacity_raises[-100] PASSED [ 14%]
+tests/test_plain.py::test_init_non_integer_capacity_raises[1.5] PASSED   [ 16%]
+tests/test_plain.py::test_init_non_integer_capacity_raises[10] PASSED    [ 18%]
+tests/test_plain.py::test_init_non_integer_capacity_raises[None] PASSED  [ 20%]
+tests/test_plain.py::test_init_non_integer_capacity_raises[cap3] PASSED  [ 22%]
+tests/test_plain.py::test_init_non_integer_capacity_raises[2.0] PASSED   [ 24%]
+tests/test_plain.py::test_init_bool_capacity_raises PASSED               [ 26%]
+tests/test_plain.py::test_init_initial_tokens_negative_raises PASSED     [ 28%]
+tests/test_plain.py::test_init_initial_tokens_above_capacity_raises PASSED [ 30%]
+tests/test_plain.py::test_init_non_integer_initial_tokens_raises[1.5] PASSED [ 32%]
+tests/test_plain.py::test_init_non_integer_initial_tokens_raises[3] PASSED [ 34%]
+tests/test_plain.py::test_init_non_integer_initial_tokens_raises[tok2] PASSED [ 36%]
+tests/test_plain.py::test_init_non_integer_initial_tokens_raises[2.0] PASSED [ 38%]
+tests/test_plain.py::test_init_bool_initial_tokens_raises PASSED         [ 40%]
+tests/test_plain.py::test_consume_success_decreases_tokens PASSED        [ 42%]
+tests/test_plain.py::test_consume_exact_amount_succeeds PASSED           [ 44%]
+tests/test_plain.py::test_consume_more_than_available_fails_and_preserves_state PASSED [ 46%]
+tests/test_plain.py::test_consume_zero_succeeds_and_does_not_change_state PASSED [ 48%]
+tests/test_plain.py::test_consume_when_empty_fails PASSED                [ 51%]
+tests/test_plain.py::test_consume_multiple_sequential PASSED             [ 53%]
+tests/test_plain.py::test_consume_negative_raises PASSED                 [ 55%]
+tests/test_plain.py::test_consume_non_integer_raises[1.5] PASSED         [ 57%]
+tests/test_plain.py::test_consume_non_integer_raises[1] PASSED           [ 59%]
+tests/test_plain.py::test_consume_non_integer_raises[None] PASSED        [ 61%]
+tests/test_plain.py::test_consume_non_integer_raises[val3] PASSED        [ 63%]
+tests/test_plain.py::test_consume_bool_raises PASSED                     [ 65%]
+tests/test_plain.py::test_refill_adds_tokens PASSED                      [ 67%]
+tests/test_plain.py::test_refill_does_not_exceed_capacity PASSED         [ 69%]
+tests/test_plain.py::test_refill_zero_is_noop PASSED                     [ 71%]
+tests/test_plain.py::test_refill_full_bucket_stays_full PASSED           [ 73%]
+tests/test_plain.py::test_refill_negative_raises PASSED                  [ 75%]
+tests/test_plain.py::test_refill_non_integer_raises[1.5] PASSED          [ 77%]
+tests/test_plain.py::test_refill_non_integer_raises[1] PASSED            [ 79%]
+tests/test_plain.py::test_refill_non_integer_raises[None] PASSED         [ 81%]
+tests/test_plain.py::test_refill_non_integer_raises[val3] PASSED         [ 83%]
+tests/test_plain.py::test_refill_bool_raises PASSED                      [ 85%]
+tests/test_plain.py::test_capacity_immutable_via_public_api PASSED       [ 87%]
+tests/test_plain.py::test_tokens_available_immutable_via_public_api PASSED [ 89%]
+tests/test_plain.py::test_consume_then_refill_cycle PASSED               [ 91%]
+tests/test_plain.py::test_z3_consume_preserves_invariant_0_le_tokens_le_capacity PASSED [ 93%]
+tests/test_plain.py::test_z3_refill_preserves_invariant_0_le_tokens_le_capacity PASSED [ 95%]
+tests/test_plain.py::test_z3_failed_consume_does_not_change_tokens PASSED [ 97%]
+tests/test_plain.py::test_z3_refill_monotonic_non_decreasing PASSED      [100%]
+
+============================== 49 passed in 0.21s ==============================

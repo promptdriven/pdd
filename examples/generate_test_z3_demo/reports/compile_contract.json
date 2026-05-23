@@ -1,0 +1,134 @@
+[
+  {
+    "version": "pdd.contract_ir.v1",
+    "path": "prompts/token_bucket_python.prompt",
+    "has_contract_rules": true,
+    "rule_count": 7,
+    "error_count": 0,
+    "rules": [
+      {
+        "id": "R1",
+        "title": "Reject non-positive capacity",
+        "modal": "MUST",
+        "condition": "capacity is not a positive integer",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "raise",
+            "value": {
+              "target": "ValueError"
+            },
+            "text": "MUST raise ValueError"
+          }
+        ],
+        "raw": "R1 - Reject non-positive capacity\nWhen capacity is not a positive integer, the TokenBucket constructor MUST raise ValueError."
+      },
+      {
+        "id": "R2",
+        "title": "Default tokens to capacity",
+        "modal": "MUST",
+        "condition": "tokens_available is not provided to",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "target": "tokens_available equal to capacity"
+            },
+            "text": "MUST return tokens_available equal to capacity"
+          }
+        ],
+        "raw": "R2 - Default tokens to capacity\nWhen tokens_available is not provided to the constructor, the TokenBucket MUST return tokens_available equal to capacity."
+      },
+      {
+        "id": "R3",
+        "title": "Consume with sufficient tokens",
+        "modal": "MUST",
+        "condition": "requested_tokens is less than or equal to current tokens_available, consume MUST return True and tokens_available equal to prior tokens_available minus requested_tokens",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "target": "True and tokens_available equal to prior tokens_available minus requested_tokens"
+            },
+            "text": "MUST return True and tokens_available equal to prior tokens_available minus requested_tokens"
+          }
+        ],
+        "raw": "R3 - Consume with sufficient tokens\nWhen requested_tokens is less than or equal to current tokens_available, consume MUST return True and tokens_available equal to prior tokens_available minus requested_tokens."
+      },
+      {
+        "id": "R4",
+        "title": "Consume with insufficient tokens",
+        "modal": "MUST",
+        "condition": "requested_tokens is greater than current tokens_available, consume MUST return False",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "target": "False"
+            },
+            "text": "MUST return False"
+          }
+        ],
+        "raw": "R4 - Consume with insufficient tokens\nWhen requested_tokens is greater than current tokens_available, consume MUST return False."
+      },
+      {
+        "id": "R5",
+        "title": "Failed consume preserves state",
+        "modal": "MUST NOT",
+        "condition": "consume returns False",
+        "obligations": [
+          {
+            "modal": "MUST NOT",
+            "type": "state_mutation",
+            "value": {
+              "verb": "mutate",
+              "target": "tokens_available"
+            },
+            "text": "MUST NOT mutate tokens_available"
+          }
+        ],
+        "raw": "R5 - Failed consume preserves state\nWhen consume returns False, the consume call MUST NOT mutate tokens_available."
+      },
+      {
+        "id": "R6",
+        "title": "Refill caps at capacity",
+        "modal": "MUST NOT",
+        "condition": "refill is called with any amount",
+        "obligations": [
+          {
+            "modal": "MUST NOT",
+            "type": "return",
+            "value": {
+              "target": "tokens_available greater than capacity"
+            },
+            "text": "MUST NOT return tokens_available greater than capacity"
+          }
+        ],
+        "raw": "R6 - Refill caps at capacity\nWhen refill is called with any amount, the TokenBucket MUST NOT return tokens_available greater than capacity."
+      },
+      {
+        "id": "R7",
+        "title": "Refill adds tokens below capacity",
+        "modal": "MUST",
+        "condition": "refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "target": "tokens_available equal to prior tokens_available plus amount"
+            },
+            "text": "MUST return tokens_available equal to prior tokens_available plus amount"
+          }
+        ],
+        "raw": "R7 - Refill adds tokens below capacity\nWhen refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity, the TokenBucket MUST return tokens_available equal to prior tokens_available plus amount."
+      }
+    ],
+    "compile_errors": [],
+    "ir_kind": "pdd.contract_ir.v1"
+  }
+]
+

@@ -1,0 +1,102 @@
+{
+  "schema": "pdd.evidence.manifest.v1",
+  "generated_at": "2026-05-21T01:57:07.012733+00:00",
+  "pdd_version": "0.0.218.dev460",
+  "prompt": {
+    "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+    "sha256": "6f9ab947a5db44a7d17d4ec4bb87f4057069537f2bbf7712aa449ce2966025df"
+  },
+  "lint": {
+    "error_count": 0,
+    "warn_count": 0,
+    "issues_by_code": {}
+  },
+  "contracts_check": {
+    "exit_code": 0,
+    "error_count": 0,
+    "warn_count": 0,
+    "results": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      },
+      {
+        "path": "user_stories/story__cost_tracker.md",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      }
+    ]
+  },
+  "contracts_compile": {
+    "exit_code": 0,
+    "results": [
+      {
+        "version": "pdd.contract_ir.v1",
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+        "has_contract_rules": false,
+        "rule_count": 0,
+        "error_count": 0,
+        "rules": [],
+        "compile_errors": []
+      }
+    ]
+  },
+  "coverage": {
+    "results": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_work_python.prompt",
+        "has_contract_rules": false,
+        "error": null,
+        "rules": [],
+        "summary": {
+          "total": 0,
+          "checked": 0,
+          "story_only": 0,
+          "test_only": 0,
+          "unchecked": 0,
+          "waived": 0,
+          "failed": 0,
+          "formal_only": 0,
+          "needs_human": 0
+        }
+      }
+    ]
+  },
+  "gate": {
+    "exit_code": 0,
+    "stages": [
+      {
+        "name": "prompt_lint",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": ""
+      },
+      {
+        "name": "contracts_check",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": ""
+      },
+      {
+        "name": "contracts_compile",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": "1 file(s)"
+      },
+      {
+        "name": "coverage_contracts",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": "unchecked=0"
+      }
+    ]
+  },
+  "use_cloud": true
+}

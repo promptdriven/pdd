@@ -1,0 +1,47 @@
+{
+  "payload": [
+    {
+      "version": "pdd.contract_ir.v1",
+      "path": "prompts/find_verification_errors_LLM.prompt",
+      "has_contract_rules": true,
+      "rule_count": 0,
+      "error_count": 5,
+      "rules": [],
+      "compile_errors": [
+        {
+          "code": "UNSTABLE_RULE_ID",
+          "rule_id": "S-001",
+          "message": "Contract rules must use a stable explicit ID such as R1 or R-001.",
+          "line": "1. Compare the program and code_module against the prompt and report discrepancies appropriately."
+        },
+        {
+          "code": "UNSTABLE_RULE_ID",
+          "rule_id": "S-002",
+          "message": "Contract rules must use a stable explicit ID such as R1 or R-001.",
+          "line": "2. Treat compatibility between program and code_module as the highest priority."
+        },
+        {
+          "code": "UNSTABLE_RULE_ID",
+          "rule_id": "S-003",
+          "message": "Contract rules must use a stable explicit ID such as R1 or R-001.",
+          "line": "3. Return a valid JSON object with an accurate issues_count."
+        },
+        {
+          "code": "UNSTABLE_RULE_ID",
+          "rule_id": "S-004",
+          "message": "Contract rules must use a stable explicit ID such as R1 or R-001.",
+          "line": "4. Handle mock-related failures gracefully when mocks are present."
+        },
+        {
+          "code": "UNSTABLE_RULE_ID",
+          "rule_id": "S-005",
+          "message": "Contract rules must use a stable explicit ID such as R1 or R-001.",
+          "line": "5. When the subject prompt includes formalization targets, check formal verification coverage reasonably."
+        }
+      ],
+      "ir_kind": "pdd.contract_ir.v1"
+    }
+  ],
+  "rule_count": 0,
+  "error_count": 5
+}

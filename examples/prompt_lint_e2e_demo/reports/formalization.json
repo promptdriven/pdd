@@ -1,0 +1,33 @@
+{
+  "payload": [
+    {
+      "path": "prompts/find_verification_errors_LLM.prompt",
+      "warn_count": 2,
+      "error_count": 0,
+      "issues": [
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "valid",
+          "section": "contract_rules",
+          "line": "3. Return a valid JSON object with an accurate issues_count.",
+          "message": "Vague term \"valid\" used in [contract_rules] without a <vocabulary> definition.",
+          "suggestion": "valid: <add a precise, observable definition here>",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "FORMAL_RULE_WITHOUT_FORMALIZATION",
+          "term": "S-005",
+          "section": "contract_rules",
+          "line": "5. When the subject prompt includes formalization targets, check formal verification coverage reasonably.",
+          "message": "Rule S-005 mentions formal/SMT verification but has no <formalization> entry.",
+          "suggestion": "",
+          "interpretations": []
+        }
+      ]
+    }
+  ],
+  "file_count": 1,
+  "issue_count": 2
+}

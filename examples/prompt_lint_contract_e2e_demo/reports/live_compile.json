@@ -1,0 +1,139 @@
+[
+  {
+    "version": "pdd.contract_ir.v1",
+    "path": "prompts/foo_work_python.prompt",
+    "has_contract_rules": true,
+    "rule_count": 6,
+    "error_count": 0,
+    "rules": [
+      {
+        "id": "R1",
+        "title": "Successful first request",
+        "modal": "MUST",
+        "condition": "the caller presents a Bearer JWT with scope 'foo:invoke' and exp in",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "http_status": 200
+            },
+            "text": "MUST return HTTP 200"
+          }
+        ],
+        "raw": "R1 - Successful first request\nWhen the caller presents a Bearer JWT with scope 'foo:invoke' and exp in the future, is an active user, and presents an X-Idempotency-Key not present in IdempotencyStore within the 24h TTL, and the body is absent or has amount_cents > 0,\nthe handler MUST return HTTP 200 with JSON {result: 'ok', request_id: <uuid4>, amount_cents: <int|null>} and MUST record (request_id, recorded_at) in IdempotencyStore under that key."
+      },
+      {
+        "id": "R2",
+        "title": "Duplicate idempotency key",
+        "modal": "MUST",
+        "condition": "X-Idempotency-Key already exists in IdempotencyStore within its 24h TTL",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "http_status": 409
+            },
+            "text": "MUST return HTTP 409"
+          }
+        ],
+        "raw": "R2 - Duplicate idempotency key\nWhen X-Idempotency-Key already exists in IdempotencyStore within its 24h TTL,\nthe handler MUST return HTTP 409 with JSON {reason: 'duplicate', original_request_id: <stored>} and MUST NOT add or modify any IdempotencyStore entry."
+      },
+      {
+        "id": "R3",
+        "title": "Authorization gate",
+        "modal": "MUST",
+        "condition": "the Authorization header is missing, not a Bearer token, base64url-undecodable, lacks 'foo:invoke' in scope, or has exp <= now",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "http_status": 401
+            },
+            "text": "MUST return HTTP 401"
+          },
+          {
+            "modal": "MUST NOT",
+            "type": "write",
+            "value": {
+              "target": "to IdempotencyStore or AUDIT_LOG"
+            },
+            "text": "MUST NOT write to IdempotencyStore or AUDIT_LOG"
+          }
+        ],
+        "raw": "R3 - Authorization gate\nWhen the Authorization header is missing, not a Bearer token, base64url-undecodable, lacks 'foo:invoke' in scope, or has exp <= now,\nthe handler MUST return HTTP 401 and MUST NOT write to IdempotencyStore or AUDIT_LOG."
+      },
+      {
+        "id": "R4",
+        "title": "Inactive user rejection",
+        "modal": "MUST",
+        "condition": "(request_received_at - last_login_at).days > 5",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "http_status": 403
+            },
+            "text": "MUST return HTTP 403"
+          },
+          {
+            "modal": "MUST NOT",
+            "type": "write",
+            "value": {
+              "target": "to IdempotencyStore or AUDIT_LOG"
+            },
+            "text": "MUST NOT write to IdempotencyStore or AUDIT_LOG"
+          }
+        ],
+        "raw": "R4 - Inactive user rejection\nWhen (request_received_at - last_login_at).days > 5,\nthe handler MUST return HTTP 403 and MUST NOT write to IdempotencyStore or AUDIT_LOG."
+      },
+      {
+        "id": "R5",
+        "title": "Payload validation",
+        "modal": "MUST",
+        "condition": "the body is non-empty but not valid JSON",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "http_status": 400
+            },
+            "text": "MUST return HTTP 400"
+          },
+          {
+            "modal": "MUST",
+            "type": "return",
+            "value": {
+              "http_status": 422
+            },
+            "text": "MUST return HTTP 422"
+          }
+        ],
+        "raw": "R5 - Payload validation\nWhen the body is non-empty but not valid JSON, the handler MUST return HTTP 400; when JSON parses and amount_cents is present and <= 0, the handler MUST return HTTP 422. In both cases the handler MUST NOT add, remove, or mutate any IdempotencyStore entry other than reads for TTL eviction."
+      },
+      {
+        "id": "R6",
+        "title": "Audit on success",
+        "modal": "MUST",
+        "condition": "the handler returns HTTP 200, it MUST append exactly one line to AUDIT_LOG containing",
+        "obligations": [
+          {
+            "modal": "MUST",
+            "type": "append",
+            "value": {
+              "target": "exactly one line to AUDIT_LOG containing the JWT sub, request_id, and amount_cents (or null)"
+            },
+            "text": "MUST append exactly one line to AUDIT_LOG containing the JWT sub, request_id, and amount_cents (or null)"
+          }
+        ],
+        "raw": "R6 - Audit on success\nWhen the handler returns HTTP 200, it MUST append exactly one line to AUDIT_LOG containing the JWT sub, request_id, and amount_cents (or null). If appending raises, the response body MUST include audit_failed: true and status MUST remain 200."
+      }
+    ],
+    "compile_errors": [],
+    "ir_kind": "pdd.contract_ir.v1"
+  }
+]

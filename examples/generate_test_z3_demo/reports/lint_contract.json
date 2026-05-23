@@ -1,0 +1,29 @@
+[
+  {
+    "path": "prompts/token_bucket_python.prompt",
+    "warn_count": 2,
+    "error_count": 0,
+    "issues": [
+      {
+        "level": "warn",
+        "code": "VAGUE_TERM_UNDEFINED",
+        "term": "invalid",
+        "section": "prose",
+        "line": "- An invalid capacity should produce an appropriate error.",
+        "message": "Vague term \"invalid\" used in [prose] without a <vocabulary> definition.",
+        "suggestion": "invalid: <add a precise, observable definition here>",
+        "interpretations": []
+      },
+      {
+        "level": "warn",
+        "code": "FORMAL_UNBOUNDED_DOMAIN",
+        "term": "R1",
+        "section": "formalization",
+        "line": "capacity <= 0 => raised_value_error == true",
+        "message": "Integer variables in R1 should declare bounds via assume:, variables:, or explicit <= constraints.",
+        "suggestion": "",
+        "interpretations": []
+      }
+    ]
+  }
+]

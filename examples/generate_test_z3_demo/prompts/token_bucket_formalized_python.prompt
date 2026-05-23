@@ -1,0 +1,142 @@
+% You are an expert Python Software Engineer. Your goal is to implement a
+% token bucket rate limiter module called 'token_bucket'.
+
+% The token bucket controls how many operations a caller can perform over time.
+% Each consume call tries to take tokens from the bucket. A refill call adds
+% tokens back up to the allowed limit.
+
+Public API:
+    class TokenBucket:
+        def __init__(self, capacity: int, tokens_available: int = None):
+            """
+            Create a token bucket with the given capacity.
+            tokens_available defaults to capacity if not specified.
+            Raises ValueError if capacity is not a positive integer.
+            """
+
+        def consume(self, requested_tokens: int) -> bool:
+            """
+            Attempt to consume requested_tokens from the bucket.
+            Returns True if successful, False if not enough tokens.
+            Does not modify the bucket state on failure.
+            """
+
+        def refill(self, amount: int) -> None:
+            """
+            Add amount tokens to the bucket.
+            The bucket cannot exceed its capacity.
+            """
+
+        @property
+        def tokens_available(self) -> int:
+            """Current number of available tokens."""
+
+        @property
+        def capacity(self) -> int:
+            """Maximum number of tokens the bucket can hold."""
+
+% Behavior:
+%   - A consume call should succeed only when enough tokens are available.
+%   - A failed consume call should not change the token count.
+%   - Refilling should add tokens but not go over the maximum.
+%   - The bucket should start full unless a lower initial count is given.
+%   - An invalid capacity should produce an appropriate error.
+
+<contract_rules>
+R1 - Reject non-positive capacity
+When capacity is not a positive integer, the TokenBucket constructor MUST raise ValueError.
+R2 - Default tokens to capacity
+When tokens_available is omitted or None at construction, the TokenBucket MUST return tokens_available equal to capacity.
+R3 - Successful consume reduces tokens
+When consume is called with requested_tokens less than or equal to current tokens_available, the TokenBucket MUST return True and tokens_available equal to prior tokens_available minus requested_tokens.
+R4 - Failed consume preserves state
+When consume is called with requested_tokens greater than current tokens_available, the TokenBucket MUST return False and MUST NOT mutate tokens_available.
+R5 - Refill capped at capacity
+When refill is called with a non-negative amount, the TokenBucket MUST NOT return tokens_available greater than capacity.
+R6 - Refill adds tokens below cap
+When refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity, the TokenBucket MUST return tokens_available equal to prior tokens_available plus amount.
+</contract_rules>
+
+<acceptance_tests>
+- R1: Given capacity = 0, when TokenBucket(0) is called, then ValueError is raised.
+- R2: Given capacity = 5 and tokens_available omitted, when TokenBucket(5) is constructed, then tokens_available equals 5.
+- R3: Given a bucket with capacity = 10 and tokens_available = 7, when consume(4) is called, then it returns True and tokens_available equals 3.
+- R4: Given a bucket with capacity = 10 and tokens_available = 2, when consume(5) is called, then it returns False and tokens_available remains 2.
+- R5: Given a bucket with capacity = 10 and tokens_available = 8, when refill(5) is called, then tokens_available equals 10.
+- R6: Given a bucket with capacity = 10 and tokens_available = 3, when refill(4) is called, then tokens_available equals 7.
+</acceptance_tests>
+
+<vocabulary>
+- positive integer: an int value strictly greater than zero (booleans are not accepted).
+- capacity: the maximum number of tokens the bucket can hold, fixed at construction.
+- tokens_available: the current non-negative integer count of tokens held by the bucket.
+- token: a single unit of consumption capacity tracked by the bucket.
+- non-negative: an integer value greater than or equal to zero.
+</vocabulary>
+
+<formalization>
+R1:
+  target: smt
+  variables:
+    capacity: Int
+    raised_value_error: Bool
+  assume: true
+  predicate: capacity <= 0 => raised_value_error == true
+  violation: capacity <= 0 && raised_value_error == false
+
+R2:
+  target: smt
+  variables:
+    capacity: Int
+    tokens_available: Int
+    tokens_arg_provided: Bool
+  assume: capacity > 0
+  predicate: tokens_arg_provided == false => tokens_available == capacity
+  violation: tokens_arg_provided == false && tokens_available != capacity
+
+R3:
+  target: smt
+  variables:
+    capacity: Int
+    prior_tokens_available: Int
+    requested_tokens: Int
+    tokens_available: Int
+    result: Bool
+  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && requested_tokens >= 0
+  predicate: requested_tokens <= prior_tokens_available => (result == true && tokens_available == prior_tokens_available - requested_tokens)
+  violation: requested_tokens <= prior_tokens_available && (result == false || tokens_available != prior_tokens_available - requested_tokens)
+
+R4:
+  target: smt
+  variables:
+    capacity: Int
+    prior_tokens_available: Int
+    requested_tokens: Int
+    tokens_available: Int
+    result: Bool
+  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && requested_tokens >= 0
+  predicate: requested_tokens > prior_tokens_available => (result == false && tokens_available == prior_tokens_available)
+  violation: requested_tokens > prior_tokens_available && (result == true || tokens_available != prior_tokens_available)
+
+R5:
+  target: smt
+  variables:
+    capacity: Int
+    prior_tokens_available: Int
+    amount: Int
+    tokens_available: Int
+  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && amount >= 0
+  predicate: tokens_available <= capacity
+  violation: tokens_available > capacity
+
+R6:
+  target: smt
+  variables:
+    capacity: Int
+    prior_tokens_available: Int
+    amount: Int
+    tokens_available: Int
+  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && amount >= 0
+  predicate: (prior_tokens_available + amount) <= capacity => tokens_available == prior_tokens_available + amount
+  violation: (prior_tokens_available + amount) <= capacity && tokens_available != prior_tokens_available + amount
+</formalization>

@@ -1,0 +1,265 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.247.dev24",
+  "timestamp_utc": "20260522T020909Z",
+  "argv": [
+    "--force",
+    "generate",
+    "prompts/foo_work_python.prompt",
+    "--output",
+    "src/foo_work_before.py"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": true,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [
+    "generate"
+  ],
+  "total_cost": 0.38581,
+  "steps": [
+    {
+      "step": 1,
+      "command": "generate",
+      "cost": 0.38581,
+      "model": "claude-opus-4-7"
+    }
+  ],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_FORCE": "1",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {
+    ".pdd/meta/foo_work_python_sync.log": "{\"timestamp\": \"2026-05-20T14:19:38.544164\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 94.7483868598938, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:21:20.004387\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 181.3877351284027, \"actual_cost\": 0.3361487, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:27:04.707318\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.93177604675293, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:27:16.927566\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 20.26871681213379, \"actual_cost\": 0.3361487, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:40:45.652496\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 13.683010816574097, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:41:04.948877\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 177.16943311691284, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:44:43.853294\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.151504039764404, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:44:56.142296\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 168.79310393333435, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:52:14.666058\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.492659091949463, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T15:04:02.816130\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.513398885726929, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T15:06:17.899170\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.571554899215698, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:03:08.196176\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 58.812579870224, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:04:30.277578\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 58.683647871017456, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:24:56.953053\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 118.65742897987366, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:49:08.922838\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": false, \"duration\": 395.1108720302582, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:55:56.135573\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": false, \"duration\": 36.3282470703125, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T19:08:09.556084\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 59.6483039855957, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n",
+    "src/foo_work_before.py": "\"\"\"\nfoo_work.py - Idempotent request handler with JWT authorization,\nactive-user checks, and a 24-hour idempotency store.\n\nStandard library only.\n\"\"\"\n\nimport base64\nimport json\nimport logging\nimport threading\nimport time\nimport uuid\nfrom dataclasses import dataclass, field\nfrom datetime import datetime, timedelta, timezone\nfrom typing import Any, Dict, List, Optional, Tuple\n\n# Configure logger\nlogger = logging.getLogger(__name__)\n\n# Module-level audit log (append-only list of audit lines)\nAUDIT_LOG: List[str] = []\n\n# Constants\nIDEMPOTENCY_TTL_SECONDS: int = 24 * 60 * 60  # 24 hours\nACTIVE_USER_MAX_DAYS: int = 5\nREQUIRED_SCOPE: str = \"foo:invoke\"\n\n\n# -----------------------------------------------------------------------------\n# Data Classes\n# -----------------------------------------------------------------------------\n\n@dataclass\nclass RequestContext:\n    \"\"\"Encapsulates the incoming request's relevant fields.\"\"\"\n    authorization: Optional[str]\n    idempotency_key: Optional[str]\n    request_received_at: datetime\n    body_bytes: Optional[bytes]\n\n\n@dataclass\nclass UserProfile:\n    \"\"\"Represents the caller's user profile.\"\"\"\n    user_id: str\n    last_login_at: datetime\n\n\n@dataclass\nclass HandlerResult:\n    \"\"\"Represents the HTTP response from the handler.\"\"\"\n    status_code: int\n    body: Dict[str, Any]\n\n\n# -----------------------------------------------------------------------------\n# Idempotency Store\n# -----------------------------------------------------------------------------\n\nclass IdempotencyStore:\n    \"\"\"\n    In-process idempotency store with 24-hour TTL.\n    \n    Entries are stored as {key: (request_id, recorded_at_epoch)}.\n    TTL eviction occurs on every read or write operation.\n    \"\"\"\n\n    def __init__(self, ttl_seconds: int = IDEMPOTENCY_TTL_SECONDS) -> None:\n        self._ttl_seconds = ttl_seconds\n        self._store: Dict[str, Tuple[str, float]] = {}\n        self._global_lock = threading.Lock()\n        self._key_locks: Dict[str, threading.Lock] = {}\n\n    def _evict_expired(self) -> None:\n        \"\"\"Remove expired entries. Caller must hold _global_lock.\"\"\"\n        now = time.time()\n        expired_keys = [\n            k for k, (_, recorded_at) in self._store.items()\n            if (now - recorded_at) >= self._ttl_seconds\n        ]\n        for k in expired_keys:\n            self._store.pop(k, None)\n\n    def has(self, key: str) -> bool:\n        \"\"\"Return True if a non-expired entry exists for `key`.\"\"\"\n        with self._global_lock:\n            self._evict_expired()\n            return key in self._store\n\n    def record(self, key: str, request_id: str) -> None:\n        \"\"\"Record a new entry (request_id, current time) under `key`.\"\"\"\n        with self._global_lock:\n            self._evict_expired()\n            self._store[key] = (request_id, time.time())\n\n    def get_request_id(self, key: str) -> Optional[str]:\n        \"\"\"Return the stored request_id for `key` or None if missing/expired.\"\"\"\n        with self._global_lock:\n            self._evict_expired()\n            entry = self._store.get(key)\n            if entry is None:\n                return None\n            return entry[0]\n\n    def get_key_lock(self, key: str) -> threading.Lock:\n        \"\"\"Return (creating if needed) a per-key lock for check-then-set semantics.\"\"\"\n        with self._global_lock:\n            lock = self._key_locks.get(key)\n            if lock is None:\n                lock = threading.Lock()\n                self._key_locks[key] = lock\n            return lock\n\n\n# -----------------------------------------------------------------------------\n# JWT Parsing (payload only, no signature verification - demo only)\n# -----------------------------------------------------------------------------\n\ndef _b64url_decode(segment: str) -> bytes:\n    \"\"\"Decode a base64url-encoded string, adding padding as needed.\"\"\"\n    padding = \"=\" * (-len(segment) % 4)\n    return base64.urlsafe_b64decode(segment + padding)\n\n\ndef parse_bearer_jwt(\n    authorization: Optional[str],\n) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:\n    \"\"\"\n    Parse and validate a Bearer JWT from the Authorization header.\n    \n    Validates:\n    - Header presence and 'Bearer ' prefix\n    - Token has three dot-separated segments\n    - Payload is valid base64url-encoded JSON\n    - `exp` claim is present and in the future\n    - `scope` claim contains `foo:invoke`\n    \n    Does NOT verify the signature (this is a demo).\n    \n    Returns:\n        (ok, claims, error): On success, (True, claims_dict, None).\n                             On failure, (False, None, error_message).\n    \"\"\"\n    if not authorization or not isinstance(authorization, str):\n        return False, None, \"missing_authorization\"\n\n    if not authorization.startswith(\"Bearer \"):\n        return False, None, \"malformed_authorization\"\n\n    token = authorization[len(\"Bearer \"):].strip()\n    if not token:\n        return False, None, \"empty_token\"\n\n    parts = token.split(\".\")\n    if len(parts) != 3:\n        return False, None, \"malformed_jwt\"\n\n    try:\n        payload_bytes = _b64url_decode(parts[1])\n        claims = json.loads(payload_bytes.decode(\"utf-8\"))\n    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):\n        return False, None, \"malformed_payload\"\n\n    if not isinstance(claims, dict):\n        return False, None, \"invalid_claims\"\n\n    # Validate exp\n    exp = claims.get(\"exp\")\n    if not isinstance(exp, (int, float)):\n        return False, None, \"missing_or_invalid_exp\"\n\n    now_epoch = time.time()\n    if exp <= now_epoch:\n        return False, None, \"expired_token\"\n\n    # Validate scope\n    scope = claims.get(\"scope\")\n    if scope is None:\n        return False, None, \"missing_scope\"\n\n    if isinstance(scope, str):\n        scopes = scope.split()\n    elif isinstance(scope, list):\n        scopes = [str(s) for s in scope]\n    else:\n        return False, None, \"invalid_scope\"\n\n    if REQUIRED_SCOPE not in scopes:\n        return False, None, \"insufficient_scope\"\n\n    return True, claims, None\n\n\n# -----------------------------------------------------------------------------\n# Active User Check\n# -----------------------------------------------------------------------------\n\ndef is_active_user(user: UserProfile, at: datetime) -> bool:\n    \"\"\"\n    Return True if the user's last login was within the active window.\n    \n    A user is active when (at - user.last_login_at).days <= ACTIVE_USER_MAX_DAYS.\n    Both datetimes must be timezone-aware.\n    \"\"\"\n    if user.last_login_at is None or at is None:\n        return False\n\n    delta = at - user.last_login_at\n    return delta.days <= ACTIVE_USER_MAX_DAYS and delta.total_seconds() >= 0\n\n\n# -----------------------------------------------------------------------------\n# Audit Logging\n# -----------------------------------------------------------------------------\n\ndef _append_audit(caller_id: str, request_id: str, amount_cents: Optional[int]) -> bool:\n    \"\"\"\n    Append an audit line to AUDIT_LOG.\n    \n    Returns True on success, False if appending failed.\n    \"\"\"\n    try:\n        line = json.dumps({\n            \"caller_id\": caller_id,\n            \"request_id\": request_id,\n            \"amount_cents\": amount_cents,\n            \"timestamp\": datetime.now(timezone.utc).isoformat(),\n        })\n        AUDIT_LOG.append(line)\n        return True\n    except Exception as e:  # pragma: no cover - defensive\n        logger.warning(\"Audit logging failed: %s\", e)\n        return False\n\n\n# -----------------------------------------------------------------------------\n# Main Handler\n# -----------------------------------------------------------------------------\n\ndef handle_request(\n    ctx: RequestContext,\n    user: UserProfile,\n    store: IdempotencyStore,\n) -> HandlerResult:\n    \"\"\"\n    Handle an incoming request with full processing order:\n    auth -> idempotency key -> active user -> duplicate check ->\n    body validation -> store write -> audit -> response.\n    \"\"\"\n\n    # 1. Authorization\n    ok, claims, err = parse_bearer_jwt(ctx.authorization)\n    if not ok:\n        logger.info(\"Unauthorized request: %s\", err)\n        return HandlerResult(\n            status_code=401,\n            body={\"reason\": \"unauthorized\", \"error\": err or \"unauthorized\"},\n        )\n\n    caller_id = str(claims.get(\"sub\", \"\")) if claims else \"\"\n\n    # 2. Idempotency key presence\n    if not ctx.idempotency_key or not isinstance(ctx.idempotency_key, str):\n        return HandlerResult(\n            status_code=400,\n            body={\"reason\": \"missing_idempotency_key\"},\n        )\n\n    idem_key = ctx.idempotency_key\n\n    # 3. Active user check\n    if not is_active_user(user, ctx.request_received_at):\n        return HandlerResult(\n            status_code=403,\n            body={\"reason\": \"inactive_user\"},\n        )\n\n    # 4 + 5 + 6. Duplicate check + body validation + store write,\n    # all under per-key lock for concurrency safety.\n    key_lock = store.get_key_lock(idem_key)\n    with key_lock:\n        # Duplicate check (inside lock for check-then-set semantics)\n        existing_request_id = store.get_request_id(idem_key)\n        if existing_request_id is not None:\n            return HandlerResult(\n                status_code=409,\n                body={\n                    \"reason\": \"duplicate\",\n                    \"original_request_id\": existing_request_id,\n                },\n            )\n\n        # Body validation\n        amount_cents: Optional[int] = None\n        note: Optional[str] = None\n\n        if ctx.body_bytes is not None and len(ctx.body_bytes) > 0:\n            try:\n                parsed = json.loads(ctx.body_bytes.decode(\"utf-8\"))\n            except (ValueError, UnicodeDecodeError):\n                return HandlerResult(\n                    status_code=400,\n                    body={\"reason\": \"malformed_json\"},\n                )\n\n            if not isinstance(parsed, dict):\n                return HandlerResult(\n                    status_code=400,\n                    body={\"reason\": \"malformed_json\"},\n                )\n\n            if \"amount_cents\" in parsed:\n                ac = parsed.get(\"amount_cents\")\n                if not isinstance(ac, int) or isinstance(ac, bool):\n                    return HandlerResult(\n                        status_code=422,\n                        body={\"reason\": \"invalid_amount_cents\"},\n                    )\n                if ac <= 0:\n                    return HandlerResult(\n                        status_code=422,\n                        body={\"reason\": \"invalid_amount_cents\"},\n                    )\n                amount_cents = ac\n\n            if \"note\" in parsed:\n                n = parsed.get(\"note\")\n                if n is not None and not isinstance(n, str):\n                    return HandlerResult(\n                        status_code=422,\n                        body={\"reason\": \"invalid_note\"},\n                    )\n                note = n\n\n        # Store write (first acceptance for this key)\n        request_id = str(uuid.uuid4())\n        store.record(idem_key, request_id)\n\n    # 7. Audit logging (outside per-key lock; only on successful store write)\n    audit_ok = _append_audit(caller_id, request_id, amount_cents)\n\n    # 8. Response\n    response_body: Dict[str, Any] = {\n        \"result\": \"ok\",\n        \"request_id\": request_id,\n        \"amount_cents\": amount_cents,\n    }\n    if not audit_ok:\n        response_body[\"audit_failed\"] = True\n\n    # Include note in audit context but not the response (response shape is fixed)\n    _ = note  # currently unused in response shape\n\n    return HandlerResult(status_code=200, body=response_body)",
+    ".pdd/meta/foo_work_python.json": "{\n  \"pdd_version\": \"0.0.247.dev24\",\n  \"timestamp\": \"2026-05-22T02:09:09.407697+00:00\",\n  \"command\": \"generate\",\n  \"prompt_hash\": \"a955109c5e356f1c5eea8c29919a8e32806abe47d0e68c83199fa8ab5d512ef1\",\n  \"code_hash\": null,\n  \"example_hash\": null,\n  \"test_hash\": null,\n  \"test_files\": {\n    \"test_foo_work_before.py\": \"05ee6b63d7b3bf91842d4a60a35a12b1e1dda9d40da6be86e036ffa205098e8d\"\n  },\n  \"include_deps\": {}\n}",
+    "prompts/foo_work_python.prompt": "write a python module `foo_work` in `src/foo_work.py` that implements an idempotent\nrequest handler with JWT authorization, active-user checks, and a 24-hour idempotency\nstore. Use only the Python standard library.\n\n% E2E fixture: complex handler logic + deliberately vague contract language.\n% Suitable for pdd generate / pdd test AND for pdd prompt lint / pdd contracts.\n% Pair with user_stories/story__foo_codegen.md for coverage --contracts.\n\n<contract_rules>\nR1: The handler must return a valid response when the caller is an active user and the request is not a duplicate.\nR2: Duplicate requests must be rejected gracefully and must not corrupt stored state.\nR3: Only authorized callers may invoke the handler; unauthorized access should fail safely.\nR4: Inactive users must not receive a successful outcome.\nR5: Bad payloads should be handled appropriately without breaking other keys.\nR6: Audit logging must occur when uploads look valid and the outcome is successful.\n</contract_rules>\n\n<requirements>\nBehavior (implement all of this in code):\n\n1. Authorization\n   - Read `Authorization: Bearer <jwt>`; reject missing, malformed, expired, or wrong-scope tokens before any idempotency write.\n   - JWT payload must include `exp` (unix seconds, must be in the future) and `scope` containing `foo:invoke`.\n   - Decode payload only (base64url); do not verify signatures in this demo.\n\n2. Idempotency\n   - Require header `X-Idempotency-Key` (non-empty string).\n   - Maintain an in-process store keyed by idempotency key with TTL 24 hours from first acceptance.\n   - First seen key within TTL: record `{request_id, recorded_at}` then return HTTP 200.\n   - Duplicate key within TTL: return HTTP 409 with JSON `{\"reason\": \"duplicate\", \"original_request_id\": \"<stored>\"}` and do not add a second record.\n\n3. Active user\n   - `UserProfile.last_login_at` and `RequestContext.request_received_at` are timezone-aware datetimes.\n   - Caller is active when `(request_received_at - last_login_at).days <= 5`.\n\n4. Request body\n   - Optional JSON body with fields `amount_cents` (int) and `note` (str).\n   - Malformed JSON \u2192 HTTP 400, no store mutation.\n   - If `amount_cents` is present and `<= 0` \u2192 HTTP 422.\n\n5. Successful response shape (HTTP 200)\n   - JSON `{\"result\": \"ok\", \"request_id\": \"<uuid4>\", \"amount_cents\": <int|null>}`.\n   - If audit logging fails after a successful store write, still return 200 but add `\"audit_failed\": true`.\n\n6. Concurrency\n   - Two concurrent requests with the same idempotency key must not both return 200 (per-key `threading.Lock` or equivalent check-then-set).\n\n7. Audit\n   - On HTTP 200 only, append one line to an in-memory list `AUDIT_LOG` with caller id from JWT `sub`, request_id, and amount_cents when supplied.\n   - Log upload attempts for audit when appropriate (see acceptance tests).\n\nProcessing order (do not reorder): auth \u2192 idempotency key \u2192 active user \u2192 duplicate check \u2192 body validation \u2192 store write \u2192 audit \u2192 response.\n</requirements>\n\n<acceptance_tests>\n- Active users with a fresh idempotency key receive success (HTTP 200 with result and request_id).\n- Duplicate idempotency keys within a reasonable recent window are handled gracefully (one 200, replays 409).\n- Unauthorized callers are blocked (HTTP 401).\n- Inactive users do not get a successful outcome (HTTP 403).\n- Concurrent duplicate race: parallel same-key requests yield exactly one 200 and one 409.\n- Invalid JSON returns 400 without corrupting stored state for other keys.\n</acceptance_tests>\n\n<deliverables>\nImplement `src/foo_work.py` with these public symbols:\n\n- `@dataclass class RequestContext`: fields `authorization`, `idempotency_key`, `request_received_at`, `body_bytes`\n- `@dataclass class UserProfile`: fields `user_id`, `last_login_at`\n- `@dataclass class HandlerResult`: fields `status_code: int`, `body: dict`\n- `class IdempotencyStore`: methods `has(key) -> bool`, `record(key, request_id) -> None`, `get_request_id(key) -> str | None`, plus TTL eviction on read/write\n- `def parse_bearer_jwt(authorization: str | None) -> tuple[bool, dict | None, str | None]`  # ok, claims, error\n- `def is_active_user(user: UserProfile, at: datetime) -> bool`\n- `def handle_request(ctx: RequestContext, user: UserProfile, store: IdempotencyStore) -> HandlerResult`\n\nModule-level `AUDIT_LOG: list[str]` for audit lines.\n\nDo not generate tests, CLI, or extra files in this step.\n</deliverables>\n"
+  },
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\nUsing .pddrc context: default\nInput files:\n  prompt_file     /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/prompts/foo_work_python.prompt\nOutput files:\n  output          /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/src/foo_work_before.py\nDetected language: python\nBasename: foo_work\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Starting prompt preprocessing                                                                                                            \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Preprocessing complete                                                                                                                   \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Starting prompt preprocessing                                                                                                            \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\nDoubling curly brackets...\n\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Preprocessing complete                                                                                                                   \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\nTo authenticate, visit: https://github.com/login/device\nEnter code: 8390-55B9\nOpening browser for authentication...\nWaiting for authentication...\nAuthentication successful!\nGenerated code saved to: /Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/src/foo_work_before.py\n\n--- Command Execution Summary ---\n  Step 1 (generate): Cost: $0.385810, Model: claude-opus-4-7\nTotal Estimated Cost: $0.385810\n-------------------------------------\n",
+  "sync_steps": [
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 94.7483868598938,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3361487,
+      "model": "claude-opus-4-7",
+      "duration": 181.3877351284027,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.93177604675293,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3361487,
+      "model": "claude-opus-4-7",
+      "duration": 20.26871681213379,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 13.683010816574097,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 177.16943311691284,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.151504039764404,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 168.79310393333435,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.492659091949463,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.513398885726929,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.571554899215698,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 58.812579870224,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 58.683647871017456,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 118.65742897987366,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": false,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 395.1108720302582,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": false,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 36.3282470703125,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 59.6483039855957,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    }
+  ]
+}

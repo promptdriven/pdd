@@ -1,0 +1,6 @@
+{
+  "test_plain_rule_markers": 0,
+  "test_contract_rule_markers": 4,
+  "test_contract_has_z3_style": true,
+  "improvement": true
+}

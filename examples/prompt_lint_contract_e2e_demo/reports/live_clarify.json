@@ -1,0 +1,705 @@
+{
+  "results": [
+    {
+      "path": "prompts/foo_work_python.prompt",
+      "warn_count": 1,
+      "error_count": 0,
+      "issues": [
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "invalid",
+          "section": "acceptance_tests",
+          "line": "- Invalid JSON returns 400 without corrupting stored state for other keys.",
+          "message": "Vague term \"invalid\" used in [acceptance_tests] without a <vocabulary> definition.",
+          "suggestion": "invalid: <add a precise, observable definition here>",
+          "interpretations": []
+        }
+      ]
+    },
+    {
+      "path": "user_stories/story__foo_codegen.md",
+      "warn_count": 4,
+      "error_count": 0,
+      "issues": [
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "active",
+          "section": "acceptance criteria",
+          "line": "- Given a valid JWT with scope foo:invoke and an active user, when X-Idempotency-Key is new, then HTTP 200 with `result` and `request_id` and the key is stored once.",
+          "message": "Vague term \"active\" used in [acceptance criteria] without a <vocabulary> definition.",
+          "suggestion": "active: <add a precise, observable definition here>",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "valid",
+          "section": "acceptance criteria",
+          "line": "- Given a valid JWT with scope foo:invoke and an active user, when X-Idempotency-Key is new, then HTTP 200 with `result` and `request_id` and the key is stored once.",
+          "message": "Vague term \"valid\" used in [acceptance criteria] without a <vocabulary> definition.",
+          "suggestion": "valid: <add a precise, observable definition here>",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "valid",
+          "section": "acceptance criteria",
+          "line": "- Given last login older than 5 days, when processed with valid JWT, then HTTP 403.",
+          "message": "Vague term \"valid\" used in [acceptance criteria] without a <vocabulary> definition.",
+          "suggestion": "valid: <add a precise, observable definition here>",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "VAGUE_NO_OBSERVABLE_OUTCOME",
+          "term": "(no observable outcome)",
+          "section": "acceptance criteria",
+          "line": "- Given last login older than 5 days, when processed with valid JWT, then HTTP 403.",
+          "message": "Rule or criterion contains a vague term but no observable outcome verb (returns/raises/writes/emits/rejects/\u2026).",
+          "suggestion": "",
+          "interpretations": []
+        }
+      ]
+    },
+    {
+      "path": "user_stories/story__foo_formalized.md",
+      "warn_count": 0,
+      "error_count": 0,
+      "issues": []
+    },
+    {
+      "path": "user_stories/story__foo_vague.md",
+      "warn_count": 4,
+      "error_count": 0,
+      "issues": [
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "active",
+          "section": "acceptance criteria",
+          "line": "- Given an active user with last_login within 5 days of request_received_at,",
+          "message": "Vague term \"active\" used in [acceptance criteria] without a <vocabulary> definition.",
+          "suggestion": "active: <add a precise, observable definition here>",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "VAGUE_NO_OBSERVABLE_OUTCOME",
+          "term": "(no observable outcome)",
+          "section": "acceptance criteria",
+          "line": "- Given an active user with last_login within 5 days of request_received_at,",
+          "message": "Rule or criterion contains a vague term but no observable outcome verb (returns/raises/writes/emits/rejects/\u2026).",
+          "suggestion": "",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "VAGUE_TERM_UNDEFINED",
+          "term": "duplicate",
+          "section": "acceptance criteria",
+          "line": "- Given a duplicate X-Idempotency-Key within 24 hours, when the handler",
+          "message": "Vague term \"duplicate\" used in [acceptance criteria] without a <vocabulary> definition.",
+          "suggestion": "duplicate: <add a precise, observable definition here>",
+          "interpretations": []
+        },
+        {
+          "level": "warn",
+          "code": "VAGUE_NO_OBSERVABLE_OUTCOME",
+          "term": "(no observable outcome)",
+          "section": "acceptance criteria",
+          "line": "- Given a duplicate X-Idempotency-Key within 24 hours, when the handler",
+          "message": "Rule or criterion contains a vague term but no observable outcome verb (returns/raises/writes/emits/rejects/\u2026).",
+          "suggestion": "",
+          "interpretations": []
+        }
+      ]
+    }
+  ],
+  "guidance": [
+    {
+      "path": "prompts/foo_work_python.prompt",
+      "summary": "The contract_rules use baseline vague terms (valid, duplicate, gracefully, authorized, safely, inactive, successful, appropriately, valid) while the requirements section already defines precise behavior. Rewriting each rule to reference the concrete HTTP codes and store effects in <requirements> will make them lintable and compilable.",
+      "vocabulary_suggestions": [
+        {
+          "term": "active user",
+          "suggestion": "active user: a UserProfile where (RequestContext.request_received_at - UserProfile.last_login_at).days <= 5, both timezone-aware.",
+          "why": "Pins the active check to the exact arithmetic in requirements section 3 so tests and code agree."
+        },
+        {
+          "term": "duplicate request",
+          "suggestion": "duplicate request: a request whose X-Idempotency-Key matches a key already recorded in IdempotencyStore within the 24-hour TTL.",
+          "why": "Removes ambiguity between 'same payload' and 'same idempotency key' for R2."
+        },
+        {
+          "term": "authorized caller",
+          "suggestion": "authorized caller: a request bearing an Authorization: Bearer <jwt> whose base64url-decoded payload has exp > now and scope containing 'foo:invoke'.",
+          "why": "Defines R3 in terms of the deterministic checks in requirements section 1."
+        },
+        {
+          "term": "bad payload",
+          "suggestion": "bad payload: a request body that is not valid JSON (-> 400) or whose amount_cents is present and <= 0 (-> 422).",
+          "why": "Replaces 'bad' with the two enumerated cases in requirements section 4."
+        },
+        {
+          "term": "valid upload (for audit)",
+          "suggestion": "valid upload: a request that reached the store-write step and produced HTTP 200.",
+          "why": "Anchors R6's audit trigger to an observable state transition rather than 'looks valid'."
+        }
+      ],
+      "rule_rewrites": [
+        {
+          "rule_id": "R1",
+          "finding": "Uses 'valid response', 'active user', and 'not a duplicate' without observable obligations.",
+          "rewrite": "R1 - Successful first request\nWhen the caller presents a Bearer JWT with scope 'foo:invoke' and exp in the future, is an active user, and presents an X-Idempotency-Key not present in IdempotencyStore within the 24h TTL, and the body is absent or has amount_cents > 0,\nthe handler MUST return HTTP 200 with JSON {result: 'ok', request_id: <uuid4>, amount_cents: <int|null>} and MUST record (request_id, recorded_at) in IdempotencyStore under that key.",
+          "why": "Compiles into a When-condition with two observable obligations (status code and store write)."
+        },
+        {
+          "rule_id": "R2",
+          "finding": "'Gracefully' and 'corrupt stored state' are not observable.",
+          "rewrite": "R2 - Duplicate idempotency key\nWhen X-Idempotency-Key already exists in IdempotencyStore within its 24h TTL,\nthe handler MUST return HTTP 409 with JSON {reason: 'duplicate', original_request_id: <stored>} and MUST NOT add or modify any IdempotencyStore entry.",
+          "why": "Replaces graceful/corrupt with deterministic HTTP and store invariants."
+        },
+        {
+          "rule_id": "R3",
+          "finding": "'Authorized' and 'fail safely' are baseline vague terms.",
+          "rewrite": "R3 - Authorization gate\nWhen the Authorization header is missing, not a Bearer token, base64url-undecodable, lacks 'foo:invoke' in scope, or has exp <= now,\nthe handler MUST return HTTP 401 and MUST NOT write to IdempotencyStore or AUDIT_LOG.",
+          "why": "Enumerates the failure inputs and gives two negative obligations the IR can express."
+        },
+        {
+          "rule_id": "R4",
+          "finding": "'Inactive' and 'successful outcome' need definitions.",
+          "rewrite": "R4 - Inactive user rejection\nWhen (request_received_at - last_login_at).days > 5,\nthe handler MUST return HTTP 403 and MUST NOT write to IdempotencyStore or AUDIT_LOG.",
+          "why": "Binds R4 to the exact threshold from requirements section 3."
+        },
+        {
+          "rule_id": "R5",
+          "finding": "'Bad payloads', 'appropriately', 'breaking other keys' are vague.",
+          "rewrite": "R5 - Payload validation\nWhen the body is non-empty but not valid JSON, the handler MUST return HTTP 400; when JSON parses and amount_cents is present and <= 0, the handler MUST return HTTP 422. In both cases the handler MUST NOT add, remove, or mutate any IdempotencyStore entry other than reads for TTL eviction.",
+          "why": "Two observable status codes plus a store invariant that can be asserted directly."
+        },
+        {
+          "rule_id": "R6",
+          "finding": "'Uploads look valid' and 'successful' are vague; R6 also conflicts with section 7 which says audit only on 200.",
+          "rewrite": "R6 - Audit on success\nWhen the handler returns HTTP 200, it MUST append exactly one line to AUDIT_LOG containing the JWT sub, request_id, and amount_cents (or null). If appending raises, the response body MUST include audit_failed: true and status MUST remain 200.",
+          "why": "Removes 'look valid' and aligns with section 7; failure mode becomes an observable response field."
+        }
+      ],
+      "acceptance_criteria_improvements": [
+        {
+          "finding": "'Fresh idempotency key' and 'success' are not observable.",
+          "criterion": "- R1: Given an active user and a Bearer JWT with scope 'foo:invoke' and exp in the future, when handle_request is called with a previously unseen X-Idempotency-Key and body {\"amount_cents\": 100}, then HandlerResult.status_code == 200, body['result'] == 'ok', body['request_id'] is a uuid4 string, and store.get_request_id(key) == body['request_id'].",
+          "why": "Replaces 'success' with status code, body fields, and a store assertion."
+        },
+        {
+          "finding": "'Reasonable recent window' is undefined.",
+          "criterion": "- R2: Given a key already recorded less than 24 hours ago with stored request_id S, when handle_request is called again with the same key, then status_code == 409, body == {'reason': 'duplicate', 'original_request_id': S}, and store.get_request_id(key) == S (unchanged).",
+          "why": "Pins TTL window and asserts store immutability."
+        },
+        {
+          "finding": "'Unauthorized callers blocked' lacks the trigger conditions.",
+          "criterion": "- R3: Given Authorization is None, or not 'Bearer <token>', or the decoded payload has exp <= now, or scope lacks 'foo:invoke', when handle_request is called, then status_code == 401, store is unchanged, and AUDIT_LOG is unchanged.",
+          "why": "Enumerates the four failure inputs and asserts no side effects."
+        },
+        {
+          "finding": "'Inactive users do not get a successful outcome' is negative-only.",
+          "criterion": "- R4: Given (request_received_at - last_login_at).days == 6, when handle_request is called with otherwise valid inputs, then status_code == 403, store is unchanged, and AUDIT_LOG is unchanged.",
+          "why": "Pins the threshold and adds state assertions."
+        },
+        {
+          "finding": "Concurrency criterion lacks oracle for which response wins.",
+          "criterion": "- R2: Given N=2 threads calling handle_request with the same key and otherwise valid inputs, then exactly one HandlerResult has status_code == 200 and exactly one has status_code == 409, and store.get_request_id(key) equals the 200-response request_id.",
+          "why": "Adds a check-then-set oracle tying the survivor to the stored value."
+        },
+        {
+          "finding": "'Invalid JSON ... without corrupting stored state for other keys' is vague.",
+          "criterion": "- R5: Given store contains (K1 -> R1) and a request arrives with key K2 and body b'{not json', then status_code == 400, store.get_request_id(K1) == R1, and store.has(K2) is False.",
+          "why": "Concretely specifies the non-interference property for other keys."
+        },
+        {
+          "finding": "Audit acceptance is implicit only.",
+          "criterion": "- R6: Given a request that returns 200 for caller sub='u1' with amount_cents=100 and request_id=R, then AUDIT_LOG gains exactly one entry containing 'u1', R, and '100'; given the same conditions but AUDIT_LOG.append is patched to raise, body['audit_failed'] is True and status_code is 200.",
+          "why": "Makes the audit obligation and the failure-tolerance branch directly testable."
+        }
+      ],
+      "formalization_notes": [
+        {
+          "finding": "R6 in <contract_rules> says audit fires when 'uploads look valid', but requirements section 7 says audit only on HTTP 200; the sentence 'Log upload attempts for audit when appropriate' contradicts 'On HTTP 200 only'.",
+          "suggestion": "Run `pdd prompt lint --ambiguity` to choose between (a) audit only on 200 (current section 7) or (b) audit on every authorized attempt, then delete the conflicting sentence.",
+          "why": "Two contradictory triggers cannot both compile into a deterministic obligation; only the author can pick the product intent."
+        },
+        {
+          "finding": "JWT 'expired' and 'wrong-scope' both map to one status, but the prompt does not state whether malformed token should also be 401 vs 400.",
+          "suggestion": "Fix all four auth failure modes (missing, malformed, expired, wrong-scope) to HTTP 401 in R3, or run `pdd prompt lint --ambiguity` to split malformed into 400.",
+          "why": "Formal IR needs a single status per failure class."
+        },
+        {
+          "finding": "TTL eviction timing ('on read/write') is unspecified for boundary at exactly 24h.",
+          "suggestion": "State whether age == 24h counts as expired (>=) or still live (>); a single comparator makes R2 decidable.",
+          "why": "Boundary ambiguity breaks reproducibility of duplicate-vs-fresh tests."
+        },
+        {
+          "finding": "active-user threshold uses .days <= 5 which truncates sub-day deltas.",
+          "suggestion": "Confirm whether 'days' means timedelta.days (floor) is intended, or switch to total_seconds() / 86400 <= 5.",
+          "why": "Truncation vs real-valued comparison changes which fixtures pass; pick one explicitly."
+        }
+      ],
+      "formalization_candidates": [
+        {
+          "rule_id": "R1",
+          "target": "pytest",
+          "variables": {
+            "status_code": "int",
+            "stored_request_id": "str|None",
+            "response_request_id": "str"
+          },
+          "assume": "auth_ok and active and key_unseen and body_ok",
+          "predicate": "status_code == 200 and stored_request_id == response_request_id",
+          "violation": "status_code != 200 or stored_request_id != response_request_id",
+          "linked_test": "R1: test_first_request_returns_200_and_records_key in tests/test_foo_work.py"
+        },
+        {
+          "rule_id": "R2",
+          "target": "pytest",
+          "variables": {
+            "status_code": "int",
+            "store_size_delta": "int",
+            "body_reason": "str"
+          },
+          "assume": "key in store and not expired",
+          "predicate": "status_code == 409 and store_size_delta == 0 and body_reason == 'duplicate'",
+          "violation": "status_code != 409 or store_size_delta != 0",
+          "linked_test": "R2: test_duplicate_key_returns_409_and_does_not_mutate_store"
+        },
+        {
+          "rule_id": "R3",
+          "target": "pytest",
+          "variables": {
+            "status_code": "int",
+            "store_mutated": "Bool",
+            "audit_mutated": "Bool"
+          },
+          "assume": "auth missing or malformed or expired or wrong_scope",
+          "predicate": "status_code == 401 and not store_mutated and not audit_mutated",
+          "violation": "status_code != 401 or store_mutated or audit_mutated",
+          "linked_test": "R3: test_unauthorized_returns_401_with_no_side_effects (parametrized over four failure modes)"
+        },
+        {
+          "rule_id": "R4",
+          "target": "smt",
+          "variables": {
+            "days_since_login": "Int",
+            "status_code": "Int"
+          },
+          "assume": "auth_ok and key_unseen and body_ok",
+          "predicate": "days_since_login > 5 => status_code == 403",
+          "violation": "days_since_login > 5 and status_code != 403",
+          "linked_test": "R4: test_inactive_user_returns_403 with last_login_at = now - 6 days"
+        },
+        {
+          "rule_id": "R5",
+          "target": "smt",
+          "variables": {
+            "json_valid": "Bool",
+            "amount_cents_present": "Bool",
+            "amount_cents": "Int",
+            "status_code": "Int"
+          },
+          "assume": "auth_ok and active and key_unseen",
+          "predicate": "(not json_valid => status_code == 400) and (json_valid and amount_cents_present and amount_cents <= 0 => status_code == 422)",
+          "violation": "(not json_valid and status_code != 400) or (json_valid and amount_cents_present and amount_cents <= 0 and status_code != 422)",
+          "linked_test": "R5: test_bad_payload_returns_400_or_422_without_other_key_mutation"
+        },
+        {
+          "rule_id": "R6",
+          "target": "pytest",
+          "variables": {
+            "status_code": "int",
+            "audit_lines_added": "int",
+            "audit_failed_flag": "Bool"
+          },
+          "assume": "handler returned 200",
+          "predicate": "audit_lines_added == 1 or (audit_lines_added == 0 and audit_failed_flag)",
+          "violation": "status_code == 200 and audit_lines_added == 0 and not audit_failed_flag",
+          "linked_test": "R6: test_audit_appended_on_200 and test_audit_failure_sets_flag_but_keeps_200"
+        }
+      ],
+      "error": "",
+      "ambiguities": [
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "valid",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"valid\" as potentially ambiguous.",
+          "suggestion": "valid response: an HTTP 200 HandlerResult whose body matches {\"result\": \"ok\", \"request_id\": <uuid4>, \"amount_cents\": <int|null>}",
+          "interpretations": [
+            "HTTP 200 with result payload",
+            "Any non-error HTTP response",
+            "Response that passes schema validation"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "duplicate",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"duplicate\" as potentially ambiguous.",
+          "suggestion": "duplicate request: a request whose X-Idempotency-Key already exists in IdempotencyStore within the 24-hour TTL",
+          "interpretations": [
+            "Same X-Idempotency-Key within TTL",
+            "Identical request body bytes",
+            "Same caller sub and key"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "gracefully",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"gracefully\" as potentially ambiguous.",
+          "suggestion": "gracefully (for duplicates): returns HTTP 409 with body {\"reason\": \"duplicate\", \"original_request_id\": <stored>} and performs no store mutation",
+          "interpretations": [
+            "Returns HTTP 409 with duplicate reason JSON",
+            "Returns HTTP 200 idempotently replaying prior result",
+            "Logs and silently ignores"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "authorized",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"authorized\" as potentially ambiguous.",
+          "suggestion": "authorized caller: a caller whose Authorization header is 'Bearer <jwt>' where the base64url-decoded payload has exp > now and 'foo:invoke' in scope",
+          "interpretations": [
+            "Any Bearer token present",
+            "Token decodes and has future exp and scope contains foo:invoke",
+            "Token signature verified"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "unauthorized",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"unauthorized\" as potentially ambiguous.",
+          "suggestion": "unauthorized caller: any caller for which parse_bearer_jwt returns ok=False (missing, malformed, expired, or missing foo:invoke scope)",
+          "interpretations": [
+            "Missing token",
+            "Any token that fails parse_bearer_jwt checks",
+            "Token with wrong sub"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "safely",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"safely\" as potentially ambiguous.",
+          "suggestion": "fail safely: return HTTP 401 before any IdempotencyStore mutation or AUDIT_LOG append",
+          "interpretations": [
+            "Return HTTP 401 with no body",
+            "Return HTTP 401 and perform no idempotency store writes or audit log entries",
+            "Raise exception"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "inactive",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"inactive\" as potentially ambiguous.",
+          "suggestion": "inactive user: a UserProfile where (request_received_at - last_login_at).days > 5",
+          "interpretations": [
+            "last_login_at more than 5 days before request_received_at",
+            "User flagged inactive in profile",
+            "Never logged in"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "active",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"active\" as potentially ambiguous.",
+          "suggestion": "active user: a UserProfile where (request_received_at - last_login_at).days <= 5",
+          "interpretations": [
+            "(request_received_at - last_login_at).days <= 5",
+            "Logged in within last 24 hours",
+            "User account flag set"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "successful",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"successful\" as potentially ambiguous.",
+          "suggestion": "successful outcome: a HandlerResult with status_code == 200",
+          "interpretations": [
+            "HTTP 200 response",
+            "HTTP 2xx response",
+            "Store write completed regardless of status"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "Bad payloads",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"Bad payloads\" as potentially ambiguous.",
+          "suggestion": "bad payload: body_bytes that fail json.loads (\u2192400) or whose amount_cents is present and <= 0 (\u2192422)",
+          "interpretations": [
+            "Malformed JSON only",
+            "Malformed JSON or amount_cents <= 0",
+            "Any unexpected field"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "handled appropriately",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"handled appropriately\" as potentially ambiguous.",
+          "suggestion": "handled appropriately: malformed JSON \u2192 HTTP 400; amount_cents <= 0 \u2192 HTTP 422; in both cases no IdempotencyStore mutation occurs",
+          "interpretations": [
+            "Return 400 for any bad payload",
+            "Return 400 for malformed JSON and 422 for invalid amount_cents, with no store mutation",
+            "Silently accept and log"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "look valid",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"look valid\" as potentially ambiguous.",
+          "suggestion": "uploads look valid: the request reached the store-write step and produced HTTP 200",
+          "interpretations": [
+            "Body parses as JSON",
+            "Request reached store write step",
+            "HTTP 200 was returned"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "reasonable recent window",
+          "section": "acceptance_tests",
+          "line": "",
+          "message": "LLM flagged \"reasonable recent window\" as potentially ambiguous.",
+          "suggestion": "reasonable recent window: the 24-hour TTL of the IdempotencyStore from first acceptance",
+          "interpretations": [
+            "Within 24-hour idempotency TTL",
+            "Within 5-day active window",
+            "Within last hour"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "corrupt stored state",
+          "section": "contract_rules",
+          "line": "",
+          "message": "LLM flagged \"corrupt stored state\" as potentially ambiguous.",
+          "suggestion": "corrupt stored state: any mutation of IdempotencyStore entries other than the single first-acceptance record per key",
+          "interpretations": [
+            "Overwriting an existing key's record",
+            "Adding a second record for the same key",
+            "Modifying records for unrelated keys"
+          ]
+        },
+        {
+          "level": "warn",
+          "code": "LLM_AMBIGUITY",
+          "term": "when appropriate",
+          "section": "requirements",
+          "line": "",
+          "message": "LLM flagged \"when appropriate\" as potentially ambiguous.",
+          "suggestion": "log when appropriate: append to AUDIT_LOG if and only if the HandlerResult.status_code == 200",
+          "interpretations": [
+            "Only on HTTP 200",
+            "On any 2xx",
+            "On every request"
+          ]
+        }
+      ],
+      "formalization_rejected": []
+    }
+  ],
+  "coverage": [
+    {
+      "path": "prompts/foo_work_python.prompt",
+      "has_contract_rules": true,
+      "error": null,
+      "rules": [
+        {
+          "rule_id": "R1",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r1_first_request_returns_200_and_records_key",
+            "test_r1_no_body_returns_200_with_null_amount",
+            "test_r1_empty_body_returns_200",
+            "test_r1_body_without_amount_returns_200"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R2",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r2_duplicate_key_returns_409_unchanged",
+            "test_r2_duplicate_does_not_add_audit_entry"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R3",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r3_missing_or_malformed_auth_returns_401",
+            "test_r3_expired_token_returns_401",
+            "test_r3_wrong_scope_returns_401",
+            "test_r3_undecodable_payload_returns_401"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R4",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r4_inactive_user_returns_403",
+            "test_r4_boundary_five_days_is_active"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R5",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r5_invalid_json_returns_400_no_mutation",
+            "test_r5_amount_cents_zero_returns_422",
+            "test_r5_amount_cents_negative_returns_422",
+            "test_r5_amount_cents_positive_returns_200",
+            "test_r5_bad_payload_does_not_add_audit"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R6",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_r6_audit_appended_on_200",
+            "test_r6_audit_failure_sets_flag_but_keeps_200",
+            "test_r6_no_audit_on_non_200"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_foo_work_1.py: syntax error on line 30",
+            "test_foo_work_before.py: syntax error on line 27"
+          ],
+          "notes": [],
+          "story_details": []
+        }
+      ],
+      "summary": {
+        "total": 6,
+        "checked": 0,
+        "story_only": 0,
+        "test_only": 0,
+        "unchecked": 0,
+        "waived": 0,
+        "failed": 6,
+        "formal_only": 0,
+        "needs_human": 0
+      }
+    }
+  ],
+  "coverage_gaps": [
+    {
+      "path": "prompts/foo_work_python.prompt",
+      "unchecked_must": [],
+      "story_only_must_not": [],
+      "unlinked_formalizations": [],
+      "failed_evidence": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6"
+      ]
+    }
+  ],
+  "contract_issues": [
+    {
+      "path": "prompts/foo_work_python.prompt",
+      "warn_count": 0,
+      "error_count": 0,
+      "issues": []
+    }
+  ],
+  "hints": [
+    "pdd contracts check prompts/foo_work_python.prompt",
+    "pdd coverage --contracts prompts/foo_work_python.prompt",
+    "pdd contracts compile --json prompts/foo_work_python.prompt",
+    "pdd prompt lint --report formalization prompts/foo_work_python.prompt"
+  ]
+}

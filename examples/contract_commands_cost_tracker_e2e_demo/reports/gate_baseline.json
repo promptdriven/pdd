@@ -1,0 +1,33 @@
+{
+  "exit_code": 0,
+  "stages": [
+    {
+      "name": "prompt_lint",
+      "exit_code": 0,
+      "error_count": 0,
+      "warn_count": 0,
+      "detail": ""
+    },
+    {
+      "name": "contracts_check",
+      "exit_code": 0,
+      "error_count": 0,
+      "warn_count": 0,
+      "detail": ""
+    },
+    {
+      "name": "contracts_compile",
+      "exit_code": 0,
+      "error_count": 0,
+      "warn_count": 0,
+      "detail": "1 file(s)"
+    },
+    {
+      "name": "coverage_contracts",
+      "exit_code": 0,
+      "error_count": 0,
+      "warn_count": 0,
+      "detail": "unchecked=0"
+    }
+  ]
+}

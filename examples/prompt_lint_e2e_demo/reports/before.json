@@ -1,0 +1,51 @@
+{
+  "lint": {
+    "exit_code": 1,
+    "warn_count": 22,
+    "error_count": 0
+  },
+  "has_vocabulary": false,
+  "pdd_generate": {
+    "cli_exit_code": 0,
+    "cli_output_tail": "SystemExit: 0",
+    "code_file": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_e2e_demo/src/payment.py",
+    "analysis": {
+      "exists": true,
+      "lines": 12,
+      "defines_charge": true,
+      "returns_transaction_id": false,
+      "mentions_idempotency_key": true,
+      "uses_vague_response_shape": true
+    }
+  },
+  "pdd_test": {
+    "cli_exit_code": 0,
+    "cli_output_tail": "SystemExit: 0",
+    "test_file": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_e2e_demo/tests/test_payment_before.py",
+    "code_file": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_e2e_demo/src/payment.py",
+    "analysis": {
+      "exists": true,
+      "lines": 25,
+      "test_functions": 2,
+      "assert_count": 2,
+      "uses_vocabulary_terms": false,
+      "uses_vague_assertions": true
+    },
+    "pytest": {
+      "ran": true,
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "output_tail": "..                                                                       [100%]\n2 passed in 0.03s"
+    }
+  },
+  "verification": {
+    "issues_count": -1,
+    "details": null,
+    "model_name": null,
+    "cost": 0.0,
+    "error": "All candidate models failed. Last error (BadRequestError): litellm.BadRequestError: GetLLMProvider Exception - Failed to get access token after 3 attempts\n\noriginal model: github_copilot/claude-sonnet-4",
+    "program_exit_code": 1,
+    "program_output_tail": "Traceback (most recent call last):\n  File \"/Users/yifeitao/Desktop/pdd/examples/prompt_lint_e2e_demo/examples/payment_charge_example.py\", line 23, in <module>\n    main()\n  File \"/Users/yifeitao/Desktop/pdd/examples/prompt_lint_e2e_demo/examples/payment_charge_example.py\", line 19, in main\n    print(response[\"transaction_id\"])\n          ~~~~~~~~^^^^^^^^^^^^^^^^^^\nKeyError: 'transaction_id'"
+  }
+}

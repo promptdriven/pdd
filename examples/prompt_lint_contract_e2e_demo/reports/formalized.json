@@ -1,0 +1,690 @@
+{
+  "label": "formalized",
+  "prompt": "prompts/foo_formalized_python.prompt",
+  "lint": {
+    "exit_code": 0,
+    "warn_count": 3,
+    "error_count": 0
+  },
+  "lint_json": {
+    "payload": [
+      {
+        "path": "prompts/foo_formalized_python.prompt",
+        "warn_count": 3,
+        "error_count": 0,
+        "issues": [
+          {
+            "level": "warn",
+            "code": "FORMAL_UNBOUNDED_DOMAIN",
+            "term": "R2",
+            "section": "formalization",
+            "line": "seen_within_24h => (response_status == 409 && wrote_record == false)",
+            "message": "Integer variables in R2 should declare bounds via assume:, variables:, or explicit <= constraints.",
+            "suggestion": "",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "FORMAL_UNBOUNDED_DOMAIN",
+            "term": "R3",
+            "section": "formalization",
+            "line": "(!authorized) => (response_status == 401 && wrote_record == false)",
+            "message": "Integer variables in R3 should declare bounds via assume:, variables:, or explicit <= constraints.",
+            "suggestion": "",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "FORMAL_UNBOUNDED_DOMAIN",
+            "term": "R4",
+            "section": "formalization",
+            "line": "(authorized && !active) => (response_status == 403 && wrote_record == false)",
+            "message": "Integer variables in R4 should declare bounds via assume:, variables:, or explicit <= constraints.",
+            "suggestion": "",
+            "interpretations": []
+          }
+        ]
+      }
+    ],
+    "issue_count": 3,
+    "by_code": {
+      "FORMAL_UNBOUNDED_DOMAIN": 3
+    },
+    "by_section": {
+      "formalization": 3
+    }
+  },
+  "contracts_check": {
+    "results": [
+      {
+        "path": "prompts/foo_formalized_python.prompt",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      },
+      {
+        "path": "user_stories/story__foo_codegen.md",
+        "warn_count": 4,
+        "error_count": 0,
+        "issues": [
+          {
+            "level": "warn",
+            "code": "UNKNOWN_STORY_REF",
+            "rule_id": "R1",
+            "section": "covers",
+            "line": "R1: fresh idempotency key with active authorized user returns HTTP 200",
+            "message": "Story ## Covers references rule ID \"R1\" which was not found in any linked prompt's <contract_rules>.",
+            "term": "",
+            "suggestion": "Add rule R1 to the linked prompt's <contract_rules>, or remove this ## Covers entry.",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "UNKNOWN_STORY_REF",
+            "rule_id": "R2",
+            "section": "covers",
+            "line": "R2: replay within 24 hours returns HTTP 409 with reason and original_request_id",
+            "message": "Story ## Covers references rule ID \"R2\" which was not found in any linked prompt's <contract_rules>.",
+            "term": "",
+            "suggestion": "Add rule R2 to the linked prompt's <contract_rules>, or remove this ## Covers entry.",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "UNKNOWN_STORY_REF",
+            "rule_id": "R3",
+            "section": "covers",
+            "line": "R3: missing or invalid Bearer JWT returns HTTP 401",
+            "message": "Story ## Covers references rule ID \"R3\" which was not found in any linked prompt's <contract_rules>.",
+            "term": "",
+            "suggestion": "Add rule R3 to the linked prompt's <contract_rules>, or remove this ## Covers entry.",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "UNKNOWN_STORY_REF",
+            "rule_id": "R4",
+            "section": "covers",
+            "line": "R4: inactive user returns HTTP 403",
+            "message": "Story ## Covers references rule ID \"R4\" which was not found in any linked prompt's <contract_rules>.",
+            "term": "",
+            "suggestion": "Add rule R4 to the linked prompt's <contract_rules>, or remove this ## Covers entry.",
+            "interpretations": []
+          }
+        ]
+      },
+      {
+        "path": "user_stories/story__foo_formalized.md",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      },
+      {
+        "path": "user_stories/story__foo_vague.md",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      }
+    ],
+    "issue_count": 4,
+    "target_count": 4
+  },
+  "contracts_compile": {
+    "payload": [
+      {
+        "version": "pdd.contract_ir.v1",
+        "path": "prompts/foo_formalized_python.prompt",
+        "has_contract_rules": true,
+        "rule_count": 4,
+        "error_count": 0,
+        "rules": [
+          {
+            "id": "R1",
+            "title": "When an authorized caller who is an active user submits a request that is not a duplicate request, the handler MUST return a valid response and MUST write one request record.",
+            "modal": "MUST",
+            "condition": "an authorized caller who is an active user submits a request that is not a duplicate request",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "target": "a valid response"
+                },
+                "text": "MUST return a valid response"
+              },
+              {
+                "modal": "MUST",
+                "type": "write",
+                "value": {
+                  "target": "one request record"
+                },
+                "text": "MUST write one request record"
+              }
+            ],
+            "raw": "R1: When an authorized caller who is an active user submits a request that is not a duplicate request, the handler MUST return a valid response and MUST write one request record."
+          },
+          {
+            "id": "R2",
+            "title": "When the request is a duplicate request, the handler MUST return a duplicate response and MUST NOT write a new request record.",
+            "modal": "MUST",
+            "condition": "the request is a duplicate request",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "target": "a duplicate response"
+                },
+                "text": "MUST return a duplicate response"
+              },
+              {
+                "modal": "MUST NOT",
+                "type": "write",
+                "value": {
+                  "target": "a new request record"
+                },
+                "text": "MUST NOT write a new request record"
+              }
+            ],
+            "raw": "R2: When the request is a duplicate request, the handler MUST return a duplicate response and MUST NOT write a new request record."
+          },
+          {
+            "id": "R3",
+            "title": "When the caller is not an authorized caller, the handler MUST return HTTP 401 and MUST NOT write a request record.",
+            "modal": "MUST",
+            "condition": "the caller is not an authorized caller",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "http_status": 401
+                },
+                "text": "MUST return HTTP 401"
+              },
+              {
+                "modal": "MUST NOT",
+                "type": "write",
+                "value": {
+                  "target": "a request record"
+                },
+                "text": "MUST NOT write a request record"
+              }
+            ],
+            "raw": "R3: When the caller is not an authorized caller, the handler MUST return HTTP 401 and MUST NOT write a request record."
+          },
+          {
+            "id": "R4",
+            "title": "When the caller is an authorized caller but is not an active user, the handler MUST return HTTP 403 and MUST NOT write a request record.",
+            "modal": "MUST",
+            "condition": "the caller is an authorized caller but is not an active user",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "http_status": 403
+                },
+                "text": "MUST return HTTP 403"
+              },
+              {
+                "modal": "MUST NOT",
+                "type": "write",
+                "value": {
+                  "target": "a request record"
+                },
+                "text": "MUST NOT write a request record"
+              }
+            ],
+            "raw": "R4: When the caller is an authorized caller but is not an active user, the handler MUST return HTTP 403 and MUST NOT write a request record."
+          }
+        ],
+        "compile_errors": [],
+        "ir_kind": "pdd.contract_ir.v1"
+      }
+    ],
+    "rule_count": 4,
+    "obligation_count": 8,
+    "error_count": 0
+  },
+  "coverage": {
+    "payload": {
+      "results": [
+        {
+          "path": "prompts/foo_formalized_python.prompt",
+          "has_contract_rules": true,
+          "error": null,
+          "rules": [
+            {
+              "rule_id": "R1",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R1."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            },
+            {
+              "rule_id": "R2",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [
+                "smt:R2:predicate"
+              ],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R2."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            },
+            {
+              "rule_id": "R3",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [
+                "smt:R3:predicate"
+              ],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R3."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            },
+            {
+              "rule_id": "R4",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [
+                "smt:R4:predicate"
+              ],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R4."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total": 4,
+            "checked": 0,
+            "story_only": 4,
+            "test_only": 0,
+            "unchecked": 0,
+            "waived": 0,
+            "failed": 0,
+            "formal_only": 0,
+            "needs_human": 0
+          }
+        }
+      ],
+      "total_prompts": 1,
+      "prompts_with_contracts": 1
+    },
+    "rule_count": 4,
+    "summary": {
+      "total": 4,
+      "checked": 0,
+      "story_only": 4,
+      "test_only": 0,
+      "unchecked": 0,
+      "waived": 0,
+      "failed": 0,
+      "formal_only": 0,
+      "needs_human": 0
+    }
+  },
+  "lint_contracts": {
+    "payload": {
+      "results": [
+        {
+          "path": "prompts/foo_formalized_python.prompt",
+          "warn_count": 3,
+          "error_count": 0,
+          "issues": [
+            {
+              "level": "warn",
+              "code": "FORMAL_UNBOUNDED_DOMAIN",
+              "term": "R2",
+              "section": "formalization",
+              "line": "seen_within_24h => (response_status == 409 && wrote_record == false)",
+              "message": "Integer variables in R2 should declare bounds via assume:, variables:, or explicit <= constraints.",
+              "suggestion": "",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "FORMAL_UNBOUNDED_DOMAIN",
+              "term": "R3",
+              "section": "formalization",
+              "line": "(!authorized) => (response_status == 401 && wrote_record == false)",
+              "message": "Integer variables in R3 should declare bounds via assume:, variables:, or explicit <= constraints.",
+              "suggestion": "",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "FORMAL_UNBOUNDED_DOMAIN",
+              "term": "R4",
+              "section": "formalization",
+              "line": "(authorized && !active) => (response_status == 403 && wrote_record == false)",
+              "message": "Integer variables in R4 should declare bounds via assume:, variables:, or explicit <= constraints.",
+              "suggestion": "",
+              "interpretations": []
+            }
+          ]
+        },
+        {
+          "path": "user_stories/story__foo_codegen.md",
+          "warn_count": 4,
+          "error_count": 0,
+          "issues": [
+            {
+              "level": "warn",
+              "code": "VAGUE_TERM_UNDEFINED",
+              "term": "active",
+              "section": "acceptance criteria",
+              "line": "- Given a valid JWT with scope foo:invoke and an active user, when X-Idempotency-Key is new, then HTTP 200 with `result` and `request_id` and the key is stored once.",
+              "message": "Vague term \"active\" used in [acceptance criteria] without a <vocabulary> definition.",
+              "suggestion": "active: <add a precise, observable definition here>",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "VAGUE_TERM_UNDEFINED",
+              "term": "valid",
+              "section": "acceptance criteria",
+              "line": "- Given a valid JWT with scope foo:invoke and an active user, when X-Idempotency-Key is new, then HTTP 200 with `result` and `request_id` and the key is stored once.",
+              "message": "Vague term \"valid\" used in [acceptance criteria] without a <vocabulary> definition.",
+              "suggestion": "valid: <add a precise, observable definition here>",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "VAGUE_TERM_UNDEFINED",
+              "term": "valid",
+              "section": "acceptance criteria",
+              "line": "- Given last login older than 5 days, when processed with valid JWT, then HTTP 403.",
+              "message": "Vague term \"valid\" used in [acceptance criteria] without a <vocabulary> definition.",
+              "suggestion": "valid: <add a precise, observable definition here>",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "VAGUE_NO_OBSERVABLE_OUTCOME",
+              "term": "(no observable outcome)",
+              "section": "acceptance criteria",
+              "line": "- Given last login older than 5 days, when processed with valid JWT, then HTTP 403.",
+              "message": "Rule or criterion contains a vague term but no observable outcome verb (returns/raises/writes/emits/rejects/\u2026).",
+              "suggestion": "",
+              "interpretations": []
+            }
+          ]
+        },
+        {
+          "path": "user_stories/story__foo_formalized.md",
+          "warn_count": 0,
+          "error_count": 0,
+          "issues": []
+        },
+        {
+          "path": "user_stories/story__foo_vague.md",
+          "warn_count": 4,
+          "error_count": 0,
+          "issues": [
+            {
+              "level": "warn",
+              "code": "VAGUE_TERM_UNDEFINED",
+              "term": "active",
+              "section": "acceptance criteria",
+              "line": "- Given an active user with last_login within 5 days of request_received_at,",
+              "message": "Vague term \"active\" used in [acceptance criteria] without a <vocabulary> definition.",
+              "suggestion": "active: <add a precise, observable definition here>",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "VAGUE_NO_OBSERVABLE_OUTCOME",
+              "term": "(no observable outcome)",
+              "section": "acceptance criteria",
+              "line": "- Given an active user with last_login within 5 days of request_received_at,",
+              "message": "Rule or criterion contains a vague term but no observable outcome verb (returns/raises/writes/emits/rejects/\u2026).",
+              "suggestion": "",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "VAGUE_TERM_UNDEFINED",
+              "term": "duplicate",
+              "section": "acceptance criteria",
+              "line": "- Given a duplicate X-Idempotency-Key within 24 hours, when the handler",
+              "message": "Vague term \"duplicate\" used in [acceptance criteria] without a <vocabulary> definition.",
+              "suggestion": "duplicate: <add a precise, observable definition here>",
+              "interpretations": []
+            },
+            {
+              "level": "warn",
+              "code": "VAGUE_NO_OBSERVABLE_OUTCOME",
+              "term": "(no observable outcome)",
+              "section": "acceptance criteria",
+              "line": "- Given a duplicate X-Idempotency-Key within 24 hours, when the handler",
+              "message": "Rule or criterion contains a vague term but no observable outcome verb (returns/raises/writes/emits/rejects/\u2026).",
+              "suggestion": "",
+              "interpretations": []
+            }
+          ]
+        }
+      ],
+      "coverage": [
+        {
+          "path": "prompts/foo_formalized_python.prompt",
+          "has_contract_rules": true,
+          "error": null,
+          "rules": [
+            {
+              "rule_id": "R1",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R1."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            },
+            {
+              "rule_id": "R2",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [
+                "smt:R2:predicate"
+              ],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R2."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            },
+            {
+              "rule_id": "R3",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [
+                "smt:R3:predicate"
+              ],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R3."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            },
+            {
+              "rule_id": "R4",
+              "status": "story-only",
+              "stories": [
+                "story__foo_formalized.md"
+              ],
+              "tests": [],
+              "formal": [
+                "smt:R4:predicate"
+              ],
+              "waiver": null,
+              "failures": [],
+              "notes": [
+                "Story validates prompt intent, but no executable test references R4."
+              ],
+              "story_details": [
+                {
+                  "path": "story__foo_formalized.md",
+                  "validation": "passed"
+                }
+              ]
+            }
+          ],
+          "summary": {
+            "total": 4,
+            "checked": 0,
+            "story_only": 4,
+            "test_only": 0,
+            "unchecked": 0,
+            "waived": 0,
+            "failed": 0,
+            "formal_only": 0,
+            "needs_human": 0
+          }
+        }
+      ],
+      "coverage_gaps": [
+        {
+          "path": "prompts/foo_formalized_python.prompt",
+          "unchecked_must": [],
+          "story_only_must_not": [],
+          "unlinked_formalizations": [],
+          "failed_evidence": []
+        }
+      ],
+      "contract_issues": [
+        {
+          "path": "prompts/foo_formalized_python.prompt",
+          "warn_count": 0,
+          "error_count": 0,
+          "issues": []
+        }
+      ],
+      "hints": [
+        "pdd contracts check prompts/foo_formalized_python.prompt",
+        "pdd coverage --contracts prompts/foo_formalized_python.prompt",
+        "pdd contracts compile --json prompts/foo_formalized_python.prompt",
+        "pdd prompt lint --report formalization prompts/foo_formalized_python.prompt"
+      ]
+    },
+    "rule_count": 4
+  },
+  "formalization": {
+    "payload": [
+      {
+        "path": "prompts/foo_formalized_python.prompt",
+        "warn_count": 3,
+        "error_count": 0,
+        "issues": [
+          {
+            "level": "warn",
+            "code": "FORMAL_UNBOUNDED_DOMAIN",
+            "term": "R2",
+            "section": "formalization",
+            "line": "seen_within_24h => (response_status == 409 && wrote_record == false)",
+            "message": "Integer variables in R2 should declare bounds via assume:, variables:, or explicit <= constraints.",
+            "suggestion": "",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "FORMAL_UNBOUNDED_DOMAIN",
+            "term": "R3",
+            "section": "formalization",
+            "line": "(!authorized) => (response_status == 401 && wrote_record == false)",
+            "message": "Integer variables in R3 should declare bounds via assume:, variables:, or explicit <= constraints.",
+            "suggestion": "",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "FORMAL_UNBOUNDED_DOMAIN",
+            "term": "R4",
+            "section": "formalization",
+            "line": "(authorized && !active) => (response_status == 403 && wrote_record == false)",
+            "message": "Integer variables in R4 should declare bounds via assume:, variables:, or explicit <= constraints.",
+            "suggestion": "",
+            "interpretations": []
+          }
+        ]
+      }
+    ],
+    "file_count": 1,
+    "issue_count": 3
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "schema": "pdd.evidence.manifest.v1",
+  "generated_at": "2026-05-22T00:04:25.538589+00:00",
+  "pdd_version": "0.0.246.dev95",
+  "prompt": {
+    "path": "/Users/yifeitao/Desktop/pdd/examples/evidence_manifest_demo/prompts/token_bucket_formalized_python.prompt",
+    "sha256": "577e32564607b5dc4c9909ad098eda5d8016920c0b2d4e37fb935d75d2e3cc53"
+  },
+  "lint": {
+    "error_count": 0,
+    "warn_count": 0,
+    "issues_by_code": {
+      "VAGUE_TERM_UNDEFINED": 3,
+      "VAGUE_NO_OBSERVABLE_OUTCOME": 1,
+      "FORMAL_UNBOUNDED_DOMAIN": 1
+    }
+  },
+  "contracts_check": {
+    "exit_code": 1,
+    "error_count": 0,
+    "warn_count": 1,
+    "results": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/evidence_manifest_demo/prompts/token_bucket_formalized_python.prompt",
+        "warn_count": 1,
+        "error_count": 0,
+        "issues": [
+          {
+            "level": "warn",
+            "code": "VAGUE_TERM",
+            "rule_id": "",
+            "section": "contract_rules",
+            "line": "R3 - Successful consume reduces tokens",
+            "message": "Vague term \"successful\" used in <contract_rules> without a <vocabulary> definition.",
+            "term": "successful",
+            "suggestion": "successful: <add a precise, observable definition here>",
+            "interpretations": []
+          }
+        ]
+      },
+      {
+        "path": "examples/evidence_manifest_demo/user_stories/story__token_bucket.md",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      }
+    ]
+  },
+  "contracts_compile": {
+    "exit_code": 0,
+    "results": [
+      {
+        "version": "pdd.contract_ir.v1",
+        "path": "/Users/yifeitao/Desktop/pdd/examples/evidence_manifest_demo/prompts/token_bucket_formalized_python.prompt",
+        "has_contract_rules": true,
+        "rule_count": 6,
+        "error_count": 0,
+        "rules": [
+          {
+            "id": "R1",
+            "title": "Reject non-positive capacity",
+            "modal": "MUST",
+            "condition": "capacity is not a positive integer",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "raise",
+                "value": {
+                  "target": "ValueError"
+                },
+                "text": "MUST raise ValueError"
+              }
+            ],
+            "raw": "R1 - Reject non-positive capacity\nWhen capacity is not a positive integer, the TokenBucket constructor MUST raise ValueError."
+          },
+          {
+            "id": "R2",
+            "title": "Default tokens to capacity",
+            "modal": "MUST",
+            "condition": "tokens_available is omitted or None at construction",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "target": "tokens_available equal to capacity"
+                },
+                "text": "MUST return tokens_available equal to capacity"
+              }
+            ],
+            "raw": "R2 - Default tokens to capacity\nWhen tokens_available is omitted or None at construction, the TokenBucket MUST return tokens_available equal to capacity."
+          },
+          {
+            "id": "R3",
+            "title": "Successful consume reduces tokens",
+            "modal": "MUST",
+            "condition": "consume is called with requested_tokens less than or equal to current tokens_available",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "target": "True and tokens_available equal to prior tokens_available minus requested_tokens"
+                },
+                "text": "MUST return True and tokens_available equal to prior tokens_available minus requested_tokens"
+              }
+            ],
+            "raw": "R3 - Successful consume reduces tokens\nWhen consume is called with requested_tokens less than or equal to current tokens_available, the TokenBucket MUST return True and tokens_available equal to prior tokens_available minus requested_tokens."
+          },
+          {
+            "id": "R4",
+            "title": "Failed consume preserves state",
+            "modal": "MUST",
+            "condition": "consume is called with requested_tokens greater than current tokens_available",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "target": "False"
+                },
+                "text": "MUST return False"
+              },
+              {
+                "modal": "MUST NOT",
+                "type": "state_mutation",
+                "value": {
+                  "verb": "mutate",
+                  "target": "tokens_available"
+                },
+                "text": "MUST NOT mutate tokens_available"
+              }
+            ],
+            "raw": "R4 - Failed consume preserves state\nWhen consume is called with requested_tokens greater than current tokens_available, the TokenBucket MUST return False and MUST NOT mutate tokens_available."
+          },
+          {
+            "id": "R5",
+            "title": "Refill capped at capacity",
+            "modal": "MUST NOT",
+            "condition": "refill is called with a non-negative amount",
+            "obligations": [
+              {
+                "modal": "MUST NOT",
+                "type": "return",
+                "value": {
+                  "target": "tokens_available greater than capacity"
+                },
+                "text": "MUST NOT return tokens_available greater than capacity"
+              }
+            ],
+            "raw": "R5 - Refill capped at capacity\nWhen refill is called with a non-negative amount, the TokenBucket MUST NOT return tokens_available greater than capacity."
+          },
+          {
+            "id": "R6",
+            "title": "Refill adds tokens below cap",
+            "modal": "MUST",
+            "condition": "refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity",
+            "obligations": [
+              {
+                "modal": "MUST",
+                "type": "return",
+                "value": {
+                  "target": "tokens_available equal to prior tokens_available plus amount"
+                },
+                "text": "MUST return tokens_available equal to prior tokens_available plus amount"
+              }
+            ],
+            "raw": "R6 - Refill adds tokens below cap\nWhen refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity, the TokenBucket MUST return tokens_available equal to prior tokens_available plus amount."
+          }
+        ],
+        "compile_errors": []
+      }
+    ]
+  },
+  "coverage": {
+    "results": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/evidence_manifest_demo/prompts/token_bucket_formalized_python.prompt",
+        "has_contract_rules": true,
+        "error": null,
+        "rules": [
+          {
+            "rule_id": "R1",
+            "status": "checked",
+            "stories": [
+              "story__token_bucket.md"
+            ],
+            "tests": [
+              "test_R1_rejects_non_positive_capacity"
+            ],
+            "formal": [
+              "smt:R1:predicate"
+            ],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": [
+              {
+                "path": "story__token_bucket.md",
+                "validation": "passed"
+              }
+            ]
+          },
+          {
+            "rule_id": "R2",
+            "status": "checked",
+            "stories": [
+              "story__token_bucket.md"
+            ],
+            "tests": [
+              "test_R2_default_tokens_equal_capacity"
+            ],
+            "formal": [
+              "smt:R2:predicate"
+            ],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": [
+              {
+                "path": "story__token_bucket.md",
+                "validation": "passed"
+              }
+            ]
+          },
+          {
+            "rule_id": "R3",
+            "status": "checked",
+            "stories": [
+              "story__token_bucket.md"
+            ],
+            "tests": [
+              "test_R3_consume_success_reduces_tokens",
+              "test_R3_consume_proof_z3"
+            ],
+            "formal": [
+              "smt:R3:predicate"
+            ],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": [
+              {
+                "path": "story__token_bucket.md",
+                "validation": "passed"
+              }
+            ]
+          },
+          {
+            "rule_id": "R4",
+            "status": "checked",
+            "stories": [
+              "story__token_bucket.md"
+            ],
+            "tests": [
+              "test_R4_consume_failure_preserves_state"
+            ],
+            "formal": [
+              "smt:R4:predicate"
+            ],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": [
+              {
+                "path": "story__token_bucket.md",
+                "validation": "passed"
+              }
+            ]
+          },
+          {
+            "rule_id": "R5",
+            "status": "checked",
+            "stories": [
+              "story__token_bucket.md"
+            ],
+            "tests": [
+              "test_R5_refill_capped_at_capacity"
+            ],
+            "formal": [
+              "smt:R5:predicate"
+            ],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": [
+              {
+                "path": "story__token_bucket.md",
+                "validation": "passed"
+              }
+            ]
+          },
+          {
+            "rule_id": "R6",
+            "status": "checked",
+            "stories": [
+              "story__token_bucket.md"
+            ],
+            "tests": [
+              "test_R6_refill_adds_when_below_cap"
+            ],
+            "formal": [
+              "smt:R6:predicate"
+            ],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": [
+              {
+                "path": "story__token_bucket.md",
+                "validation": "passed"
+              }
+            ]
+          }
+        ],
+        "summary": {
+          "total": 6,
+          "checked": 6,
+          "story_only": 0,
+          "test_only": 0,
+          "unchecked": 0,
+          "waived": 0,
+          "failed": 0,
+          "formal_only": 0,
+          "needs_human": 0
+        }
+      }
+    ]
+  },
+  "gate": {
+    "exit_code": 1,
+    "stages": [
+      {
+        "name": "prompt-lint",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": "errors=0 warns=0",
+        "skipped": false
+      },
+      {
+        "name": "contracts-check",
+        "exit_code": 1,
+        "error_count": 0,
+        "warn_count": 1,
+        "detail": "errors=0 warns=1",
+        "skipped": false
+      },
+      {
+        "name": "contracts-compile",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": "rules=6 errors=0",
+        "skipped": false
+      },
+      {
+        "name": "coverage",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": "total=6 checked=6 unchecked=0",
+        "skipped": false
+      }
+    ]
+  },
+  "use_cloud": false
+}

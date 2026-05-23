@@ -1,0 +1,248 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.246.dev96",
+  "timestamp_utc": "20260522T015544Z",
+  "argv": [
+    "--force",
+    "test",
+    "--manual",
+    "prompts/foo_work_python.prompt",
+    "src/foo_work_after.py",
+    "--output",
+    "tests/test_foo_work_after.py"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": true,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [
+    "test"
+  ],
+  "total_cost": 0.0,
+  "steps": [
+    {
+      "step": 1,
+      "command": "test",
+      "cost": null,
+      "model": "unknown"
+    }
+  ],
+  "errors": [
+    {
+      "command": "test",
+      "type": "KeyboardInterrupt",
+      "message": "",
+      "traceback": "Traceback (most recent call last):\n  File \"/Users/yifeitao/Desktop/pdd/pdd/core/cli.py\", line 116, in invoke\n    result = super().invoke(ctx)\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/click/core.py\", line 1688, in invoke\n    return _process_result(sub_ctx.command.invoke(sub_ctx))\n                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/click/core.py\", line 1434, in invoke\n    return ctx.invoke(self.callback, **ctx.params)\n           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/click/core.py\", line 783, in invoke\n    return __callback(*args, **kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/click/decorators.py\", line 33, in new_func\n    return f(get_current_context(), *args, **kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/pdd/operation_log.py\", line 395, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/pdd/track_cost.py\", line 57, in wrapper\n    result = func(*args, **kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/pdd/commands/generate.py\", line 513, in test\n    test_result = cmd_test_main(\n        ctx=ctx,\n    ...<10 lines>...\n        manual=manual\n    )\n  File \"/Users/yifeitao/Desktop/pdd/pdd/cmd_test_main.py\", line 279, in cmd_test_main\n    response = requests.post(\n        cloud_url,\n    ...<2 lines>...\n        timeout=get_cloud_request_timeout()\n    )\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/requests/api.py\", line 115, in post\n    return request(\"post\", url, data=data, json=json, **kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/requests/api.py\", line 59, in request\n    return session.request(method=method, url=url, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/requests/sessions.py\", line 589, in request\n    resp = self.send(prep, **send_kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/requests/sessions.py\", line 703, in send\n    r = adapter.send(request, **kwargs)\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/requests/adapters.py\", line 667, in send\n    resp = conn.urlopen(\n        method=request.method,\n    ...<9 lines>...\n        chunked=chunked,\n    )\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/urllib3/connectionpool.py\", line 788, in urlopen\n    response = self._make_request(\n        conn,\n    ...<10 lines>...\n        **response_kw,\n    )\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/urllib3/connectionpool.py\", line 534, in _make_request\n    response = conn.getresponse()\n  File \"/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/urllib3/connection.py\", line 571, in getresponse\n    httplib_response = super().getresponse()\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/client.py\", line 1430, in getresponse\n    response.begin()\n    ~~~~~~~~~~~~~~^^\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/client.py\", line 331, in begin\n    version, status, reason = self._read_status()\n                              ~~~~~~~~~~~~~~~~~^^\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/client.py\", line 292, in _read_status\n    line = str(self.fp.readline(_MAXLINE + 1), \"iso-8859-1\")\n               ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py\", line 719, in readinto\n    return self._sock.recv_into(b)\n           ~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ssl.py\", line 1304, in recv_into\n    return self.read(nbytes, buffer)\n           ~~~~~~~~~^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ssl.py\", line 1138, in read\n    return self._sslobj.read(len, buffer)\n           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^\nKeyboardInterrupt\n"
+    }
+  ],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_FORCE": "1",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {
+    ".pdd/meta/foo_work_python.json": "{\n  \"pdd_version\": \"0.0.246.dev96\",\n  \"timestamp\": \"2026-05-22T01:26:55.705021+00:00\",\n  \"command\": \"generate\",\n  \"prompt_hash\": null,\n  \"code_hash\": null,\n  \"example_hash\": null,\n  \"test_hash\": null,\n  \"test_files\": {\n    \"test_foo_work_before.py\": \"05ee6b63d7b3bf91842d4a60a35a12b1e1dda9d40da6be86e036ffa205098e8d\"\n  },\n  \"include_deps\": {}\n}",
+    ".pdd/meta/foo_work_python_sync.log": "{\"timestamp\": \"2026-05-20T14:19:38.544164\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 94.7483868598938, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:21:20.004387\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 181.3877351284027, \"actual_cost\": 0.3361487, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:27:04.707318\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.93177604675293, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:27:16.927566\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 20.26871681213379, \"actual_cost\": 0.3361487, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:40:45.652496\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 13.683010816574097, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:41:04.948877\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 177.16943311691284, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:44:43.853294\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.151504039764404, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:44:56.142296\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 168.79310393333435, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T14:52:14.666058\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.492659091949463, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T15:04:02.816130\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.513398885726929, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T15:06:17.899170\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 15.571554899215698, \"actual_cost\": 0.3359937, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:03:08.196176\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 58.812579870224, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:04:30.277578\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 58.683647871017456, \"actual_cost\": 0.13044180000000002, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:24:56.953053\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 118.65742897987366, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T18:49:08.922838\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": false, \"duration\": 395.1108720302582, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n"
+  },
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\nUsing .pddrc context: examples\nInput files:\n  prompt_file     \n/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/prom\npts/foo_work_python.prompt\n  code_file       \n/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/src/\nfoo_work_after.py\nOutput files:\n  output          \n/Users/yifeitao/Desktop/pdd/examples/prompt_lint_contract_e2e_demo/test\ns/test_foo_work_after.py\nDetected language: python\nBasename: foo_work\nYou pressed Ctrl+C in your terminal. Interrupted during 'test' command.\n  Interrupted by user (Ctrl+C).\n  Re-run the same command to start fresh.\n",
+  "sync_steps": [
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 94.7483868598938,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3361487,
+      "model": "claude-opus-4-7",
+      "duration": 181.3877351284027,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.93177604675293,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3361487,
+      "model": "claude-opus-4-7",
+      "duration": 20.26871681213379,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 13.683010816574097,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 177.16943311691284,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.151504039764404,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 168.79310393333435,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.492659091949463,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.513398885726929,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.3359937,
+      "model": "claude-opus-4-7",
+      "duration": 15.571554899215698,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 58.812579870224,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.13044180000000002,
+      "model": "claude-opus-4-7",
+      "duration": 58.683647871017456,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 118.65742897987366,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": false,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 395.1108720302582,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/foo_work_python_sync.log"
+    }
+  ]
+}

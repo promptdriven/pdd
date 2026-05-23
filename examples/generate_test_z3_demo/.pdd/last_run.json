@@ -1,0 +1,30 @@
+{
+  "b8b0a4a761edfe38": {
+    "argv": [
+      "--no-core-dump",
+      "generate",
+      "prompts/token_bucket_plain_python.prompt",
+      "--output",
+      "src/token_bucket_before.py"
+    ],
+    "project_root": "/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo",
+    "fingerprint": "06ae633d25a16606f3f5dbb2b9041b0b046623419090bd064e329e2e9426dd35",
+    "git_head": "5aa17bb0e40eac5fcfb9f6521d3c6a0edd479527",
+    "subcommand": "generate",
+    "timestamp": 1779403857.392768
+  },
+  "0bfc20234d263e03": {
+    "argv": [
+      "--no-core-dump",
+      "generate",
+      "prompts/token_bucket_python.prompt",
+      "--output",
+      "src/token_bucket_after.py"
+    ],
+    "project_root": "/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo",
+    "fingerprint": "06ae633d25a16606f3f5dbb2b9041b0b046623419090bd064e329e2e9426dd35",
+    "git_head": "5aa17bb0e40eac5fcfb9f6521d3c6a0edd479527",
+    "subcommand": "generate",
+    "timestamp": 1779403901.8923829
+  }
+}

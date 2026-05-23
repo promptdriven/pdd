@@ -1,34 +1,34 @@
 """
-Comprehensive CLI tests for `pdd prompt lint`.
+Comprehensive CLI tests for `pdd lint`.
 
 Each test class maps to one of the documented usage patterns:
 
     # Single file
-    pdd prompt lint prompts/foo_python.prompt
+    pdd lint prompts/foo_python.prompt
 
     # Directory
-    pdd prompt lint prompts/
+    pdd lint prompts/
 
     # Stories only
-    pdd prompt lint --stories user_stories/
+    pdd lint --stories user_stories/
 
     # Prompt + stories together
-    pdd prompt lint --stories user_stories/ prompts/foo_python.prompt
+    pdd lint --stories user_stories/ prompts/foo_python.prompt
 
     # JSON output
-    pdd prompt lint --json prompts/foo_python.prompt
+    pdd lint --json prompts/foo_python.prompt
 
     # Deterministic ambiguity pass
-    pdd prompt lint --ambiguity prompts/foo_python.prompt
+    pdd lint --ambiguity prompts/foo_python.prompt
 
     # Strict mode (CI gate)
-    pdd prompt lint --strict prompts/foo_python.prompt
+    pdd lint --strict prompts/foo_python.prompt
 
     # LLM ambiguity review (auto coach + clarify when ambiguities found)
-    pdd prompt lint --ambiguity prompts/foo_python.prompt
+    pdd lint --ambiguity prompts/foo_python.prompt
 
     # Write vocabulary suggestions back into the file
-    pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
+    pdd lint --ambiguity --apply prompts/foo_python.prompt
 """
 from __future__ import annotations
 
@@ -65,12 +65,12 @@ def _lint_json(runner: CliRunner, *args):
 
 
 # ---------------------------------------------------------------------------
-# Pattern 1: pdd prompt lint prompts/foo_python.prompt
+# Pattern 1: pdd lint prompts/foo_python.prompt
 # Single file — exit codes, issue content, section names
 # ---------------------------------------------------------------------------
 
 class TestSingleFile:
-    """pdd prompt lint <single-file>"""
+    """pdd lint <single-file>"""
 
     def test_clean_file_exits_zero(self, runner):
         result = _lint(runner, str(FIXTURES / "payment_api_clean_python.prompt"))
@@ -139,12 +139,12 @@ def _json_lint(runner, *args):
 
 
 # ---------------------------------------------------------------------------
-# Pattern 2: pdd prompt lint prompts/
+# Pattern 2: pdd lint prompts/
 # Directory scan — aggregates results, exits non-zero if any issue
 # ---------------------------------------------------------------------------
 
 class TestDirectoryScan:
-    """pdd prompt lint <directory>"""
+    """pdd lint <directory>"""
 
     def test_fixtures_dir_exit_nonzero_due_to_vague_files(self, runner):
         result = _lint(runner, str(FIXTURES))
@@ -204,12 +204,12 @@ class TestDirectoryScan:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 3: pdd prompt lint --stories user_stories/
+# Pattern 3: pdd lint --stories user_stories/
 # Stories-only scan
 # ---------------------------------------------------------------------------
 
 class TestStoriesOnly:
-    """pdd prompt lint --stories <dir>"""
+    """pdd lint --stories <dir>"""
 
     def test_vague_story_exits_one(self, runner):
         result = _lint(runner, "--stories", str(FIXTURES))
@@ -262,12 +262,12 @@ class TestStoriesOnly:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 4: pdd prompt lint --stories user_stories/ prompts/foo_python.prompt
+# Pattern 4: pdd lint --stories user_stories/ prompts/foo_python.prompt
 # Scan a prompt AND its stories together
 # ---------------------------------------------------------------------------
 
 class TestCombinedStoriesAndPrompt:
-    """pdd prompt lint --stories <dir> <prompt-file>"""
+    """pdd lint --stories <dir> <prompt-file>"""
 
     def test_combined_scan_exits_one_from_vague_prompt(self, runner):
         """foo_python.prompt has vague terms → exit 1 even if stories are clean."""
@@ -322,12 +322,12 @@ class TestCombinedStoriesAndPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 5: pdd prompt lint --json prompts/foo_python.prompt
+# Pattern 5: pdd lint --json prompts/foo_python.prompt
 # JSON output — schema, field types, informational messages on stderr
 # ---------------------------------------------------------------------------
 
 class TestJsonOutput:
-    """pdd prompt lint --json <target>"""
+    """pdd lint --json <target>"""
 
     def test_json_is_parseable_list(self, runner):
         result = _lint_json(runner, str(FIXTURES / "payment_api_python.prompt"))
@@ -389,12 +389,12 @@ class TestJsonOutput:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 6: pdd prompt lint --strict prompts/foo_python.prompt
+# Pattern 6: pdd lint --strict prompts/foo_python.prompt
 # Strict mode: warns → errors, exit 2; extended terms fire
 # ---------------------------------------------------------------------------
 
 class TestStrictMode:
-    """pdd prompt lint --strict <target>"""
+    """pdd lint --strict <target>"""
 
     def test_strict_escalates_warn_to_exit_two(self, runner):
         result = _lint(runner, "--strict", str(FIXTURES / "payment_api_python.prompt"))
@@ -454,12 +454,12 @@ class TestStrictMode:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 7: pdd prompt lint --ambiguity prompts/foo_python.prompt
+# Pattern 7: pdd lint --ambiguity prompts/foo_python.prompt
 # LLM ambiguity pass — mocked; verifies interpretations block, suggestion block
 # ---------------------------------------------------------------------------
 
 class TestLlmAmbiguityReview:
-    """pdd prompt lint --ambiguity <file>"""
+    """pdd lint --ambiguity <file>"""
 
     @pytest.fixture(autouse=True)
     def _mock_llm_passes(self):
@@ -626,12 +626,12 @@ class TestLlmAmbiguityReview:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 8: pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
+# Pattern 8: pdd lint --ambiguity --apply prompts/foo_python.prompt
 # Apply: writes vocabulary suggestions back into the file
 # ---------------------------------------------------------------------------
 
 class TestApplyWriteback:
-    """pdd prompt lint --ambiguity --apply <file>"""
+    """pdd lint --ambiguity --apply <file>"""
 
     @pytest.fixture(autouse=True)
     def _mock_llm_passes(self):

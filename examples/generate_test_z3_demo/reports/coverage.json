@@ -1,0 +1,202 @@
+{
+  "results": [
+    {
+      "path": "prompts/token_bucket_python.prompt",
+      "has_contract_rules": true,
+      "error": null,
+      "rules": [
+        {
+          "rule_id": "R1",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r1_zero_capacity_raises_value_error",
+            "test_r1_negative_capacity_raises_value_error",
+            "test_r1_non_integer_capacity_raises_value_error",
+            "test_r1_boolean_capacity_rejected",
+            "test_r1_zero_capacity_raises",
+            "test_r1_negative_capacity_raises",
+            "test_r1_non_int_capacity_raises",
+            "test_r1_bool_capacity_rejected",
+            "test_r1_string_capacity_raises",
+            "test_r1_string_capacity_raises_value_error",
+            "test_r1_bool_capacity_raises_value_error"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R2",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r2_default_tokens_equal_capacity",
+            "test_r2_explicit_tokens_available_set",
+            "test_r2_explicit_initial_tokens_respected",
+            "test_r2_explicit_zero_initial_tokens",
+            "test_r2_initial_tokens_above_capacity_rejected",
+            "test_r2_negative_initial_tokens_rejected",
+            "test_r2_default_tokens_equals_capacity",
+            "test_r2_default_tokens_equals_capacity_one",
+            "test_r2_explicit_tokens_available_respected",
+            "test_r2_explicit_tokens_available_zero"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R3",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r3_consume_with_sufficient_tokens_succeeds",
+            "test_r3_consume_exact_amount_succeeds",
+            "test_r3_consume_partial_returns_true_and_decrements",
+            "test_r3_consume_exact_amount_returns_true",
+            "test_r3_consume_zero_succeeds_without_change",
+            "test_r3_consume_sufficient_returns_true_and_decrements",
+            "test_r3_consume_all_tokens",
+            "test_r3_consume_zero_tokens_succeeds",
+            "test_r3_consume_exactly_available",
+            "test_r3_multiple_consumes_track_state"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R4",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r4_consume_with_insufficient_tokens_returns_false",
+            "test_r4_consume_more_than_available_returns_false",
+            "test_r4_consume_just_above_available_returns_false",
+            "test_r4_consume_from_empty_bucket_returns_false",
+            "test_r4_consume_from_empty_returns_false",
+            "test_r4_consume_more_than_capacity_returns_false"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R5",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r5_failed_consume_preserves_state",
+            "test_r5_refill_adds_when_within_capacity",
+            "test_r5_refill_zero_is_noop",
+            "test_r5_refill_exactly_to_capacity",
+            "test_r5_failed_consume_does_not_change_tokens",
+            "test_r5_failed_consume_state_unchanged_after_many_attempts",
+            "test_r5_mixed_success_and_failure_preserves_correct_state"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R6",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r6_refill_caps_at_capacity",
+            "test_r6_refill_when_full_stays_full",
+            "test_r6_refill_over_capacity_caps",
+            "test_r6_refill_far_above_capacity_caps",
+            "test_r6_refill_full_bucket_stays_full",
+            "test_r6_refill_full_bucket_stays_at_capacity",
+            "test_r6_refill_exact_to_capacity",
+            "test_r6_refill_huge_amount_caps_to_capacity"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        },
+        {
+          "rule_id": "R7",
+          "status": "failed",
+          "stories": [
+            "story__token_bucket.md"
+          ],
+          "tests": [
+            "test_r7_refill_adds_tokens_below_capacity",
+            "test_r7_capacity_property_returns_constructor_value",
+            "test_r7_capacity_unchanged_after_consume_and_refill",
+            "test_r7_capacity_is_read_only",
+            "test_r7_refill_below_capacity_adds_tokens",
+            "test_r7_refill_zero_amount_no_change",
+            "test_r7_refill_after_consume"
+          ],
+          "formal": [],
+          "waiver": null,
+          "failures": [
+            "test_after.py: syntax error on line 19",
+            "test_after_2.py: syntax error on line 19"
+          ],
+          "notes": [],
+          "story_details": []
+        }
+      ],
+      "summary": {
+        "total": 7,
+        "checked": 0,
+        "story_only": 0,
+        "test_only": 0,
+        "unchecked": 0,
+        "waived": 0,
+        "failed": 7,
+        "formal_only": 0,
+        "needs_human": 0
+      }
+    }
+  ],
+  "total_prompts": 1,
+  "prompts_with_contracts": 1
+}

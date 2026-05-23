@@ -32,6 +32,62 @@ pytestmark = pytest.mark.e2e
 class TestOperationLoggingE2E:
     """E2E tests verifying CLI commands log with invocation_mode='manual'."""
 
+    @pytest.fixture(autouse=True)
+    def skip_unless_real_with_credentials(self) -> None:
+        """Skip unless real LLM tests are enabled and valid credentials exist."""
+        run_all = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+        if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or run_all):
+            pytest.skip(
+                "E2E tests require API access; set PDD_RUN_REAL_LLM_TESTS=1 or use --run-all."
+            )
+        
+        default_model = os.getenv("PDD_MODEL_DEFAULT")
+        if not self._has_credentials_for_model(default_model):
+            pytest.skip(
+                f"Skipped E2E test: Missing credentials for default model '{default_model or 'default'}'."
+            )
+
+    def _has_credentials_for_model(self, model: str | None) -> bool:
+        from pathlib import Path
+        
+        def has_gac() -> bool:
+            gac = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            if not gac:
+                return False
+            try:
+                return Path(gac).is_file()
+            except Exception:
+                return False
+
+        if not model:
+            return any(
+                os.getenv(k) for k in [
+                    "OPENAI_API_KEY",
+                    "AZURE_OPENAI_API_KEY",
+                    "AZURE_API_KEY",
+                    "ANTHROPIC_API_KEY",
+                    "GOOGLE_API_KEY",
+                ]
+            ) or has_gac()
+        model_lower = model.lower()
+        if "vertex_ai" in model_lower:
+            return has_gac() or bool(os.getenv("GOOGLE_API_KEY"))
+        elif "openai/" in model_lower or model_lower.startswith("gpt-"):
+            return bool(os.getenv("OPENAI_API_KEY"))
+        elif "azure/" in model_lower:
+            return bool(os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_API_KEY"))
+        elif "anthropic/" in model_lower or "claude-" in model_lower:
+            return bool(os.getenv("ANTHROPIC_API_KEY"))
+        return any(
+            os.getenv(k) for k in [
+                "OPENAI_API_KEY",
+                "AZURE_OPENAI_API_KEY",
+                "AZURE_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "GOOGLE_API_KEY",
+            ]
+        ) or has_gac()
+
     @pytest.fixture
     def project_dir(self, tmp_path: Path) -> Path:
         """Create a minimal PDD project structure."""

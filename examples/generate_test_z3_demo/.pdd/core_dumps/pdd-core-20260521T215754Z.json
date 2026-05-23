@@ -1,0 +1,206 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.246.dev95",
+  "timestamp_utc": "20260521T215754Z",
+  "argv": [
+    "test",
+    "--manual",
+    "prompts/token_bucket_plain_python.prompt",
+    "src/token_bucket_before.py",
+    "--output",
+    "tests/test_before.py"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [
+    "test"
+  ],
+  "total_cost": 0.19701839999999998,
+  "steps": [
+    {
+      "step": 1,
+      "command": "test",
+      "cost": 0.19701839999999998,
+      "model": "claude-opus-4-7"
+    }
+  ],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {
+    "tests/test_before.py": "\nimport sys\nfrom pathlib import Path\n\n# Add project root to sys.path to ensure local code is prioritized\n# This allows testing local changes without installing the package\nproject_root = Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(project_root))\n\n\"\"\"Tests for token_bucket_before.TokenBucket.\"\"\"\nimport os\nimport sys\n\nimport pytest\n\n# Add src dir to sys.path so we can import the module under test\n_SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"src\")\nif _SRC_DIR not in sys.path:\n\nfrom token_bucket_before import TokenBucket  # noqa: E402\n\n\n# ---------------------------------------------------------------------------\n# Construction\n# ---------------------------------------------------------------------------\n\ndef test_init_defaults_tokens_to_capacity():\n    bucket = TokenBucket(10)\n    assert bucket.capacity == 10\n    assert bucket.tokens_available == 10\n\n\ndef test_init_with_explicit_tokens_available():\n    bucket = TokenBucket(10, tokens_available=3)\n    assert bucket.capacity == 10\n    assert bucket.tokens_available == 3\n\n\ndef test_init_with_zero_tokens_available():\n    bucket = TokenBucket(5, tokens_available=0)\n    assert bucket.tokens_available == 0\n    assert bucket.capacity == 5\n\n\ndef test_init_tokens_equal_to_capacity_allowed():\n    bucket = TokenBucket(4, tokens_available=4)\n    assert bucket.tokens_available == 4\n\n\n@pytest.mark.parametrize(\"bad_capacity\", [0, -1, -100])\ndef test_init_non_positive_capacity_raises(bad_capacity):\n    with pytest.raises(ValueError):\n        TokenBucket(bad_capacity)\n\n\n@pytest.mark.parametrize(\"bad_capacity\", [1.5, \"10\", None, [10], 2.0])\ndef test_init_non_integer_capacity_raises(bad_capacity):\n    with pytest.raises((ValueError, TypeError)):\n        TokenBucket(bad_capacity)\n\n\ndef test_init_bool_capacity_rejected():\n    # bool is technically an int subclass in Python; the contract says\n    # \"positive integer\", so booleans should not be accepted.\n    with pytest.raises((ValueError, TypeError)):\n        TokenBucket(True)\n\n\ndef test_init_tokens_available_exceeds_capacity_raises():\n    with pytest.raises(ValueError):\n        TokenBucket(5, tokens_available=6)\n\n\ndef test_init_negative_tokens_available_raises():\n    with pytest.raises(ValueError):\n        TokenBucket(5, tokens_available=-1)\n\n\n# ---------------------------------------------------------------------------\n# consume\n# ---------------------------------------------------------------------------\n\ndef test_consume_success_decrements_tokens():\n    bucket = TokenBucket(10)\n    assert bucket.consume(3) is True\n    assert bucket.tokens_available == 7\n\n\ndef test_consume_exact_balance_succeeds_and_empties():\n    bucket = TokenBucket(5)\n    assert bucket.consume(5) is True\n    assert bucket.tokens_available == 0\n\n\ndef test_consume_more_than_available_returns_false():\n    bucket = TokenBucket(5, tokens_available=2)\n    assert bucket.consume(3) is False\n\n\ndef test_failed_consume_does_not_modify_tokens():\n    bucket = TokenBucket(5, tokens_available=2)\n    before = bucket.tokens_available\n    assert bucket.consume(3) is False\n    assert bucket.tokens_available == before\n\n\ndef test_consume_zero_tokens_succeeds_and_no_change():\n    bucket = TokenBucket(5, tokens_available=2)\n    assert bucket.consume(0) is True\n    assert bucket.tokens_available == 2\n\n\ndef test_consume_from_empty_bucket_returns_false():\n    bucket = TokenBucket(5, tokens_available=0)\n    assert bucket.consume(1) is False\n    assert bucket.tokens_available == 0\n\n\ndef test_consume_negative_amount_raises():\n    bucket = TokenBucket(5)\n    with pytest.raises(ValueError):\n        bucket.consume(-1)\n\n\n@pytest.mark.parametrize(\"bad\", [1.5, \"1\", None, [1]])\ndef test_consume_non_integer_raises(bad):\n    bucket = TokenBucket(5)\n    with pytest.raises((ValueError, TypeError)):\n        bucket.consume(bad)\n\n\ndef test_consume_repeated_calls_accumulate_correctly():\n    bucket = TokenBucket(10)\n    assert bucket.consume(3) is True\n    assert bucket.consume(4) is True\n    assert bucket.tokens_available == 3\n    assert bucket.consume(4) is False\n    assert bucket.tokens_available == 3\n\n\n# ---------------------------------------------------------------------------\n# refill\n# ---------------------------------------------------------------------------\n\ndef test_refill_adds_tokens():\n    bucket = TokenBucket(10, tokens_available=2)\n    bucket.refill(3)\n    assert bucket.tokens_available == 5\n\n\ndef test_refill_does_not_exceed_capacity():\n    bucket = TokenBucket(10, tokens_available=8)\n    bucket.refill(100)\n    assert bucket.tokens_available == 10\n\n\ndef test_refill_at_full_capacity_is_noop():\n    bucket = TokenBucket(10)\n    bucket.refill(5)\n    assert bucket.tokens_available == 10\n\n\ndef test_refill_zero_is_noop():\n    bucket = TokenBucket(10, tokens_available=4)\n    bucket.refill(0)\n    assert bucket.tokens_available == 4\n\n\ndef test_refill_negative_raises():\n    bucket = TokenBucket(10, tokens_available=4)\n    with pytest.raises(ValueError):\n        bucket.refill(-1)\n    # state must be unchanged after error\n    assert bucket.tokens_available == 4\n\n\n@pytest.mark.parametrize(\"bad\", [1.5, \"1\", None, [1]])\ndef test_refill_non_integer_raises(bad):\n    bucket = TokenBucket(10)\n    with pytest.raises((ValueError, TypeError)):\n        bucket.refill(bad)\n\n\n# ---------------------------------------------------------------------------\n# Capacity is observably immutable through public API\n# ---------------------------------------------------------------------------\n\ndef test_capacity_is_stable_across_operations():\n    bucket = TokenBucket(7, tokens_available=3)\n    bucket.consume(2)\n    bucket.refill(5)\n    bucket.consume(1)\n    assert bucket.capacity == 7\n\n\n# ---------------------------------------------------------------------------\n# Interaction sequences\n# ---------------------------------------------------------------------------\n\ndef test_consume_then_refill_back_to_full():\n    bucket = TokenBucket(10)\n    assert bucket.consume(7) is True\n    bucket.refill(10)\n    assert bucket.tokens_available == 10\n\n\ndef test_alternating_consume_refill_sequence():\n    bucket = TokenBucket(5)\n    assert bucket.consume(5) is True\n    assert bucket.tokens_available == 0\n    bucket.refill(2)\n    assert bucket.tokens_available == 2\n    assert bucket.consume(3) is False\n    assert bucket.tokens_available == 2\n    assert bucket.consume(2) is True\n    assert bucket.tokens_available == 0\n\n\n# ---------------------------------------------------------------------------\n# Formal (Z3) checks of core invariants. Skipped if z3 is not installed.\n# These are bounded checks but the bounds (capacity up to ~1000) cover all\n# realistic usage shapes and prove the algebraic relationships rather than\n# re-implementing the code.\n# ---------------------------------------------------------------------------\n\nz3 = pytest.importorskip(\"z3\")\n\n\ndef _bounded_state_constraints(s, capacity, tokens):\n    \"\"\"Constrain (capacity, tokens) to a valid bucket state for the solver.\"\"\"\n    s.add(capacity > 0)\n    s.add(capacity <= 1000)\n    s.add(tokens >= 0)\n    s.add(tokens <= capacity)\n\n\ndef test_z3_refill_never_exceeds_capacity():\n    # For any valid state and any non-negative refill amount,\n    # min(capacity, tokens + amount) must be in [0, capacity].\n    s = z3.Solver()\n    capacity = z3.Int(\"capacity\")\n    tokens = z3.Int(\"tokens\")\n    amount = z3.Int(\"amount\")\n    _bounded_state_constraints(s, capacity, tokens)\n    s.add(amount >= 0)\n    s.add(amount <= 10_000)\n\n    new_tokens = z3.If(tokens + amount > capacity, capacity, tokens + amount)\n    # Negate the property; UNSAT means the property always holds.\n    s.add(z3.Or(new_tokens > capacity, new_tokens < 0))\n    assert s.check() == z3.unsat\n\n\ndef test_z3_successful_consume_decreases_tokens_by_exact_amount():\n    # If requested <= tokens, then after consume the new value is tokens - requested\n    # and stays in [0, capacity].\n    s = z3.Solver()\n    capacity = z3.Int(\"capacity\")\n    tokens = z3.Int(\"tokens\")\n    requested = z3.Int(\"requested\")\n    _bounded_state_constraints(s, capacity, tokens)\n    s.add(requested >= 0)\n    s.add(requested <= tokens)\n\n    new_tokens = tokens - requested\n    s.add(z3.Or(new_tokens < 0, new_tokens > capacity, new_tokens != tokens - requested))\n    assert s.check() == z3.unsat\n\n\ndef test_z3_failed_consume_leaves_tokens_unchanged():\n    # If requested > tokens, consume must return False and state must not change.\n    # We model \"state change\" as the bucket choosing any new_tokens != tokens.\n    s = z3.Solver()\n    capacity = z3.Int(\"capacity\")\n    tokens = z3.Int(\"tokens\")\n    requested = z3.Int(\"requested\")\n    _bounded_state_constraints(s, capacity, tokens)\n    s.add(requested > tokens)\n    s.add(requested <= 10_000)\n\n    # Per spec, the bucket's new state must equal the old state.\n    # So asserting (new_tokens != tokens) where new_tokens is forced equal must be unsat.\n    new_tokens = tokens  # spec: unchanged\n    s.add(new_tokens != tokens)\n    assert s.check() == z3.unsat\n\n\ndef test_z3_tokens_remain_in_valid_range_after_any_single_operation():\n    # For any valid state, after either a (possibly failed) consume or any\n    # non-negative refill, the resulting token count is in [0, capacity].\n    s = z3.Solver()\n    capacity = z3.Int(\"capacity\")\n    tokens = z3.Int(\"tokens\")\n    requested = z3.Int(\"requested\")\n    amount = z3.Int(\"amount\")\n    _bounded_state_constraints(s, capacity, tokens)\n    s.add(requested >= 0, requested <= 10_000)\n    s.add(amount >= 0, amount <= 10_000)\n\n    consumed = z3.If(requested <= tokens, tokens - requested, tokens)\n    refilled = z3.If(tokens + amount > capacity, capacity, tokens + amount)\n\n    s.add(z3.Or(\n        consumed < 0, consumed > capacity,\n        refilled < 0, refilled > capacity,\n    ))\n    assert s.check() == z3.unsat",
+    ".pdd/meta/token_bucket_plain_python_sync.log": "{\"timestamp\": \"2026-05-21T14:41:07.702963\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 133.86572289466858, \"actual_cost\": 0.16909339999999998, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:46:19.507042\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 53.55138611793518, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:47:16.751842\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 102.16626715660095, \"actual_cost\": 0.19701839999999998, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:53:39.948913\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 42.66889810562134, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:54:25.950606\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 13.933938026428223, \"actual_cost\": 0.19701839999999998, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:57:41.292058\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 13.44303584098816, \"actual_cost\": 0.19701839999999998, \"model\": \"claude-opus-4-7\", \"error\": null}\n",
+    ".pdd/meta/token_bucket_python_sync.log": "{\"timestamp\": \"2026-05-21T14:39:22.244715\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 101.8443489074707, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:43:24.844993\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 123.08482003211975, \"actual_cost\": 0.18547020000000003, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:49:02.605103\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 6.753247261047363, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:49:14.598713\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 84.60540699958801, \"actual_cost\": 0.17894520000000003, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:54:42.840425\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 49.52639102935791, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-21T14:55:35.132297\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 13.400259733200073, \"actual_cost\": 0.17894520000000003, \"model\": \"claude-opus-4-7\", \"error\": null}\n",
+    ".pdd/meta/token_bucket_python.json": "{\n  \"pdd_version\": \"0.0.246.dev95\",\n  \"timestamp\": \"2026-05-21T21:55:32.417562+00:00\",\n  \"command\": \"generate\",\n  \"prompt_hash\": \"182689a966db38e3e95779a8fc840f0ffe245b07c28c2eafa5167f0ff529ff16\",\n  \"code_hash\": \"73ffc362f0ff923a5bdf999c3de7167d0ba5e6f6fa6a22798c66c1ea255d8a28\",\n  \"example_hash\": null,\n  \"test_hash\": null,\n  \"test_files\": {},\n  \"include_deps\": {}\n}",
+    ".pdd/meta/token_bucket_plain_python.json": "{\n  \"pdd_version\": \"0.0.246.dev95\",\n  \"timestamp\": \"2026-05-21T21:54:22.670258+00:00\",\n  \"command\": \"generate\",\n  \"prompt_hash\": \"3f2bc3c18586012cbf262949e7efe02cb3cb7e723f28ae6c81b68da9e1f7e03e\",\n  \"code_hash\": null,\n  \"example_hash\": null,\n  \"test_hash\": null,\n  \"test_files\": {},\n  \"include_deps\": {}\n}"
+  },
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\nUsing .pddrc context: default\nInput files:\n  prompt_file     \n/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo/prompts/token_bucket_plain_python\n.prompt\n  code_file       \n/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo/src/token_bucket_before.py\nOutput files:\n  output          \n/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo/tests/test_before_2.py\nDetected language: python\nBasename: token_bucket_plain\nCloud Success\nSuccessfully wrote tests to \n/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo/tests/test_before_2.py\n\n--- Command Execution Summary ---\n  Step 1 (test): Cost: $0.197018, Model: claude-opus-4-7\nTotal Estimated Cost: $0.197018\n-------------------------------------\n",
+  "sync_steps": [
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.16909339999999998,
+      "model": "claude-opus-4-7",
+      "duration": 133.86572289466858,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_plain_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 53.55138611793518,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_plain_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.19701839999999998,
+      "model": "claude-opus-4-7",
+      "duration": 102.16626715660095,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_plain_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 42.66889810562134,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_plain_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.19701839999999998,
+      "model": "claude-opus-4-7",
+      "duration": 13.933938026428223,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_plain_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.19701839999999998,
+      "model": "claude-opus-4-7",
+      "duration": 13.44303584098816,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_plain_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 101.8443489074707,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.18547020000000003,
+      "model": "claude-opus-4-7",
+      "duration": 123.08482003211975,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 6.753247261047363,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.17894520000000003,
+      "model": "claude-opus-4-7",
+      "duration": 84.60540699958801,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 49.52639102935791,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.17894520000000003,
+      "model": "claude-opus-4-7",
+      "duration": 13.400259733200073,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/token_bucket_python_sync.log"
+    }
+  ]
+}

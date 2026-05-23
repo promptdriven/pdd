@@ -1,0 +1,79 @@
+% You are an expert Python Software Engineer. Your goal is to implement a
+% token bucket rate limiter module called 'token_bucket'.
+
+% The token bucket controls how many operations a caller can perform over time.
+% Each consume call tries to take tokens from the bucket. A refill call adds
+% tokens back up to the allowed limit.
+
+Public API:
+    class TokenBucket:
+        def __init__(self, capacity: int, tokens_available: int = None):
+            """
+            Create a token bucket with the given capacity.
+            tokens_available defaults to capacity if not specified.
+            Raises ValueError if capacity is not a positive integer.
+            """
+
+        def consume(self, requested_tokens: int) -> bool:
+            """
+            Attempt to consume requested_tokens from the bucket.
+            Returns True if successful, False if not enough tokens.
+            Does not modify the bucket state on failure.
+            """
+
+        def refill(self, amount: int) -> None:
+            """
+            Add amount tokens to the bucket.
+            The bucket cannot exceed its capacity.
+            """
+
+        @property
+        def tokens_available(self) -> int:
+            """Current number of available tokens."""
+
+        @property
+        def capacity(self) -> int:
+            """Maximum number of tokens the bucket can hold."""
+
+% Behavior:
+%   - A consume call should succeed only when enough tokens are available.
+%   - A failed consume call should not change the token count.
+%   - Refilling should add tokens but not go over the maximum.
+%   - The bucket should start full unless a lower initial count is given.
+%   - An invalid capacity should produce an appropriate error.
+
+<contract_rules>
+R1 - Reject non-positive capacity
+When capacity is not a positive integer, the TokenBucket constructor MUST raise ValueError.
+R2 - Default tokens to capacity
+When tokens_available is not provided to the constructor, the TokenBucket MUST return tokens_available equal to capacity.
+R3 - Successful consume returns True
+When requested_tokens is less than or equal to current tokens_available, consume MUST return True and tokens_available equal to prior tokens_available minus requested_tokens.
+R4 - Insufficient consume returns False
+When requested_tokens is greater than current tokens_available, consume MUST return False.
+R5 - Failed consume preserves state
+When requested_tokens is greater than current tokens_available, consume MUST NOT mutate tokens_available.
+R6 - Refill caps at capacity
+When refill is called with any non-negative amount, the TokenBucket MUST NOT return tokens_available greater than capacity.
+R7 - Refill adds tokens
+When refill is called with amount such that prior tokens_available plus amount is less than or equal to capacity, the TokenBucket MUST return tokens_available equal to prior tokens_available plus amount.
+</contract_rules>
+
+<acceptance_tests>
+- R1: Given capacity = 0, when TokenBucket(0) is constructed, then ValueError is raised.
+- R2: Given capacity = 10 and no tokens_available argument, when TokenBucket(10) is constructed, then tokens_available equals 10.
+- R3: Given a TokenBucket with capacity=10 and tokens_available=5, when consume(3) is called, then it returns True and tokens_available equals 2.
+- R4: Given a TokenBucket with capacity=10 and tokens_available=2, when consume(5) is called, then it returns False.
+- R5: Given a TokenBucket with capacity=10 and tokens_available=2, when consume(5) is called, then tokens_available remains 2.
+- R6: Given a TokenBucket with capacity=10 and tokens_available=8, when refill(5) is called, then tokens_available equals 10 (not greater than capacity).
+- R7: Given a TokenBucket with capacity=10 and tokens_available=3, when refill(4) is called, then tokens_available equals 7.
+</acceptance_tests>
+
+<vocabulary>
+- positive integer: an integer value strictly greater than zero.
+- non-negative: an integer value greater than or equal to zero.
+- capacity: the maximum number of tokens the bucket can hold, fixed at construction.
+- tokens_available: the current count of tokens held by the bucket, an integer between 0 and capacity inclusive.
+- requested_tokens: the integer argument passed to consume indicating how many tokens the caller wishes to remove.
+- prior tokens_available: the value of tokens_available immediately before the method call under consideration.
+</vocabulary>

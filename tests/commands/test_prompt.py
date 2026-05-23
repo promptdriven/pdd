@@ -1,4 +1,4 @@
-"""CLI-level tests for `pdd prompt lint` via CliRunner."""
+"""CLI-level tests for `pdd lint` via CliRunner."""
 from __future__ import annotations
 
 import json
@@ -20,7 +20,7 @@ def runner():
 
 
 def _invoke(runner: CliRunner, *args):
-    """Invoke pdd prompt lint with --quiet to suppress update/summary noise."""
+    """Invoke pdd lint with --quiet to suppress update/summary noise."""
     return runner.invoke(
         cli.cli,
         ["--quiet", "prompt", "lint", *args],
@@ -29,7 +29,7 @@ def _invoke(runner: CliRunner, *args):
 
 
 def _json_invoke(runner: CliRunner, *args):
-    """Invoke pdd prompt lint --json with --quiet for clean parseable output."""
+    """Invoke pdd lint --json with --quiet for clean parseable output."""
     return runner.invoke(
         cli.cli,
         ["--quiet", "prompt", "lint", "--json", *args],
@@ -38,7 +38,7 @@ def _json_invoke(runner: CliRunner, *args):
 
 
 def _ambiguity_invoke(runner: CliRunner, *args, input_text: str = ""):
-    """Invoke pdd prompt lint --ambiguity with --quiet."""
+    """Invoke pdd lint --ambiguity with --quiet."""
     return runner.invoke(
         cli.cli,
         ["--quiet", "prompt", "lint", "--ambiguity", *args],
@@ -55,6 +55,38 @@ def _ambiguity_json_invoke(runner: CliRunner, *args):
         catch_exceptions=False,
     )
 
+
+
+
+def test_top_level_lint_alias_matches_prompt_lint(runner):
+    result = runner.invoke(
+        cli.cli,
+        ["--quiet", "lint", str(FIXTURES / "clean.prompt")],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+
+
+def test_checkup_lint_alias_runs_prompt_lint(runner):
+    result = runner.invoke(
+        cli.cli,
+        ["--quiet", "checkup", "lint", str(FIXTURES / "clean.prompt")],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+
+
+def test_checkup_converge_runs_lint_closure_defaults(runner):
+    result = runner.invoke(
+        cli.cli,
+        ["--quiet", "checkup", "converge", str(FIXTURES / "clean.prompt")],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert "Formalization readiness" in result.output
 
 # ---------------------------------------------------------------------------
 # Basic invocation
@@ -190,7 +222,7 @@ class TestStoriesFlag:
         )
         assert result.exit_code != 0
         assert "--stories expects a directory" in result.output
-        assert "pdd prompt lint --stories user_stories/prompt_lint_samples/ prompts/foo_python.prompt" in result.output
+        assert "pdd lint --stories user_stories/prompt_lint_samples/ prompts/foo_python.prompt" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,20 @@
+[
+  {
+    "path": "prompts/token_bucket_formalized_python.prompt",
+    "warn_count": 1,
+    "error_count": 0,
+    "issues": [
+      {
+        "level": "warn",
+        "code": "VAGUE_TERM",
+        "rule_id": "",
+        "section": "contract_rules",
+        "line": "R3 - Successful consume reduces tokens",
+        "message": "Vague term \"successful\" used in <contract_rules> without a <vocabulary> definition.",
+        "term": "successful",
+        "suggestion": "successful: <add a precise, observable definition here>",
+        "interpretations": []
+      }
+    ]
+  }
+]

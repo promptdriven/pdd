@@ -1,0 +1,11 @@
+{
+  "mode": "deterministic",
+  "input_prompt": "find_verification_errors_LLM.prompt",
+  "commands": [
+    "pdd prompt lint",
+    "pdd prompt lint --llm-template",
+    "pdd contracts check --json",
+    "pdd contracts compile --json",
+    "pdd prompt lint --report formalization --json"
+  ]
+}

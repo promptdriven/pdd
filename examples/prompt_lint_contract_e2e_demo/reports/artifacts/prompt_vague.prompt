@@ -1,0 +1,32 @@
+% E2E NEGATIVE fixture: a deliberately VAGUE contract prompt.
+% Paired with prompts/foo_formalized_python.prompt (positive fixture).
+%
+% This file is intentionally not "source-of-truth grade":
+%   - vague terms (active, valid, duplicate, authorized, ...) with no
+%     <vocabulary> definitions
+%   - rules with no "When ..." condition and no observable obligation verb
+%   - acceptance tests phrased as adjectives ("gracefully", "blocked")
+%
+% pdd prompt lint / pdd contracts compile / pdd coverage should flag every
+% one of these. See ../README.md for the expected counts.
+
+<contract_rules>
+R1: The handler must return a valid response when the caller is an active user.
+R2: Duplicate requests must be rejected gracefully and must not corrupt stored state.
+R3: Only authorized callers may invoke the handler; unauthorized access should fail safely.
+R4: Inactive users must not receive a successful outcome.
+</contract_rules>
+
+<requirements>
+- Read header X-Idempotency-Key on each request.
+- Compare last_login_at against request_received_at for active-user checks.
+- Reject duplicates that were already processed within a reasonable recent window.
+- Emit JSON containing reason and original_request_id when rejecting duplicates.
+- Log upload attempts for audit when appropriate.
+</requirements>
+
+<acceptance_tests>
+- Active users receive success.
+- Duplicate idempotency keys are handled gracefully.
+- Unauthorized callers are blocked.
+</acceptance_tests>

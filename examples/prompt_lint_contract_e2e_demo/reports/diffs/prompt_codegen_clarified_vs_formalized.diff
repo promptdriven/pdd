@@ -1,0 +1,247 @@
+--- prompt_codegen_clarified.prompt
++++ prompts/foo_formalized_python.prompt (target)
+@@ -1,182 +1,84 @@
+-write a python module `foo_work` in `src/foo_work.py` that implements an idempotent
+-request handler with JWT authorization, active-user checks, and a 24-hour idempotency
+-store. Use only the Python standard library.
++% E2E POSITIVE fixture: the SAME domain as foo_vague_python.prompt,
++% but rewritten as a "source-of-truth"-grade contract.
++%
++% Every vague term is defined in <vocabulary>; every rule states a
++% "When ..." condition and at least one observable obligation
++% ("MUST return HTTP ...", "MUST write ...", "MUST NOT write ...").
++% The <formalization> block encodes R2 and R3 as SMT predicates so
++% pdd contracts compile recognizes them and pdd prompt lint --report
++% formalization stays clean.
++%
++% Expected deterministic verdict on this file:
++%   pdd prompt lint                : 0 warn
++%   pdd contracts compile          : 4 rules, 0 errors, >= 6 obligations
++%   pdd coverage --contracts       : every rule story-only or checked
++%   pdd prompt lint --report
++%       formalization              : 0 issues
+ 
+-% E2E fixture: complex handler logic + deliberately vague contract language.
+-% Suitable for pdd generate / pdd test AND for pdd prompt lint / pdd contracts.
+-% Pair with user_stories/story__foo_codegen.md for coverage --contracts.
++<vocabulary>
++- active user: a user whose request_received_at - last_login_at <= 5 days
++- duplicate request: a request whose X-Idempotency-Key matches a previously accepted request within the last 24 hours
++- authorized caller: a caller presenting a Bearer JWT whose exp is in the future and whose scope includes "foo:invoke"
++- valid response: HTTP 200 with body matching {result: object}
++- duplicate response: HTTP 409 with body matching {reason: string, original_request_id: uuid}
++- seen_within_24h: boolean predicate that is true when the request's X-Idempotency-Key has been recorded within the previous 24 hours
++- authorized: boolean predicate for "the caller is an authorized caller"
++- active: boolean predicate for "the caller is an active user"
++- response_status: HTTP status code of the response (integer 100-599)
++- wrote_record: boolean predicate that is true when the handler appended a new request record
++</vocabulary>
+ 
+ <contract_rules>
+-R1 - Successful first request
+-When the caller presents a Bearer JWT with scope 'foo:invoke' and exp in the future, is an active user, and presents an X-Idempotency-Key not present in IdempotencyStore within the 24h TTL, and the body is absent or has amount_cents > 0,
+-the handler MUST return HTTP 200 with JSON {result: 'ok', request_id: <uuid4>, amount_cents: <int|null>} and MUST record (request_id, recorded_at) in IdempotencyStore under that key.
+-R2 - Duplicate idempotency key
+-When X-Idempotency-Key already exists in IdempotencyStore within its 24h TTL,
+-the handler MUST return HTTP 409 with JSON {reason: 'duplicate', original_request_id: <stored>} and MUST NOT add or modify any IdempotencyStore entry.
+-R3 - Authorization gate
+-When the Authorization header is missing, not a Bearer token, base64url-undecodable, lacks 'foo:invoke' in scope, or has exp <= now,
+-the handler MUST return HTTP 401 and MUST NOT write to IdempotencyStore or AUDIT_LOG.
+-R4 - Inactive user rejection
+-When (request_received_at - last_login_at).days > 5,
+-the handler MUST return HTTP 403 and MUST NOT write to IdempotencyStore or AUDIT_LOG.
+-R5 - Payload validation
+-When the body is non-empty but not valid JSON, the handler MUST return HTTP 400; when JSON parses and amount_cents is present and <= 0, the handler MUST return HTTP 422. In both cases the handler MUST NOT add, remove, or mutate any IdempotencyStore entry other than reads for TTL eviction.
+-R6 - Audit on success
+-When the handler returns HTTP 200, it MUST append exactly one line to AUDIT_LOG containing the JWT sub, request_id, and amount_cents (or null). If appending raises, the response body MUST include audit_failed: true and status MUST remain 200.
++R1: When an authorized caller who is an active user submits a request that is not a duplicate request, the handler MUST return a valid response and MUST write one request record.
++R2: When the request is a duplicate request, the handler MUST return a duplicate response and MUST NOT write a new request record.
++R3: When the caller is not an authorized caller, the handler MUST return HTTP 401 and MUST NOT write a request record.
++R4: When the caller is an authorized caller but is not an active user, the handler MUST return HTTP 403 and MUST NOT write a request record.
+ </contract_rules>
+ 
+ <requirements>
+-Behavior (implement all of this in code):
+-
+-1. Authorization
+-   - Read `Authorization: Bearer <jwt>`; reject missing, malformed, expired, or wrong-scope tokens before any idempotency write.
+-   - JWT payload must include `exp` (unix seconds, must be in the future) and `scope` containing `foo:invoke`.
+-   - Decode payload only (base64url); do not verify signatures in this demo.
+-
+-2. Idempotency
+-   - Require header `X-Idempotency-Key` (non-empty string).
+-   - Maintain an in-process store keyed by idempotency key with TTL 24 hours from first acceptance.
+-   - First seen key within TTL: record `{request_id, recorded_at}` then return HTTP 200.
+-   - Duplicate key within TTL: return HTTP 409 with JSON `{"reason": "duplicate", "original_request_id": "<stored>"}` and do not add a second record.
+-
+-3. Active user
+-   - `UserProfile.last_login_at` and `RequestContext.request_received_at` are timezone-aware datetimes.
+-   - Caller is active when `(request_received_at - last_login_at).days <= 5`.
+-
+-4. Request body
+-   - Optional JSON body with fields `amount_cents` (int) and `note` (str).
+-   - Malformed JSON → HTTP 400, no store mutation.
+-   - If `amount_cents` is present and `<= 0` → HTTP 422.
+-
+-5. Successful response shape (HTTP 200)
+-   - JSON `{"result": "ok", "request_id": "<uuid4>", "amount_cents": <int|null>}`.
+-   - If audit logging fails after a successful store write, still return 200 but add `"audit_failed": true`.
+-
+-6. Concurrency
+-   - Two concurrent requests with the same idempotency key must not both return 200 (per-key `threading.Lock` or equivalent check-then-set).
+-
+-7. Audit
+-   - On HTTP 200 only, append one line to an in-memory list `AUDIT_LOG` with caller id from JWT `sub`, request_id, and amount_cents when supplied.
+-   - Log upload attempts for audit when appropriate (see acceptance tests).
+-
+-Processing order (do not reorder): auth → idempotency key → active user → duplicate check → body validation → store write → audit → response.
++- Read header X-Idempotency-Key on each request.
++- Compute (request_received_at - last_login_at) for the active user check.
++- Reject duplicate requests within the 24 hour window with HTTP 409.
++- Emit JSON {reason: string, original_request_id: uuid} when rejecting duplicates.
++- Append one audit log entry per accepted request with caller_id and request_id.
+ </requirements>
+ 
+ <acceptance_tests>
+-- Active users with a fresh idempotency key receive success (HTTP 200 with result and request_id).
+-- Duplicate idempotency keys within a reasonable recent window are handled gracefully (one 200, replays 409).
+-- Unauthorized callers are blocked (HTTP 401).
+-- Inactive users do not get a successful outcome (HTTP 403).
+-- Concurrent duplicate race: parallel same-key requests yield exactly one 200 and one 409.
+-- Invalid JSON returns 400 without corrupting stored state for other keys.
+-- R1: Given an active user and a Bearer JWT with scope 'foo:invoke' and exp in the future, when handle_request is called with a previously unseen X-Idempotency-Key and body {"amount_cents": 100}, then HandlerResult.status_code == 200, body['result'] == 'ok', body['request_id'] is a uuid4 string, and store.get_request_id(key) == body['request_id'].
+-- R2: Given a key already recorded less than 24 hours ago with stored request_id S, when handle_request is called again with the same key, then status_code == 409, body == {'reason': 'duplicate', 'original_request_id': S}, and store.get_request_id(key) == S (unchanged).
+-- R3: Given Authorization is None, or not 'Bearer <token>', or the decoded payload has exp <= now, or scope lacks 'foo:invoke', when handle_request is called, then status_code == 401, store is unchanged, and AUDIT_LOG is unchanged.
+-- R4: Given (request_received_at - last_login_at).days == 6, when handle_request is called with otherwise valid inputs, then status_code == 403, store is unchanged, and AUDIT_LOG is unchanged.
+-- R2: Given N=2 threads calling handle_request with the same key and otherwise valid inputs, then exactly one HandlerResult has status_code == 200 and exactly one has status_code == 409, and store.get_request_id(key) equals the 200-response request_id.
+-- R5: Given store contains (K1 -> R1) and a request arrives with key K2 and body b'{not json', then status_code == 400, store.get_request_id(K1) == R1, and store.has(K2) is False.
+-- R6: Given a request that returns 200 for caller sub='u1' with amount_cents=100 and request_id=R, then AUDIT_LOG gains exactly one entry containing 'u1', R, and '100'; given the same conditions but AUDIT_LOG.append is patched to raise, body['audit_failed'] is True and status_code is 200.
+-- R2-concurrency: Given N=2 threads calling handle_request with the same key and otherwise valid inputs, then exactly one HandlerResult has status_code == 200 and exactly one has status_code == 409, and store.get_request_id(key) equals the 200-response request_id.
++- R1: handler returns HTTP 200 for an authorized caller who is an active user and whose X-Idempotency-Key has not been seen in the last 24 hours.
++- R2: handler returns HTTP 409 with reason and original_request_id when the X-Idempotency-Key has been seen in the last 24 hours.
++- R3: handler returns HTTP 401 when the Bearer JWT is missing, expired, or lacks scope "foo:invoke".
++- R4: handler returns HTTP 403 when the caller has a valid Bearer JWT but request_received_at - last_login_at > 5 days.
+ </acceptance_tests>
+ 
+-<deliverables>
+-Implement `src/foo_work.py` with these public symbols:
+-
+-- `@dataclass class RequestContext`: fields `authorization`, `idempotency_key`, `request_received_at`, `body_bytes`
+-- `@dataclass class UserProfile`: fields `user_id`, `last_login_at`
+-- `@dataclass class HandlerResult`: fields `status_code: int`, `body: dict`
+-- `class IdempotencyStore`: methods `has(key) -> bool`, `record(key, request_id) -> None`, `get_request_id(key) -> str | None`, plus TTL eviction on read/write
+-- `def parse_bearer_jwt(authorization: str | None) -> tuple[bool, dict | None, str | None]`  # ok, claims, error
+-- `def is_active_user(user: UserProfile, at: datetime) -> bool`
+-- `def handle_request(ctx: RequestContext, user: UserProfile, store: IdempotencyStore) -> HandlerResult`
+-
+-Module-level `AUDIT_LOG: list[str]` for audit lines.
+-
+-Do not generate tests, CLI, or extra files in this step.
+-</deliverables>
+-
+-<vocabulary>
+-- valid response: an HTTP 200 HandlerResult whose body matches {"result": "ok", "request_id": <uuid4>, "amount_cents": <int|null>}
+-- duplicate request: a request whose X-Idempotency-Key already exists in IdempotencyStore within the 24-hour TTL
+-- gracefully (for duplicates): returns HTTP 409 with body {"reason": "duplicate", "original_request_id": <stored>} and performs no store mutation
+-- authorized caller: a caller whose Authorization header is 'Bearer <jwt>' where the base64url-decoded payload has exp > now and 'foo:invoke' in scope
+-- unauthorized caller: any caller for which parse_bearer_jwt returns ok=False (missing, malformed, expired, or missing foo:invoke scope)
+-- fail safely: return HTTP 401 before any IdempotencyStore mutation or AUDIT_LOG append
+-- inactive user: a UserProfile where (request_received_at - last_login_at).days > 5
+-- active user: a UserProfile where (request_received_at - last_login_at).days <= 5
+-- successful outcome: a HandlerResult with status_code == 200
+-- bad payload: body_bytes that fail json.loads (→400) or whose amount_cents is present and <= 0 (→422)
+-- handled appropriately: malformed JSON → HTTP 400; amount_cents <= 0 → HTTP 422; in both cases no IdempotencyStore mutation occurs
+-- uploads look valid: the request reached the store-write step and produced HTTP 200
+-- reasonable recent window: the 24-hour TTL of the IdempotencyStore from first acceptance
+-- corrupt stored state: any mutation of IdempotencyStore entries other than the single first-acceptance record per key
+-- log when appropriate: append to AUDIT_LOG if and only if the HandlerResult.status_code == 200
+-</vocabulary>
+-
+ <formalization>
+-R1:
+-  target: pytest
+-  variables:
+-    status_code: int
+-    stored_request_id: str|None
+-    response_request_id: str
+-  assume: auth_ok and active and key_unseen and body_ok
+-  predicate: status_code == 200 and stored_request_id == response_request_id
+-  violation: status_code != 200 or stored_request_id != response_request_id
+-  # linked_test: R1: test_first_request_returns_200_and_records_key
+-
+ R2:
+-  target: pytest
++  target: smt
+   variables:
+-    status_code: int
+-    store_size_delta: int
+-    body_reason: str
+-  assume: key in store and not expired
+-  predicate: status_code == 409 and store_size_delta == 0 and body_reason == 'duplicate'
+-  violation: status_code != 409 or store_size_delta != 0
+-  # linked_test: R2: test_duplicate_key_returns_409_and_does_not_mutate_store
++    seen_within_24h: Bool
++    response_status: Int
++    wrote_record: Bool
++  assume: response_status >= 100 && response_status <= 599
++  predicate: seen_within_24h => (response_status == 409 && wrote_record == false)
++  violation: seen_within_24h && (response_status != 409 || wrote_record == true)
+ 
+ R3:
+-  target: pytest
++  target: smt
+   variables:
+-    status_code: int
+-    store_mutated: Bool
+-    audit_mutated: Bool
+-  assume: auth missing or malformed or expired or wrong_scope
+-  predicate: status_code == 401 and not store_mutated and not audit_mutated
+-  violation: status_code != 401 or store_mutated or audit_mutated
+-  # linked_test: R3: test_unauthorized_returns_401_with_no_side_effects
++    authorized: Bool
++    response_status: Int
++    wrote_record: Bool
++  assume: response_status >= 100 && response_status <= 599
++  predicate: (!authorized) => (response_status == 401 && wrote_record == false)
++  violation: (!authorized) && (response_status != 401 || wrote_record == true)
+ 
+ R4:
+   target: smt
+   variables:
+-    days_since_login: Int
+-    status_code: Int
+-  assume: auth_ok and key_unseen and body_ok
+-  predicate: days_since_login > 5 => status_code == 403
+-  violation: days_since_login > 5 and status_code != 403
+-  # linked_test: R4: test_inactive_user_returns_403
+-
+-R5:
+-  target: smt
+-  variables:
+-    json_valid: Bool
+-    amount_cents_present: Bool
+-    amount_cents: Int
+-    status_code: Int
+-  assume: auth_ok and active and key_unseen
+-  predicate: (not json_valid => status_code == 400) and (json_valid and amount_cents_present and amount_cents <= 0 => status_code == 422)
+-  violation: (not json_valid and status_code != 400) or (json_valid and amount_cents_present and amount_cents <= 0 and status_code != 422)
+-  # linked_test: R5: test_bad_payload_returns_400_or_422_without_other_key_mutation
+-
+-R6:
+-  target: pytest
+-  variables:
+-    status_code: int
+-    audit_lines_added: int
+-    audit_failed_flag: Bool
+-  assume: handler returned 200
+-  predicate: audit_lines_added == 1 or (audit_lines_added == 0 and audit_failed_flag)
+-  violation: status_code == 200 and audit_lines_added == 0 and not audit_failed_flag
+-  # linked_test: R6: test_audit_appended_on_200 and test_audit_failure_sets_flag_but_keeps_200
++    authorized: Bool
++    active: Bool
++    response_status: Int
++    wrote_record: Bool
++  assume: response_status >= 100 && response_status <= 599
++  predicate: (authorized && !active) => (response_status == 403 && wrote_record == false)
++  violation: authorized && !active && (response_status != 403 || wrote_record == true)
+ </formalization>

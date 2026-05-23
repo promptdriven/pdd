@@ -1,0 +1,119 @@
+{
+  "schema": "pdd.evidence.manifest.v1",
+  "generated_at": "2026-05-22T00:04:21.656301+00:00",
+  "prompt_path": "examples/evidence_manifest_demo/prompts/token_bucket_formalized_python.prompt",
+  "prompt_sha256": "577e32564607b5dc4c9909ad098eda5d8016920c0b2d4e37fb935d75d2e3cc53",
+  "rule_count": 6,
+  "gap_count": 0,
+  "rules": [
+    {
+      "rule_id": "R1",
+      "status": "checked",
+      "stories": [
+        "story__token_bucket.md"
+      ],
+      "story_snippets": [
+        "- [ ] R1: Non-positive capacity raises ValueError at construction\n- [ ] R2: Default tokens_available equals capacity\n- [ ] R3: Successful consume reduces tokens and returns True\n- [ ] R4: Failed consume preserves state and returns False\n- [ ] R5: Refill never exceeds capacity\n- [ ] R6: Partial refill adds the refill amount when below cap"
+      ],
+      "tests": [
+        "test_R1_rejects_non_positive_capacity"
+      ],
+      "formal": [
+        "R1:\n  target: smt\n  variables:\n    capacity: Int\n    raised_value_error: Bool\n  assume: true\n  predicate: capacity <= 0 => raised_value_error == true\n  violation: capacity <= 0 && raised_value_error == false"
+      ],
+      "waiver": null,
+      "gap": false
+    },
+    {
+      "rule_id": "R2",
+      "status": "checked",
+      "stories": [
+        "story__token_bucket.md"
+      ],
+      "story_snippets": [
+        "- [ ] R1: Non-positive capacity raises ValueError at construction\n- [ ] R2: Default tokens_available equals capacity\n- [ ] R3: Successful consume reduces tokens and returns True\n- [ ] R4: Failed consume preserves state and returns False\n- [ ] R5: Refill never exceeds capacity\n- [ ] R6: Partial refill adds the refill amount when below cap"
+      ],
+      "tests": [
+        "test_R2_default_tokens_equal_capacity"
+      ],
+      "formal": [
+        "R2:\n  target: smt\n  variables:\n    capacity: Int\n    tokens_available: Int\n    tokens_arg_provided: Bool\n  assume: capacity > 0\n  predicate: tokens_arg_provided == false => tokens_available == capacity\n  violation: tokens_arg_provided == false && tokens_available != capacity"
+      ],
+      "waiver": null,
+      "gap": false
+    },
+    {
+      "rule_id": "R3",
+      "status": "checked",
+      "stories": [
+        "story__token_bucket.md"
+      ],
+      "story_snippets": [
+        "- [ ] R1: Non-positive capacity raises ValueError at construction\n- [ ] R2: Default tokens_available equals capacity\n- [ ] R3: Successful consume reduces tokens and returns True\n- [ ] R4: Failed consume preserves state and returns False\n- [ ] R5: Refill never exceeds capacity\n- [ ] R6: Partial refill adds the refill amount when below cap"
+      ],
+      "tests": [
+        "test_R3_consume_success_reduces_tokens",
+        "test_R3_consume_proof_z3"
+      ],
+      "formal": [
+        "R3:\n  target: smt\n  variables:\n    capacity: Int\n    prior_tokens_available: Int\n    requested_tokens: Int\n    tokens_available: Int\n    result: Bool\n  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && requested_tokens >= 0\n  predicate: requested_tokens <= prior_tokens_available => (result == true && tokens_available == prior_tokens_available - requested_tokens)\n  violation: requested_tokens <= prior_tokens_available && (result == false || tokens_available != prior_tokens_available - requested_tokens)"
+      ],
+      "waiver": null,
+      "gap": false
+    },
+    {
+      "rule_id": "R4",
+      "status": "checked",
+      "stories": [
+        "story__token_bucket.md"
+      ],
+      "story_snippets": [
+        "- [ ] R1: Non-positive capacity raises ValueError at construction\n- [ ] R2: Default tokens_available equals capacity\n- [ ] R3: Successful consume reduces tokens and returns True\n- [ ] R4: Failed consume preserves state and returns False\n- [ ] R5: Refill never exceeds capacity\n- [ ] R6: Partial refill adds the refill amount when below cap"
+      ],
+      "tests": [
+        "test_R4_consume_failure_preserves_state"
+      ],
+      "formal": [
+        "R4:\n  target: smt\n  variables:\n    capacity: Int\n    prior_tokens_available: Int\n    requested_tokens: Int\n    tokens_available: Int\n    result: Bool\n  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && requested_tokens >= 0\n  predicate: requested_tokens > prior_tokens_available => (result == false && tokens_available == prior_tokens_available)\n  violation: requested_tokens > prior_tokens_available && (result == true || tokens_available != prior_tokens_available)"
+      ],
+      "waiver": null,
+      "gap": false
+    },
+    {
+      "rule_id": "R5",
+      "status": "checked",
+      "stories": [
+        "story__token_bucket.md"
+      ],
+      "story_snippets": [
+        "- [ ] R1: Non-positive capacity raises ValueError at construction\n- [ ] R2: Default tokens_available equals capacity\n- [ ] R3: Successful consume reduces tokens and returns True\n- [ ] R4: Failed consume preserves state and returns False\n- [ ] R5: Refill never exceeds capacity\n- [ ] R6: Partial refill adds the refill amount when below cap"
+      ],
+      "tests": [
+        "test_R5_refill_capped_at_capacity"
+      ],
+      "formal": [
+        "R5:\n  target: smt\n  variables:\n    capacity: Int\n    prior_tokens_available: Int\n    amount: Int\n    tokens_available: Int\n  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && amount >= 0\n  predicate: tokens_available <= capacity\n  violation: tokens_available > capacity"
+      ],
+      "waiver": null,
+      "gap": false
+    },
+    {
+      "rule_id": "R6",
+      "status": "checked",
+      "stories": [
+        "story__token_bucket.md"
+      ],
+      "story_snippets": [
+        "- [ ] R1: Non-positive capacity raises ValueError at construction\n- [ ] R2: Default tokens_available equals capacity\n- [ ] R3: Successful consume reduces tokens and returns True\n- [ ] R4: Failed consume preserves state and returns False\n- [ ] R5: Refill never exceeds capacity\n- [ ] R6: Partial refill adds the refill amount when below cap"
+      ],
+      "tests": [
+        "test_R6_refill_adds_when_below_cap"
+      ],
+      "formal": [
+        "R6:\n  target: smt\n  variables:\n    capacity: Int\n    prior_tokens_available: Int\n    amount: Int\n    tokens_available: Int\n  assume: capacity > 0 && prior_tokens_available >= 0 && prior_tokens_available <= capacity && amount >= 0\n  predicate: (prior_tokens_available + amount) <= capacity => tokens_available == prior_tokens_available + amount\n  violation: (prior_tokens_available + amount) <= capacity && tokens_available != prior_tokens_available + amount"
+      ],
+      "waiver": null,
+      "gap": false
+    }
+  ]
+}

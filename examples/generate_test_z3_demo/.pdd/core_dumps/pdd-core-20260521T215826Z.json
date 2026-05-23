@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.246.dev95",
+  "timestamp_utc": "20260521T215826Z",
+  "argv": [
+    "coverage",
+    "--contracts",
+    "prompts/token_bucket_python.prompt",
+    "--stories-dir",
+    "user_stories/",
+    "--tests-dir",
+    "tests/",
+    "--json"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/generate_test_z3_demo",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [],
+  "total_cost": 0.0,
+  "steps": [],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd"
+  },
+  "file_contents": {},
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\n{\n  \"results\": [\n    {\n      \"path\": \"prompts/token_bucket_python.prompt\",\n      \"has_contract_rules\": true,\n      \"error\": null,\n      \"rules\": [\n        {\n          \"rule_id\": \"R1\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r1_zero_capacity_raises\",\n            \"test_r1_negative_capacity_raises\",\n            \"test_r1_non_int_capacity_raises\",\n            \"test_r1_bool_capacity_rejected\",\n            \"test_r1_string_capacity_raises\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        },\n        {\n          \"rule_id\": \"R2\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r2_default_tokens_equal_capacity\",\n            \"test_r2_explicit_initial_tokens_respected\",\n            \"test_r2_explicit_zero_initial_tokens\",\n            \"test_r2_initial_tokens_above_capacity_rejected\",\n            \"test_r2_negative_initial_tokens_rejected\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        },\n        {\n          \"rule_id\": \"R3\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r3_consume_partial_returns_true_and_decrements\",\n            \"test_r3_consume_exact_amount_returns_true\",\n            \"test_r3_consume_zero_succeeds_without_change\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        },\n        {\n          \"rule_id\": \"R4\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r4_consume_more_than_available_returns_false\",\n            \"test_r4_consume_just_above_available_returns_false\",\n            \"test_r4_consume_from_empty_bucket_returns_false\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        },\n        {\n          \"rule_id\": \"R5\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r5_refill_adds_when_within_capacity\",\n            \"test_r5_refill_zero_is_noop\",\n            \"test_r5_refill_exactly_to_capacity\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        },\n        {\n          \"rule_id\": \"R6\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r6_refill_over_capacity_caps\",\n            \"test_r6_refill_far_above_capacity_caps\",\n            \"test_r6_refill_full_bucket_stays_full\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        },\n        {\n          \"rule_id\": \"R7\",\n          \"status\": \"test-only\",\n          \"stories\": [],\n          \"tests\": [\n            \"test_r7_capacity_property_returns_constructor_value\",\n            \"test_r7_capacity_unchanged_after_consume_and_refill\",\n            \"test_r7_capacity_is_read_only\"\n          ],\n          \"formal\": [],\n          \"waiver\": null,\n          \"failures\": [],\n          \"notes\": [],\n          \"story_details\": []\n        }\n      ],\n      \"summary\": {\n        \"total\": 7,\n        \"checked\": 0,\n        \"story_only\": 0,\n        \"test_only\": 7,\n        \"unchecked\": 0,\n        \"waived\": 0,\n        \"failed\": 0,\n        \"formal_only\": 0,\n        \"needs_human\": 0\n      }\n    }\n  ],\n  \"total_prompts\": 1,\n  \"prompts_with_contracts\": 1\n}\n\n\n=== STDERR ===\n",
+  "exit_reason": "Command exited with code 1 (intentional failure)."
+}
