@@ -1596,6 +1596,12 @@ class JobManager:
         if not job:
             return False
 
+        # _handle_budget_exceeded calls cancel() AFTER setting
+        # job.status = BUDGET_EXCEEDED, and relies on this method to
+        # actually terminate the subprocess and cancel the asyncio
+        # task. So BUDGET_EXCEEDED MUST NOT short-circuit here — only
+        # the other terminal statuses (which mean the subprocess is
+        # already gone) do.
         if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
             return False
 

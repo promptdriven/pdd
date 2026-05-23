@@ -123,7 +123,18 @@
   - `/pdd budget <N>` on any non-issue active_command -> kind
     `budget_set`, `amount=N`.
   - `/pdd budget node <N>` -> kind `budget_node_set`, `amount=N`.
+    **Only valid when `active_command == "issue"`**; on any other active
+    command the parser MUST return `kind="invalid"` with a message that
+    redirects the commenter to `/pdd budget N` (the verb that actually
+    moves the cap for non-issue commands). Accepting the verb silently
+    would set `node_budget` on the job, but `effective_cap()` ignores
+    `node_budget` for non-issue commands — the user would see an
+    acknowledgement while the cap stayed unchanged.
   - `/pdd budget max <N>` -> kind `budget_max_set`, `amount=N`.
+    **Only valid when `active_command == "issue"`**; same rationale as
+    `budget node` above — `max_total_cap` only participates in the
+    `pdd-issue` effective-cap formula. Non-issue active commands must
+    receive the same `kind="invalid"` redirect.
   All amounts are validated by `budget_settings.validate_amount`; on
   ValueError, kind becomes `invalid` with a usage hint.
 

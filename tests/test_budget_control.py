@@ -2743,3 +2743,143 @@ class TestTrackCostWritesOnException:
         assert "gpt-4" in contents
 
 
+# --------------------------------------------------------------- review fixes
+# Regression tests for the five findings raised by the post-implementation
+# code review. Each test reproduces the broken behaviour before the fix and
+# documents which finding it guards against.
+
+
+class TestCancelReturns409ForBudgetExceeded:
+    """Finding 5: ``POST /jobs/{job_id}/cancel`` must 409 when the job
+    has already terminated with ``BUDGET_EXCEEDED`` — previously it
+    silently returned 200 because the early-409 guard only enumerated
+    ``COMPLETED``/``FAILED``/``CANCELLED``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_on_budget_exceeded_is_409(self, tmp_path):
+        from fastapi import HTTPException
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes.commands import cancel_job
+
+        async def noop_executor(job):
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=noop_executor, project_root=tmp_path)
+        job = await mgr.submit("bug", args={}, options={})
+        # Simulate the budget-exceeded terminal state without racing the
+        # actual watcher.
+        job.status = JobStatus.BUDGET_EXCEEDED
+
+        with pytest.raises(HTTPException) as exc:
+            await cancel_job(job.id, manager=mgr)
+        assert exc.value.status_code == 409
+        assert "budget_exceeded" in exc.value.detail.lower()
+
+
+class TestClearCapViaRest:
+    """Finding 2: the prompt's ``BudgetStore.update`` contract distinguishes
+    "field omitted" (leave unchanged) from "field explicitly None" (clear).
+    The REST route previously collapsed both onto ``leave unchanged`` so
+    no client could drop a previously-set cap back to "no cap". This test
+    asserts the route now forwards explicit ``None`` through to
+    ``update_budget``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_null_clears_budget_cap(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.routes.commands import update_job_budget
+        from pdd.server.models import BudgetUpdateRequest
+
+        async def slow_executor(job):
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.2)
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor, project_root=tmp_path)
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        assert job.budget_cap == 30.0
+
+        request = BudgetUpdateRequest.model_validate({"budget_cap": None})
+        result = await update_job_budget(job.id, request, manager=mgr)
+        # update_budget should have cleared the cap; the returned snapshot
+        # confirms budget_cap is now None.
+        assert result.budget_cap is None
+        assert job.budget_cap is None
+
+    def test_empty_body_still_rejected(self):
+        """An empty body remains a 422 — fields_set is empty, so the
+        model_validator fires. Regression guard for the rejection
+        path the previous validator relied on.
+        """
+        from pdd.server.models import BudgetUpdateRequest
+
+        with pytest.raises(Exception):
+            BudgetUpdateRequest.model_validate({})
+
+
+class TestAmountValidationSharedHelper:
+    """Finding 4: amount validation used to live in three places (the
+    canonical ``budget_settings.validate_amount`` plus two pydantic
+    field validators in models.py). The models-side validators now
+    share a single module-level helper so they cannot drift apart.
+    """
+
+    def test_validators_share_same_rejection_set(self):
+        from pdd.server.models import (
+            BudgetUpdateRequest, CommandRequest, _coerce_budget_amount_value,
+        )
+
+        # The same bad inputs must be rejected by both pydantic
+        # validators and the shared helper.
+        bad_inputs = [0, -1, 10001, float("nan"), float("inf"), "abc", True]
+        for bad in bad_inputs:
+            with pytest.raises(Exception):
+                _coerce_budget_amount_value(bad)
+            with pytest.raises(Exception):
+                BudgetUpdateRequest.model_validate({"budget_cap": bad})
+            with pytest.raises(Exception):
+                CommandRequest.model_validate({"command": "bug", "budget_cap": bad})
+
+    def test_none_passes_through(self):
+        from pdd.server.models import _coerce_budget_amount_value
+        assert _coerce_budget_amount_value(None) is None
+
+
+class TestParserRejectsNodeMaxOnNonIssue:
+    """Finding 3: the prompt's R6 now explicitly documents the
+    non-issue rejection the code has been enforcing. This test pins
+    the contract regardless of which side of the prompt/code pair
+    a future ``pdd sync`` regenerates first.
+    """
+
+    def test_budget_node_on_non_issue_returns_invalid(self):
+        from pdd.server.slash_command_parser import CommentInput, parse_comment
+
+        result = parse_comment(
+            CommentInput(id=1, body="/pdd budget node 50", user_login="alice", user_type="User"),
+            active_command="bug",
+        )
+        assert result.kind == "invalid"
+        assert "/pdd budget N" in result.message  # redirect to the right verb
+
+    def test_budget_max_on_non_issue_returns_invalid(self):
+        from pdd.server.slash_command_parser import CommentInput, parse_comment
+
+        result = parse_comment(
+            CommentInput(id=2, body="/pdd budget max 200", user_login="alice", user_type="User"),
+            active_command="sync",
+        )
+        assert result.kind == "invalid"
+        assert "/pdd budget N" in result.message
+
+    def test_budget_node_on_issue_still_works(self):
+        from pdd.server.slash_command_parser import CommentInput, parse_comment
+
+        result = parse_comment(
+            CommentInput(id=3, body="/pdd budget node 50", user_login="alice", user_type="User"),
+            active_command="issue",
+        )
+        assert result.kind == "budget_node_set"
+        assert result.metadata.get("amount") == 50.0

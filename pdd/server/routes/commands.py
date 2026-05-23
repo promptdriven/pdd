@@ -366,18 +366,19 @@ async def update_job_budget(
     endpoint the GitHub App's webhook calls when ``/pdd budget``,
     ``/pdd budget node``, or ``/pdd budget max`` is accepted.
     """
-    # Only pass kwargs the caller actually set. Pydantic absence or None on
-    # the request model means "leave the field alone"; `update_budget`'s own
-    # sentinel-based contract distinguishes "not provided" from "clear".
-    kwargs: Dict[str, Any] = {}
-    if request.budget_cap is not None:
-        kwargs["budget_cap"] = request.budget_cap
-    if request.node_budget is not None:
-        kwargs["node_budget"] = request.node_budget
-    if request.max_total_cap is not None:
-        kwargs["max_total_cap"] = request.max_total_cap
-    if request.node_count is not None:
-        kwargs["node_count"] = request.node_count
+    # Forward only the fields the caller actually sent. `update_budget`'s
+    # sentinel contract distinguishes "field omitted" (leave unchanged)
+    # from "field explicitly None" (clear that cap); preserving that
+    # distinction is what lets a slash-command webhook or programmatic
+    # caller drop a previously-set budget_cap back to "no cap". A field
+    # value of None therefore reaches update_budget as None (clear),
+    # while an omitted field never appears in kwargs at all.
+    set_fields = request.model_fields_set
+    kwargs: Dict[str, Any] = {
+        name: getattr(request, name)
+        for name in ("budget_cap", "node_budget", "max_total_cap", "node_count")
+        if name in set_fields
+    }
 
     try:
         await manager.update_budget(job_id, **kwargs)
@@ -449,7 +450,12 @@ async def cancel_job(
     if not job:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
-    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+    if job.status in (
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+        JobStatus.BUDGET_EXCEEDED,
+    ):
         raise HTTPException(
             status_code=409,
             detail=f"Job already finished with status: {job.status.value}"

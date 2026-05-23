@@ -13,6 +13,51 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# Hard ceiling for any budget amount, in USD. Mirrored from
+# ``pdd.server.budget_settings.BUDGET_HARD_CEILING``; kept here as a literal
+# so this module never imports from ``budget_settings`` (which would create
+# an import cycle, since ``budget_settings`` already imports
+# ``BudgetSettings``/``JobStatus`` from this file).
+_BUDGET_HARD_CEILING: float = 10000.0
+
+
+def _coerce_budget_amount_value(value: Any) -> Optional[float]:
+    """Pydantic-friendly mirror of ``budget_settings.validate_amount``.
+
+    The canonical validator lives in ``budget_settings``; this helper exists
+    so the pydantic field validators on ``CommandRequest`` and
+    ``BudgetUpdateRequest`` can apply the same rules at the API boundary
+    without forcing a circular import. Returns ``None`` unchanged so
+    pydantic Optional[float] fields can mean "not provided / clear".
+
+    Raises ``ValueError`` on: bool, non-numeric strings, empty strings,
+    NaN/inf, zero, negatives, and values above ``_BUDGET_HARD_CEILING``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"Invalid budget amount: {value!r}")
+    if isinstance(value, str):
+        stripped = value.strip().lstrip("$").strip()
+        if not stripped:
+            raise ValueError("Empty budget amount")
+        try:
+            parsed = float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"Non-numeric budget amount: {value!r}") from exc
+    else:
+        parsed = float(value)
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        raise ValueError(f"Budget amount must be finite: {value!r}")
+    if parsed <= 0:
+        raise ValueError(f"Budget amount must be > 0: {value!r}")
+    if parsed > _BUDGET_HARD_CEILING:
+        raise ValueError(
+            f"Budget amount {parsed} exceeds hard ceiling ${int(_BUDGET_HARD_CEILING)}"
+        )
+    return parsed
+
+
 __all__ = [
     "FileMetadata",
     "FileTreeNode",
@@ -122,32 +167,12 @@ class CommandRequest(BaseModel):
     @field_validator("budget_cap", "node_budget", "max_total_cap", mode="before")
     @classmethod
     def _coerce_budget_amount(cls, v: Any) -> Optional[float]:
-        """Validate initial budget fields with the same rules as
-        :class:`BudgetUpdateRequest` so a malformed amount can never enter
-        the system through ``POST /commands/execute`` and bypass the
-        ``update_budget`` validation gate.
+        """Validate initial budget fields so a malformed amount can never
+        enter the system through ``POST /commands/execute`` and bypass the
+        ``update_budget`` validation gate. Shares its rule set with
+        :class:`BudgetUpdateRequest` via the module-level helper.
         """
-        if v is None:
-            return None
-        if isinstance(v, bool):
-            raise ValueError(f"Invalid budget amount: {v!r}")
-        if isinstance(v, str):
-            stripped = v.strip().lstrip("$").strip()
-            if not stripped:
-                raise ValueError("Empty budget amount")
-            try:
-                value = float(stripped)
-            except ValueError as exc:
-                raise ValueError(f"Non-numeric budget amount: {v!r}") from exc
-        else:
-            value = float(v)
-        if value != value or value in (float("inf"), float("-inf")):
-            raise ValueError(f"Budget amount must be finite: {v!r}")
-        if value <= 0:
-            raise ValueError(f"Budget amount must be > 0: {v!r}")
-        if value > 10000:
-            raise ValueError(f"Budget amount {value} exceeds hard ceiling $10000")
-        return value
+        return _coerce_budget_amount_value(v)
 
 
 class JobStatus(str, Enum):
@@ -294,27 +319,10 @@ class BudgetUpdateRequest(BaseModel):
     @field_validator("budget_cap", "node_budget", "max_total_cap", mode="before")
     @classmethod
     def _coerce_amount(cls, v: Any) -> Optional[float]:
-        if v is None:
-            return None
-        if isinstance(v, bool):
-            raise ValueError(f"Invalid budget amount: {v!r}")
-        if isinstance(v, str):
-            stripped = v.strip().lstrip("$").strip()
-            if not stripped:
-                raise ValueError("Empty budget amount")
-            try:
-                value = float(stripped)
-            except ValueError as exc:
-                raise ValueError(f"Non-numeric budget amount: {v!r}") from exc
-        else:
-            value = float(v)
-        if value != value or value in (float("inf"), float("-inf")):
-            raise ValueError(f"Budget amount must be finite: {v!r}")
-        if value <= 0:
-            raise ValueError(f"Budget amount must be > 0: {v!r}")
-        if value > 10000:
-            raise ValueError(f"Budget amount {value} exceeds hard ceiling $10000")
-        return value
+        # Same rule set as CommandRequest._coerce_budget_amount and
+        # budget_settings.validate_amount — shared via the module-level
+        # helper to keep the three entry points in lockstep.
+        return _coerce_budget_amount_value(v)
 
     @field_validator("node_count", mode="before")
     @classmethod
@@ -361,16 +369,13 @@ class BudgetUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_at_least_one(self) -> "BudgetUpdateRequest":
-        # model_validator runs once per instance regardless of whether any
-        # fields were passed, so an empty body ({}) is rejected — a
-        # field_validator on node_count alone would not see this case
-        # because pydantic skips per-field validation for the default value.
-        if (
-            self.budget_cap is None
-            and self.node_budget is None
-            and self.max_total_cap is None
-            and self.node_count is None
-        ):
+        # Reject an empty body ({}) but accept explicit-None values: the
+        # JobManager.update_budget contract treats "field not provided"
+        # (sentinel) and "field set to None" (clear that cap) as
+        # different operations, and the REST layer must let clients
+        # express both. We therefore check `model_fields_set` (the set
+        # of field names the caller actually sent), not value-is-None.
+        if not self.model_fields_set:
             raise ValueError(
                 "At least one of budget_cap, node_budget, max_total_cap, "
                 "or node_count must be set"
