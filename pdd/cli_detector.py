@@ -1,875 +1,834 @@
+"""Detect and bootstrap agentic CLI harnesses for `pdd setup`.
+
+Supports Claude, Codex, Antigravity (`agy`), Gemini, and OpenCode CLIs.
+
+Public entry points:
+    - ``detect_and_bootstrap_cli()`` — Phase 1 of ``pdd setup``: prints a
+      numbered selection table, lets the user choose one or more CLIs, and
+      walks each through install/credential/test.
+    - ``detect_cli_tools()`` — legacy detection (status only).
+    - ``CliBootstrapResult`` — dataclass describing the outcome for each CLI.
+
+Module-level constants ``PROVIDER_PRIMARY_KEY``, ``PROVIDER_DISPLAY``,
+``CLI_PREFERENCE``, and ``SHELL_RC_MAP`` are exposed for other modules.
+"""
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from rich.console import Console
 
-# Maps provider name -> CLI command name
-_CLI_COMMANDS: dict[str, str] = {
-    "anthropic": "claude",
-    "google": "gemini",
-    "openai": "codex",
-    "opencode": "opencode",
-}
+from pdd.setup_tool import _print_step_banner
 
-# Maps provider name -> environment variable for API key.
-# OpenCode is intentionally absent: it is a multi-provider router with no
-# canonical API-key env var of its own. It consumes whichever backend
-# provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY,
-# GITHUB_TOKEN, ...) corresponds to the resolved OPENCODE_MODEL — there is
-# no single key to prompt for or save. Setup discovers credentials for
-# OpenCode via `_has_opencode_oauth_or_config` (auth.json + opencode.json
-# + provider env vars) and instructs the user to run `opencode auth login`
-# rather than collecting a key into a file under the wrong name.
-_API_KEY_ENV_VARS: dict[str, str] = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GEMINI_API_KEY",
-    "openai": "OPENAI_API_KEY",
-}
-
-# Maps provider name -> npm install command for the CLI
-_INSTALL_COMMANDS: dict[str, str] = {
-    "anthropic": "npm install -g @anthropic-ai/claude-code",
-    "google": "npm install -g @google/gemini-cli",
-    "openai": "npm install -g @openai/codex",
-    "opencode": "npm install -g opencode-ai",
-}
-
-# Maps provider name -> human-readable CLI name
-_CLI_DISPLAY_NAMES: dict[str, str] = {
-    "anthropic": "Claude CLI",
-    "google": "Gemini CLI",
-    "openai": "Codex CLI",
-    "opencode": "OpenCode CLI",
-}
-
-# Provider -> primary key env var name (used when saving).
-# OpenCode is intentionally absent for the same reason as `_API_KEY_ENV_VARS`:
-# there is no single "OpenCode API key" to save. `_prompt_api_key` short-
-# circuits when the entry is missing so users are not prompted for, and a
-# non-OpenCode key is not silently saved under an unrelated name.
-PROVIDER_PRIMARY_KEY: Dict[str, str] = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GEMINI_API_KEY",
-    "openai": "OPENAI_API_KEY",
-}
-
-# Provider -> display name
-PROVIDER_DISPLAY: Dict[str, str] = {
-    "anthropic": "Anthropic",
-    "google": "Google (Gemini)",
-    "openai": "OpenAI",
-    "opencode": "OpenCode",
-}
-
-# CLI preference order (claude first because it supports subscription auth)
-CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex", "opencode"]
-
-# Ordered list for the numbered selection table: (provider, cli_name, display_name)
-_TABLE_ORDER: List[Tuple[str, str, str]] = [
-    ("anthropic", "claude", "Claude CLI"),
-    ("openai", "codex", "Codex CLI"),
-    ("google", "gemini", "Gemini CLI"),
-    ("opencode", "opencode", "OpenCode CLI"),
-]
-
-# Shell -> RC file path (relative to home)
-SHELL_RC_MAP: Dict[str, str] = {
-    "bash": ".bashrc",
-    "zsh": ".zshrc",
-    "fish": os.path.join(".config", "fish", "config.fish"),
-}
-
-# Common installation paths for CLI tools (fallback)
-_COMMON_CLI_PATHS: Dict[str, List[Path]] = {
-    "claude": [
-        Path.home() / ".local" / "bin" / "claude",
-        Path("/usr/local/bin/claude"),
-        Path("/opt/homebrew/bin/claude"),
-    ],
-    "codex": [
-        Path.home() / ".local" / "bin" / "codex",
-        Path("/usr/local/bin/codex"),
-        Path("/opt/homebrew/bin/codex"),
-    ],
-    "gemini": [
-        Path.home() / ".local" / "bin" / "gemini",
-        Path("/usr/local/bin/gemini"),
-        Path("/opt/homebrew/bin/gemini"),
-    ],
-    "opencode": [
-        Path.home() / ".local" / "bin" / "opencode",
-        Path.home() / ".npm-global" / "bin" / "opencode",
-        Path("/usr/local/bin/opencode"),
-        Path("/opt/homebrew/bin/opencode"),
-    ],
-}
-
+# Module-level console used for all user-facing output. Tests patch this
+# attribute to capture printed lines.
 console = Console(highlight=False)
+
+
+# ---------------------------------------------------------------------------
+# Public dataclass
+# ---------------------------------------------------------------------------
+
 
 @dataclass
 class CliBootstrapResult:
-    """Result of CLI detection and bootstrapping."""
+    """Outcome of bootstrapping a single CLI.
+
+    Attributes:
+        cli_name: The CLI binary name (e.g. ``"claude"``, ``"agy"``).
+        provider: The model provider key (``anthropic``/``openai``/``google``/``opencode``).
+        cli_path: Absolute path of the resolved binary, or ``""`` if unresolved.
+        api_key_configured: ``True`` if a primary API key was set or saved.
+        skipped: ``True`` if the user opted out for this CLI.
+    """
+
     cli_name: str = ""
     provider: str = ""
     cli_path: str = ""
     api_key_configured: bool = False
-    skipped: bool = False  # True when user explicitly skipped CLI setup
+    skipped: bool = False
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Module-level constants
 # ---------------------------------------------------------------------------
 
-def _which(cmd: str) -> str | None:
-    """Return the full path to a command if found on PATH, else None."""
-    if not cmd:
-        return None
+
+PROVIDER_PRIMARY_KEY: Dict[str, Optional[str]] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "opencode": None,
+}
+
+PROVIDER_DISPLAY: Dict[str, str] = {
+    "anthropic": "Claude CLI",
+    "openai": "Codex CLI",
+    "google": "Google (Gemini family)",
+    "opencode": "OpenCode CLI",
+}
+
+# Table order: Claude, Codex, Antigravity, Gemini, OpenCode. Antigravity sits
+# immediately above the legacy Gemini CLI per the migration plan.
+CLI_PREFERENCE: List[str] = ["claude", "codex", "agy", "gemini", "opencode"]
+
+CLI_LABEL: Dict[str, str] = {
+    "claude": "Claude CLI",
+    "codex": "Codex CLI",
+    "agy": "Antigravity CLI (agy)",
+    "gemini": "Gemini CLI",
+    "opencode": "OpenCode CLI",
+}
+
+CLI_PROVIDER: Dict[str, str] = {
+    "claude": "anthropic",
+    "codex": "openai",
+    "agy": "google",
+    "gemini": "google",
+    "opencode": "opencode",
+}
+
+# npm install command per CLI. ``agy`` is None because Antigravity is not
+# distributed via npm — detection MUST NOT shell out to its installer URL.
+CLI_INSTALL_HINT: Dict[str, Optional[str]] = {
+    "claude": "npm install -g @anthropic-ai/claude-code",
+    "codex": "npm install -g @openai/codex",
+    "agy": None,
+    "gemini": "npm install -g @google/gemini-cli",
+    "opencode": "npm install -g opencode-ai",
+}
+
+AGY_MANUAL_INSTALL_HINT = "curl -fsSL https://antigravity.google/install.sh | sh"
+
+SHELL_RC_MAP: Dict[str, str] = {
+    "bash": ".bashrc",
+    "zsh": ".zshrc",
+    "fish": ".config/fish/config.fish",
+}
+
+
+# ---------------------------------------------------------------------------
+# Low-level helpers (kept patchable for tests)
+# ---------------------------------------------------------------------------
+
+
+def _prompt_input(prompt: str = "") -> str:
+    """Wrapper around ``input()`` to provide a single patch-point for tests."""
+    return input(prompt)
+
+
+def _which(cmd: str) -> Optional[str]:
+    """Wrapper around ``shutil.which`` (single patch-point for tests)."""
     return shutil.which(cmd)
 
-def _has_api_key(provider: str) -> bool:
-    """Check whether the API key environment variable is set for a provider."""
-    env_var = _API_KEY_ENV_VARS.get(provider, "")
-    if not env_var:
-        # Also check fallback keys
-        if provider == "google":
-            val = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            return bool(val and val.strip())
-        return False
-    val = os.environ.get(env_var)
-    if val and val.strip():
-        return True
-    # Fallback for google: also check GOOGLE_API_KEY (Vertex AI convention)
-    if provider == "google":
-        val = os.environ.get("GOOGLE_API_KEY")
-        return bool(val and val.strip())
-    return False
+
+def _npm_available() -> bool:
+    """Return True if ``npm`` is on PATH."""
+    return _which("npm") is not None
+
+
+def _find_cli_binary(name: str) -> Optional[str]:
+    """Resolve a CLI binary, falling back to common install dirs + nvm.
+
+    Search order:
+        1. ``shutil.which(name)``
+        2. ``~/.local/bin``, ``/usr/local/bin``, ``/opt/homebrew/bin``,
+           ``~/.antigravity/bin``
+        3. Every ``~/.nvm/versions/node/*/bin`` directory.
+    """
+    path = _which(name)
+    if path:
+        return path
+    home = Path.home()
+    dirs: List[Path] = [
+        home / ".local" / "bin",
+        Path("/usr/local/bin"),
+        Path("/opt/homebrew/bin"),
+        home / ".antigravity" / "bin",
+    ]
+    nvm_root = home / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        try:
+            for ver in nvm_root.iterdir():
+                dirs.append(ver / "bin")
+        except OSError:
+            pass
+    for d in dirs:
+        candidate = d / name
+        try:
+            if candidate.exists() and os.access(str(candidate), os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def _get_shell_info() -> "tuple[str, Path]":
+    """Detect the user's shell and return ``(shell_name, rc_file_path)``."""
+    shell_env = os.environ.get("SHELL") or "/bin/bash"
+    shell_name = os.path.basename(shell_env)
+    if shell_name not in SHELL_RC_MAP:
+        shell_name = "bash"
+    rc_file = Path.home() / SHELL_RC_MAP[shell_name]
+    return shell_name, rc_file
+
+
+# ---------------------------------------------------------------------------
+# Credential detection
+# ---------------------------------------------------------------------------
 
 
 def _claude_credentials_file_has_oauth(path: Path) -> bool:
-    """True iff ``path`` is a Claude credentials file with a usable OAuth token.
+    """Return True only when the on-disk file declares a usable OAuth token.
 
-    The Claude Code CLI persists Max/Pro OAuth as
-    ``{"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., ...}}``.
-    A logged-out or partially-rotated state can leave the file present and
-    non-empty but missing those token fields; treating bytes-on-disk as proof
-    of OAuth would false-positive on those, then `pdd setup` skips the API-key
-    prompt and the user runs into "no credentials" at first call. A few
-    non-canonical writers leave the token at the top level, so accept that
-    fallback shape too — both google and openai branches do the same.
+    Required by Issue #813: a stale/corrupt/logged-out credentials file can
+    still have bytes but no usable token. We must shape-parse for
+    ``claudeAiOauth.accessToken`` or ``claudeAiOauth.refreshToken`` (or a
+    top-level fallback) and swallow IO/JSON errors quietly.
     """
     try:
-        if not path.exists() or path.stat().st_size == 0:
-            return False
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return False
     if not isinstance(data, dict):
         return False
     oauth = data.get("claudeAiOauth")
-    if isinstance(oauth, dict) and (oauth.get("accessToken") or oauth.get("refreshToken")):
-        return True
+    if isinstance(oauth, dict):
+        if oauth.get("accessToken") or oauth.get("refreshToken"):
+            return True
     if data.get("accessToken") or data.get("refreshToken"):
         return True
     return False
 
 
-def _has_provider_oauth(provider: str) -> bool:
-    """Check whether the provider's CLI has a stored OAuth/subscription credential.
-
-    Each agentic CLI maintains its own credential store separate from API-key
-    env vars. Setup must treat "OAuth configured" as a fully valid auth path —
-    otherwise it tells Max/Pro users they're "missing an API key" and pushes
-    them into setting ``ANTHROPIC_API_KEY``, the exact stale-key workflow that
-    Issue #813 fixes.
-
-    - **Anthropic**: Claude Code stores Max/Pro OAuth in the macOS keychain
-      (``security find-generic-password -s 'Claude Code-credentials'``) or in
-      ``~/.claude/.credentials.json`` on Linux. The authoritative runtime check
-      is ``claude auth status`` with a ``--json`` fallback (used by
-      ``agentic_common`` before launching the subprocess), but setup keeps this
-      lightweight to avoid spawning a subprocess and parses the credentials
-      file's JSON shape instead — a non-empty file alone is not enough, since a
-      stale, corrupt, or logged-out file can still have bytes but no usable
-      OAuth token, which would false-positive and skip the API-key prompt the
-      user actually needs. The env-supplied ``CLAUDE_CODE_OAUTH_TOKEN`` (used
-      by the cloud waterfall) is also accepted.
-    - **Google**: Gemini CLI stores OAuth at ``~/.gemini/oauth_creds.json``
-      (matches ``_has_gemini_oauth_credentials`` in agentic_common).
-    - **OpenAI/Codex**: codex CLI stores ChatGPT login at ``~/.codex/auth.json``.
-    """
-    if provider == "anthropic":
-        if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
-            return True
-        # Parse the credentials file's JSON shape (cross-platform). A bare
-        # size check would treat a stale/corrupt/logged-out file as OAuth
-        # configured, then `pdd setup` skips the API-key prompt and the user
-        # is left with no working credential.
-        for path in (
-            Path.home() / ".claude" / ".credentials.json",
-            Path.home() / "Library" / "Application Support" / "Claude" / "credentials.json",
-        ):
-            if _claude_credentials_file_has_oauth(path):
-                return True
-        # macOS keychain check is more reliable than file presence; gate on
-        # platform to avoid spurious dependencies on Linux/Windows.
-        if sys.platform == "darwin":
-            try:
-                result = subprocess.run(
-                    ["security", "find-generic-password", "-s", "Claude Code-credentials"],
-                    capture_output=True, text=True, timeout=5, check=False,
-                )
-                if result.returncode == 0:
-                    return True
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+def _macos_claude_keychain_has_credential() -> bool:
+    """Return True if macOS keychain holds a ``Claude Code-credentials`` entry."""
+    if sys.platform != "darwin":
         return False
-
-    if provider == "google":
-        creds = Path.home() / ".gemini" / "oauth_creds.json"
-        try:
-            if creds.exists():
-                data = json.loads(creds.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and (data.get("refresh_token") or data.get("access_token")):
-                    return True
-        except (OSError, json.JSONDecodeError):
-            pass
-        return False
-
-    if provider == "openai":
-        auth = Path.home() / ".codex" / "auth.json"
-        try:
-            if auth.exists():
-                data = json.loads(auth.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and (data.get("token") or data.get("tokens") or data.get("OPENAI_API_KEY")):
-                    return True
-        except (OSError, json.JSONDecodeError):
-            pass
-        return False
-
-    if provider == "opencode":
-        return _has_opencode_oauth_or_config()
-
-    return False
-
-
-def _has_opencode_oauth_or_config() -> bool:
-    """Return True when OpenCode has any usable credential / configuration source.
-
-    OpenCode is a multi-provider router with no single canonical API-key env
-    var, so setup must look beyond ``~/.local/share/opencode/auth.json`` to
-    avoid pushing users into the wrong API-key prompt. Sources (any one
-    qualifies):
-
-      * ``~/.local/share/opencode/auth.json`` with non-empty provider data
-      * ``~/.config/opencode/opencode.json`` declaring a provider/model
-      * Project ``opencode.json`` (walked up from cwd) declaring a provider/model
-      * ``OPENCODE_CONFIG`` pointing to a file declaring a provider/model
-      * Any backend-provider env var the OpenCode router can route to
-        (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY/GOOGLE_API_KEY,
-        OPENROUTER_API_KEY, GITHUB_TOKEN, XAI_API_KEY, DEEPSEEK_API_KEY, ...)
-    """
-    # 1. auth.json with provider data.
-    auth = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    try:
-        if auth.exists() and auth.stat().st_size > 0:
-            data = json.loads(auth.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data:
-                for value in data.values():
-                    if isinstance(value, dict) and value:
-                        return True
-                    if isinstance(value, str) and value.strip():
-                        return True
-    except (OSError, json.JSONDecodeError):
-        pass
-
-    # 2. OpenCode config files (global, project, OPENCODE_CONFIG) and the
-    #    inline ``OPENCODE_CONFIG_CONTENT`` env var.
-    try:
-        from pdd.agentic_common import (
-            _iter_opencode_config_texts,
-            _opencode_data_declares_provider,
-            _opencode_provider_env_keys,
-            _parse_opencode_config_text,
-        )
-    except ImportError:
-        _iter_opencode_config_texts = None  # type: ignore[assignment]
-        _opencode_data_declares_provider = None  # type: ignore[assignment]
-        _opencode_provider_env_keys = None  # type: ignore[assignment]
-        _parse_opencode_config_text = None  # type: ignore[assignment]
-    if (
-        _iter_opencode_config_texts is not None
-        and _opencode_data_declares_provider is not None
-        and _parse_opencode_config_text is not None
-    ):
-        try:
-            for text, base_dir in _iter_opencode_config_texts(None):
-                if _opencode_data_declares_provider(
-                    _parse_opencode_config_text(text), base_dir=base_dir
-                ):
-                    return True
-        except Exception:
-            pass
-
-    # 3. Backend provider env vars the OpenCode router can route to. The set
-    #    is derived from ``pdd/data/llm_model.csv`` (the source of truth for
-    #    OpenCode-routable providers) so newly-added catalog rows like
-    #    ``GMI_API_KEY``/``SNOWFLAKE_API_KEY`` are picked up automatically;
-    #    falls back to a static list if the helper is unavailable.
-    backend_env_keys: Tuple[str, ...]
-    if _opencode_provider_env_keys is not None:
-        try:
-            backend_env_keys = _opencode_provider_env_keys()
-        except Exception:
-            backend_env_keys = ()
-    else:
-        backend_env_keys = ()
-    if not backend_env_keys:
-        backend_env_keys = (
-            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-            "OPENROUTER_API_KEY", "GITHUB_TOKEN", "XAI_API_KEY", "DEEPSEEK_API_KEY",
-            "MISTRAL_API_KEY", "COHERE_API_KEY", "MOONSHOT_API_KEY", "AZURE_API_KEY",
-            "AZURE_AI_API_KEY", "AWS_ACCESS_KEY_ID", "GROQ_API_KEY",
-            "TOGETHERAI_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY",
-            "PERPLEXITYAI_API_KEY", "REPLICATE_API_KEY", "DEEPINFRA_API_KEY",
-            "ZAI_API_KEY", "DASHSCOPE_API_KEY", "MINIMAX_API_KEY", "OLLAMA_HOST",
-            "LMSTUDIO_HOST",
-        )
-    for key in backend_env_keys:
-        v = os.environ.get(key)
-        if v and v.strip():
-            return True
-    return False
-
-
-def _has_credential(provider: str) -> bool:
-    """True if the provider has *any* working credential (API key OR OAuth).
-
-    Used by setup_tool to decide whether to warn "no API key configured" — a
-    stored OAuth login (Claude Max, Gemini OAuth, Codex ChatGPT) is a fully
-    valid alternative and should not trigger that warning.
-    """
-    return _has_api_key(provider) or _has_provider_oauth(provider)
-
-def _get_display_key_name(provider: str) -> str:
-    """Return the key name to display for a provider, checking which is actually set."""
-    if provider == "google":
-        # Prefer GEMINI_API_KEY for display if set, else GOOGLE_API_KEY if set, else GEMINI_API_KEY
-        if os.environ.get("GEMINI_API_KEY", "").strip():
-            return "GEMINI_API_KEY"
-        if os.environ.get("GOOGLE_API_KEY", "").strip():
-            return "GOOGLE_API_KEY"
-        return "GEMINI_API_KEY"
-    if provider == "opencode":
-        # OpenCode has no single API-key env var to display — surface the
-        # CLI-level auth flow instead so users with `opencode auth login`
-        # configured see a meaningful label.
-        return "opencode auth login"
-    return _API_KEY_ENV_VARS.get(provider, "")
-
-def _npm_available() -> bool:
-    """Check whether npm is available on PATH."""
-    return _which("npm") is not None
-
-def _prompt_input(prompt_text: str) -> str:
-    """Wrapper around input() for testability."""
-    return input(prompt_text)
-
-def _prompt_yes_no(prompt: str) -> bool:
-    """Prompt the user with a yes/no question. Default is No."""
-    try:
-        answer = _prompt_input(prompt).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return answer in ("y", "yes")
-
-def _run_install(install_cmd: str) -> bool:
-    """Run an installation command via subprocess. Returns True on success."""
     try:
         result = subprocess.run(
-            install_cmd,
-            shell=True,
+            ["security", "find-generic-password", "-s", "Claude Code-credentials"],
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=5,
         )
         return result.returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
-def _detect_shell() -> str:
-    """Detect the user's shell from the SHELL environment variable."""
-    shell_path = os.environ.get("SHELL", "/bin/bash")
-    return os.path.basename(shell_path)
 
-def _get_rc_file_path(shell: str) -> Path:
-    """Return the absolute path to the shell's RC file."""
-    rc_relative = SHELL_RC_MAP.get(shell, SHELL_RC_MAP["bash"])
-    if shell == "fish":
-        return Path.home() / ".config" / "fish" / "config.fish"
-    return Path.home() / rc_relative
+def _strip_jsonc_comments(text: str) -> str:
+    """Crudely strip ``//`` and ``/* */`` comments from JSONC text."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"(^|[^:])//.*", lambda m: m.group(1), text)
+    return text
 
-def _get_api_env_file_path(shell: str) -> Path:
-    """Return the path to ~/.pdd/api-env.{shell}."""
-    return Path.home() / ".pdd" / f"api-env.{shell}"
 
-def _find_cli_binary(cli_name: str) -> Optional[str]:
-    """Find a CLI binary by name, including fallbacks."""
-    # Use shutil.which first
-    result = shutil.which(cli_name)
-    if result:
-        return result
-    
-    # Try common paths
-    paths = _COMMON_CLI_PATHS.get(cli_name, [])
-    for path in paths:
-        if path.exists() and os.access(path, os.X_OK):
-            return str(path)
-            
-    # Try nvm fallback for node-based CLIs
-    nvm_node = Path.home() / ".nvm" / "versions" / "node"
-    if nvm_node.exists():
+def _opencode_config_has_usable_credential() -> bool:
+    """Inspect OpenCode JSON/JSONC config sources for a usable provider/model.
+
+    Returns True only when the parsed config declares a selected
+    ``model``/``provider`` pairing backed by a resolvable credential
+    (``options.apiKey``, ``{env:...}`` with a set env var, ``{file:...}`` with
+    a readable non-empty file), or by an explicit local/no-key provider.
+    """
+    candidates: List[Path] = []
+    cfg_env = os.environ.get("OPENCODE_CONFIG")
+    if cfg_env:
+        candidates.append(Path(cfg_env))
+    home_cfg = Path.home() / ".config" / "opencode" / "opencode.json"
+    if home_cfg.exists():
+        candidates.append(home_cfg)
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = None
+    if cwd is not None:
+        for parent in [cwd, *cwd.parents]:
+            proj = parent / "opencode.json"
+            if proj.exists():
+                candidates.append(proj)
+                break
+
+    contents: List[str] = []
+    for c in candidates:
         try:
-            for version_dir in sorted(nvm_node.iterdir(), reverse=True):
-                bin_candidate = version_dir / "bin" / cli_name
-                if bin_candidate.is_file() and os.access(bin_candidate, os.X_OK):
-                    return str(bin_candidate)
+            contents.append(c.read_text(encoding="utf-8"))
         except OSError:
-            pass
-                
-    return None
+            continue
+    content_env = os.environ.get("OPENCODE_CONFIG_CONTENT")
+    if content_env:
+        contents.append(content_env)
 
-def _format_export_line(key_name: str, key_value: str, shell: str) -> str:
-    """Return the shell-appropriate export line."""
-    if shell == "fish":
-        return f"set -gx {key_name} {key_value}"
-    return f"export {key_name}={key_value}"
+    local_providers = {"local", "ollama", "lmstudio"}
 
-def _format_source_line(api_env_path: Path, shell: str) -> str:
-    """Return the shell-appropriate source line."""
-    path_str = str(api_env_path)
-    if shell == "fish":
-        return f"test -f {path_str} ; and source {path_str}"
-    return f"source {path_str}"
-
-def _save_api_key(key_name: str, key_value: str, shell: str) -> bool:
-    """Save API key and update shell RC."""
-    pdd_dir = Path.home() / ".pdd"
-    api_env_path = _get_api_env_file_path(shell)
-    rc_path = _get_rc_file_path(shell)
-
-    try:
-        pdd_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Append or create api-env file
-        existing_content = ""
-        if api_env_path.exists():
-            existing_content = api_env_path.read_text(encoding="utf-8")
-        
-        export_line = _format_export_line(key_name, key_value, shell)
-        lines = existing_content.splitlines()
-        # Filter out existing entries for this key
-        filtered = [ln for ln in lines if key_name not in ln]
-        filtered.append(export_line)
-        
-        api_env_path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
-        
-        # Update RC file
-        source_line = _format_source_line(api_env_path, shell)
-        rc_content = ""
-        if rc_path.exists():
-            rc_content = rc_path.read_text(encoding="utf-8")
-            
-        if source_line not in rc_content:
-            with open(rc_path, "a", encoding="utf-8") as f:
-                f.write(f"\n# pdd CLI API keys\n{source_line}\n")
-        
-        os.environ[key_name] = key_value
-        return True
-    except Exception as e:
-        console.print(f"[red]Error saving API key: {e}[/red]")
-        return False
-
-def _prompt_api_key(provider: str, shell: str) -> bool:
-    """Prompt user for API key and save it. Prints save location on success."""
-    key_name = PROVIDER_PRIMARY_KEY.get(provider, "")
-    if not key_name:
-        if provider == "opencode":
-            # OpenCode has no single API key — issuing the generic prompt would
-            # silently save user input under the wrong env var (e.g. as
-            # ANTHROPIC_API_KEY) and confuse later runs. Guide the user to the
-            # supported configuration paths instead.
-            console.print(
-                "  [yellow]OpenCode has no dedicated API key.[/yellow] Configure it via "
-                "[bold]opencode auth login[/bold], an [bold]opencode.json[/bold] config "
-                "file (project, ~/.config/opencode/opencode.json, or OPENCODE_CONFIG), "
-                "or by setting a backend provider env var (ANTHROPIC_API_KEY, "
-                "OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, GITHUB_TOKEN, "
-                "...). Then set OPENCODE_MODEL=provider/model to pick a route."
-            )
-        return False
-
-    display = PROVIDER_DISPLAY.get(provider, provider)
-    try:
-        key_value = _prompt_input(f"  Enter your {display} API key (or press Enter to skip): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return False
-
-    if not key_value:
-        if provider == "anthropic":
-            console.print("  [dim]Note: Claude CLI may still work with subscription auth.[/dim]")
-        return False
-
-    api_env_path = _get_api_env_file_path(shell)
-    if _save_api_key(key_name, key_value, shell):
-        console.print(f"  [green]\u2713[/green] {key_name} saved to {api_env_path}")
-        #console.print(f"  [green]\u2713[/green] {key_name} loaded into current session")
-        return True
+    for raw in contents:
+        try:
+            data = json.loads(_strip_jsonc_comments(raw))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        model = data.get("model")
+        provider = data.get("provider")
+        if not (model and provider):
+            continue
+        if isinstance(provider, str) and provider.lower() in local_providers:
+            return True
+        opts = data.get("options")
+        if not isinstance(opts, dict):
+            continue
+        if opts.get("apiKey"):
+            return True
+        for v in opts.values():
+            if not isinstance(v, str):
+                continue
+            m = re.match(r"^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$", v)
+            if m and os.environ.get(m.group(1)):
+                return True
+            m = re.match(r"^\{file:(.+)\}$", v)
+            if m:
+                try:
+                    if Path(m.group(1)).read_text(encoding="utf-8").strip():
+                        return True
+                except OSError:
+                    pass
     return False
 
 
-def _test_cli(cli_name: str, cli_path: str) -> bool:
-    """Run a quick sanity-check invocation of the CLI. Returns True on success."""
-    console.print(f"\n  Testing {cli_name}...")
-    try:
-        result = subprocess.run(
-            [cli_path, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            version_line = (result.stdout or result.stderr or "").strip().splitlines()[0] if (result.stdout or result.stderr) else ""
-            console.print(f"  [green]\u2713[/green] {cli_name} version {version_line or 'OK'}")
+def _has_provider_oauth(provider: str) -> bool:
+    """Return True if a stored OAuth/subscription credential exists."""
+    home = Path.home()
+    if provider == "anthropic":
+        if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
             return True
-        else:
-            # Some CLIs exit non-zero for --version but still work; try --help
-            result2 = subprocess.run(
-                [cli_path, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result2.returncode == 0:
-                console.print(f"  [green]\u2713[/green] {cli_name} is responsive")
-                return True
-            console.print(f"  [red]\u2717[/red] {cli_name} test failed (exit {result.returncode})")
-            return False
-    except FileNotFoundError:
-        console.print(f"  [red]\u2717[/red] {cli_name} binary not found at {cli_path}")
+        for p in (
+            home / ".claude" / ".credentials.json",
+            home / "Library" / "Application Support" / "Claude" / "credentials.json",
+        ):
+            try:
+                if p.exists() and _claude_credentials_file_has_oauth(p):
+                    return True
+            except OSError:
+                continue
+        if _macos_claude_keychain_has_credential():
+            return True
         return False
-    except subprocess.TimeoutExpired:
-        console.print(f"  [red]\u2717[/red] {cli_name} test timed out")
-        return False
-    except Exception as exc:
-        console.print(f"  [red]\u2717[/red] {cli_name} test error: {exc}")
-        return False
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def _bootstrap_single_cli(
-    cli_entry: Dict[str, object],
-    shell: str,
-) -> CliBootstrapResult:
-    """Process install/key/test for a single CLI selection.
-
-    Returns a populated CliBootstrapResult (skipped=True on failure).
-    """
-    display_name = str(cli_entry["display_name"])
-    sel_provider: str = str(cli_entry["provider"])
-    sel_cli_name: str = str(cli_entry["cli_name"])
-    sel_path: Optional[str] = str(cli_entry["path"]) if cli_entry["path"] else None
-    sel_has_key: bool = bool(cli_entry["has_key"])
-    sel_has_oauth: bool = bool(cli_entry.get("has_oauth", False))
-
-    console.print(f"\n  [bold]Setting up {display_name}...[/bold]")
-
-    def _cli_skip(reason: str = "") -> CliBootstrapResult:
-        if reason:
-            console.print(f"  [red]\u2717 {reason}[/red]")
-        console.print(f"  [red]\u2717 {display_name} not configured.[/red]")
-        return CliBootstrapResult(skipped=True)
-
-    # Install step (if not installed)
-    if not sel_path:
-        install_cmd = _INSTALL_COMMANDS[sel_provider]
-        console.print(f"  Install command: [bold]{install_cmd}[/bold]")
+    if provider == "google":
         try:
-            install_answer = _prompt_input("  Install now? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            console.print()
-            return _cli_skip()
-
-        if install_answer in ("y", "yes"):
-            if not _npm_available():
-                console.print("  [red]\u2717[/red] npm is not installed. Please install Node.js/npm first.")
-                console.print(f"  Then run: {install_cmd}")
-                return _cli_skip("npm not available — cannot install CLI")
-
-            console.print(f"  Installing {display_name}...")
-            if _run_install(install_cmd):
-                sel_path = _find_cli_binary(sel_cli_name)
-                if sel_path:
-                    console.print(f"  [green]\u2713[/green] Installed {sel_cli_name} at {sel_path}")
-                else:
-                    console.print("  [yellow]Installation completed but CLI not found on PATH.[/yellow]")
-                    return _cli_skip("CLI installed but not found on PATH")
-            else:
-                console.print("  [red]Installation failed. Try installing manually.[/red]")
-                return _cli_skip("installation failed")
-        else:
-            return _cli_skip()
-
-    # Credential step (if no API key AND no OAuth login).
-    # Issue #813: Skip the API-key prompt when the CLI already has a stored
-    # OAuth/subscription credential (Claude Max keychain, ~/.gemini OAuth,
-    # ~/.codex/auth.json) — pushing those users into setting an API key is
-    # the exact stale-key workflow this PR exists to make safe.
-    if not sel_has_key and not sel_has_oauth:
-        sel_has_key = _prompt_api_key(sel_provider, shell)
-        if not sel_has_key and sel_provider != "anthropic":
-            console.print(f"  [dim]No API key or OAuth login configured. {display_name} may have limited functionality.[/dim]")
-    elif sel_has_oauth and not sel_has_key:
-        if sel_provider == "anthropic":
-            console.print(
-                f"  [green]✓[/green] Using stored OAuth/subscription credential for {display_name}; "
-                "no API key needed. (Set ANTHROPIC_API_KEY + PDD_KEEP_ANTHROPIC_API_KEY=1 to "
-                "force API-key billing instead.)"
+            return (
+                (home / ".gemini" / "oauth_creds.json").exists()
+                or (home / ".gemini" / "antigravity-cli" / "oauth_creds.json").exists()
             )
-        else:
-            console.print(
-                f"  [green]✓[/green] Using stored OAuth credential for {display_name}; "
-                "no API key needed."
-            )
+        except OSError:
+            return False
+    if provider == "openai":
+        p = home / ".codex" / "auth.json"
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return bool(data)
+                if isinstance(data, list):
+                    return len(data) > 0
+                return bool(data)
+            except (OSError, json.JSONDecodeError):
+                return False
+        return False
+    if provider == "opencode":
+        auth = home / ".local" / "share" / "opencode" / "auth.json"
+        if auth.exists():
+            try:
+                with open(auth, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and any(
+                    bool(v) for v in data.values()
+                ):
+                    return True
+            except (OSError, json.JSONDecodeError):
+                pass
+        if _opencode_config_has_usable_credential():
+            return True
+        return False
+    return False
 
-    # Force CLI test (no option to skip)
-    _test_cli(sel_cli_name, sel_path or sel_cli_name)
 
-    return CliBootstrapResult(
-        cli_name=sel_cli_name,
-        provider=sel_provider,
-        cli_path=sel_path or "",
-        api_key_configured=sel_has_key,
+# ---------------------------------------------------------------------------
+# API key detection
+# ---------------------------------------------------------------------------
+
+
+def _load_opencode_provider_keys() -> set:
+    """Build the set of env vars that satisfy OpenCode's credential check.
+
+    Drawn from non-empty ``api_key`` fields in ``pdd/data/llm_model.csv``
+    (pipe-delimited), augmented with OpenCode-compatible extras like
+    ``GITHUB_TOKEN``.
+    """
+    keys: set = {"GITHUB_TOKEN"}
+    csv_path = Path(__file__).parent / "data" / "llm_model.csv"
+    if not csv_path.exists():
+        # Fallback: most common provider keys, so behavior is sensible if the
+        # catalog is missing for any reason.
+        keys.update(
+            {
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+                "OPENROUTER_API_KEY",
+            }
+        )
+        return keys
+    try:
+        with open(csv_path, "r", encoding="utf-8") as f:
+            header = f.readline().strip().split(",")
+            if "api_key" not in header:
+                return keys
+            api_idx = header.index("api_key")
+            for line in f:
+                parts = line.rstrip("\n").split(",")
+                if len(parts) > api_idx:
+                    raw = parts[api_idx].strip()
+                    if not raw:
+                        continue
+                    for k in raw.split("|"):
+                        k = k.strip()
+                        if k:
+                            keys.add(k)
+    except OSError:
+        pass
+    return keys
+
+
+_OPENCODE_PROVIDER_KEYS: set = _load_opencode_provider_keys()
+
+
+def _has_api_key(provider: str) -> bool:
+    """Return True if at least one primary API-key env var is set."""
+    if provider == "opencode":
+        return any(os.environ.get(k) for k in _OPENCODE_PROVIDER_KEYS)
+    if provider == "google":
+        return bool(
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("ANTIGRAVITY_API_KEY")
+        )
+    key = PROVIDER_PRIMARY_KEY.get(provider)
+    return bool(key and os.environ.get(key))
+
+
+def _displayed_google_key() -> str:
+    for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY"):
+        if os.environ.get(k):
+            return k
+    return "GEMINI_API_KEY"
+
+
+def _credential_status_label(provider: str) -> str:
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY"
+    if provider == "openai":
+        return "OPENAI_API_KEY"
+    if provider == "google":
+        return _displayed_google_key()
+    if provider == "opencode":
+        return "OpenCode provider credential"
+    return provider
+
+
+# ---------------------------------------------------------------------------
+# API-key file management
+# ---------------------------------------------------------------------------
+
+
+def _save_api_key(key: str, value: str) -> None:
+    """Persist an API key to ``~/.pdd/api-env.<shell>`` and source it in RC."""
+    shell_name, rc_file = _get_shell_info()
+    pdd_dir = Path.home() / ".pdd"
+    pdd_dir.mkdir(parents=True, exist_ok=True)
+    env_file = pdd_dir / f"api-env.{shell_name}"
+
+    os.environ[key] = value
+
+    existing_lines: List[str] = []
+    if env_file.exists():
+        existing_lines = env_file.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    # Deduplicate by key name. Matches "export K=" and "set -gx K ...".
+    dedup_re = re.compile(
+        r"^\s*(?:export\s+" + re.escape(key) + r"\s*=|set\s+-gx\s+" + re.escape(key) + r"\b)"
     )
+    existing_lines = [l for l in existing_lines if not dedup_re.match(l)]
+
+    if shell_name == "fish":
+        existing_lines.append(f"set -gx {key} {value}\n")
+    else:
+        existing_lines.append(f"export {key}={value}\n")
+
+    env_file.write_text("".join(existing_lines), encoding="utf-8")
+
+    if rc_file.exists():
+        rc_content = rc_file.read_text(encoding="utf-8")
+    else:
+        rc_content = ""
+    if shell_name == "fish":
+        source_line = f"test -f {env_file} ; and source {env_file}"
+    else:
+        source_line = f"source {env_file}"
+    if source_line not in rc_content:
+        rc_file.parent.mkdir(parents=True, exist_ok=True)
+        if rc_content and not rc_content.endswith("\n"):
+            rc_content += "\n"
+        rc_content += source_line + "\n"
+        rc_file.write_text(rc_content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+
+def _default_index(rows: List[dict]) -> int:
+    """Pick the default selection: installed+cred > installed > first row."""
+    for i, r in enumerate(rows):
+        if r["path"] and (r["has_key"] or r["has_oauth"]):
+            return i
+    for i, r in enumerate(rows):
+        if r["path"]:
+            return i
+    return 0
+
+
+def _build_rows() -> List[dict]:
+    """Detect each CLI and return a list of row dicts."""
+    rows: List[dict] = []
+    for cli in CLI_PREFERENCE:
+        provider = CLI_PROVIDER[cli]
+        rows.append(
+            {
+                "cli": cli,
+                "provider": provider,
+                "path": _find_cli_binary(cli),
+                "has_key": _has_api_key(provider),
+                "has_oauth": _has_provider_oauth(provider),
+            }
+        )
+    return rows
+
+
+def _print_selection_table(rows: List[dict]) -> None:
+    """Print the numbered selection table."""
+    console.print("Available agentic CLI harnesses:")
+    for idx, row in enumerate(rows, start=1):
+        cli = row["cli"]
+        provider = row["provider"]
+        label = CLI_LABEL[cli]
+        prov_disp = PROVIDER_DISPLAY[provider]
+        if cli == "agy":
+            prov_disp += " — Antigravity (preferred)"
+        elif cli == "gemini":
+            prov_disp += " — Gemini (legacy rollback)"
+        if row["path"]:
+            install_str = f"Found at {row['path']}"
+        else:
+            install_str = "Not found"
+        if row["has_key"]:
+            cred_str = f"[green]\u2713[/green] {_credential_status_label(provider)} set"
+        elif row["has_oauth"]:
+            cred_str = "[green]\u2713[/green] OAuth/subscription login configured"
+        else:
+            cred_str = f"[red]\u2717[/red] {_credential_status_label(provider)} not set"
+        console.print(
+            f"{idx}. {label} ({prov_disp}) — {install_str}; {cred_str}"
+        )
+
+
+def _parse_selection(raw: str, n_rows: int) -> List[int]:
+    """Parse a comma-separated numeric selection. Returns deduplicated indices."""
+    out: List[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not part.isdigit():
+            return []
+        i = int(part) - 1
+        if 0 <= i < n_rows:
+            if i not in out:
+                out.append(i)
+        else:
+            return []
+    return out
+
+
+def _install_cli(cli: str) -> "tuple[bool, Optional[str]]":
+    """Attempt to install a CLI. Returns (success, message_or_none)."""
+    if cli == "agy":
+        # Antigravity is installed manually — never shell out to the URL.
+        console.print(
+            "Antigravity CLI (`agy`) is not distributed via npm. Install hint:"
+        )
+        console.print(f"    {AGY_MANUAL_INSTALL_HINT}")
+        try:
+            ans = _prompt_input(
+                "Press Enter after running the installer (or 'n' to skip): "
+            ).strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return False, "User interrupted Antigravity install."
+        if ans in ("n", "no", "q", "skip"):
+            return False, "User declined Antigravity install."
+        return True, None
+
+    if not _npm_available():
+        return False, "npm is not available on PATH. Install Node.js/npm first."
+    cmd = CLI_INSTALL_HINT[cli]
+    if not cmd:
+        return False, f"No install command registered for {cli}."
+    try:
+        proc = subprocess.run(cmd, shell=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"Install command raised: {exc}"
+    if proc.returncode != 0:
+        return False, f"Install failed (exit {proc.returncode}). Try manually: {cmd}"
+    return True, None
 
 
 def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
-    """Phase 1 entry point for pdd setup.
+    """Phase 1 of ``pdd setup``.
 
-    Shows a numbered selection table of all three CLI options with their
-    install and API-key status, lets the user choose one or more via
-    comma-separated input, and walks through installation and key
-    configuration for each.
-
-    Returns a list of CliBootstrapResult objects (one per selected CLI).
-    On full skip: returns [CliBootstrapResult(skipped=True)].
+    Detects agentic CLIs, presents a selection table, and for each chosen
+    CLI walks through install / credential / test in sequence.
     """
-    # Import banner helper from setup_tool
-    from pdd.setup_tool import _print_step_banner
-    _print_step_banner("Checking CLI tools...")
-    shell = _detect_shell()
+    _print_step_banner("Detecting Agentic CLI Harnesses")
 
-    def _skip_all(reason: str = "") -> List[CliBootstrapResult]:
-        """Print red CLI-not-configured warning and return a skipped result."""
-        if reason:
-            console.print(f"  [red]\u2717 {reason}[/red]")
-        console.print("  [red]\u2717 CLI not configured. Run `pdd setup` again to configure it.[/red]")
+    rows = _build_rows()
+    _print_selection_table(rows)
+    console.print(
+        "Enter comma-separated numbers (e.g. 1,3), press Enter for the default, "
+        "or 'q'/'n' to skip."
+    )
+
+    try:
+        raw = _prompt_input("Selection: ").strip()
+    except (KeyboardInterrupt, EOFError):
         return [CliBootstrapResult(skipped=True)]
 
-    # ------------------------------------------------------------------
-    # 1. Gather status for each CLI in table order
-    # ------------------------------------------------------------------
-    cli_info: List[Dict[str, object]] = []
-    for provider, cli_name, display_name in _TABLE_ORDER:
-        path = _find_cli_binary(cli_name)
-        has_key = _has_api_key(provider)
-        # Issue #813: detect OAuth/subscription credentials too — Claude Max,
-        # Gemini OAuth, Codex ChatGPT login are valid auth paths that the
-        # original API-key-only check missed, leading to UX that pushed
-        # OAuth users into the stale-API-key workflow.
-        has_oauth = _has_provider_oauth(provider)
-        key_display = _get_display_key_name(provider)
-        cli_info.append({
-            "provider": provider,
-            "cli_name": cli_name,
-            "display_name": display_name,
-            "path": path,
-            "has_key": has_key,
-            "has_oauth": has_oauth,
-            "has_credential": has_key or has_oauth,
-            "key_display": key_display,
-        })
+    if raw.lower() in ("q", "n", "quit", "skip"):
+        return [CliBootstrapResult(skipped=True)]
 
-    # ------------------------------------------------------------------
-    # 2. Print numbered selection table with aligned columns
-    # ------------------------------------------------------------------
-    from rich.markup import escape as _escape
-
-    # Compute column widths using plain strings (no markup) for measurement
-    max_name_len = max(len(str(c["display_name"])) for c in cli_info)
-    max_install_len = 0
-    install_strs_plain: List[str] = []
-    install_strs_display: List[str] = []
-    for c in cli_info:
-        if c["path"]:
-            plain = f"\u2713 Found at {c['path']}"
-            display = f"[green]\u2713[/green] Found at {_escape(str(c['path']))}"
-        else:
-            plain = "\u2717 Not found"
-            display = "[red]\u2717[/red] Not found"
-        install_strs_plain.append(plain)
-        install_strs_display.append(display)
-        max_install_len = max(max_install_len, len(plain))
-
-    for idx, c in enumerate(cli_info):
-        num = idx + 1
-        name_padded = str(c["display_name"]).ljust(max_name_len)
-        install_display = install_strs_display[idx]
-        install_padding = " " * (max_install_len - len(install_strs_plain[idx]))
-        # Issue #813: prefer reporting OAuth as credential source when present
-        # (more honest than "API key not set" for a Claude Max user).
-        if c["has_key"]:
-            key_str = f"[green]\u2713[/green] {c['key_display']} is set"
-        elif c["has_oauth"]:
-            key_str = f"[green]\u2713[/green] OAuth/subscription login configured"
-        else:
-            key_str = f"[red]\u2717[/red] no credentials ({c['key_display']} or OAuth login)"
-        console.print(f"  [blue]{num}[/blue]. {name_padded}   {install_display}{install_padding}   {key_str}")
-
-    console.print()
-
-    # ------------------------------------------------------------------
-    # 3. Determine smart default
-    # ------------------------------------------------------------------
-    default_idx = 0  # fallback: Claude (index 0 -> selection "1")
-    # Prefer installed + has any credential (API key OR OAuth login).
-    for i, c in enumerate(cli_info):
-        if c["path"] and c["has_credential"]:
-            default_idx = i
-            break
+    if not raw:
+        default_i = _default_index(rows)
+        console.print(
+            f"Defaulting to {CLI_LABEL[rows[default_i]['cli']]}."
+        )
+        selected = [default_i]
     else:
-        # Prefer installed only
-        for i, c in enumerate(cli_info):
-            if c["path"]:
-                default_idx = i
-                break
+        selected = _parse_selection(raw, len(rows))
+        if not selected:
+            default_i = _default_index(rows)
+            console.print(
+                f"Invalid input. Defaulting to {CLI_LABEL[rows[default_i]['cli']]}."
+            )
+            selected = [default_i]
 
-    # ------------------------------------------------------------------
-    # 4. Prompt for selection (comma-separated)
-    # ------------------------------------------------------------------
-    try:
-        console.print(r"  Select CLIs to use for pdd agentic tools (enter numbers separated by commas, e.g., [blue]1[/blue],[blue]3[/blue]): ", end="")
-        raw = _prompt_input("").strip()
-    except (EOFError, KeyboardInterrupt):
-        console.print()
-        return _skip_all()
-
-    if raw.lower() in ("q", "n"):
-        return _skip_all()
-
-    # Parse comma-separated selections, deduplicate while preserving order
-    selected_indices: List[int] = []
-    if raw == "":
-        selected_indices = [default_idx]
-        console.print(f"  [dim]Defaulting to {cli_info[default_idx]['display_name']}[/dim]")
-    else:
-        seen: set[int] = set()
-        parts = [p.strip() for p in raw.split(",")]
-        for part in parts:
-            try:
-                num = int(part)
-            except ValueError:
-                continue
-            if 1 <= num <= len(cli_info):
-                idx = num - 1
-                if idx not in seen:
-                    seen.add(idx)
-                    selected_indices.append(idx)
-        if not selected_indices:
-            # No valid numbers found — treat as default
-            selected_indices = [default_idx]
-            console.print(f"  [dim]Invalid input. Defaulting to {cli_info[default_idx]['display_name']}[/dim]")
-
-    # ------------------------------------------------------------------
-    # 5. Process each selected CLI
-    # ------------------------------------------------------------------
     results: List[CliBootstrapResult] = []
-    for sel_idx in selected_indices:
+    for i in selected:
+        row = rows[i]
+        cli = row["cli"]
+        provider = row["provider"]
+        path = row["path"]
+        has_oauth = row["has_oauth"]
+        had_key = row["has_key"]
+        api_key_configured = had_key
+
+        # --- Install step -------------------------------------------------
+        if not path:
+            console.print(f"{CLI_LABEL[cli]} is not installed.")
+            try:
+                ans = _prompt_input(
+                    f"Install now? [Y/n]: "
+                ).strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                results.append(
+                    CliBootstrapResult(
+                        cli_name=cli, provider=provider, skipped=True
+                    )
+                )
+                continue
+            if ans in ("n", "no"):
+                console.print(f"{cli} not configured — skipping.")
+                results.append(
+                    CliBootstrapResult(
+                        cli_name=cli, provider=provider, skipped=True
+                    )
+                )
+                continue
+            ok, err = _install_cli(cli)
+            if not ok:
+                if err:
+                    console.print(err)
+                console.print(f"{cli} not configured.")
+                results.append(
+                    CliBootstrapResult(
+                        cli_name=cli, provider=provider, skipped=True
+                    )
+                )
+                continue
+            path = _find_cli_binary(cli)
+            if not path:
+                console.print(
+                    f"{cli} not found on PATH after install — not configured."
+                )
+                results.append(
+                    CliBootstrapResult(
+                        cli_name=cli, provider=provider, skipped=True
+                    )
+                )
+                continue
+
+        # --- Credential step ---------------------------------------------
+        if has_oauth and not had_key:
+            console.print(
+                f"[green]\u2713[/green] OAuth/subscription login configured for "
+                f"{CLI_LABEL[cli]} — using the stored credential."
+            )
+            if provider == "anthropic":
+                console.print(
+                    "(Set PDD_KEEP_ANTHROPIC_API_KEY=1 to force API-key billing.)"
+                )
+        elif had_key:
+            # Key already present — no prompt needed.
+            pass
+        else:
+            if provider == "opencode":
+                console.print(
+                    "[dim]OpenCode has no dedicated API key. Run "
+                    "`opencode auth login`, configure "
+                    "`~/.config/opencode/opencode.json` (or a project "
+                    "`opencode.json`), or export an underlying provider env "
+                    "var plus `OPENCODE_MODEL=provider/model`.[/dim]"
+                )
+                console.print(
+                    "[dim]Docs: https://opencode.ai/docs/providers[/dim]"
+                )
+            else:
+                key_name = PROVIDER_PRIMARY_KEY[provider]
+                try:
+                    val = _prompt_input(
+                        f"Enter your {key_name} (press Enter to skip): "
+                    ).strip()
+                except (KeyboardInterrupt, EOFError):
+                    val = ""
+                if val:
+                    _save_api_key(key_name, val)
+                    api_key_configured = True
+                else:
+                    if provider == "anthropic":
+                        console.print(
+                            f"{key_name} not configured. Claude CLI can still "
+                            "work via subscription auth (run `claude login`)."
+                        )
+                    else:
+                        console.print(
+                            f"{key_name} not configured — limited functionality."
+                        )
+
+        # --- Test step (always) ------------------------------------------
+        console.print(f"Testing {CLI_LABEL[cli]} ({path})...")
         try:
-            result = _bootstrap_single_cli(cli_info[sel_idx], shell)
-            results.append(result)
-        except KeyboardInterrupt:
-            console.print()
-            console.print(f"  [red]\u2717 {cli_info[sel_idx]['display_name']} not configured.[/red]")
-            results.append(CliBootstrapResult(skipped=True))
-            break  # Stop processing remaining CLIs
+            r = subprocess.run(
+                [path, "--version"], capture_output=True, text=True
+            )
+            if r.returncode != 0:
+                r = subprocess.run(
+                    [path, "--help"], capture_output=True, text=True
+                )
+            combined = (r.stdout or "") + (r.stderr or "")
+            console.print(combined.strip() or f"{cli} responded.")
+        except (OSError, subprocess.SubprocessError) as exc:
+            console.print(f"Error invoking {cli}: {exc}")
+
+        results.append(
+            CliBootstrapResult(
+                cli_name=cli,
+                provider=provider,
+                cli_path=path or "",
+                api_key_configured=api_key_configured,
+                skipped=False,
+            )
+        )
 
     if not results:
-        return _skip_all()
-
+        return [CliBootstrapResult(skipped=True)]
     return results
 
 
+# ---------------------------------------------------------------------------
+# Legacy detection
+# ---------------------------------------------------------------------------
+
+
 def detect_cli_tools() -> None:
-    """Legacy detection function."""
+    """Legacy detection: show install status and any matching API keys."""
     console.print("Agentic CLI Tool Detection")
-    console.print("(Required for: pdd fix, pdd change, pdd bug)")
-    console.print()
+    console.print(
+        "These CLIs power `pdd fix`, `pdd change`, and `pdd bug`."
+    )
 
-    found_any = False
-    all_with_keys_installed = True
-    
-    # Use ordered providers
-    for provider in ["anthropic", "google", "openai"]:
-        cli_cmd = _CLI_COMMANDS[provider]
-        display_name = _CLI_DISPLAY_NAMES[provider]
-        path = _which(cli_cmd)
+    found: List[str] = []
+    missing: List[tuple] = []
+    for cli in CLI_PREFERENCE:
+        path = _which(cli)
+        provider = CLI_PROVIDER[cli]
         has_key = _has_api_key(provider)
-        key_env = _API_KEY_ENV_VARS[provider]
-
         if path:
-            found_any = True
-            console.print(f"  [green]\u2713[/green] {display_name} — Found at {path}")
-            if has_key:
-                console.print(f"    [green]\u2713[/green] {key_env} is set")
-            else:
-                console.print(f"    [yellow]\u2717[/yellow] {key_env} not set — CLI won't be usable for API calls")
+            console.print(
+                f"[green]\u2713[/green] {CLI_LABEL[cli]} — Found at {path}"
+            )
+            found.append(cli)
         else:
-            console.print(f"  [red]\u2717[/red] {display_name} — Not found")
-            if has_key:
-                all_with_keys_installed = False
-                console.print(f"    [yellow]You have {key_env} set but {display_name} is not installed.[/yellow]")
-                console.print(f"    Install: {_INSTALL_COMMANDS[provider]} (install the CLI to use it)")
-                if _npm_available():
-                    if _prompt_yes_no(f"    Install now? [y/N] "):
-                        if _run_install(_INSTALL_COMMANDS[provider]):
-                            new_path = _which(cli_cmd)
-                            if new_path:
-                                console.print(f"    {display_name} installed successfully.")
-                            else:
-                                console.print("    completed but not found on PATH")
-                        else:
-                            console.print("    failed (try installing manually)")
-                    else:
-                        console.print("    Skipped (you can install later).")
-                else:
-                    console.print("    npm is not installed.")
-            else:
-                console.print(f"    API key ({key_env}): not set")
-        console.print()
+            console.print(f"[red]\u2717[/red] {CLI_LABEL[cli]} — Not found")
+            missing.append((cli, provider, has_key))
 
-    if all_with_keys_installed and found_any:
-        console.print("All CLI tools with matching API keys are installed")
-    elif not found_any:
-        console.print("Quick start: No CLI tools found. Install one of the supported CLIs and set its API key.")
+    for cli, provider, has_key in missing:
+        if has_key:
+            key_name = PROVIDER_PRIMARY_KEY.get(provider) or _credential_status_label(
+                provider
+            )
+            install_hint = CLI_INSTALL_HINT.get(cli) or AGY_MANUAL_INSTALL_HINT
+            console.print(
+                f"{key_name} is set but {CLI_LABEL[cli]} is not installed. "
+                f"Suggested install: {install_hint}"
+            )
 
-if __name__ == "__main__":
-    detect_cli_tools()
+    if found and all(_has_api_key(CLI_PROVIDER[c]) for c in found):
+        console.print(
+            "All CLI tools you have installed are configured with credentials."
+        )
+    if not found:
+        console.print(
+            "No CLI tools found. Quick start: install Claude CLI via "
+            "`npm install -g @anthropic-ai/claude-code`."
+        )
+
+
+__all__ = [
+    "CliBootstrapResult",
+    "detect_and_bootstrap_cli",
+    "detect_cli_tools",
+    "PROVIDER_PRIMARY_KEY",
+    "PROVIDER_DISPLAY",
+    "CLI_PREFERENCE",
+    "SHELL_RC_MAP",
+]

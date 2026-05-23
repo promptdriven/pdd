@@ -219,7 +219,7 @@ def classify_step_output(
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
-    *, 
+    *,
     strict_unresolved: bool = False,
 ) -> str:
     """Safely substitute known {placeholders} without raising on unknown keys.
@@ -256,8 +256,21 @@ def get_agent_provider_preference() -> List[str]:
     """
     env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
     if env_val:
-        return [p.strip() for p in env_val.split(",") if p.strip()]
-    return _DEFAULT_PROVIDER_PREFERENCE
+        prefs = [p.strip() for p in env_val.split(",") if p.strip()]
+        normalized = []
+        for p in prefs:
+            if p == "antigravity":
+                normalized.append("google")
+                os.environ.setdefault("PDD_GOOGLE_CLI", "agy")
+            else:
+                normalized.append(p)
+        # Deduplicate while preserving order
+        result = []
+        for p in normalized:
+            if p not in result:
+                result.append(p)
+        return result
+    return list(_DEFAULT_PROVIDER_PREFERENCE)
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -277,8 +290,6 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/claude"),
         Path("/opt/homebrew/bin/claude"),
         Path("/home/linuxbrew/.linuxbrew/bin/claude"),
-        # nvm base path - glob-expanded in _find_cli_binary() to search
-        # ~/.nvm/versions/node/*/bin/ for all installed node versions
         Path.home() / ".nvm" / "versions" / "node",
     ],
     "codex": [
@@ -297,6 +308,16 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
         Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
+        Path.home() / ".nvm" / "versions" / "node",
+    ],
+    "agy": [
+        Path.home() / ".npm-global" / "bin" / "agy",
+        Path.home() / ".local" / "bin" / "agy",
+        Path.home() / "bin" / "agy",
+        Path("/usr/local/bin/agy"),
+        Path("/opt/homebrew/bin/agy"),
+        Path("/home/linuxbrew/.linuxbrew/bin/agy"),
+        Path.home() / ".antigravity" / "bin" / "agy",
         Path.home() / ".nvm" / "versions" / "node",
     ],
     "opencode": [
@@ -830,7 +851,7 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
     discovery still honors the current home directory.
     """
     paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini", "opencode"}:
+    if name in {"claude", "codex", "gemini", "opencode", "agy"}:
         home = Path.home()
         paths.extend([
             home / ".npm-global" / "bin" / name,
@@ -838,6 +859,8 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
             home / "bin" / name,
             home / ".nvm" / "versions" / "node",
         ])
+        if name == "agy":
+            paths.append(home / ".antigravity" / "bin" / "agy")
 
     seen: set[str] = set()
     unique_paths: List[Path] = []
@@ -878,6 +901,19 @@ def _get_cli_diagnostic_info(name: str) -> str:
     return "\n".join(lines)
 
 
+def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Resolve the Google provider CLI binary based on PDD_GOOGLE_CLI and availability."""
+    if env is None:
+        env = os.environ
+    pref = env.get("PDD_GOOGLE_CLI", "auto").strip().lower()
+    if pref == "agy":
+        return _find_cli_binary("agy")
+    elif pref == "gemini":
+        return _find_cli_binary("gemini")
+    else: # auto
+        return _find_cli_binary("agy") or _find_cli_binary("gemini")
+
+
 def get_available_agents() -> List[str]:
     """
     Returns list of available provider names based on CLI existence and API key configuration.
@@ -895,11 +931,11 @@ def get_available_agents() -> List[str]:
         available.append("anthropic")
 
     # 2. Google (Gemini)
-    # Available if 'gemini' CLI exists AND any supported non-interactive auth
+    # Available if 'agy' or 'gemini' CLI exists AND any supported non-interactive auth
     # path is configured. The Gemini CLI can run headless from its stored OAuth
     # credentials even when GOOGLE_API_KEY/GEMINI_API_KEY are unset.
-    has_gemini_cli = _find_cli_binary("gemini") is not None
-    has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    has_google_cli = _get_google_cli_binary() is not None
+    has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTIGRAVITY_API_KEY")
     has_vertex_auth = (
         os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
         and (
@@ -909,7 +945,7 @@ def get_available_agents() -> List[str]:
     )
     has_gemini_oauth = _has_gemini_oauth_credentials()
 
-    if has_gemini_cli and (has_google_key or has_vertex_auth or has_gemini_oauth):
+    if has_google_cli and (has_google_key or has_vertex_auth or has_gemini_oauth):
         available.append("google")
 
     # 3. OpenAI (Codex)
@@ -942,20 +978,24 @@ def get_available_agents() -> List[str]:
 
 
 def _has_gemini_oauth_credentials() -> bool:
-    """Return True when Gemini CLI stored OAuth credentials are present.
+    """Return True when Gemini/Antigravity CLI stored OAuth credentials are present.
 
     Gemini CLI supports first-party OAuth auth stored under ~/.gemini. Treating
     API keys and Vertex env as the only available auth paths makes PDD skip a
     working local Gemini CLI and fall into broken providers.
     """
-    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
-    try:
-        data = json.loads(creds_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    return bool(data.get("refresh_token") or data.get("access_token"))
+    for creds_path in [
+        Path.home() / ".gemini" / "oauth_creds.json",
+        Path.home() / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    ]:
+        try:
+            data = json.loads(creds_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            if bool(data.get("refresh_token") or data.get("access_token")):
+                return True
+    return False
 
 
 def _has_codex_auth_file() -> bool:
@@ -1143,14 +1183,14 @@ _OPENCODE_PROVIDER_CREDENTIAL_FIELDS = frozenset(
 # Tokenizer for stripping JSONC comments while preserving string contents.
 # A naive ``re.sub(r"//[^\n]*", "", text)`` mangles valid configs that
 # contain ``"baseURL": "https://..."`` inside JSON strings — the ``//``
-# inside the URL gets eaten along with the rest of the line. This pattern
-# matches a complete double-quoted JSON string (with backslash escapes)
-# OR a block comment OR a line comment, in that priority order; strings
-# pass through untouched while comments are dropped.
+# inside the URL gets eaten along with the rest of the line.
+# This pattern matches a complete double-quoted JSON string (with backslash
+# escapes) OR a block comment OR a line comment, in that priority order;
+# strings pass through untouched while comments are dropped.
 _JSONC_TOKEN_RE = re.compile(
-    r'"(?:\\.|[^"\\])*"'   # double-quoted JSON string with escape support
-    r'|/\*[\s\S]*?\*/'      # /* block comment */
-    r'|//[^\n]*'            # // line comment
+    r'"(?:\\.|[^"\\])*"'
+    r'|/\*[\s\S]*?\*/'
+    r'|//[^\n]*'
 )
 
 
@@ -1908,7 +1948,7 @@ def run_agentic_task(
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
         deadline: Optional Unix timestamp for job-level time budgeting
         use_playwright: Enable constrained tool access mode for browser-based testing
-        time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
+        reasoning_time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
             top-level ``pdd --time`` flag. When provided, overrides the
             ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
             means "fall back to env" so unplumbed call sites keep working.
@@ -2591,7 +2631,7 @@ def _run_with_provider(
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
         label: Task label for heartbeat messages
         use_playwright: Enable constrained tool access for browser testing
-        time: Reasoning-allocation float in [0.0, 1.0]. When provided,
+        reasoning_time: Reasoning-allocation float in [0.0, 1.0]. When provided,
             takes precedence over the ``PDD_REASONING_EFFORT`` env var.
             ``None`` means "fall back to env" so unplumbed call sites
             keep receiving the signal via the global variable set by
@@ -2622,7 +2662,12 @@ def _run_with_provider(
 
     # Find CLI binary path (use explicit path if provided)
     if cli_path is None:
-        cli_path = _find_cli_binary(cli_name)
+        if provider == "google":
+            cli_path = _get_google_cli_binary(env)
+            if not cli_path:
+                return False, f"CLI for google provider not found. PDD_GOOGLE_CLI={env.get('PDD_GOOGLE_CLI', 'auto')}", 0.0, None
+        else:
+            cli_path = _find_cli_binary(cli_name)
     if not cli_path:
         return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0, None
 
@@ -2690,24 +2735,38 @@ def _run_with_provider(
                 "not this subprocess.[/dim]"
             )
     elif provider == "google":
-        # Do NOT use -p flag for Gemini. The -p flag passes text literally,
-        # so passing a file path gives Gemini the path string instead of content.
-        # Instead, pass a short instruction as positional argument telling Gemini
-        # to read the prompt file (matches old _run_google_variants pattern).
-        cmd = [
-            cli_path,
-            f"Read the file {prompt_path.name} for your full instructions and execute them.",
-            "--yolo",
-            "--output-format", "json"
-        ]
-        # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
-        gemini_model = env.get("GEMINI_MODEL")
-        if gemini_model:
-            cmd.extend(["--model", gemini_model])
+        resolved_bin = os.path.basename(cli_path)
+        if resolved_bin == "agy":
+            # Antigravity CLI args
+            cmd = [cli_path, "--print", f"Read the file {prompt_path.name} for your full instructions and execute them."]
+            if timeout:
+                cmd.extend(["--print-timeout", f"{int(timeout)}s"])
+            
+            if env.get("GEMINI_MODEL") and not quiet:
+                console.print(
+                    "[dim]GEMINI_MODEL requested, but Antigravity CLI has no equivalent "
+                    "flag; ignored.[/dim]"
+                )
+        else:
+            # Legacy Gemini CLI
+            # Do NOT use -p flag for Gemini. The -p flag passes text literally,
+            # so passing a file path gives Gemini the path string instead of content.
+            # Instead, pass a short instruction as positional argument telling Gemini
+            # to read the prompt file (matches old _run_google_variants pattern).
+            cmd = [
+                cli_path,
+                f"Read the file {prompt_path.name} for your full instructions and execute them.",
+                "--yolo",
+                "--output-format", "json"
+            ]
+            # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+            gemini_model = env.get("GEMINI_MODEL")
+            if gemini_model:
+                cmd.extend(["--model", gemini_model])
         if reasoning_effort and not quiet:
             # See Claude Code branch above for rationale — same constraint applies.
             console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Google provider CLI "
                 "has no reasoning-effort flag; applies to llm_invoke steps only, "
                 "not this subprocess.[/dim]"
             )
@@ -3146,10 +3205,10 @@ def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) 
         return None
 
 def _find_state_comment(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
     cwd: Path
 ) -> Optional[Tuple[int, Dict]]:
     """
@@ -3185,12 +3244,12 @@ def _find_state_comment(
         return None
 
 def github_save_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    cwd: Path, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    state: Dict,
+    cwd: Path,
     comment_id: Optional[int] = None
 ) -> Optional[int]:
     """
@@ -3231,10 +3290,10 @@ def github_save_state(
         return None
 
 def github_load_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
     cwd: Path
 ) -> Tuple[Optional[Dict], Optional[int]]:
     """
@@ -3246,10 +3305,10 @@ def github_load_state(
     return None, None
 
 def github_clear_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
     cwd: Path
 ) -> bool:
     """
@@ -3389,14 +3448,14 @@ def load_workflow_state(
     return None, None
 
 def save_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
-    use_github_state: bool = True, 
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state: Dict,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
     github_comment_id: Optional[int] = None
 ) -> Optional[int]:
     """
@@ -3429,12 +3488,12 @@ def save_workflow_state(
     return github_comment_id
 
 def clear_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
     use_github_state: bool = True
 ) -> None:
     """
