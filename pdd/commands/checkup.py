@@ -10,9 +10,13 @@ from ..agentic_checkup import run_agentic_checkup
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from .prompt import prompt_lint
 
 
-@click.command("checkup")
+@click.command(
+    "checkup",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
 @click.argument("target", required=False, default=None)
 @click.option(
     "--validate-arch-includes",
@@ -285,8 +289,27 @@ def checkup(
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Prompt lint:
+      pdd checkup lint [OPTIONS] TARGET
     """
     ctx.ensure_object(dict)
+
+    if target == "lint":
+        lint_args = list(ctx.args)
+        if strict:
+            lint_args.insert(0, "--strict")
+        exit_code = prompt_lint.main(
+            args=lint_args,
+            prog_name="pdd checkup lint",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if ctx.args:
+        raise click.UsageError(f"Got unexpected extra arguments ({' '.join(ctx.args)})")
 
     if validate_arch_includes:
         if target is not None or pr_url is not None or issue_url_opt is not None:

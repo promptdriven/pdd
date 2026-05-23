@@ -12,7 +12,7 @@ from __future__ import annotations
 # logger.info() calls are suppressed when the user passes --quiet.
 import os as _os
 import sys
-if '--quiet' in sys.argv:
+if '--quiet' in sys.argv or '--json' in sys.argv:
     _os.environ.setdefault('PDD_QUIET', '1')
 
 _DEFAULTS = {

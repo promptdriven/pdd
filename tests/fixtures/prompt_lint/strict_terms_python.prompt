@@ -1,0 +1,11 @@
+% Fixture: strict_terms_python.prompt
+% Uses ONLY strict-mode vague terms (correct, expected, proper, normal).
+% Target: 0 warns in default mode, >0 warns in --strict mode.
+
+<contract_rules>
+R1: The system MUST produce the correct output for every well-formed input.
+R2: The system MUST return the expected format on success.
+R3: Proper error messages MUST be emitted when a request is malformed.
+R4: The system MUST finish the operation within 5 seconds.
+R5: Normal operation MUST NOT log debug-level messages.
+</contract_rules>

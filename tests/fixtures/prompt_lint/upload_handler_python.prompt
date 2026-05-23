@@ -1,0 +1,17 @@
+% Real-world example fixture for pdd prompt lint.
+% Demonstrates how "duplicate upload" is ambiguous without a vocabulary block.
+% Used by: test_upload_handler_ambiguous_fixture
+
+<contract_rules>
+R2 - Duplicate upload rejection
+When ...
+</contract_rules>
+
+<requirements>
+- Accept multipart/form-data POST requests.
+- Only authorized users may upload files.
+- Return HTTP 201 on successful upload with {"id": "<uuid>"}.
+- Return a valid response for accepted uploads.
+- Reject duplicate uploads with HTTP 409.
+- Log all upload attempts for audit purposes.
+</requirements>
