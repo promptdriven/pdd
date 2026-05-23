@@ -11024,6 +11024,51 @@ class TestReviewLoopDeterministicGates:
         assert "gate:base-ref" in report
         assert "reviewer-status: codex=clean" not in report
 
+    def test_changed_files_exception_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-35 Finding 1: when ``_pr_changed_files_all`` RAISES
+        unexpectedly, the previous behaviour swallowed the
+        exception into ``changed_files=[]`` and discovery
+        proceeded with an empty inventory — iter-30 ``node_modules``
+        and iter-27/iter-32 config-touched skips couldn't engage.
+        Set the ``changed_files_fallback`` sentinel in the except
+        branch so the iter-34 ``gate:changed-files`` blocker
+        fires.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_review_loop as mod
+
+        secret = "ghp_" + ("E" * 40)
+        def boom(*a, **k):
+            raise OSError(f"git binary missing — token {secret}")
+
+        monkeypatch.setattr(mod, "_pr_changed_files_all", boom)
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        findings = _enforce_gates_before_clean(
+            state=state,
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata={"base_ref": "main"},
+            reviewer="codex",
+        )
+        assert findings, "changed-files exception must fail closed"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.reviewer == "gate:changed-files"
+        # The exception text MUST be scrubbed before landing in
+        # state.gate_runs or the finding.
+        assert secret not in (f.evidence or "")
+        assert secret not in (state.gate_runs[-1].get("error") or "")
+        assert state.gate_runs[-1]["phase"] == "changed-files-resolution"
+
     def test_changed_files_fallback_fails_closed_with_blocker_finding(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

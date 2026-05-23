@@ -408,18 +408,40 @@ class TestDiscoverGates:
 
     def test_script_gate_handles_equals_and_short_config_forms(self) -> None:
         """Iter-34 Finding 3: ``--config=<path>`` and ``-c <path>``
-        shorthand forms must also be recognised."""
+        shorthand forms must also be recognised. Iter-35 Findings
+        2 + 3 extend the set with quoted paths and tsc ``-p`` /
+        ``--project`` project-file flags.
+        """
         from pdd.checkup_gates import _script_references_pr_modified_config
 
         pr_set = {"config/lint.json"}
         for script in (
+            # Iter-34 forms
             "eslint --no-fix --config config/lint.json src",
             "eslint --no-fix --config=config/lint.json src",
             "eslint --no-fix -c config/lint.json src",
             "eslint --no-fix -c=config/lint.json src",
+            # Iter-35 Finding 2: quoted paths
+            'eslint --no-fix --config "./config/lint.json" src',
+            "eslint --no-fix --config './config/lint.json' src",
+            'eslint --no-fix --config="config/lint.json" src',
+            "eslint --no-fix -c './config/lint.json' src",
         ):
             assert _script_references_pr_modified_config(script, pr_set), (
-                f"missed --config reference in {script!r}"
+                f"missed config reference in {script!r}"
+            )
+        # Iter-35 Finding 3: tsc ``-p`` / ``--project`` are
+        # equivalent custom-config flags.
+        ts_pr_set = {"config/build.json"}
+        for script in (
+            "tsc -p config/build.json --noEmit",
+            "tsc --project config/build.json --noEmit",
+            "tsc -p=config/build.json --noEmit",
+            "tsc --project=config/build.json --noEmit",
+            'tsc -p "./config/build.json" --noEmit',
+        ):
+            assert _script_references_pr_modified_config(script, ts_pr_set), (
+                f"missed tsc project reference in {script!r}"
             )
         # Unrelated PR-modified file does NOT trip the skip.
         assert not _script_references_pr_modified_config(

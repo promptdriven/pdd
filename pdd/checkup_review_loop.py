@@ -3951,8 +3951,24 @@ def _enforce_gates_before_clean(
     try:
         changed_files = _pr_changed_files_all(worktree, pr_metadata)
     except Exception as exc:  # noqa: BLE001 - defensive: never raise
-        logger.debug("gates: changed-files resolution crashed: %s", exc, exc_info=True)
+        # Iter-35 Finding 1: a raise here was previously swallowed
+        # into ``changed_files = []`` and discovery proceeded with
+        # an empty inventory — so iter-30 ``node_modules`` and
+        # iter-27/iter-32 config-touched skips couldn't engage and
+        # the loop could ship a clean verdict over a PR we never
+        # inspected for those signals. Fail closed via the same
+        # sentinel ``_pr_changed_files_all`` uses for its
+        # HEAD~1 fallback, so the iter-34 ``gate:changed-files``
+        # blocker fires below. Scrub before storing — the
+        # exception text could carry tokens that travelled
+        # through the failure.
+        scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+        logger.debug("gates: changed-files resolution crashed: %s", scrubbed_exc)
         changed_files = []
+        if pr_metadata is not None and isinstance(pr_metadata, dict):
+            pr_metadata["changed_files_fallback"] = (
+                f"_pr_changed_files_all raised: {scrubbed_exc}"
+            )
     # Iter-34 Finding 1: if the scanner had to fall back to
     # ``HEAD~1...HEAD`` (set on ``pr_metadata['changed_files_fallback']``),
     # the changed-file inventory is TRUNCATED — earlier commits on a

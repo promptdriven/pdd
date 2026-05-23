@@ -1039,38 +1039,60 @@ def _discover_python_gates(
 def _script_references_pr_modified_config(
     script_command: str, pr_changed_set: set
 ) -> bool:
-    """Return True iff the script body's ``--config`` / ``-c`` argument
-    references a PR-modified file.
+    """Return True iff the script body's custom-config-pointing
+    argument references a PR-modified file.
 
-    iter-34 Finding 3: an operator who points eslint/prettier/tsc at
-    a custom config file (``eslint --no-fix --config config/lint.json
-    src``) bypasses the iter-27 well-known-config skip — that skip
-    only watches default-named configs. We scan the script tokens
-    for ``--config <path>`` (and ``--config=<path>``, ``-c <path>``,
-    ``-c=<path>``) and treat the gate as unsafe when the cited path
-    appears in the PR diff. Path comparison is case-insensitive and
-    tolerant of leading ``./``.
+    Covers the four common shapes:
+      * ``--config <path>`` / ``--config=<path>``
+      * ``-c <path>`` / ``-c=<path>``
+      * ``-p <path>`` / ``-p=<path>`` (tsc's project flag)
+      * ``--project <path>`` / ``--project=<path>``
+
+    Quoted paths (``--config "./config/lint.json"``,
+    ``--config './conf.json'``) are also handled — quotes survive the
+    naive ``.split()`` but are stripped before comparison (iter-35
+    Finding 2).
+
+    iter-34 Finding 3 + iter-35 Findings 2 + 3: an operator who
+    points eslint/prettier/tsc at a custom config (or tsc at a
+    custom project file) bypasses the iter-27 well-known-config
+    skip. Path comparison is case-insensitive and tolerant of
+    leading ``./``.
     """
     if not script_command:
         return False
     tokens = script_command.lower().split()
     config_paths: List[str] = []
+    flag_words = ("--config", "-c", "--project", "-p")
+    flag_equals = tuple(f + "=" for f in flag_words)
     i = 0
     while i < len(tokens):
         tok = tokens[i]
-        if tok in ("--config", "-c") and i + 1 < len(tokens):
+        if tok in flag_words and i + 1 < len(tokens):
             config_paths.append(tokens[i + 1])
             i += 2
             continue
-        if tok.startswith("--config=") or tok.startswith("-c="):
-            config_paths.append(tok.split("=", 1)[1])
+        for prefix in flag_equals:
+            if tok.startswith(prefix):
+                config_paths.append(tok[len(prefix):])
+                break
         i += 1
-    for path in config_paths:
-        if not path:
+    for raw in config_paths:
+        if not raw:
             continue
+        # Iter-35 Finding 2: split() leaves shell quote characters
+        # (``"`` and ``'``) attached to the token, so a path like
+        # ``"./config/lint.json"`` becomes the literal string
+        # ``"./config/lint.json"`` and the equality check below
+        # silently fails. Strip ONE level of matching quotes from
+        # each end before any other normalisation.
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
+            raw = raw[1:-1]
         # Normalise: drop leading ``./`` so the comparison matches
         # how the changed-file inventory stores paths.
-        norm = path.lstrip("./")
+        norm = raw.lstrip("./")
+        if not norm:
+            continue
         for changed in pr_changed_set:
             if changed == norm or changed.endswith("/" + norm):
                 return True
