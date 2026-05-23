@@ -138,7 +138,12 @@ class Watcher:
         # preserve the legacy command+timestamp filter behaviour.
         self._job_id = job_id
         self._stop_event = threading.Event()
-        self._lock = threading.Lock()
+        # RLock so callers that already hold the lock (e.g. internal
+        # state read inside _consume_new_bytes) can re-enter without
+        # deadlock. Both the daemon thread's poll loop AND inline
+        # flush() callers serialise through this single lock to
+        # prevent double-counting the same CSV bytes.
+        self._lock = threading.RLock()
         self._state = _State(cap=cap)
         self._spent: float = 0.0
         # Incremental-tail state. ``_byte_offset`` is the first unread byte;
@@ -247,11 +252,22 @@ class Watcher:
     def _consume_new_bytes(self) -> None:
         """Read appended bytes and accumulate matching-row cost.
 
+        Holds ``self._lock`` for the ENTIRE consume operation so the
+        daemon-thread poll and any inline ``flush()`` caller cannot
+        race on the same byte range. Without this serialisation, two
+        concurrent calls would each read from the same ``_byte_offset``,
+        each parse the same rows, and each increment ``_spent`` — a
+        single $5 row could end up as $10 of "spend".
+
         Tolerates partial rows: if the buffer does not end on a newline, the
         last (incomplete) line is rewound so the next poll picks it up once
         it has been fully flushed. Tolerates the file disappearing or being
         truncated.
         """
+        with self._lock:
+            self._consume_new_bytes_locked()
+
+    def _consume_new_bytes_locked(self) -> None:
         try:
             stat = self._csv_path.stat()
         except (OSError, FileNotFoundError):
@@ -340,8 +356,9 @@ class Watcher:
                 added += _parse_cost(row.get("cost"))
 
         if added:
-            with self._lock:
-                self._spent += added
+            # Already inside self._lock via _consume_new_bytes; RLock
+            # makes the nested acquire a no-op.
+            self._spent += added
         self._byte_offset = new_offset
 
         # If a partial trailing row exists, the next poll will pick it up.
@@ -378,30 +395,53 @@ def read_spent_now(
 ) -> float:
     """One-shot read of cumulative spend from ``csv_path``.
 
-    Used by callers that need the current spend without paying for a
-    daemon-thread watcher — notably ``JobManager.get_budget`` when no
-    active watcher exists (uncapped runs), so that ``/pdd settings``
-    can report a non-zero spend during the run. Filtering rules
-    (commands set, started_at, job_id-when-column-present) match
+    PURE FUNCTION: no daemon thread, no shared state, no side effects.
+    Used by callers that need the current spend without a long-lived
+    watcher — notably ``JobManager.get_budget`` for both capless runs
+    (no active watcher) and capped runs (where the daemon-thread cache
+    can be up to ``poll_interval`` seconds stale and the user expects
+    /pdd settings to be fresh).
+
+    Filtering rules (commands set, ``started_at`` lower bound, optional
+    ``job_id`` when the column is present in the header) match
     :class:`Watcher` exactly so results are consistent regardless of
     whether a watcher is also running.
+
+    Previously this constructed a real :class:`Watcher`, which spun up a
+    background daemon thread per call AND called ``_consume_new_bytes``
+    inline; the two would race and double-count the same rows
+    (reproduced: a $20,000 CSV reported as $40,000). The pure
+    implementation has neither problem.
     """
-    if not csv_path or not pathlib.Path(csv_path).exists():
+    if not csv_path:
         return 0.0
-    fake = Watcher(
-        csv_path=csv_path,
-        cap=None,  # No cap — never fires on_exceeded.
-        on_exceeded=lambda spent: None,
-        commands=commands,
-        started_at=started_at,
-        poll_interval=2.0,
-        job_id=job_id,
+    path = pathlib.Path(csv_path)
+    if not path.exists():
+        return 0.0
+    commands_set: Optional[FrozenSet[str]] = (
+        frozenset(commands) if commands is not None else None
     )
+    started_norm = _normalize_started_at(started_at)
+    total = 0.0
     try:
-        fake._consume_new_bytes()
-        return fake.spent()
-    finally:
-        fake.stop()
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames or []
+            has_job_id_col = "job_id" in fieldnames
+            for row in reader:
+                if commands_set is not None and row.get("command") not in commands_set:
+                    continue
+                if started_norm is not None:
+                    ts = _parse_timestamp(row.get("timestamp"))
+                    if ts is None or ts < started_norm:
+                        continue
+                if job_id is not None and has_job_id_col:
+                    if row.get("job_id") != job_id:
+                        continue
+                total += _parse_cost(row.get("cost"))
+    except (OSError, csv.Error):
+        return total
+    return total
 
 
 def watch(

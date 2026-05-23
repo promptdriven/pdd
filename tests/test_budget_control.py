@@ -1901,6 +1901,183 @@ class TestConcurrentMigrationSafe:
         )
 
 
+class TestNoDoubleCount:
+    """Finding 1 (13th pass): concurrent daemon + flush callers must not
+    double-count the same CSV bytes. The _consume_new_bytes operation
+    is now serialised by an RLock; without it the two readers could
+    each see _byte_offset=0, each parse the same row, and each
+    increment _spent.
+    """
+
+    def test_concurrent_flush_calls_do_not_double_count(self, tmp_path):
+        import threading
+
+        from pdd.cost_budget_watcher import watch
+
+        csv_path = tmp_path / "cost.csv"
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            w.writerow([ts, "gpt-4", "bug", "5.0", "", "",
+                        "gpt-4", "job-x"])
+
+        watcher = watch(
+            csv_path, cap=None, on_exceeded=lambda s: None,
+            commands={"bug"}, job_id="job-x",
+            # Long poll interval so the daemon thread does not run a
+            # second poll during the test window.
+            poll_interval=60.0,
+        )
+        try:
+            # Two threads racing on flush() must serialise; each row
+            # may only contribute once to _spent.
+            barrier = threading.Barrier(2)
+
+            def flush_caller():
+                barrier.wait(timeout=2)
+                for _ in range(50):
+                    watcher.flush()
+
+            t1 = threading.Thread(target=flush_caller)
+            t2 = threading.Thread(target=flush_caller)
+            t1.start()
+            t2.start()
+            t1.join(timeout=2)
+            t2.join(timeout=2)
+
+            assert watcher.spent() == pytest.approx(5.0), (
+                f"Finding 1 (13th pass) regression: concurrent flush "
+                f"calls double-counted the $5 row; spent={watcher.spent()}"
+            )
+        finally:
+            watcher.stop()
+
+
+class TestReadSpentNowPure:
+    """Finding 2 (13th pass): read_spent_now must be a pure function —
+    no daemon thread, no double-count race with itself.
+    """
+
+    def test_no_thread_started(self, tmp_path):
+        import threading
+        from pdd.cost_budget_watcher import read_spent_now
+
+        csv_path = tmp_path / "cost.csv"
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            w.writerow([ts, "gpt-4", "bug", "10.0", "", "",
+                        "gpt-4", "job-x"])
+
+        before = threading.active_count()
+        for _ in range(20):
+            spent = read_spent_now(
+                csv_path, commands={"bug"}, job_id="job-x",
+            )
+            assert spent == pytest.approx(10.0), (
+                f"Finding 2 (13th pass) regression: read_spent_now "
+                f"returned {spent} for a $10 CSV — double-count or "
+                f"under-count from concurrent Watcher path."
+            )
+        # No persistent threads should have been created. Allow a
+        # small slack for unrelated thread activity on the host.
+        after = threading.active_count()
+        assert after - before <= 1, (
+            f"Finding 2 (13th pass) regression: read_spent_now leaked "
+            f"threads (before={before}, after={after})."
+        )
+
+    def test_exact_value_on_large_csv(self, tmp_path):
+        """Reproduces the reviewer's $20,000 → $40,000 case as a small
+        smoke test: many rows summed twice would yield 2× expected."""
+        from pdd.cost_budget_watcher import read_spent_now
+
+        csv_path = tmp_path / "cost.csv"
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            for i in range(100):
+                w.writerow([ts, "gpt-4", "bug", "5.0", "", "",
+                            "gpt-4", "job-x"])
+        spent = read_spent_now(csv_path, commands={"bug"}, job_id="job-x")
+        assert spent == pytest.approx(500.0), (
+            f"Finding 2 (13th pass) regression: 100×$5 should be $500, "
+            f"got ${spent} (double-count would yield $1000)."
+        )
+
+
+class TestGetBudgetIsFreshForCappedRuns:
+    """Finding 3 (13th pass): /pdd settings on a capped running job
+    must report fresh spend, not the watcher's stale cache (up to
+    poll_interval seconds old).
+    """
+
+    @pytest.mark.asyncio
+    async def test_settings_freshness_on_capped_run(self, tmp_path, monkeypatch):
+        import asyncio
+        import csv as _csv
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        async def slow_executor(job):
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        # Cap is huge so the watcher never fires; we just want to test
+        # /pdd settings freshness independent of enforcement.
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=1000.0)
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+        # Watcher should be running.
+        assert job.id in mgr._watchers
+
+        # Write a $3 row to the CSV (simulating the subprocess just
+        # wrote it). The watcher's daemon thread polls every 2s — but
+        # /pdd settings must NOT wait that long.
+        csv_path = Path(job.options["output_cost"])
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with csv_path.open("w", encoding="utf-8", newline="") as f:
+            w = _csv.writer(f)
+            w.writerow(["timestamp", "model", "command", "cost",
+                        "input_files", "output_files",
+                        "attempted_models", "job_id"])
+            w.writerow([ts, "gpt-4", "bug", "3.0", "", "",
+                        "gpt-4", job.id])
+
+        # IMMEDIATELY ask for settings. Previously this would have
+        # reported $0 until the next 2s poll.
+        snapshot = mgr.get_budget(job.id)
+        assert snapshot.spent_so_far == pytest.approx(3.0), (
+            f"Finding 3 (13th pass) regression: /pdd settings on capped "
+            f"run reported stale spent={snapshot.spent_so_far}; expected "
+            f"fresh $3.00 from the CSV."
+        )
+
+
 class TestFinalFlushCatchesLastRow:
     """Finding 1 (12th pass): a job that writes its final cost row and
     exits before the watcher's next 2s poll must still have the cap

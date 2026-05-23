@@ -1328,40 +1328,29 @@ class JobManager:
             existing = self._budget_store.get(job_id)
             if existing is not None and existing.spent_so_far > spent:
                 spent = existing.spent_so_far
-        # Fall back to the live watcher spent if available; the watcher's
-        # last poll may be slightly fresher than `job.cost`, which is only
-        # set on subprocess exit.
-        watcher = self._watchers.get(job_id)
-        if watcher is not None:
+        # ALWAYS do a synchronous one-shot CSV read for the freshest
+        # spend, regardless of whether a watcher is running. The
+        # watcher's cached value is up to ``poll_interval`` (2s)
+        # stale; /pdd settings users expect fresh-as-of-now numbers,
+        # not whatever the daemon last polled. read_spent_now is a
+        # pure function — no thread, no shared state, no
+        # double-count race.
+        csv_path_str = (
+            (job.options or {}).get("output_cost")
+            if job.options else None
+        ) or os.environ.get("PDD_OUTPUT_COST_PATH")
+        if csv_path_str and _read_spent_now is not None:
             try:
-                live = watcher.spent()
-                if live > spent:
-                    spent = live
+                fresh = _read_spent_now(
+                    Path(csv_path_str),
+                    commands=self._commands_filter_for(job.command),
+                    started_at=job.started_at,
+                    job_id=job.id,
+                )
+                if fresh > spent:
+                    spent = fresh
             except Exception:  # noqa: BLE001
                 pass
-        else:
-            # No active watcher means this job is uncapped — no daemon
-            # thread is tailing the CSV. /pdd settings must still
-            # report the actual accumulated spend during the run, so
-            # do a one-shot synchronous read of the CSV. Without this,
-            # an uncapped job that has already written cost rows would
-            # report Spent: $0.00 to the user.
-            csv_path_str = (
-                (job.options or {}).get("output_cost")
-                if job.options else None
-            ) or os.environ.get("PDD_OUTPUT_COST_PATH")
-            if csv_path_str and _read_spent_now is not None:
-                try:
-                    one_shot = _read_spent_now(
-                        Path(csv_path_str),
-                        commands=self._commands_filter_for(job.command),
-                        started_at=job.started_at,
-                        job_id=job.id,
-                    )
-                    if one_shot > spent:
-                        spent = one_shot
-                except Exception:  # noqa: BLE001
-                    pass
         return BudgetSettings(
             command=job.command,
             node_budget=job.node_budget,
