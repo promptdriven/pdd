@@ -11,6 +11,7 @@ from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from .contracts import contracts_group
+from .coverage import coverage_cmd
 from .prompt import prompt_lint
 
 
@@ -294,6 +295,8 @@ def checkup(
       pdd checkup lint [OPTIONS] TARGET
     Contract checks:
       pdd checkup contract check [OPTIONS] TARGET
+    Contract coverage:
+      pdd checkup coverage [OPTIONS] TARGET
     """
     ctx.ensure_object(dict)
 
@@ -317,6 +320,16 @@ def checkup(
         exit_code = contracts_group.main(
             args=contract_args,
             prog_name=f"pdd checkup {target}",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+    if target == "coverage":
+        exit_code = coverage_cmd.main(
+            args=list(ctx.args),
+            prog_name="pdd checkup coverage",
             standalone_mode=False,
             obj=ctx.obj,
         )

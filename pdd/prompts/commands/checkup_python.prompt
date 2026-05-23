@@ -5,7 +5,7 @@
 % Requirements
 - Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
 - Params:
-  - `target` arg (positional, optional — required for issue mode)
+- `target` arg (positional, optional — required for issue mode; also dispatches local checkup utilities below)
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
   - `--start-step` recovery override. Accept only `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, or `8`; pass the parsed int/float as `start_step_override` to the legacy `run_agentic_checkup` path.
@@ -32,6 +32,12 @@
   - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
   - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
 - Signature returns `Optional[Tuple[str, float, str]]`.
+- Local utility dispatch before mode validation:
+  - Import `prompt_lint` from `.prompt`, `contracts_group` from `.contracts`, and `coverage_cmd` from `.coverage`.
+  - For `target == "lint"`, delegate remaining args to `prompt_lint.main(...)`, enabling `pdd checkup lint`.
+  - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
+  - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
+  - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.
