@@ -181,8 +181,10 @@ class LintResult:
 
 def _extract_xml_sections(text: str) -> dict[str, str]:
     """Return tag-name → inner text for all XML-style sections found."""
-    from .contract_ir import _extract_xml_sections as _canonical_xml  # pylint: disable=import-outside-toplevel
-    return _canonical_xml(text)
+    return {
+        match.group("tag").lower(): match.group("body").strip()
+        for match in _XML_SECTION_RE.finditer(text)
+    }
 
 
 def _extract_markdown_sections(text: str) -> dict[str, str]:
