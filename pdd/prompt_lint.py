@@ -3,12 +3,14 @@
 Prompt and user-story lint engine.
 
 Detects vague/ambiguous terms in <contract_rules>, <requirements>,
-<acceptance_tests>, and user-story acceptance criteria.
+<acceptance_tests>, and user-story acceptance criteria. An optional LLM pass
+can add advisory ambiguity findings without changing files.
 
 Public API
 ----------
 scan_prompt(path, *, strict=False) -> LintResult
 scan_stories(stories_dir, *, strict=False) -> list[LintResult]
+run_llm_ambiguity_pass(path, strength, temperature, time, verbose, use_cloud) -> list[LintIssue]
 """
 from __future__ import annotations
 
@@ -568,12 +570,14 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
     temperature: float = 0.0,
     time: Optional[float] = None,
     verbose: bool = False,
+    use_cloud: Optional[bool] = None,
 ) -> list[LintIssue]:
     """
     Run the LLM-backed ambiguity analysis for a single prompt file.
 
     Loads pdd/prompts/prompt_lint_LLM.prompt, calls llm_invoke, and parses the
-    JSON response into LintIssue entries (level="warn").
+    JSON response into LintIssue entries (level="warn"). ``use_cloud=True``
+    selects PDD Cloud; ``False`` uses configured local providers.
 
     Safe to call: always returns [] on any error so CI never breaks on LLM failure.
     """
@@ -601,7 +605,7 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
             temperature=temperature,
             time=time,
             verbose=verbose,
-            use_cloud=False,
+            use_cloud=use_cloud,
         )
         response_text = result["result"]
 

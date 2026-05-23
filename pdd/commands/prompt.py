@@ -1,4 +1,4 @@
-"""Deterministic prompt lint command used by ``pdd checkup lint``."""
+"""Prompt lint command used by ``pdd checkup lint``."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ from typing import Optional
 
 import click
 
-from ..prompt_lint import LintResult, scan_prompt, scan_stories
+from ..prompt_lint import LintResult, run_llm_ambiguity_pass, scan_prompt, scan_stories
 
 
 def _exit_code(results: list[LintResult], *, strict: bool) -> int:
@@ -34,13 +34,22 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     default=False,
     help="Treat all warnings as errors.",
 )
+@click.option(
+    "--ambiguity",
+    is_flag=True,
+    default=False,
+    help="Run an advisory LLM ambiguity review through PDD Cloud.",
+)
+@click.pass_context
 def prompt_lint(
+    ctx: click.Context,
     target: Optional[str],
     stories_dir: Optional[str],
     as_json: bool,
     strict: bool,
+    ambiguity: bool,
 ) -> None:
-    """Lint prompts and user stories for deterministic ambiguity findings."""
+    """Lint prompts and user stories for ambiguity findings."""
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")
 
@@ -57,6 +66,24 @@ def prompt_lint(
     if stories_dir is not None:
         results.extend(scan_stories(Path(stories_dir), strict=strict))
 
+    deterministic_exit_code = _exit_code(results, strict=strict)
+    if ambiguity:
+        obj = ctx.obj or {}
+        use_cloud = not bool(obj.get("local", False))
+        for result in results:
+            llm_issues = run_llm_ambiguity_pass(
+                result.path,
+                strength=obj.get("strength", 0.5),
+                temperature=obj.get("temperature", 0.0),
+                time=obj.get("time"),
+                verbose=obj.get("verbose", False),
+                use_cloud=use_cloud,
+            )
+            if strict:
+                for issue in llm_issues:
+                    issue.level = "error"
+            result.issues.extend(llm_issues)
+
     if as_json:
         click.echo(json.dumps([result.as_dict() for result in results], indent=2))
     else:
@@ -68,4 +95,6 @@ def prompt_lint(
             for issue in result.issues:
                 click.echo(f"  {issue.level.upper()} [{issue.section}] {issue.message}")
 
-    raise click.exceptions.Exit(_exit_code(results, strict=strict))
+    if strict:
+        raise click.exceptions.Exit(_exit_code(results, strict=True))
+    raise click.exceptions.Exit(deterministic_exit_code)
