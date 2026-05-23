@@ -465,7 +465,7 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
     "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
     "dependencies": [],
     "priority": 18,
@@ -5849,8 +5849,8 @@
     }
   },
   {
-    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
-    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues, with optional clean restart.",
+    "description": "Orchestrates the 13-step agentic change workflow. Supports `clean_restart=True` to ignore any persisted solving state for the issue and start a fresh full pdd-issue flow from the target base branch (issue #1149). Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
@@ -5870,7 +5870,7 @@
         "functions": [
           {
             "name": "run_agentic_change_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, clean_restart)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
@@ -5882,9 +5882,12 @@
     }
   },
   {
-    "reason": "Autonomously implements GitHub feature request issues via 13-step workflow.",
-    "description": "Entry point for the agentic change command. Parses issue URL, extracts issue metadata from GitHub, and delegates to the change orchestrator.",
-    "dependencies": [],
+    "reason": "Autonomously implements GitHub feature request issues via 13-step workflow with optional clean restart.",
+    "description": "Entry point for the agentic change command. Parses issue URL, extracts issue metadata from GitHub, and delegates to the change orchestrator. Supports `clean_restart` to ignore any persisted solving state and start a fresh full pdd-issue flow from the target base branch.",
+    "dependencies": [
+      "agentic_change_orchestrator_python.prompt",
+      "agentic_common_python.prompt"
+    ],
     "priority": 169,
     "filename": "agentic_change_python.prompt",
     "filepath": "pdd/agentic_change.py",
@@ -5899,7 +5902,7 @@
         "functions": [
           {
             "name": "run_agentic_change",
-            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
               "None"
@@ -6288,9 +6291,9 @@
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Snapshots PR remote head SHA before/after run_agentic_checkup",
-              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup — fail closed without re-validating CI because Step 7 never saw the new code",
+              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup \u2014 fail closed without re-validating CI because Step 7 never saw the new code",
               "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
-              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
+              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched \u2014 silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -7373,7 +7376,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
@@ -7552,7 +7555,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7657,7 +7660,7 @@
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
-              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
+              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify \u2014 state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
               "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
               "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)",
@@ -8031,7 +8034,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",

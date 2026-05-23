@@ -43,8 +43,9 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 3. **change**:
    - Doc: "Modify an input prompt file based on a change prompt or issue."
-   - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`.
-   - **Agentic (default)**: 1 arg (issue_url). Calls `run_agentic_change(use_github_state=not no_github_state, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
+   - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`, `--clean-restart`.
+   - **Agentic (default)**: 1 arg (issue_url). Calls `run_agentic_change(use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
+   - **`--clean-restart` flag** (agentic mode only): Boolean flag (default `False`). Help text: "Discard any persisted solving state for this issue and start a fresh full pdd-issue flow from the default base branch, ignoring any previously generated change/issue-N branch artifacts. Use when recovering from a stopped or wrong-model run." Validation: MUST raise `click.UsageError` when combined with `--manual` ("--clean-restart is only valid in agentic mode and cannot be used with --manual"). When set, forwarded to `run_agentic_change` as `clean_restart=True`; otherwise passes `clean_restart=False`.
    - **Manual (`--manual`)**:
      - `--csv`: 2 args (change_file, input_code: directory).
      - Standard: 3 args (change_file, input_code: file, input_prompt).
