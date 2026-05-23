@@ -39,6 +39,20 @@ log "Running tests: $TARGET_TEST"
 # Set PDD_AUTO_UPDATE to false to prevent interference
 export PDD_AUTO_UPDATE=false
 
+# This script validates baseline local-CLI behavior — does
+# `pdd generate/test/example/fix/...` succeed and produce output?
+# It pre-existed PR #1015's public-surface and test-churn gates
+# and seeds small fixture files (~24-line `test_simple_math.py`)
+# as prerequisites. When the gate-bearing `pdd test` then
+# regenerates against that small fixture, the generated test
+# suite naturally exceeds the 40% churn threshold. The gates are
+# NOT what this script is validating, so opt the regression run
+# out of them — individual env flags rather than the umbrella
+# `PDD_SKIP_CONFORMANCE` so architecture conformance still helps if
+# it ever trips in this surface.
+export PDD_SKIP_TEST_CHURN_GATE=1
+export PDD_SKIP_PUBLIC_SURFACE_GATE=1
+
 # Define base variables
 # Set PDD base directory as the script's location (two directories up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
