@@ -101,8 +101,9 @@ class TestOperationLoggingE2E:
         timeout: int = 120
     ) -> subprocess.CompletedProcess:
         """Run a pdd command and return the result."""
+        import sys
         result = subprocess.run(
-            ["pdd"] + args,
+            [sys.executable, "-m", "pdd"] + args,
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -477,8 +478,9 @@ class TestSyncLogsWithSyncMode:
         )
 
         # Run sync (this will trigger generate internally)
+        import sys
         subprocess.run(
-            ["pdd", "sync", "counter", "--skip-tests", "--skip-verify", "--budget", "2.0"],
+            [sys.executable, "-m", "pdd", "sync", "counter", "--skip-tests", "--skip-verify", "--budget", "2.0"],
             cwd=project_dir,
             capture_output=True,
             text=True,

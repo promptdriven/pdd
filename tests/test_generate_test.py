@@ -269,14 +269,16 @@ def test_generate_test_with_example_parameter(monkeypatch, stub_generate_test_ll
     assert len(result) == 3
 
 
+@patch("pdd.generate_test.unfinished_prompt")
 @patch("pdd.generate_test.load_prompt_template")
 @patch("pdd.generate_test.llm_invoke")
 @patch("pdd.generate_test.postprocess")
-def test_generate_test_uses_example_template(mock_postprocess, mock_llm_invoke, mock_load_template):
+def test_generate_test_uses_example_template(mock_postprocess, mock_llm_invoke, mock_load_template, mock_unfinished):
     """Test that generate_test_from_example_LLM template is loaded for example parameter."""
     mock_load_template.return_value = "template content"
     mock_llm_invoke.return_value = {"result": "test code", "cost": 0.01, "model_name": "test-model"}
     mock_postprocess.return_value = ("test code", 0.0, "test-model")
+    mock_unfinished.return_value = ("finished", True, 0.0, "stub-model")
 
     generate_test(prompt="test prompt", code=None, example="example content", verbose=False)
 
