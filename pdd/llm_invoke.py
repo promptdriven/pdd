@@ -2014,6 +2014,55 @@ _PROVIDER_PREFIX_TO_PROVIDER = {
 }
 
 
+def _is_permanent_invalid_request_error(exc: Exception) -> bool:
+    """Classify whether an exception represents a permanent parameter
+    rejection that retrying through other candidate models cannot fix.
+
+    Used by the candidate-iteration loop in :func:`llm_invoke` to fast-
+    fail the cascade when the request shape itself is wrong (e.g. an
+    unsupported parameter for the model class). Every other provider that
+    relays the same model family will reject the same shape identically,
+    so cascading through them wastes time and hides the root error.
+
+    Intentionally conservative — only clear "wrong parameter" cases are
+    treated as permanent. Context-window errors are explicitly retryable
+    (a different model may have a larger context). Rate limits, transient
+    5xxs, auth failures, and everything else fall through to the existing
+    retry logic.
+
+    Concrete trigger that motivated this: Anthropic enforcing
+    ``thinking.type.adaptive`` for Opus 4.7 on 2026-05-23, where the
+    legacy ``thinking.type.enabled`` shape produces a 400 ``not supported
+    for this model``. Retrying through Vertex/Bedrock/Azure/OpenRouter/
+    Perplexity hits the same Anthropic API and the same 400, every time.
+    """
+    try:
+        import litellm
+    except ImportError:
+        return False
+
+    # Context-window-exceeded is a BadRequestError subclass but IS
+    # retryable: a different model with a larger context may succeed.
+    ctx_err = getattr(litellm.exceptions, "ContextWindowExceededError", None)
+    if ctx_err is not None and isinstance(exc, ctx_err):
+        return False
+
+    bad_req = getattr(litellm.exceptions, "BadRequestError", None)
+    if bad_req is not None and not isinstance(exc, bad_req):
+        return False
+
+    msg = str(exc).lower()
+    # Conservative allow-list of phrases that indicate a permanent
+    # parameter rejection. Extend cautiously — when in doubt, retry.
+    permanent_markers = (
+        "is not supported for this model",
+        "unsupported parameter",
+        "thinking.type",
+        "output_config.effort",
+    )
+    return any(marker in msg for marker in permanent_markers)
+
+
 def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     """Return ``(alt_name, required_provider)`` pairs to try when the literal
     form of ``base_model_name`` is not in the CSV.
@@ -4590,6 +4639,20 @@ def llm_invoke(
                 # Log more details in verbose mode
                 if verbose:
                     logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
+                # Fast-fail on permanent parameter errors: every other
+                # candidate that proxies the same model family will reject
+                # the same shape identically. Surface the root error
+                # instead of burying it under cascade noise (and avoid
+                # hanging on github_copilot device-flow OAuth deeper in
+                # the candidate list). See
+                # :func:`_is_permanent_invalid_request_error` for the
+                # conservative allow-list of phrases this matches.
+                if _is_permanent_invalid_request_error(e):
+                    logger.error(
+                        f"[FAST-FAIL] Permanent invalid_request_error from "
+                        f"{model_name_litellm}; not cascading through other candidates."
+                    )
+                    raise
                 break # Break inner loop, try next model candidate
 
         # If the inner loop was broken (not by success), continue to the next candidate model
