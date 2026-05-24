@@ -1,78 +1,78 @@
 import os
 import sys
-import json
-from pathlib import Path
+from typing import Optional, Dict, Any
 from pydantic import BaseModel
 
-# Import the llm_invoke function from the pdd package
-from pdd.llm_invoke import llm_invoke, set_verbose_logging
+try:
+    # Import the target function and logging utility from the module
+    from pdd.llm_invoke import llm_invoke, set_verbose_logging
+except ImportError:
+    # Mock for graceful degradation if module is not present in environment
+    def llm_invoke(*args, **kwargs) -> Dict[str, Any]:
+        return {"result": None, "model_name": "mock_model", "cost": 0.0}
+    def set_verbose_logging(*args, **kwargs) -> None:
+        pass
 
+class Joke(BaseModel):
+    """Pydantic model to enforce the structure of the LLM's response."""
+    setup: str
+    punchline: str
+    rating: int
 
-class CapitalInfo(BaseModel):
-    """Schema for structured output example."""
-    country: str
-    capital: str
-    population_estimate: int
-    fun_fact: str
+def main() -> None:
+    """Main execution function demonstrating basic and structured LLM invocations."""
+    # Ensure output directory exists if we needed to write files
+    os.makedirs("./output", exist_ok=True)
 
-
-def main():
-    # The example requires an API key to run properly.
-    # Using OPENAI_API_KEY as a common default for testing.
-    api_key = os.environ.get("OPENAI_API_KEY")
+    # We check for a common API key to ensure the example can run non-interactively.
+    # llm_invoke supports many providers, but we check OPENAI_API_KEY here as a baseline.
+    api_key: Optional[str] = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         print("OPENAI_API_KEY not set. Set it to run this example.")
         sys.exit(0)
 
-    # Setup output directory
-    output_dir = Path("./output")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Enable verbose logging to see the internal model selection and token usage details
+    set_verbose_logging(verbose=True)
 
-    print("--- Example 1: Basic Text Generation ---")
-    # Generate a simple text response using a prompt and input variables.
-    # strength=0.5 uses the default base model.
-    text_result = llm_invoke(
-        prompt="What are the top {count} most popular programming languages in {year}? List them briefly.",
-        input_json={"count": 3, "year": 2024},
-        strength=0.5,
+    print("\n--- Example 1: Basic Text Generation ---")
+    # llm_invoke takes a prompt template and a dictionary of inputs to format it.
+    # strength=0.5 selects the base model defined in your llm_model.csv or environment.
+    basic_response: Dict[str, Any] = llm_invoke(
+        prompt="Explain what a {topic} is in one short sentence.",
+        input_json={"topic": "variable"},
+        strength=0.5, 
         temperature=0.3,
-        verbose=False
+        verbose=True
     )
-    print(f"Model Used: {text_result.get('model_name')}")
-    print(f"Cost: ${text_result.get('cost'):.6f}")
-    print(f"Result:\n{text_result.get('result')}\n")
 
-    print("--- Example 2: Structured Output (Pydantic) ---")
-    # Generate a strictly typed JSON response parsed into a Pydantic model.
-    structured_result = llm_invoke(
-        prompt="Give me information about the capital of {country}.",
-        input_json={"country": "Japan"},
+    print("\nResult:")
+    print(basic_response.get("result", "No result"))
+    print(f"Model Used: {basic_response.get('model_name', 'Unknown')}")
+    print(f"Estimated Cost: ${basic_response.get('cost', 0.0):.6f}")
+
+    print("\n--- Example 2: Structured Output using Pydantic ---")
+    # By passing output_pydantic, llm_invoke ensures the response is parsed into this model.
+    structured_response: Dict[str, Any] = llm_invoke(
+        prompt="Tell me a developer joke about {topic}.",
+        input_json={"topic": "recursion"},
         strength=0.5,
-        temperature=0.1,
-        output_pydantic=CapitalInfo,
-        verbose=False
+        temperature=0.7,
+        output_pydantic=Joke,
+        verbose=True
     )
-    
-    model_used = structured_result.get('model_name')
-    cost = structured_result.get('cost')
-    pydantic_obj = structured_result.get('result')
-    
-    print(f"Model Used: {model_used}")
-    print(f"Cost: ${cost:.6f}")
-    
-    if isinstance(pydantic_obj, CapitalInfo):
-        print("Successfully parsed into CapitalInfo object:")
-        print(json.dumps(pydantic_obj.model_dump(), indent=2))
-        
-        # Save structured output to file
-        output_file = output_dir / "japan_capital_info.json"
-        with open(output_file, "w") as f:
-            json.dump(pydantic_obj.model_dump(), f, indent=2)
-        print(f"\nSaved structured result to {output_file}")
-    else:
-        print("Failed to parse into CapitalInfo object.")
-        print(f"Raw result: {pydantic_obj}")
 
+    print("\nStructured Result (Parsed Object):")
+    # The result is automatically validated and returned as the Pydantic model instance
+    joke_obj = structured_response.get("result")
+    if isinstance(joke_obj, Joke):
+        print(f"Setup: {joke_obj.setup}")
+        print(f"Punchline: {joke_obj.punchline}")
+        print(f"Rating: {joke_obj.rating}/10")
+    else:
+        print("Failed to parse structured output properly.")
+        
+    print(f"Model Used: {structured_response.get('model_name', 'Unknown')}")
+    print(f"Estimated Cost: ${structured_response.get('cost', 0.0):.6f}")
 
 if __name__ == "__main__":
     main()
