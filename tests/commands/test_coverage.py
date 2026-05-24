@@ -13,6 +13,9 @@ Tests cover:
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from pdd.commands.coverage import coverage_cmd
 from pdd.commands.checkup import checkup
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "coverage_contracts"
+REPO_ROOT = Path(__file__).parents[2]
 
 
 def _write(tmp_path: Path, name: str, content: str) -> Path:
@@ -405,3 +409,42 @@ class TestCoverageCliRegistration:
         )
         assert result.exit_code == 0
         assert "no contract coverage data" in result.output.lower()
+
+    @pytest.mark.parametrize(
+        ("target", "expected_exit_code"),
+        [
+            (FIXTURES / "legacy_no_contracts_python.prompt", 0),
+            (FIXTURES / "missing_python.prompt", 2),
+        ],
+    )
+    def test_real_cli_json_stdout_is_parseable_only(
+        self, target: Path, expected_exit_code: int
+    ) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "PDD_PATH": str(REPO_ROOT / "pdd"),
+                "PYTHONPATH": str(REPO_ROOT),
+                "PDD_AUTO_UPDATE": "true",
+            }
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pdd",
+                "checkup",
+                "coverage",
+                "--json",
+                str(target),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == expected_exit_code
+        payload = json.loads(result.stdout)
+        assert isinstance(payload, dict)
