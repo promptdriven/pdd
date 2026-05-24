@@ -52,7 +52,6 @@ for _module_name in _side_effect_modules:
     sys.modules.pop(_module_name, None)
 for _module_name in _side_effect_modules:
     importlib.import_module(_module_name)
-del importlib
 
 import pdd.commands.templates as _templates_module
 from pdd.core.errors import custom_theme as _real_theme
@@ -69,7 +68,20 @@ for _mod_name in list(sys.modules):
         if hasattr(_mod, 'handle_error') and isinstance(getattr(_mod, 'handle_error'), MagicMock):
             setattr(_mod, 'handle_error', _real_handle_error)
 
+# Importing pdd.commands.fix initializes sibling command modules while the
+# decorators above are mocked. Reload the package under the real dependencies
+# so the isolated fix import does not alter commands used by later tests.
+for _mod_name in list(sys.modules):
+    if _mod_name.startswith("pdd.commands."):
+        importlib.reload(sys.modules[_mod_name])
+import pdd.commands as _commands_package
+importlib.reload(_commands_package)
+if "pdd.cli" in sys.modules:
+    importlib.reload(sys.modules["pdd.cli"])
+
+del importlib
 del _import_mocks, _saved_modules, _module_name, _side_effect_modules, _templates_module, _real_theme, _real_handle_error
+del _commands_package
 
 
 @pytest.fixture

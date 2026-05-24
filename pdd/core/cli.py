@@ -21,8 +21,14 @@ from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
 from .utils import _first_pending_command, _should_show_onboarding_reminder
-from .dump import _write_core_dump
 from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
+
+
+def _write_core_dump(*args: Any, **kwargs: Any) -> None:
+    """Write through the active dump module after isolated module reloads."""
+    from .dump import _write_core_dump as write_core_dump
+
+    write_core_dump(*args, **kwargs)
 
 
 def _strip_ansi_codes(text: str) -> str:
