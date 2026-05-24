@@ -190,7 +190,8 @@ class TestGenerateMermaidCode:
         """Tests if app names with quotes are handled correctly. This test will likely fail."""
         app_name = 'My "Awesome" App'
         # The expected correct output should escape the quotes for the Mermaid label.
-        expected_node = f'PRD["{app_name.replace("\"", "&quot;")} "]'  # Mermaid uses HTML entity for quotes
+        escaped_app_name = app_name.replace('"', '&quot;')
+        expected_node = f'PRD["{escaped_app_name} "]'  # Mermaid uses HTML entity for quotes
         mermaid_code = generate_mermaid_code([], app_name=app_name)
         # Note: The current implementation f'PRD["{app_name}"]' will produce PRD["My "Awesome" App"],
         # which is invalid. This test correctly identifies that flaw.

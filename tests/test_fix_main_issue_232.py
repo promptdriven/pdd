@@ -238,9 +238,10 @@ def test_issue_232_only_code_file_modified_should_not_print_test_file(
     # Verify test file path was NOT printed (symmetrical bug)
     test_file_printed = any('test_fixed.py' in str(call) for call in mock_rprint.call_args_list)
 
+    newline = '\n'
     assert not test_file_printed, (
         "BUG #232 (related): Test file path is being printed even though no test file was modified.\n"
-        f"Output included: {'\n'.join(all_rprint_calls)}\n"
+        f"Output included: {newline.join(all_rprint_calls)}\n"
         "Expected: Only 'Code file: ...' should be printed"
     )
 

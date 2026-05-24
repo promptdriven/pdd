@@ -66,9 +66,20 @@ class PathResolver:
     def resolve_data_file(self, rel: str, profile: DataProfile = "pdd_path_only") -> Path:
         if profile != "pdd_path_only":
             raise ValueError(f"Unsupported data profile: {profile}")
-        if self.pdd_path_env is None:
-            raise ValueError("PDD_PATH environment variable is not set.")
-        return self.pdd_path_env / rel
+        if self.pdd_path_env is not None:
+            return self.pdd_path_env / rel
+        
+        # Fallback to repo root or package root if PDD_PATH is not set
+        if self.repo_root is not None:
+            repo_path = self.repo_root / rel
+            if repo_path.exists():
+                return repo_path
+        
+        pkg_path = self.package_root / rel
+        if pkg_path.exists():
+            return pkg_path
+
+        raise ValueError("PDD_PATH environment variable is not set.")
 
     def resolve_project_root(
         self,
