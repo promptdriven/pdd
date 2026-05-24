@@ -6993,3 +6993,78 @@ class TestGemini3TemperatureClamp:
             "Gemini 3 in batch mode must also be clamped to temperature=1, "
             f"got {captured_kwargs.get('temperature')}"
         )
+
+
+# ==============================================================================
+# Regression tests: github_copilot token-file existence check (no PDD_FORCE gate)
+#
+# Bug context: prior to this change, the token-file existence guard in
+# ``_ensure_api_key`` was gated on ``os.environ.get('PDD_FORCE')``. Server
+# contexts (Cloud Run) don't set PDD_FORCE, so github_copilot/* candidate
+# rows passed the check, triggered litellm's device-flow OAuth, and hung
+# for minutes waiting for human authorization that would never come.
+# After the fix, the check fires unconditionally: missing token → skip
+# with a clear hint; token present → proceed as before.
+# ==============================================================================
+
+
+def test_github_copilot_skipped_when_token_missing_no_pdd_force(tmp_path, monkeypatch):
+    """Server context (no PDD_FORCE) with no OAuth token file should skip
+    the model instead of hanging on litellm device-flow."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    token_dir = tmp_path / "no_token_here"
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is False
+
+
+def test_github_copilot_allowed_when_token_present_no_pdd_force(tmp_path, monkeypatch):
+    """Authenticated CLI user (no PDD_FORCE) with a valid token file should
+    proceed normally. This protects existing Copilot users."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    token_dir = tmp_path / "token_dir"
+    token_dir.mkdir(parents=True)
+    (token_dir / "api-key.json").write_text("{\"fake\": \"token\"}")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is True
+
+
+def test_github_copilot_skipped_with_pdd_force_when_token_missing(tmp_path, monkeypatch):
+    """Preserves behavior for PDD_FORCE-set callers (CLI --force mode and
+    server subprocesses): the existing check still fires after the gate
+    is removed, just unconditionally."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "missing"))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is False

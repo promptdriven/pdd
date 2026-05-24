@@ -2309,11 +2309,15 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     api_key_field = str(model_info.get('api_key', '') or '')
 
     if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
-        # GitHub Copilot models use an interactive OAuth device flow managed by
-        # litellm.  In non-interactive (--force) mode we must skip the model
-        # unless the user has already authenticated (token file exists).
+        # github_copilot uses litellm-managed device-flow OAuth. If the
+        # cached token file is missing, litellm hangs waiting for a human
+        # to complete the device flow — never a viable code path in server
+        # / non-interactive contexts. Skip the model with a clear hint
+        # regardless of PDD_FORCE; CLI users who set up Copilot via
+        # ``pdd setup`` will have the token file present and proceed
+        # normally. Caller is _ensure_api_key in llm_invoke.py.
         model_name = str(model_info.get('model', ''))
-        if model_name.startswith("github_copilot/") and os.environ.get('PDD_FORCE'):
+        if model_name.startswith("github_copilot/"):
             token_dir = Path(os.environ.get(
                 'GITHUB_COPILOT_TOKEN_DIR',
                 str(Path.home() / ".config" / "litellm" / "github_copilot"),
@@ -2322,8 +2326,9 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
             token_path = token_dir / api_key_file
             if not token_path.exists():
                 logger.warning(
-                    f"Skipping GitHub Copilot model '{model_name}' in --force mode: "
-                    f"no OAuth token found at {token_path}. Run 'pdd setup' to authenticate."
+                    f"Skipping GitHub Copilot model '{model_name}': "
+                    f"no OAuth token at {token_path}. "
+                    f"Run 'pdd setup' to authenticate Copilot, or unset it to skip silently."
                 )
                 return False
         if verbose:
