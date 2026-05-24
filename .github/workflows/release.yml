@@ -22,11 +22,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -55,11 +55,11 @@ jobs:
     env:
       HAS_CLAUDE_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -90,7 +90,7 @@ jobs:
 
       - name: Setup Node for Claude Code
         if: env.HAS_CLAUDE_OAUTH == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
