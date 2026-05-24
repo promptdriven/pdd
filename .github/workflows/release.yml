@@ -112,13 +112,18 @@ jobs:
           npm install -g @anthropic-ai/claude-code@2.1.150
 
           # Build context: commit log, diff stat, filtered/truncated diff.
+          # Write full diff to a file then truncate via head-from-file to
+          # avoid SIGPIPE under `set -o pipefail` (git diff sees EPIPE when
+          # `head -c` closes stdin after 80KB).
           commits=$(git log "${prev_tag}..${tag}" --pretty=format:'- %s (%h)')
           stats=$(git diff --stat "${prev_tag}..${tag}")
-          diff=$(git diff "${prev_tag}..${tag}" \
+          diff_full=$(mktemp)
+          git diff "${prev_tag}..${tag}" \
             -- ':(exclude)*.lock' ':(exclude)package-lock.json' \
                ':(exclude)*test-durations.json' ':(exclude)dist/*' \
                ':(exclude)*.min.js' ':(exclude)*.snap' \
-            | head -c 80000)
+            >"$diff_full"
+          diff=$(head -c 80000 "$diff_full")
 
           prompt_file=$(mktemp)
           {
