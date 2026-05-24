@@ -2013,6 +2013,101 @@ _PROVIDER_PREFIX_TO_PROVIDER = {
     "azure_ai/": "Azure AI",
 }
 
+# Provider-lock aliases.
+#
+# The dict is identity-mapped today (each lock accepts only its own canonical
+# provider name, case-insensitively). It exists as a documented extension
+# point for future aliases that need disambiguation.
+#
+# We deliberately do NOT alias the bare legacy value ``"google"`` into either
+# lock. ``"google"`` is ambiguous between Vertex AI and Gemini direct: a row
+# like ``provider=google, model=gemini-pro, api_key=GOOGLE_API_KEY`` routes
+# to direct Gemini at LiteLLM call time, but the bare ``"google"`` label
+# gives no signal about which endpoint the row was authored for. An earlier
+# iteration of this PR aliased ``"google"`` into BOTH locks; that allowed a
+# ``vertex_ai/``-prefixed default to silently select such a direct-Gemini
+# row — exactly the cross-provider boundary violation #1113 is meant to
+# prevent.
+#
+# Legacy CSVs that still use bare ``"google"`` must rename the provider
+# column to ``"Google Vertex AI"`` or ``"Google Gemini"`` explicitly. Rows
+# whose ``model`` column already carries a routing prefix (``vertex_ai/...``
+# or ``gemini/...``) are still accepted into the matching lock via the
+# model-prefix branch in ``_provider_filter`` regardless of the provider
+# column value, so the rename is only required for rows whose model name is
+# bare.
+#
+# The legacy-fallback match is case-insensitive — bundled and user-authored
+# CSVs alternate between ``Anthropic``/``anthropic``/``OPENAI``/``openai``,
+# and other selectors in this module (e.g. the ``PDD_SKIP_LOCAL_MODELS``
+# filter) already lowercase the column.
+#
+# Rows whose ``model`` field DOES carry a known prefix bypass this alias map
+# entirely — the prefix is authoritative because it's what LiteLLM uses to
+# decide which endpoint to call.
+_PROVIDER_LOCK_ALIASES = {
+    "Google Vertex AI": {"Google Vertex AI"},
+    "Google Gemini": {"Google Gemini"},
+}
+
+_FALSE_ENV_VALUES = {"0", "false", "no", "off", "none", "disabled"}
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on", "enabled", "transient"}
+
+
+def _provider_filter(df: pd.DataFrame, provider: str) -> pd.Series:
+    """Return a boolean mask for a provider lock.
+
+    Two signals are considered, in priority order:
+
+    1. **Model-prefix (authoritative).** A row passes if its ``model`` field
+       starts with a routing prefix that maps to ``provider`` in
+       ``_PROVIDER_PREFIX_TO_PROVIDER``. This is the signal LiteLLM itself
+       uses to route, so it overrides the CSV's ``provider`` column.
+
+    2. **Provider-column fallback (legacy/unprefixed rows).** A row passes if
+       its ``model`` field starts with NO known routing prefix AND its
+       ``provider`` column (case-insensitive) is in the alias set for
+       ``provider`` from ``_PROVIDER_LOCK_ALIASES``. This catches bundled-CSV
+       bare rows like ``Google Vertex AI,gemini-3.1-pro-preview`` as well as
+       lowercased user CSVs (``anthropic,claude-3``).
+
+    A row is REJECTED whenever its ``model`` field starts with a different
+    known routing prefix, regardless of the provider column. That's what
+    keeps a ``Google,gemini/...`` row from satisfying the Vertex lock just
+    because its provider column happens to alias to ``Google Vertex AI``.
+    """
+
+    matching_prefixes = tuple(
+        prefix
+        for prefix, provider_name in _PROVIDER_PREFIX_TO_PROVIDER.items()
+        if provider_name == provider
+    )
+    other_prefixes = tuple(
+        prefix
+        for prefix in _PROVIDER_PREFIX_TO_PROVIDER
+        if prefix not in matching_prefixes
+    )
+
+    model_str = df['model'].fillna('').astype(str)
+    if matching_prefixes:
+        has_matching_prefix = model_str.str.startswith(matching_prefixes)
+    else:
+        has_matching_prefix = pd.Series(False, index=df.index)
+    if other_prefixes:
+        has_other_prefix = model_str.str.startswith(other_prefixes)
+    else:
+        has_other_prefix = pd.Series(False, index=df.index)
+    no_known_prefix = ~has_matching_prefix & ~has_other_prefix
+
+    # Legacy fallback is case-insensitive (see comment by _PROVIDER_LOCK_ALIASES).
+    provider_aliases_lc = {
+        alias.lower()
+        for alias in _PROVIDER_LOCK_ALIASES.get(provider, {provider})
+    }
+    provider_col_lc = df['provider'].fillna('').astype(str).str.lower()
+    legacy_match = no_known_prefix & provider_col_lc.isin(provider_aliases_lc)
+    return has_matching_prefix | legacy_match
+
 
 def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     """Return ``(alt_name, required_provider)`` pairs to try when the literal
@@ -2053,6 +2148,211 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _provider_lock_for_base_model(base_model_name: Any) -> Optional[str]:
+    """Return the provider implied by an explicit model-name routing prefix."""
+
+    if not isinstance(base_model_name, str):
+        return None
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        if base_model_name.startswith(prefix):
+            return provider
+    return None
+
+
+def _model_info_matches_provider_lock(
+    model_info: Dict[str, Any],
+    provider: str,
+) -> bool:
+    """Return whether a model-info dict belongs to a provider lock."""
+
+    model_name = str(model_info.get("model", "") or "")
+    matching_prefixes = tuple(
+        prefix
+        for prefix, provider_name in _PROVIDER_PREFIX_TO_PROVIDER.items()
+        if provider_name == provider
+    )
+    other_prefixes = tuple(
+        prefix
+        for prefix in _PROVIDER_PREFIX_TO_PROVIDER
+        if prefix not in matching_prefixes
+    )
+    if matching_prefixes and model_name.startswith(matching_prefixes):
+        return True
+    if other_prefixes and model_name.startswith(other_prefixes):
+        return False
+
+    provider_aliases_lc = {
+        alias.lower()
+        for alias in _PROVIDER_LOCK_ALIASES.get(provider, {provider})
+    }
+    return str(model_info.get("provider", "") or "").lower() in provider_aliases_lc
+
+
+def _cross_provider_fallback_enabled() -> bool:
+    """Return whether transient failures may cross provider boundaries."""
+
+    raw = os.getenv("PDD_CROSS_PROVIDER_FALLBACK")
+    if raw is None:
+        return False
+    token = str(raw).strip().lower()
+    if token in _FALSE_ENV_VALUES:
+        return False
+    return token in _TRUE_ENV_VALUES
+
+
+def _normalise_provider_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _candidate_allowed_by_cross_provider_config(model_info: Dict[str, Any]) -> bool:
+    """Filter cross-provider candidates by optional operator allowlist."""
+
+    raw = os.getenv("PDD_MODEL_FALLBACK_PROVIDERS", "")
+    if not raw.strip():
+        return True
+    allowed = {
+        _normalise_provider_token(part)
+        for part in raw.split(",")
+        if part.strip()
+    }
+    if not allowed:
+        return True
+
+    provider_token = _normalise_provider_token(model_info.get("provider", ""))
+    model_token = _normalise_provider_token(
+        str(model_info.get("model", "") or "").split("/", 1)[0]
+    )
+    return any(
+        token and (token in provider_token or token == model_token)
+        for token in allowed
+    )
+
+
+def _candidate_has_configured_credentials(model_info: Dict[str, Any]) -> bool:
+    """Return True when a fallback candidate can run without prompting."""
+
+    from pdd.provider_manager import parse_api_key_vars
+
+    api_key_field = str(model_info.get("api_key", "") or "")
+    if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
+        model_name = str(model_info.get("model", "") or "").lower()
+        if model_name.startswith("github_copilot/"):
+            token_dir = Path(
+                os.environ.get(
+                    "GITHUB_COPILOT_TOKEN_DIR",
+                    str(Path.home() / ".config" / "litellm" / "github_copilot"),
+                )
+            ).expanduser()
+            api_key_file = os.environ.get("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
+            return (token_dir / api_key_file).exists()
+        return True
+
+    env_vars = parse_api_key_vars(api_key_field)
+    if not env_vars:
+        return True
+    if all(bool(os.environ.get(var)) for var in env_vars):
+        return True
+
+    missing = [var for var in env_vars if not os.environ.get(var)]
+    if len(env_vars) > 1 and "GOOGLE_APPLICATION_CREDENTIALS" in env_vars:
+        project = os.getenv("VERTEXAI_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        has_location = (
+            "VERTEXAI_LOCATION" not in missing
+            or bool(model_info.get("location"))
+        )
+        remaining = [
+            var
+            for var in missing
+            if var not in (
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "VERTEXAI_PROJECT",
+                "VERTEXAI_LOCATION",
+            )
+        ]
+        if project and has_location and not remaining:
+            return True
+
+    if len(env_vars) == 1 and env_vars[0] == "VERTEX_CREDENTIALS":
+        project = (
+            os.getenv("VERTEXAI_PROJECT")
+            or os.getenv("VERTEX_PROJECT")
+            or os.getenv("GOOGLE_CLOUD_PROJECT")
+        )
+        if project:
+            return True
+
+    return False
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    """Classify errors that justify cross-provider fallback."""
+
+    if isinstance(
+        exc,
+        (
+            openai.RateLimitError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.InternalServerError,
+        ),
+    ):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        status_code = getattr(exc, "status_code", None)
+        return status_code == 429 or (isinstance(status_code, int) and status_code >= 500)
+
+    text = str(exc).lower()
+    transient_markers = (
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "requests per minute",
+        "temporarily unavailable",
+        "service unavailable",
+        "internal server error",
+        "gateway timeout",
+        "timeout",
+        "timed out",
+        "connection error",
+    )
+    return any(marker in text for marker in transient_markers)
+
+
+def _build_cross_provider_fallback_candidates(
+    strength: float,
+    base_model_name: Any,
+    model_df: pd.DataFrame,
+    primary_candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return lower-priority cross-provider candidates for transient failures."""
+
+    provider_lock = _provider_lock_for_base_model(base_model_name)
+    if not provider_lock or not _cross_provider_fallback_enabled():
+        return []
+
+    try:
+        all_candidates = _select_model_candidates(strength, None, model_df)
+    except Exception:
+        return []
+
+    primary_models = {str(candidate.get("model")) for candidate in primary_candidates}
+    fallback_candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in all_candidates:
+        model_name = str(candidate.get("model"))
+        if model_name in primary_models or model_name in seen:
+            continue
+        if _model_info_matches_provider_lock(candidate, provider_lock):
+            continue
+        if not _candidate_allowed_by_cross_provider_config(candidate):
+            continue
+        copied = dict(candidate)
+        copied["_pdd_cross_provider_fallback"] = True
+        fallback_candidates.append(copied)
+        seen.add(model_name)
+    return fallback_candidates
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -2084,8 +2384,31 @@ def _select_model_candidates(
         # For now, let's raise an error as it likely indicates a CSV issue.
         raise ValueError("No models available after initial filtering (all had NaN 'api_key'?).")
 
+    # An explicit LiteLLM routing prefix is a provider boundary. If the chosen
+    # base is missing from the local CSV, fallback must stay inside that
+    # provider instead of jumping to a higher-ELO row with different credentials.
+    #
+    # ``_provider_filter`` is dual-signal: the row's ``model`` prefix wins over
+    # its ``provider`` column, mirroring how LiteLLM actually routes. We do
+    # NOT raise on CSV rows whose provider column disagrees with the prefix
+    # — accepting the row is correct as long as the model prefix is the one
+    # LiteLLM will route on. Downstream credential checks (``_ensure_api_key``
+    # / ``_check_required_credentials``) will surface any real mismatch.
+    provider_lock = _provider_lock_for_base_model(base_model_name)
+    selection_df = available_df
+    if provider_lock:
+        selection_df = available_df[
+            _provider_filter(available_df, provider_lock)
+        ].copy()
+        if selection_df.empty:
+            raise ValueError(
+                f"Base model '{base_model_name}' is routed to provider "
+                f"'{provider_lock}', but no models for that provider are "
+                "available in the LLM model CSV."
+            )
+
     # 2. Find Base Model
-    base_model_row = available_df[available_df['model'] == base_model_name]
+    base_model_row = selection_df[selection_df['model'] == base_model_name]
     if base_model_row.empty:
         # The bundled llm_model.csv has inconsistent provider-prefix conventions
         # for Vertex AI models — most have a `vertex_ai/` prefix, but a few
@@ -2107,9 +2430,9 @@ def _select_model_candidates(
         # bare name.
         alt_resolved = False
         for alt_name, required_provider in _alternative_base_lookups(base_model_name):
-            alt_row = available_df[
-                (available_df['model'] == alt_name)
-                & (available_df['provider'] == required_provider)
+            alt_row = selection_df[
+                (selection_df['model'] == alt_name)
+                & _provider_filter(selection_df, required_provider)
             ]
             if not alt_row.empty:
                 base_model = alt_row.iloc[0]
@@ -2118,18 +2441,20 @@ def _select_model_candidates(
         if not alt_resolved:
             # Try finding base model in the *original* df in case it was filtered out
             original_base = model_df[model_df['model'] == base_model_name]
+            if provider_lock:
+                original_base = original_base[_provider_filter(original_base, provider_lock)]
             if not original_base.empty:
                 # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
-            # Option A': Soft fallback – choose a reasonable surrogate base and continue
-            # Strategy (simplified and deterministic): pick the first available model
-            # from the CSV as the surrogate base. This mirrors typical CSV ordering
-            # expectations and keeps behavior predictable across environments.
+            # Option A': Soft fallback – choose a reasonable surrogate base and
+            # continue. For provider-prefixed base models, the surrogate is the
+            # first available model from that same provider; otherwise preserve
+            # legacy behavior and use the first available model from the CSV.
             # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
             try:
-                base_model = available_df.iloc[0]
+                base_model = selection_df.iloc[0]
                 # Silently use the first available model from user's CSV without warning
                 # Users who intentionally customize their CSV shouldn't see warnings about removed models
             except Exception:
@@ -2147,8 +2472,8 @@ def _select_model_candidates(
     if strength == 0.5:
         # target_model = base_model
         # Sort remaining by ELO descending as fallback
-        available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
-        candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        selection_df['sort_metric'] = -selection_df['coding_arena_elo'] # Negative for descending sort
+        candidates = selection_df.sort_values(by='sort_metric').to_dict('records')
         # Ensure effective base model is first if it exists (supports surrogate base)
         effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
         if any(c['model'] == effective_base_name for c in candidates):
@@ -2158,7 +2483,7 @@ def _select_model_candidates(
     elif strength < 0.5:
         # Interpolate by Cost (downwards from base)
         base_cost = base_model['avg_cost']
-        cheapest_model = available_df.loc[available_df['avg_cost'].idxmin()]
+        cheapest_model = selection_df.loc[selection_df['avg_cost'].idxmin()]
         cheapest_cost = cheapest_model['avg_cost']
 
         if base_cost <= cheapest_cost: # Handle edge case where base is cheapest
@@ -2167,14 +2492,14 @@ def _select_model_candidates(
              # Interpolate between cheapest and base
              target_cost = cheapest_cost + (strength / 0.5) * (base_cost - cheapest_cost)
 
-        available_df['sort_metric'] = abs(available_df['avg_cost'] - target_cost)
-        candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        selection_df['sort_metric'] = abs(selection_df['avg_cost'] - target_cost)
+        candidates = selection_df.sort_values(by='sort_metric').to_dict('records')
         target_metric_value = f"Target Cost: {target_cost:.6f}"
 
     else: # strength > 0.5
         # Interpolate by ELO (upwards from base)
         base_elo = base_model['coding_arena_elo']
-        highest_elo_model = available_df.loc[available_df['coding_arena_elo'].idxmax()]
+        highest_elo_model = selection_df.loc[selection_df['coding_arena_elo'].idxmax()]
         highest_elo = highest_elo_model['coding_arena_elo']
 
         if highest_elo <= base_elo: # Handle edge case where base has highest ELO
@@ -2183,8 +2508,8 @@ def _select_model_candidates(
             # Interpolate between base and highest
             target_elo = base_elo + ((strength - 0.5) / 0.5) * (highest_elo - base_elo)
 
-        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - target_elo)
-        candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        selection_df['sort_metric'] = abs(selection_df['coding_arena_elo'] - target_elo)
+        candidates = selection_df.sort_values(by='sort_metric').to_dict('records')
         target_metric_value = f"Target ELO: {target_elo:.2f}"
 
 
@@ -2200,7 +2525,7 @@ def _select_model_candidates(
         logger.debug("Available DF (Sorted by metric):")
         # Select columns relevant to the sorting metric
         sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'sort_metric']
-        logger.debug(available_df.sort_values(by='sort_metric')[sort_cols])
+        logger.debug(selection_df.sort_values(by='sort_metric')[sort_cols])
         logger.debug("Final Candidates List (Model Names):")
         logger.debug([c['model'] for c in candidates])
         logger.debug("---------------------------------------\n")
@@ -3146,6 +3471,14 @@ def llm_invoke(
     try:
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
         candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        cross_provider_fallback_candidates = _build_cross_provider_fallback_candidates(
+            strength,
+            DEFAULT_BASE_MODEL,
+            model_df,
+            candidate_models,
+        )
+        if cross_provider_fallback_candidates:
+            candidate_models = candidate_models + cross_provider_fallback_candidates
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -3242,11 +3575,33 @@ def llm_invoke(
         pass
 
     attempt_counter = 0
+    cross_provider_fallback_unlocked = False
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+        is_cross_provider_fallback = bool(model_info.get("_pdd_cross_provider_fallback"))
+
+        if is_cross_provider_fallback:
+            if not cross_provider_fallback_unlocked:
+                continue
+            if not _candidate_has_configured_credentials(model_info):
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.model_skipped",
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    api_key_env_names=_api_key_field_names(api_key_name),
+                    reason="cross_provider_credentials_unavailable",
+                )
+                if verbose:
+                    logger.info(
+                        "[SKIP] Skipping cross-provider fallback %s because "
+                        "its credentials are not configured.",
+                        model_name_litellm,
+                    )
+                continue
 
         # Record this candidate before any pre-call validation/skip logic so
         # models skipped mid-call (context window pre-check, missing api_key,
@@ -4572,6 +4927,12 @@ def llm_invoke(
                     if verbose:
                         logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
                     continue
+
+                if (
+                    not is_cross_provider_fallback
+                    and _is_transient_provider_error(e)
+                ):
+                    cross_provider_fallback_unlocked = True
 
                 _emit_llm_attribution(
                     attribution_context,

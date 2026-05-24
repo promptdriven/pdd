@@ -29,6 +29,24 @@ def set_pdd_path(monkeypatch):
     monkeypatch.setenv("PDD_PATH", str(pdd_package_dir))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_pdd_model_default(monkeypatch):
+    """Clear PDD_MODEL_DEFAULT for every test in this module.
+
+    These tests mock ``_load_model_data`` / ``litellm`` with an OpenAI-only
+    fixture. If the surrounding environment exports a prefixed default like
+    ``PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview`` (Cloud Batch CI,
+    dev shells), the provider-lock added by #1113 engages at selection time
+    and raises ``ValueError`` before the test's behaviour-under-test fires —
+    because the mocked CSV has no Vertex rows. Clearing both the env var and
+    the module-level ``DEFAULT_BASE_MODEL`` (captured at import time) keeps
+    the tests hermetic against external env.
+    """
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    import pdd.llm_invoke as _llm_mod
+    monkeypatch.setattr(_llm_mod, "DEFAULT_BASE_MODEL", None)
+
+
 class TestOpenAIRequiredArraySchema:
     """
     Tests for OpenAI strict mode requirement: ALL properties must be in 'required'.

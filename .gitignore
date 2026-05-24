@@ -268,6 +268,11 @@ yarn.lock
 !.pdd/meta/ci_drift_heal_python_run.json
 !.pdd/meta/agentic_change_orchestrator_python_run.json
 !.pdd/meta/metadata_sync_python_run.json
+# Issue #1113 follow-up: agentic_fix's prompt <include>s context/llm_invoke_example.py,
+# so the provider-lock contract update bumps agentic_fix's composite prompt_hash +
+# include_deps entry. Without a run-report the workflow-complete gate forces a
+# crash op and `pdd sync agentic_fix` exceeds the auto-heal 1200s timeout.
+!.pdd/meta/agentic_fix_python_run.json
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)
