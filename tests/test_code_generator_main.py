@@ -1879,7 +1879,7 @@ def test_architecture_template_repairs_invalid_interface_type(
     assert saved[0]["interface"]["type"] == "page"
 
 
-def test_postprocess_uses_output_path_as_input_when_llm_enabled(
+def test_postprocess_uses_temp_input_when_llm_enabled(
     mock_ctx,
     temp_dir_setup,
     mock_construct_paths_fixture,
@@ -1887,7 +1887,7 @@ def test_postprocess_uses_output_path_as_input_when_llm_enabled(
     mock_subprocess_run_fixture,
     mock_env_vars,
 ):
-    """When LLM is enabled and an output path is resolved, the post-process input file should be the output path."""
+    """When LLM is enabled, post-process input should not overwrite the output path before gates pass."""
     mock_ctx.obj['local'] = True
 
     # Build a prompt with front matter enabling a post-process script
@@ -1897,6 +1897,7 @@ def test_postprocess_uses_output_path_as_input_when_llm_enabled(
     front_matter_prompt = """---
 language: python
 post_process_python: "./dummy_post_process.py"
+post_process_args: ["{INPUT_FILE}"]
 ---
 Generate a simple module.
 """
@@ -1920,12 +1921,116 @@ Generate a simple module.
         env_vars={"llm": "true"},
     )
 
-    # Output should be written prior to post-process and match generated code
     assert output_file_path.exists()
     assert output_file_path.read_text(encoding="utf-8") == DEFAULT_MOCK_GENERATED_CODE
 
-    # Post-process should be invoked
     assert mock_subprocess_run_fixture.called
+    postprocess_cmd = mock_subprocess_run_fixture.call_args[0][0]
+    assert pathlib.Path(postprocess_cmd[2]).resolve() != output_file_path.resolve()
+
+
+def test_postprocess_reads_back_modified_temp_input_when_llm_enabled(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+    postprocessed_code = "def hello():\n  print('postprocessed')"
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+post_process_args: ["{INPUT_FILE}"]
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    def rewrite_input_file(*args, **kwargs):
+        input_path = pathlib.Path(args[0][2])
+        input_path.write_text(postprocessed_code, encoding="utf-8")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    mock_subprocess_run_fixture.side_effect = rewrite_input_file
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+        env_vars={"llm": "true"},
+    )
+
+    assert code == postprocessed_code
+    assert output_file_path.read_text(encoding="utf-8") == postprocessed_code
+
+
+def test_postprocess_gate_failure_restores_existing_output(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    from pdd.code_generator_main import PublicSurfaceRegressionError
+
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+    existing_code = "def stable_api():\n    return 'old'\n"
+    rejected_code = "def replacement_api():\n    return 'new'\n"
+    create_file(output_file_path, existing_code)
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+post_process_args: ["{INPUT_FILE}"]
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_local_generator_fixture.return_value = (
+        rejected_code,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    def write_rejected_output(*args, **kwargs):
+        output_file_path.write_text(rejected_code, encoding="utf-8")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    mock_subprocess_run_fixture.side_effect = write_rejected_output
+
+    with pytest.raises(PublicSurfaceRegressionError):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            str(output_file_path),
+            None,
+            False,
+            env_vars={"llm": "true"},
+        )
+
+    assert output_file_path.read_text(encoding="utf-8") == existing_code
 
 
 def test_architecture_postprocess_passes_absolute_input_path(
@@ -2002,7 +2107,7 @@ def test_architecture_postprocess_passes_absolute_input_path(
     assert render_cmd is not None, "render_mermaid.py should run for architecture template"
     input_arg = render_cmd[2]
     assert os.path.isabs(input_arg)
-    assert input_arg == str(expected_output_path.resolve())
+    assert pathlib.Path(input_arg).resolve() != expected_output_path.resolve()
 
 
 def test_architecture_postprocess_rewrites_json_pretty(
@@ -4014,8 +4119,25 @@ def test_issue_777_real_content_output_file_still_uses_incremental(
     """
     mock_ctx.obj['local'] = True
     # Real validation side_effect: non-empty existing_code returns normally.
-    mock_incremental_generator_fixture.side_effect = \
-        _incremental_mock_with_real_validation().side_effect
+    # The default helper returns the literal "Updated code", which parses to
+    # zero public symbols and would trip the PublicSurfaceRegressionError
+    # gate against the pre-existing single-symbol surface. Use a return value
+    # that preserves the existing public symbol so this test exercises the
+    # incremental path without colliding with the public-surface gate.
+    updated_code = "def existing():\n    return 99\n"
+
+    def _incremental_side_effect(*args, **kwargs):
+        original_prompt = kwargs.get("original_prompt")
+        new_prompt = kwargs.get("new_prompt")
+        existing_code = kwargs.get("existing_code")
+        language = kwargs.get("language")
+        if not original_prompt or not new_prompt or not existing_code or not language:
+            raise ValueError(
+                "All required inputs (original_prompt, new_prompt, existing_code, language) must be provided."
+            )
+        return (updated_code, True, 0.002, "inc_model")
+
+    mock_incremental_generator_fixture.side_effect = _incremental_side_effect
 
     prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_real.prompt"
     create_file(prompt_file_path, "Updated prompt for real content")
@@ -4043,7 +4165,7 @@ def test_issue_777_real_content_output_file_still_uses_incremental(
 
     # Real content → incremental path still taken, local generator not called.
     assert incremental, "Non-empty existing file must still trigger incremental path"
-    assert code == "Updated code", f"Expected incremental output, got: {code!r}"
+    assert code == updated_code, f"Expected incremental output, got: {code!r}"
     mock_incremental_generator_fixture.assert_called_once()
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
     assert call_kwargs["existing_code"] == "def existing():\n    return 42\n"
@@ -5065,6 +5187,2306 @@ class TestArchitectureConformanceErrorTypedException:
 
 
 # ---------------------------------------------------------------------------
+# Tests for public surface and test churn gates (Issue #1012)
+# ---------------------------------------------------------------------------
+class TestSyncCompatibilityGates:
+    def test_public_surface_regression_catches_removed_helper(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Both versions preserve ``import git`` so this test isolates the
+        # helper-removal signal. Removal of the import is covered separately
+        # by ``test_public_surface_regression_catches_removed_import``.
+        before = (
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+            "def calculate_sha256(value):\n"
+            "    return value\n"
+        )
+        after = (
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "Public surface regression for update_main_Python.prompt:" in str(excinfo.value)
+        assert excinfo.value.removed_symbols == ["calculate_sha256"]
+        assert "- calculate_sha256" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_catches_removed_import(self):
+        """Removing an ``import`` re-export is a real downstream-breaking
+        change — issue #1012's user-cited regression was specifically the
+        loss of the ``git`` module re-export, so this MUST surface."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "git" in excinfo.value.removed_symbols
+        assert "- git" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_catches_removed_module_attribute(self):
+        """Module-level ``ast.Assign`` targets (public constants) are part
+        of the importable surface; their removal MUST raise."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "PUBLIC_SETTING = True\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "PUBLIC_SETTING" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_ignores_underscore_module_names(self):
+        """Underscore-prefixed module-level names (private) and dunder
+        attributes are NOT part of the public surface — they must NOT
+        cause a regression when removed."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "_PRIVATE_CONST = 1\n"
+            "__version__ = '0.1.0'\n"
+            "import _internal_module\n"
+            "from typing import _GenericAlias\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        # All removed names are private/dunder — gate should pass silently.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
+        )
+
+    def test_public_surface_regression_tracks_from_import_aliases(self):
+        """``from X import Y`` and ``from X import Y as Z`` bind ``Y``
+        and ``Z`` respectively as module attributes; both are public
+        re-exports that must be tracked. ``from X import *`` binds no
+        fixed identifier and is ignored."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from pathlib import Path\n"
+            "from os.path import join as pjoin\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        # Both the direct name and the alias surface as removed.
+        assert "Path" in excinfo.value.removed_symbols
+        assert "pjoin" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_tracks_annotated_assignment(self):
+        """Module-level ``ast.AnnAssign`` targets (annotated public
+        constants) are also part of the importable surface."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "PUBLIC_FLAG: bool = True\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = "def read_fingerprint():\n    return 'new'\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "PUBLIC_FLAG" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_ignores_bare_annotation(self):
+        """Bare ``ast.AnnAssign`` declarations (``PUBLIC_NAME: int`` with no
+        value) do NOT bind a runtime module attribute — they're type hints
+        only. Capturing them as public surface would cause false positives
+        when a generation removes a type-only annotation, so the snapshot
+        skips bare annotations and only tracks bound ones."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "PUBLIC_BARE: int\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = "def read_fingerprint():\n    return 'new'\n"
+
+        # Removing the bare annotation must NOT raise — it never bound a
+        # runtime attribute callers could have imported.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
+        )
+
+    def test_public_surface_regression_tracks_annassign_with_none_value(self):
+        """``PUBLIC_NAME: int = None`` is a real binding (the explicit
+        ``None`` value lives at ``node.value``, distinct from the Python
+        sentinel meaning "no value assigned"), so it MUST be tracked."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "PUBLIC_NONE: int = None\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = "def read_fingerprint():\n    return 'new'\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "PUBLIC_NONE" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_walks_tuple_assignment_targets(self):
+        """Tuple-unpacking module-level assignments expose each name as a
+        separate attribute; the snapshot walks every element."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "PUBLIC_A, PUBLIC_B = 1, 2\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = "def read_fingerprint():\n    return 'new'\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "PUBLIC_A" in excinfo.value.removed_symbols
+        assert "PUBLIC_B" in excinfo.value.removed_symbols
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) F-C (iter-6): `__all__` is Python's canonical
+    # public-API declaration. When it is present as a clean list/tuple
+    # of string constants, it MUST be authoritative — underscore-prefixed
+    # names listed in `__all__` ARE public, and names NOT in `__all__`
+    # are NOT public even if they're otherwise non-underscore.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_dunder_all_protects_underscore_name(self):
+        """`__all__ = ["_public_helper"]` makes `_public_helper` public
+        per Python semantics; removing it MUST raise even though the
+        name is underscore-prefixed."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = [\"_public_helper\", \"PublicClass\"]\n"
+            "def _public_helper():\n    pass\n"
+            "class PublicClass:\n    pass\n"
+        )
+        after = (
+            "__all__ = [\"PublicClass\"]\n"
+            "class PublicClass:\n    pass\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "_public_helper" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_excludes_unlisted_name(self):
+        """When `__all__` declares only `["A"]`, removing a sibling `B`
+        (not in `__all__`) MUST NOT raise — `B` is no longer part of the
+        public surface once `__all__` is declared."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = [\"A\"]\n"
+            "def A():\n    pass\n"
+            "def B():\n    pass\n"
+        )
+        after = (
+            "__all__ = [\"A\"]\n"
+            "def A():\n    pass\n"
+        )
+
+        # Must NOT raise — B is not in __all__, so it's not public.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Internal refactor.",
+        )
+
+    def test_public_surface_regression_no_dunder_all_uses_heuristic(self):
+        """When `__all__` is absent the underscore-prefix heuristic
+        applies as before: `_helper` is NOT in the surface."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "def _helper():\n    pass\n"
+            "def public_one():\n    pass\n"
+        )
+        after = (
+            "def public_one():\n    pass\n"
+        )
+
+        # No __all__ declared — `_helper` is private (underscore prefix).
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Internal refactor.",
+        )
+
+    def test_public_surface_regression_dunder_all_tuple_form(self):
+        """`__all__` declared as a tuple of constants is equally valid."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = (\"_protected\",)\n"
+            "def _protected():\n    pass\n"
+        )
+        after = "def _protected_renamed():\n    pass\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Internal refactor.",
+            )
+
+        assert "_protected" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_computed_falls_back(self):
+        """When `__all__` is computed (e.g. `sorted(...)`) and cannot be
+        statically evaluated, the heuristic falls back to the
+        non-underscore rule."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        # __all__ is computed; the heuristic falls back. `_helper` is
+        # underscore-prefixed so it's not in the surface; removing it
+        # must NOT raise even though a computed __all__ exists.
+        before = (
+            "__all__ = sorted([\"_helper\"])\n"
+            "def _helper():\n    pass\n"
+            "def public_one():\n    pass\n"
+        )
+        after = (
+            "__all__ = sorted([])\n"
+            "def public_one():\n    pass\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Internal refactor.",
+        )
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) F-C follow-up (iter-7): the parser MUST
+    # walk every top-level __all__ assignment in source order and
+    # honor the LAST one (Python runtime semantics). The previous
+    # implementation returned the first clean literal, which would
+    # incorrectly trust ``__all__ = ["_helper"]`` even when a later
+    # ``__all__ = func()`` overrode it at runtime.
+    # -----------------------------------------------------------------
+    def test_dunder_all_computed_after_literal_overrides(self):
+        """A computed `__all__` assignment FOLLOWING a clean literal
+        MUST reset the parse state — at runtime the computed value
+        wins. The snapshot must NOT keep treating the earlier literal
+        as authoritative."""
+        from pdd.code_generator_main import _extract_dunder_all
+        import ast
+
+        src = (
+            "__all__ = [\"_helper\"]\n"
+            "def func():\n    return [\"a\", \"b\"]\n"
+            "__all__ = func()\n"
+        )
+        result = _extract_dunder_all(ast.parse(src))
+        assert result is None, (
+            "Computed __all__ after a literal MUST reset state to None "
+            "(last assignment wins); got %r" % (result,)
+        )
+
+    def test_dunder_all_aug_assign_falls_back(self):
+        """`__all__ += [...]` (AugAssign) mutates the previous list at
+        runtime; statically we cannot be sure what's in the target
+        object, so the parser must fall back to the heuristic."""
+        from pdd.code_generator_main import _extract_dunder_all
+        import ast
+
+        src = (
+            "__all__ = [\"A\"]\n"
+            "__all__ += [\"B\"]\n"
+        )
+        result = _extract_dunder_all(ast.parse(src))
+        assert result is None, (
+            "AugAssign to __all__ MUST reset state to None; got %r" % (result,)
+        )
+
+    def test_dunder_all_single_literal_captures_set(self):
+        """A single clean `__all__ = [...]` literal is captured exactly
+        (regression guard for the common case)."""
+        from pdd.code_generator_main import _extract_dunder_all
+        import ast
+
+        src = "__all__ = [\"_helper\", \"PublicClass\"]\n"
+        result = _extract_dunder_all(ast.parse(src))
+        assert result == {"_helper", "PublicClass"}
+
+    def test_dunder_all_last_literal_wins(self):
+        """Two clean literal assignments in source order — only the
+        SECOND survives (matches Python runtime semantics)."""
+        from pdd.code_generator_main import _extract_dunder_all
+        import ast
+
+        src = (
+            "__all__ = [\"A\"]\n"
+            "__all__ = [\"B\"]\n"
+        )
+        result = _extract_dunder_all(ast.parse(src))
+        assert result == {"B"}, (
+            "Second clean literal MUST win (last assignment wins); got %r"
+            % (result,)
+        )
+
+    def test_public_surface_regression_dunder_all_computed_after_literal(self):
+        """End-to-end: a computed __all__ following a clean literal
+        falls back to the heuristic. Underscore-prefixed name from the
+        earlier literal is therefore NOT treated as public, so removing
+        it does NOT raise (the heuristic excludes underscore-prefixed
+        names from the surface)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = [\"_helper\"]\n"
+            "def _helper():\n    pass\n"
+            "def public_one():\n    pass\n"
+            "def _compute():\n    return []\n"
+            "__all__ = _compute()\n"
+        )
+        after = (
+            "def public_one():\n    pass\n"
+            "def _compute():\n    return []\n"
+            "__all__ = _compute()\n"
+        )
+
+        # Heuristic applies — `_helper` is underscore-prefixed and
+        # therefore not in the surface. Removal must NOT raise.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Internal refactor.",
+        )
+
+    def test_public_surface_regression_dunder_all_aug_assign_falls_back(self):
+        """End-to-end: `__all__ += [...]` after a clean literal makes
+        the parser fall back. Underscore-prefixed name removal must
+        NOT raise."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = [\"_helper\"]\n"
+            "__all__ += [\"PublicClass\"]\n"
+            "def _helper():\n    pass\n"
+            "class PublicClass:\n    pass\n"
+        )
+        after = (
+            "__all__ = [\"_helper\"]\n"
+            "__all__ += [\"PublicClass\"]\n"
+            "class PublicClass:\n    pass\n"
+        )
+
+        # Heuristic applies — underscore-prefixed `_helper` is not in
+        # the surface. Removal must NOT raise.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Internal refactor.",
+        )
+
+    def test_public_surface_regression_dunder_all_narrowing_surfaces_removed(self):
+        """Adding `__all__` to a module that previously exported `foo`
+        and `bar` as plain non-underscore names is intentionally
+        surface-narrowing: omitted names show up as removed. The fix
+        is the standard `BREAKING-CHANGE: remove <symbol>` opt-out."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "def foo():\n    pass\n"
+            "def bar():\n    pass\n"
+        )
+        after = (
+            "__all__ = [\"foo\"]\n"
+            "def foo():\n    pass\n"
+            "def bar():\n    pass\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Narrowing the public surface.",
+            )
+
+        assert "bar" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_applies_to_signature_snapshot(self):
+        """The `__all__` rule applies to `_snapshot_public_signatures`
+        too — otherwise the removed-symbol diff and the signature-drift
+        diff disagree on what is "public". Sanity-check by changing the
+        signature of an underscore-prefixed function listed in
+        `__all__`: signature drift MUST surface."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = [\"_run\"]\n"
+            "def _run(x, y=1):\n    return x + y\n"
+        )
+        after = (
+            "__all__ = [\"_run\"]\n"
+            "def _run(x):\n    return x\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Internal refactor.",
+            )
+
+        assert "_run" in excinfo.value.changed_signatures
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) F-F (iter-8): when `__all__` lists a class,
+    # the recursively-walked members of that class (methods, nested
+    # classes, methods on nested classes) MUST also be part of the
+    # public surface. Without this, the user-cited regression where
+    # `__all__ = ["Service"]` plus removal of `Service.run` slipped
+    # past the gate would persist. Methods of __all__'d classes are
+    # captured regardless of underscore prefix — the user opted the
+    # whole class into the public surface, consistent with how
+    # underscore-prefixed top-level names in __all__ are public.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_dunder_all_walks_class_methods(self):
+        """`__all__ = ["Service"]` with `Service.run` MUST capture
+        `Service.run` as part of the public surface — removing it
+        raises with `Service.run` in `removed_symbols`."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    def run(self):\n        return 1\n"
+        )
+        after = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n    pass\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Internal refactor.",
+            )
+
+        assert "Service.run" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_walks_nested_class_members(self):
+        """`__all__ = ["Service"]` with a nested `Service.Inner.m` MUST
+        capture the deeply-nested method; removing it raises with
+        `Service.Inner.m` in `removed_symbols`."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    class Inner:\n"
+            "        def m(self):\n            return 1\n"
+        )
+        after = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    class Inner:\n        pass\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Internal refactor.",
+            )
+
+        assert "Service.Inner.m" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_catches_class_method_signature_change(self):
+        """`__all__ = ["Service"]` + signature change on `Service.run`
+        (adding a required param) MUST raise with `Service.run` in
+        `changed_signatures`."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    def run(self):\n        return 1\n"
+        )
+        after = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    def run(self, value):\n        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Internal refactor.",
+            )
+
+        assert "Service.run" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_dunder_all_ignores_unlisted_class_members(self):
+        """Top-level classes NOT in `__all__` and their members are not
+        part of the public surface — removing them does NOT raise."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    def run(self):\n        return 1\n"
+            "class Internal:\n"
+            "    def helper(self):\n        return 2\n"
+        )
+        after = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    def run(self):\n        return 1\n"
+        )
+
+        # `Internal` and `Internal.helper` are not in __all__ — removal
+        # must NOT raise.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Internal refactor.",
+        )
+
+    def test_public_surface_regression_dunder_all_includes_underscore_methods(self):
+        """When a class is opted into __all__, its underscore-prefixed
+        methods ARE part of the public surface (consistent with how
+        underscore-prefixed top-level names in __all__ are public)."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n"
+            "    def _internal_run(self):\n        return 1\n"
+        )
+        after = (
+            "__all__ = [\"Service\"]\n"
+            "class Service:\n    pass\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "Internal refactor.",
+            )
+
+        assert "Service._internal_run" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_allows_explicit_breaking_change(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "def old_helper():\n    pass\n",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: remove old_helper.",
+        )
+
+    def test_public_surface_regression_requires_scoped_breaking_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def old_helper():\n    pass\n"
+                "def keep_helper():\n    pass\n",
+                "def new_helper():\n    pass\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "BREAKING-CHANGE: remove old_helper.",
+            )
+
+        assert excinfo.value.removed_symbols == ["keep_helper"]
+
+    def test_public_surface_regression_catches_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def calculate(value, *, strict=False) -> str:\n    return str(value)\n",
+                "def calculate(value) -> str:\n    return str(value)\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.removed_symbols == []
+        assert excinfo.value.changed_signatures == ["calculate"]
+        assert "signature_changed: calculate" in str(excinfo.value)
+
+    def test_public_surface_regression_allows_scoped_signature_change(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "def calculate(value, *, strict=False) -> str:\n    return str(value)\n",
+            "def calculate(value) -> str:\n    return str(value)\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: change signature calculate.",
+        )
+
+    def test_public_surface_regression_requires_scoped_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def calculate(value, *, strict=False) -> str:\n    return str(value)\n",
+                "def calculate(value) -> str:\n    return str(value)\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "BREAKING-CHANGE: change signature other_function.",
+            )
+
+        assert excinfo.value.changed_signatures == ["calculate"]
+
+    def test_public_surface_regression_catches_removed_constructor(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    def __init__(self, value: int) -> None:\n"
+            "        self.value = value\n"
+            "    def public_method(self) -> int:\n"
+            "        return self.value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def public_method(self) -> int:\n"
+            "        return 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.removed_symbols == []
+        assert "MyClass" in excinfo.value.changed_signatures
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) P1.B (iter-13): a class without an explicit
+    # `__init__` is treated as having the implicit `(self)` constructor
+    # at runtime. Previously the signature snapshot recorded NO entry
+    # for such classes, so adding a required-arg `__init__` slipped
+    # past the gate — even though callers doing `Service()` would
+    # `TypeError` at runtime. The fix records `"()"` for implicit
+    # constructors so the pre/post diff catches the addition.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_catches_added_required_init(self):
+        """A class WITHOUT an explicit `__init__` then a class WITH a
+        new required-arg `__init__` MUST raise: the change is a
+        runtime ABI break for callers using the default `Service()`
+        construction."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class Service:\n"
+            "    def __init__(self, required):\n"
+            "        self.required = required\n"
+            "    def run(self):\n"
+            "        return self.required\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Service" in excinfo.value.changed_signatures
+        # The repair directive should surface the changed constructor.
+        assert "Service" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_allows_added_init_with_breaking_change(self):
+        """The same change with an anchored `BREAKING-CHANGE: change
+        signature Service` directive must NOT raise — explicit opt-out."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class Service:\n"
+            "    def __init__(self, required):\n"
+            "        self.required = required\n"
+            "    def run(self):\n"
+            "        return self.required\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: change signature Service.",
+        )
+
+    def test_public_surface_regression_ignores_unrelated_method_addition(self):
+        """Negative test: class without `__init__` in both pre and post,
+        only an unrelated method added. The implicit `()` signature is
+        unchanged between pre and post, so the gate must NOT raise."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+            "    def new_method(self):\n"
+            "        return 2\n"
+        )
+
+        # Both sides have implicit `()` init; only a new method appears,
+        # which is additive. Must NOT raise.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_catches_staticmethod_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def compute(value: int, factor: int) -> int:\n"
+            "        return value * factor\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def compute(value: int) -> int:\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.compute" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_catches_async_sync_flip(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "async def foo() -> int:\n    return 0\n"
+        after = "def foo() -> int:\n    return 0\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.removed_symbols == []
+        assert "foo" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_catches_async_sync_flip_on_method(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    async def compute(self, value: int) -> int:\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def compute(self, value: int) -> int:\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.compute" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_allows_unchanged_staticmethod(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def compute(value: int, factor: int) -> int:\n"
+            "        return value * factor\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_gate_has_dedicated_skip_flag(self, monkeypatch):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        monkeypatch.setenv("PDD_SKIP_PUBLIC_SURFACE_GATE", "1")
+
+        _verify_public_surface_regression(
+            "def old_helper():\n    pass\n",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # Codex review (#1015) F-K (iter-16): the umbrella
+    # `PDD_SKIP_CONFORMANCE=1` flag must short-circuit both the
+    # public-surface gate AND the test-churn gate, matching the
+    # README's documented hierarchy.
+    def test_public_surface_gate_honors_skip_conformance_umbrella(self, monkeypatch):
+        """`PDD_SKIP_CONFORMANCE=1` must disable the public-surface
+        gate (not just `PDD_SKIP_PUBLIC_SURFACE_GATE=1`)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+        # Without the umbrella flag this would raise; with it set,
+        # the call must return silently.
+        _verify_public_surface_regression(
+            "def old_helper():\n    pass\n",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_test_churn_gate_honors_skip_conformance_umbrella(self, monkeypatch):
+        """`PDD_SKIP_CONFORMANCE=1` must disable the test-churn gate
+        (not just `PDD_SKIP_TEST_CHURN_GATE=1`)."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+        # 100% churn — would normally raise; with the umbrella flag
+        # set, the call must return silently.
+        _verify_test_churn(
+            existing_code=(
+                "def test_a(): pass\n"
+                "def test_b(): pass\n"
+                "def test_c(): pass\n"
+            ),
+            generated_code=(
+                "def test_new_a(): pass\n"
+                "def test_new_b(): pass\n"
+                "def test_new_c(): pass\n"
+            ),
+            prompt_name="module_test_Python.prompt",
+            output_path="tests/test_module.py",
+            prompt_content="",
+        )
+
+    def test_public_surface_regression_exempts_first_time_generation(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_test_churn_gate_raises_above_threshold(self, monkeypatch):
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "\n".join(
+            [
+                "def test_a(): pass",
+                "def test_b(): pass",
+                "def test_c(): pass",
+                "def test_d(): pass",
+                "def test_e(): pass",
+            ]
+        )
+        after = "\n".join(
+            [
+                "def test_new_a(): pass",
+                "def test_new_b(): pass",
+                "def test_new_c(): pass",
+                "def test_new_d(): pass",
+                "def test_new_e(): pass",
+            ]
+        )
+
+        with pytest.raises(TestChurnError) as excinfo:
+            _verify_test_churn(
+                before,
+                after,
+                "update_main_test_Python.prompt",
+                "tests/test_update_main.py",
+                "",
+            )
+
+        assert excinfo.value.churn_ratio > excinfo.value.threshold
+        assert "Test churn threshold exceeded for update_main_test_Python.prompt:" in str(excinfo.value)
+
+    def test_test_churn_allows_pure_additive_growth(self, monkeypatch):
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a():\n    assert True\n"
+        after = before + "\ndef test_b():\n    assert True\n"
+
+        _verify_test_churn(
+            before,
+            after,
+            "module_test_Python.prompt",
+            "tests/test_module.py",
+            "",
+        )
+
+    def test_test_churn_requires_explicit_test_rewrite_marker(self, monkeypatch):
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "module_test_Python.prompt",
+                "tests/test_module.py",
+                "BREAKING-CHANGE: remove old_helper.",
+            )
+
+        _verify_test_churn(
+            before,
+            after,
+            "module_test_Python.prompt",
+            "tests/test_module.py",
+            "BREAKING-CHANGE: rewrite tests for new contract.",
+        )
+
+    def test_test_churn_gate_has_dedicated_skip_flag(self, monkeypatch):
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.setenv("PDD_SKIP_TEST_CHURN_GATE", "1")
+
+        _verify_test_churn(
+            "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n",
+            "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n",
+            "module_test_Python.prompt",
+            "tests/test_module.py",
+            "",
+        )
+
+    def test_test_churn_threshold_is_clamped_to_one(self, monkeypatch):
+        from pdd.code_generator_main import _get_test_churn_threshold
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "2")
+
+        assert _get_test_churn_threshold() == pytest.approx(1.0)
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015): anchoring + verb-form coverage for the
+    # BREAKING-CHANGE: opt-out parsers. Mid-line prose mentioning the
+    # marker must NOT disable a gate, and the documented gerund variants
+    # (`rewriting`/`replacing`) MUST opt out the test-churn gate.
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_ignores_midline_marker(self, monkeypatch):
+        """Buried prose like 'use BREAKING-CHANGE: rewrite tests to opt out'
+        must NOT opt out the gate — only an anchored directive line does."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+        prose = (
+            "# Marker docs: use `BREAKING-CHANGE: rewrite tests` to opt out.\n"
+        )
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "module_test_Python.prompt",
+                "tests/test_module.py",
+                prose,
+            )
+
+    def test_test_churn_gate_accepts_gerund_variants(self, monkeypatch):
+        """Documented gerund forms (`rewriting`/`replacing` tests) MUST opt
+        out — the prompt body explicitly suggests this wording."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+
+        for marker in (
+            "BREAKING-CHANGE: rewriting tests for new contract.",
+            "BREAKING-CHANGE: replacing tests after refactor.",
+            "BREAKING-CHANGE: regenerating tests to match new fixtures.",
+            "   BREAKING-CHANGE: rewrite tests after split.",
+        ):
+            _verify_test_churn(
+                before,
+                after,
+                "module_test_Python.prompt",
+                "tests/test_module.py",
+                marker,
+            )
+
+    def test_test_churn_gate_rejects_unrelated_target(self, monkeypatch):
+        """A `BREAKING-CHANGE: rewrite calculator` directive must NOT opt out
+        the test-churn gate — the verb must be paired with `test`/`tests`."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "module_test_Python.prompt",
+                "tests/test_module.py",
+                "BREAKING-CHANGE: rewrite calculator helper.",
+            )
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Finding 1 (iter-2): the verb must take
+    # `tests?` as its OBJECT, not merely co-occur with it. A comma,
+    # semicolon, or conjunction (`and`/`but`/`then`/`or`) between the
+    # opt-out verb and `tests?` belongs to a different verb's phrase,
+    # so the directive must NOT opt out.
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_rejects_verb_with_different_object(self, monkeypatch):
+        """`BREAKING-CHANGE: rewrite docs and update tests` must NOT opt out:
+        the opt-out verb's object is `docs`, and `update` is not an opt-out
+        verb. Codex review #1015 Finding 1 (iter-2)."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+
+        for marker in (
+            "BREAKING-CHANGE: rewrite docs and update tests.",
+            "BREAKING-CHANGE: rewrite docs, update tests.",
+            "BREAKING-CHANGE: rewriting calculator helper but keep tests.",
+            "BREAKING-CHANGE: replace shim; preserve tests.",
+        ):
+            with pytest.raises(TestChurnError):
+                _verify_test_churn(
+                    before,
+                    after,
+                    "module_test_Python.prompt",
+                    "tests/test_module.py",
+                    marker,
+                )
+
+    def test_test_churn_gate_accepts_verb_directly_governing_tests(self, monkeypatch):
+        """The verb may have prose between itself and `tests?` (e.g. a
+        determiner like `the` or a noun phrase like `the failing`) as long
+        as no comma/conjunction breaks the phrase. Codex review #1015
+        Finding 1 (iter-2)."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+
+        for marker in (
+            "BREAKING-CHANGE: rewriting the failing tests for new helper.",
+            "BREAKING-CHANGE: rewrite the test suite for new helper.",
+            # An earlier non-churn directive verb is fine: the second
+            # opt-out verb here directly governs `tests`.
+            "BREAKING-CHANGE: drop foo and rewrite tests.",
+        ):
+            _verify_test_churn(
+                before,
+                after,
+                "module_test_Python.prompt",
+                "tests/test_module.py",
+                marker,
+            )
+
+    def test_public_surface_gate_ignores_midline_marker(self):
+        """Prompt prose explaining the marker by example must NOT whitelist
+        prose tokens like `to`/`opt`/`out` as removable symbols."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "def to():\n    pass\n"
+            "def opt():\n    pass\n"
+            "def out():\n    pass\n"
+        )
+        after = "def new_helper():\n    pass\n"
+        prose_prompt = (
+            "Marker docs: use `BREAKING-CHANGE: remove old_helper` to opt out.\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prose_prompt,
+            )
+
+        # None of `to`, `opt`, `out` should have been silently whitelisted;
+        # all three must surface as removed symbols.
+        assert set(excinfo.value.removed_symbols) == {"to", "opt", "out"}
+
+    def test_public_surface_gate_rejects_prose_after_verb(self):
+        """Even an anchored directive must not leak prose tokens as
+        removable symbols — only delimited identifier lists are accepted."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "def to():\n    pass\n"
+            "def opt():\n    pass\n"
+            "def out():\n    pass\n"
+        )
+        after = "def new_helper():\n    pass\n"
+        # The verb is recognized but the rest is prose: `to opt out` must NOT
+        # be parsed as the symbols `to`, `opt`, `out`.
+        prompt_with_directive = "BREAKING-CHANGE: remove old_helper to opt out\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_directive,
+            )
+
+        assert set(excinfo.value.removed_symbols) == {"to", "opt", "out"}
+
+    def test_public_surface_gate_accepts_comma_list(self):
+        """An anchored `BREAKING-CHANGE: remove a, b, c` directive correctly
+        whitelists each comma-delimited identifier."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "def a():\n    pass\n"
+            "def b():\n    pass\n"
+            "def c():\n    pass\n"
+        )
+        after = "def new_helper():\n    pass\n"
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: remove a, b, c\n",
+        )
+
+    def test_signature_gate_ignores_midline_marker(self):
+        """Mid-line marker mentions must NOT whitelist a real signature
+        change — only an anchored directive opts out."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def calculate(value, *, strict=False) -> str:\n    return str(value)\n"
+        after = "def calculate(value) -> str:\n    return str(value)\n"
+        prose_prompt = (
+            "See the BREAKING-CHANGE: change signature calculate marker in the doc.\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prose_prompt,
+            )
+
+        assert "calculate" in excinfo.value.changed_signatures
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Medium 3 (iter-3): the BREAKING-CHANGE: opt-out
+    # parser must accept quoted identifiers — operators writing the doc
+    # naturally reach for backticks/single-quotes/double-quotes around
+    # symbol names. The same identifier grammar must work whether the
+    # author wraps the symbol or not.
+    # -----------------------------------------------------------------
+    def test_breaking_change_removal_accepts_quoted_identifiers(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = "def old_helper():\n    pass\n"
+        after = "def new_helper():\n    pass\n"
+
+        for marker in (
+            'BREAKING-CHANGE: remove "old_helper".',
+            "BREAKING-CHANGE: remove 'old_helper'.",
+            "BREAKING-CHANGE: remove `old_helper`.",
+            'BREAKING-CHANGE: remove "old_helper", `another_helper`.',
+        ):
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                marker,
+            )
+
+    def test_breaking_change_signature_accepts_quoted_identifiers(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "class MyClass:\n"
+            "    def method(self, value, *, strict=False):\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def method(self, value):\n"
+            "        return value\n"
+        )
+
+        for marker in (
+            "BREAKING-CHANGE: change signature \"MyClass.method\".",
+            "BREAKING-CHANGE: change signature 'MyClass.method'.",
+        ):
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                marker,
+            )
+
+    def test_breaking_change_rejects_mismatched_quote_wrappers(self):
+        """Wrappers must MATCH on both sides — ``"old_helper'`` is a typo,
+        not a valid identifier token, so the directive must NOT whitelist
+        the removal. Falling back to a sane error keeps the gate
+        protective when authors slip a quote.
+        """
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def old_helper():\n    pass\n"
+        after = "def new_helper():\n    pass\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "BREAKING-CHANGE: remove \"old_helper'.",
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Medium 4 (iter-3): the public-surface
+    # snapshot must recurse into nested classes so removing
+    # ``Outer.Inner.method`` is caught (the enclosing ``Outer.Inner``
+    # may stay, escaping both the removed-symbol diff and the
+    # signature-change diff).
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_catches_nested_class_method_removal(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def removed_method(self):\n"
+            "            return 1\n"
+            "        def kept_method(self):\n"
+            "            return 2\n"
+        )
+        after = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def kept_method(self):\n"
+            "            return 2\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Outer.Inner.removed_method" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_catches_nested_class_method_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def method(self, value, *, strict=False):\n"
+            "            return value\n"
+        )
+        after = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def method(self, value):\n"
+            "            return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Outer.Inner.method" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_recursion_depth_two_or_more(self):
+        """Triple-nested public classes (``A.B.C.method``) must also be
+        recorded by the snapshot — single-level recursion is not enough."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class Outer:\n"
+            "    class Mid:\n"
+            "        class Inner:\n"
+            "            def removed(self):\n"
+            "                return 1\n"
+        )
+        after = (
+            "class Outer:\n"
+            "    class Mid:\n"
+            "        class Inner:\n"
+            "            pass\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Outer.Mid.Inner.removed" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_nested_private_class_ignored(self):
+        """A leading-underscore (private) nested class must NOT contribute
+        symbols to the snapshot, even when its enclosing class is public."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "class Outer:\n"
+            "    class _Inner:\n"
+            "        def helper(self):\n"
+            "            return 1\n"
+        )
+        after = (
+            "class Outer:\n"
+            "    class _Inner:\n"
+            "        pass\n"
+        )
+
+        # _Inner is private; removing its method should not fail the gate.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Medium 5 (iter-3): PDD_TEST_CHURN_THRESHOLD
+    # must accept a trailing ``%`` so common operator wording like
+    # ``50%`` is treated as ``0.50`` rather than silently clamped to
+    # the default 0.40.
+    # -----------------------------------------------------------------
+    def test_test_churn_threshold_accepts_percent_suffix(self, monkeypatch):
+        from pdd.code_generator_main import _get_test_churn_threshold
+
+        for raw, expected in (
+            ("40%", 0.40),
+            ("50%", 0.50),
+            ("100%", 1.0),
+            ("0%", 0.0),
+            ("50 %", 0.50),
+        ):
+            monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", raw)
+            assert _get_test_churn_threshold() == pytest.approx(expected)
+
+    def test_test_churn_threshold_invalid_defaults_and_warns(self, monkeypatch, caplog):
+        from pdd.code_generator_main import _get_test_churn_threshold
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "invalid")
+        caplog.set_level("WARNING", logger="pdd.code_generator_main")
+
+        assert _get_test_churn_threshold() == pytest.approx(0.40)
+        assert any(
+            "PDD_TEST_CHURN_THRESHOLD" in record.message
+            for record in caplog.records
+        )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) follow-up: extend churn-gate file-type
+    # detection past Python/JS — `<name>_test.go` and `<name>_spec.rb`
+    # live next to production code (not under `tests/`) and the gate's
+    # early-return previously skipped them.
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_catches_sibling_go_test_file(self):
+        """`handler_test.go` sitting next to `handler.go` must trip the
+        churn gate when generation drops most of the existing tests."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = "\n".join(f"func TestCase{i}(t *testing.T) {{}}" for i in range(20)) + "\n"
+        after = "func TestCase0(t *testing.T) {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "handler_test_go.prompt",
+                "service/handler_test.go",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_sibling_ruby_spec_file(self):
+        """`widget_spec.rb` next to `widget.rb` must trip the gate too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = "\n".join(f"it 'case {i}' do; end" for i in range(20)) + "\n"
+        after = "it 'case 0' do; end\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_spec_ruby.prompt",
+                "app/widget_spec.rb",
+                "Document the public API.",
+            )
+
+    def test_test_churn_gate_catches_pascal_case_java_test_file(self):
+        """`src/test/java/FooTest.java` (PascalCase `Test.java`) must trip
+        the churn gate. The agentic test prompt names `Test.java` as a
+        first-class test convention."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(
+                f"  @Test public void case{i}() {{}}" for i in range(20)
+            )
+            + "\n"
+        )
+        after = "  @Test public void case0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooTest_java.prompt",
+                "src/test/java/FooTest.java",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_kotlin_spec_file(self):
+        """`WidgetSpec.kt` (PascalCase `Spec.kt`) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  fun `case {i}`() {{}}" for i in range(20)) + "\n"
+        )
+        after = "  fun `case 0`() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "WidgetSpec_kt.prompt",
+                "src/test/kotlin/WidgetSpec.kt",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_skips_pascal_case_false_positive(self):
+        """`latest.kt` is NOT a test file even though it ends with the
+        substring `test.kt` — the PascalCase suffix match is
+        case-sensitive on `Test`/`Tests`/`Spec` to avoid this trap."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        # Large rewrite that would normally trip the gate.
+        before = "\n".join(f"val item{i} = {i}" for i in range(50)) + "\n"
+        after = "val item0 = 0\n"
+
+        # Must NOT raise — `latest.kt` is regular code, not a test.
+        _verify_test_churn(
+            before,
+            after,
+            "latest_kt.prompt",
+            "src/main/kotlin/latest.kt",
+            "Internal refactor.",
+        )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) iter-11 follow-up: extend test-suffix
+    # detection past `Test.java`/`Tests.kt`/`Spec.kt` to cover JUnit
+    # integration tests (`FooIT.java`), older JUnit/TestNG
+    # (`FooTestCase.java`), ScalaTest specs (`FooSpec.scala`), and
+    # Rust sibling tests (`foo_test.rs`).
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_catches_java_integration_test(self):
+        """`FooIT.java` (Maven failsafe integration test) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  @Test public void case{i}() {{}}" for i in range(20))
+            + "\n"
+        )
+        after = "  @Test public void case0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooIT_java.prompt",
+                "src/test/java/FooIT.java",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_java_testcase(self):
+        """`FooTestCase.java` (older JUnit/TestNG convention) too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  public void testCase{i}() {{}}" for i in range(20))
+            + "\n"
+        )
+        after = "  public void testCase0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooTestCase_java.prompt",
+                "src/test/java/FooTestCase.java",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_scala_spec(self):
+        """`FooSpec.scala` (ScalaTest convention) too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = "\n".join(f'  it("case {i}") {{}}' for i in range(20)) + "\n"
+        after = '  it("case 0") {}\n'
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooSpec_scala.prompt",
+                "src/test/scala/FooSpec.scala",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_rust_sibling_test(self):
+        """`widget_test.rs` next to `widget.rs` (Rust sibling test) too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"#[test]\nfn case_{i}() {{}}" for i in range(20)) + "\n"
+        )
+        after = "#[test]\nfn case_0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_rs.prompt",
+                "src/widget_test.rs",
+                "Cover the public API.",
+            )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) iter-12 follow-up: broaden test-suffix
+    # coverage to all `_test.<ext>` / `_spec.<ext>` extensions in
+    # `_LANGUAGE_TEST_FILE_EXTS` (Elixir/Dart/Clojure/Lua/PHP appear by
+    # data, not code) AND add Groovy PascalCase (Spock convention).
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_catches_groovy_spec(self):
+        """`FooSpec.groovy` (Spock framework) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  def 'case {i}'() {{}}" for i in range(20)) + "\n"
+        )
+        after = "  def 'case 0'() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooSpec_groovy.prompt",
+                "src/test/groovy/FooSpec.groovy",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_elixir_sibling_test(self):
+        """`widget_test.exs` (Elixir ExUnit) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f'  test "case {i}" do\n  end' for i in range(20))
+            + "\n"
+        )
+        after = '  test "case 0" do\n  end\n'
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_exs.prompt",
+                "lib/widget_test.exs",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_dart_sibling_test(self):
+        """`widget_test.dart` (Flutter / Dart test) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  test('case {i}', () {{}});" for i in range(20))
+            + "\n"
+        )
+        after = "  test('case 0', () {});\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_dart.prompt",
+                "lib/widget_test.dart",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_clojure_sibling_test(self):
+        """`widget_test.clj` (clojure.test) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"(deftest case-{i} (is true))" for i in range(20))
+            + "\n"
+        )
+        after = "(deftest case-0 (is true))\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_clj.prompt",
+                "src/widget_test.clj",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_lua_busted_spec(self):
+        """`widget_spec.lua` (Busted) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f'  it("case {i}", function() end)' for i in range(20))
+            + "\n"
+        )
+        after = '  it("case 0", function() end)\n'
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_spec_lua.prompt",
+                "src/widget_spec.lua",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_skips_groovy_false_positive(self):
+        """`Greatest.groovy` is NOT a test file; the PascalCase
+        `Spec.groovy`/`Test.groovy` match must remain case-sensitive
+        so generic names ending in `est.groovy` do not trip the gate."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        before = "\n".join(f"def item{i} = {i}" for i in range(50)) + "\n"
+        after = "def item0 = 0\n"
+
+        # Must NOT raise — `Greatest.groovy` is regular code, not a test.
+        _verify_test_churn(
+            before,
+            after,
+            "Greatest_groovy.prompt",
+            "src/main/groovy/Greatest.groovy",
+            "Internal refactor.",
+        )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) follow-up: `from __future__ import …`
+    # is a compiler directive, not a public attribute, so removing it
+    # MUST NOT trip the public-surface gate.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_ignores_future_import(self):
+        """`from __future__ import annotations` is not part of the
+        importable public surface — removing it after a Python-version
+        bump must not fail the gate."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from __future__ import annotations\n"
+            "def public_one(x: int) -> int:\n    return x\n"
+        )
+        after = "def public_one(x: int) -> int:\n    return x\n"
+
+        # Must NOT raise — the only "removed" name is a future directive.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Clean up the future-imports header.",
+        )
+
+    def test_public_surface_regression_future_import_under_dunder_all(self):
+        """`__all__ = ["annotations"]` combined with `from __future__
+        import annotations` must NOT promote the future binding into
+        the public surface: cleaning up the directive (and the bogus
+        `__all__` entry) should not fire `removed: annotations`."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from __future__ import annotations\n"
+            "__all__ = [\"annotations\", \"public_one\"]\n"
+            "def public_one():\n    return 1\n"
+        )
+        after = (
+            "__all__ = [\"public_one\"]\n"
+            "def public_one():\n    return 1\n"
+        )
+
+        # Must NOT raise — `annotations` was only ever a `__future__`
+        # binding, which the gate now ignores even when `__all__`
+        # mentions it.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Clean up the future-imports header and __all__ list.",
+        )
+
+    def test_public_surface_regression_future_import_to_real_assignment(self):
+        """A regenerated module that drops `from __future__ import
+        annotations` AND binds a real `annotations = …` attribute MUST
+        NOT trip the signature-drift diff. Without the parallel
+        `__future__` skip in `_snapshot_public_signatures` the
+        before-signature `[import:from __future__]` would falsely diff
+        against the after-signature `[assignment]` on the same name."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from __future__ import annotations\n"
+            "def public_one(x: int) -> int:\n    return x\n"
+        )
+        after = (
+            "annotations = {\"version\": 1}\n"
+            "def public_one(x: int) -> int:\n    return x\n"
+        )
+
+        # Must NOT raise — `annotations` only existed as a `__future__`
+        # directive before, which the gate now ignores.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Replace the future-imports header with a real annotations dict.",
+        )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) follow-up: `BREAKING-CHANGE: remove
+    # Service` should authorize removing every captured descendant of
+    # `Service` (its methods, nested classes, and their methods). Without
+    # the expansion the caller has to enumerate every member by hand.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_breaking_change_remove_class_covers_descendants(self):
+        """Listing a top-level class in `BREAKING-CHANGE: remove …`
+        implicitly authorizes removing every `Class.method` /
+        `Class.Inner.method` descendant the snapshot captured."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "class Service:\n"
+            "    def run(self):\n        return 1\n"
+            "    class Inner:\n"
+            "        def go(self):\n            return 2\n"
+            "def keep_me():\n    return 0\n"
+        )
+        after = "def keep_me():\n    return 0\n"
+
+        # The directive only names `Service`; the gate must accept the
+        # disappearance of `Service.run`, `Service.Inner`, and
+        # `Service.Inner.go` without forcing the caller to enumerate them.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: remove Service\n",
+        )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) iter-13 BLOCKING follow-up: an empty
+    # generated body MUST trigger the compatibility gates rather than
+    # silently truncating the existing file to 0 bytes. The original
+    # code gated on `and generated_code_content` (truthy), which made
+    # the check skip whenever the provider returned "" — and the
+    # writer below then erased the existing module / test file
+    # without raising. Three regressions guard the three end-user
+    # surfaces: Python module (public surface), test file (churn),
+    # non-Python file (safety net).
+    # -----------------------------------------------------------------
+    def test_empty_generation_over_existing_module_raises_public_surface(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Empty local generation over an existing public Python module
+        MUST raise `PublicSurfaceRegressionError` (not silently
+        truncate the file)."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            code_generator_main,
+        )
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "service_python.prompt"
+        prompt_file.write_text("Generate the Service class.")
+        output_file = temp_dir_setup["output_dir"] / "service.py"
+        output_file.write_text(
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+            "\n"
+            "def helper():\n"
+            "    return 'h'\n"
+        )
+
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate the Service class."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = ("", 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ):
+            with pytest.raises(PublicSurfaceRegressionError):
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # The compat-gate restore branch must put the original module
+        # back on disk so the repair loop sees the pre-sync baseline.
+        assert "class Service" in output_file.read_text(encoding="utf-8")
+
+    def test_empty_generation_over_existing_test_raises_test_churn(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Empty local generation over an existing test file MUST raise
+        `TestChurnError` (not silently truncate the test file)."""
+        from pdd.code_generator_main import (
+            TestChurnError,
+            code_generator_main,
+        )
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "test_existing_python.prompt"
+        prompt_file.write_text("Generate tests for the existing module.")
+        output_file = temp_dir_setup["output_dir"] / "test_existing.py"
+        existing_tests = (
+            "\n".join(f"def test_case_{i}():\n    assert True" for i in range(20))
+            + "\n"
+        )
+        output_file.write_text(existing_tests)
+
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate tests for the existing module."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = ("", 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ):
+            with pytest.raises(TestChurnError):
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # Restore branch puts the original tests back on disk.
+        assert output_file.read_text(encoding="utf-8") == existing_tests
+
+    def test_empty_generation_over_existing_non_python_file_raises_safety_guard(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Empty local generation over an existing non-Python artifact
+        (one the public-surface / test-churn gates cannot inspect)
+        MUST be refused by the safety guard — silent truncation would
+        otherwise lose real work."""
+        import click
+
+        from pdd.code_generator_main import code_generator_main
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "config_yaml.prompt"
+        prompt_file.write_text("Generate the YAML config.")
+        output_file = temp_dir_setup["output_dir"] / "config.yaml"
+        existing_yaml = "key: value\nother: 42\n"
+        output_file.write_text(existing_yaml)
+
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate the YAML config."},
+            {"output": str(output_file)},
+            "yaml",
+        )
+        mock_local_generator_fixture.return_value = ("", 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ):
+            with pytest.raises(click.UsageError, match="Refusing to overwrite"):
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # The safety guard fires BEFORE the writer, so the original
+        # file is untouched on disk.
+        assert output_file.read_text(encoding="utf-8") == existing_yaml
+
+
+# ---------------------------------------------------------------------------
 # Tests for <pdd-interface> signature conformance (Issue #928)
 # ---------------------------------------------------------------------------
 class TestPddInterfaceSignatureConformance:
@@ -5773,3 +8195,1828 @@ class TestPddInterfaceSignatureConformance:
         # Missing entry is the bare function name, not a dotted param.
         assert "update_main" in excinfo.value.missing_symbols
         assert all("." not in s for s in excinfo.value.missing_symbols if s == "update_main")
+
+
+# ---------------------------------------------------------------------------
+# Codex review #1015 iter-1 follow-ups
+# ---------------------------------------------------------------------------
+class TestPublicSurfaceBindingKind:
+    """Blocker 1: changing a method's binding (instance ↔ staticmethod ↔
+    classmethod ↔ property) breaks ``Class.method(arg)`` callers even when
+    the receiver-stripped parameter list is identical. The signature gate
+    must catch this — previously the snapshot normalized them away.
+    """
+
+    def test_instance_to_staticmethod_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Same receiver-stripped param list: `(value)`. Without the binding
+        # discriminator the gate compared "(value)" == "(value)" and missed
+        # the flip even though `MyClass.f(1)` callers now break.
+        before = (
+            "class MyClass:\n"
+            "    def f(self, value):\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def f(value):\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.f" in excinfo.value.changed_signatures
+
+    def test_instance_to_classmethod_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    def f(self, value):\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @classmethod\n"
+            "    def f(cls, value):\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.f" in excinfo.value.changed_signatures
+
+    def test_method_to_property_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    def value(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def value(self):\n"
+            "        return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.value" in excinfo.value.changed_signatures
+
+    def test_unchanged_classmethod_is_allowed(self):
+        # Sanity check: same binding kind, same signature → no failure.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "class MyClass:\n"
+            "    @classmethod\n"
+            "    def f(cls, value):\n"
+            "        return value\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # ------------------------------------------------------------------
+    # Iter-2 Blocker 2: property descriptors with setters must NOT
+    # collide with plain methods of the same name. Last-write-wins on
+    # the signature dict previously let ``@x.setter`` overwrite the
+    # ``@property`` getter as ``[instance] (self, value)``; a plain
+    # ``def x(self, value)`` rewrite then produced the same snapshot
+    # and bypassed the gate.
+    # ------------------------------------------------------------------
+    def test_property_to_plain_method_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def x(self):\n"
+            "        return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.x" in excinfo.value.changed_signatures
+
+    def test_property_with_setter_to_plain_method_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+        # The receiver-stripped param list of the setter is ``(value)`` —
+        # identical to a plain ``def x(self, value)`` after stripping
+        # ``self``. Without the merged property tag the snapshot dict
+        # would resolve both sides to ``[instance] (value)`` and the
+        # gate would miss the regression.
+        after = (
+            "class MyClass:\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.x" in excinfo.value.changed_signatures
+
+    def test_property_with_setter_unchanged_is_allowed(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+
+        # Same descriptor on both sides → merged snapshot must match.
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_property_loses_setter_is_detected(self):
+        # Dropping write-capability is a real breaking change for callers
+        # doing ``instance.x = value``; the accessor-set in the snapshot
+        # tag (``getter+setter`` → ``getter``) makes the diff visible.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.x" in excinfo.value.changed_signatures
+
+    # ------------------------------------------------------------------
+    # Iter-2 Blocker 3: top-level kind flips (class ↔ function /
+    # function ↔ async function) preserve name and normalized signature
+    # but break callers that instantiate, subclass, or ``await``.
+    # ------------------------------------------------------------------
+    def test_class_to_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "class Service:\n    pass\n"
+        # Same bare ``()`` signature on both sides — only the symbol
+        # kind tag (``[class]`` vs ``[function]``) distinguishes them.
+        after = "def Service():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Service" in excinfo.value.changed_signatures
+
+    def test_function_to_class_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def Service():\n    return None\n"
+        after = "class Service:\n    pass\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Service" in excinfo.value.changed_signatures
+
+    def test_function_to_async_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def run(x):\n    return x\n"
+        after = "async def run(x):\n    return x\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "run" in excinfo.value.changed_signatures
+
+    def test_unchanged_class_is_allowed(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "class Service:\n    def run(self):\n        return 1\n"
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # ------------------------------------------------------------------
+    # Iter-3 Important: top-level assignment ↔ def/class kind flips must
+    # be detected in BOTH directions. The iter-2 fallback at the bottom
+    # of ``_verify_public_surface_regression`` only caught the
+    # ``def/class → assignment`` direction (because the after-side
+    # dropped the signatures entry while keeping the surface entry).
+    # The reverse ``assignment → def/class`` left the before-side
+    # without a signatures entry, so the new function/class looked like
+    # an ADDED symbol — no diff fired. Recording assignments as
+    # ``[assignment]`` in the signatures dict closes that gap.
+    # ------------------------------------------------------------------
+    def test_assignment_to_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "Foo = lambda: None\n"
+        after = "def Foo():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
+
+    def test_assignment_to_class_flip_is_detected(self):
+        # The class-valued assignment example from the codex finding —
+        # ``Foo = type("Foo", (), {})`` previously slipped past the gate
+        # because the surface helper kept ``Foo`` while the signatures
+        # helper had no record of it, so ``def Foo()`` looked like a
+        # brand-new symbol rather than a kind flip.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = 'Foo = type("Foo", (), {})\n'
+        after = "class Foo:\n    pass\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
+
+    def test_class_to_assignment_flip_still_detected(self):
+        # Regression guard: this direction was already caught before
+        # iter-3 via the surface-helper fallback at line ~1128 (after
+        # signatures drops ``Foo`` but the surface keeps it). Now that
+        # the signatures dict also records assignments, this case
+        # should hit the primary ``changed_set`` path (``[class] ()``
+        # → ``[assignment]``) instead. Either path is acceptable, but
+        # the failure MUST still surface.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "class Foo:\n    pass\n"
+        after = 'Foo = type("Foo", (), {})\n'
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
+
+    def test_unchanged_top_level_assignment_is_allowed(self):
+        # Sanity check: identical module-level assignments on both
+        # sides must NOT produce a snapshot diff. Otherwise every
+        # regenerated module that ships a public constant would
+        # falsely trip the gate.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "PUBLIC_SETTING = 42\n"
+            "ANOTHER: int = 7\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # ------------------------------------------------------------------
+    # External review (PR #1015): the positional-only ``/`` marker was
+    # silently dropped from ``_format_python_signature``. As a result,
+    # ``def f(x, /, y)`` and ``def f(x, y)`` both snapshotted as
+    # ``(x, y)`` and the public-surface gate missed a real ABI break —
+    # ``f(x=1, y=2)`` succeeds against the second form but raises
+    # ``TypeError`` against the first. The fix inserts a literal ``/``
+    # token between the posonly group and the regular args (mirroring
+    # the existing ``*`` insertion for kwonlyargs).
+    # ------------------------------------------------------------------
+    def test_positional_only_added_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def f(x, y):\n    return x + y\n"
+        # Same arg names, but ``x`` is now positional-only — callers
+        # doing ``f(x=1, y=2)`` will break.
+        after = "def f(x, /, y):\n    return x + y\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "f" in excinfo.value.changed_signatures
+
+    def test_positional_only_removed_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Reverse direction: the ``/`` is dropped. While dropping
+        # positional-only is technically a strict broadening of the
+        # callable contract, the snapshot must still register the
+        # change so reviewers can see the surface shift.
+        before = "def f(x, /, y):\n    return x + y\n"
+        after = "def f(x, y):\n    return x + y\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "f" in excinfo.value.changed_signatures
+
+    def test_unchanged_positional_only_is_allowed(self):
+        # Sanity check: identical posonly markers on both sides must
+        # NOT produce a snapshot diff.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "def f(x, /, y):\n    return x + y\n"
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_format_python_signature_emits_posonly_marker(self):
+        """Direct snapshot-string test: ``def f(x, /, y)`` MUST produce
+        a signature containing the literal ``/`` token. Pins the marker
+        independently of the diff machinery — a future refactor that
+        accidentally drops the marker from ``_format_python_signature``
+        will fail this test even if the diff path coincidentally still
+        catches the change via another tag."""
+        import ast
+        from pdd.code_generator_main import _format_python_signature
+
+        tree = ast.parse("def f(x, /, y):\n    return x + y\n")
+        func_node = tree.body[0]
+        signature = _format_python_signature(func_node)
+        assert "/" in signature, (
+            f"posonly ``/`` marker missing from signature: {signature!r}"
+        )
+        # And the marker must sit BETWEEN the posonly arg and the
+        # regular arg (not at the end).
+        assert signature.startswith("(x, /, y)"), signature
+
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-4): top-level imports were
+    # captured by the surface helper but NOT by the signatures helper.
+    # That asymmetry let ``from pathlib import Path`` → ``def Path():
+    # ...`` slip through — the surface set kept ``Path`` (no removal),
+    # and the signatures dict had no ``Path`` entry on the before side
+    # so the new ``[function] ()`` looked like a brand-new symbol, not
+    # a re-export break. Recording imports as ``[import:...]`` in the
+    # signatures dict closes the gap.
+    # ------------------------------------------------------------------
+    def test_from_import_to_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "from pathlib import Path\n"
+        # Same bound name ``Path`` but now resolves to a local function;
+        # ``Path("/tmp")`` callers that expect the pathlib API break.
+        after = "def Path():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Path" in excinfo.value.changed_signatures
+
+    def test_import_to_assignment_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "import pathlib\n"
+        # Same bound name ``pathlib`` but now ``None`` — code that does
+        # ``pathlib.Path(...)`` raises ``AttributeError`` after the
+        # rewrite.
+        after = "pathlib = None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "pathlib" in excinfo.value.changed_signatures
+
+    def test_import_aliased_to_function_flip_is_detected(self):
+        # ``import pathlib as p`` binds ``p``; replacing with a local
+        # ``def p()`` is the same flip as the unaliased form. The alias
+        # is encoded in the signatures snapshot so this still trips.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "import pathlib as p\n"
+        after = "def p():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "p" in excinfo.value.changed_signatures
+
+    def test_unchanged_from_import_is_allowed(self):
+        # Sanity check: identical ``from X import Y`` on both sides must
+        # NOT produce a snapshot diff. The encoded source module keeps
+        # the entry stable across regeneration.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "from pathlib import Path\n"
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-4): when a class has no explicit
+    # ``__init__`` the snapshot was ``[class] ()`` regardless of the
+    # synthesised dataclass init. Adding a required field
+    # (``@dataclass class User: name: str`` → add ``age: int``) left
+    # the snapshot unchanged so the gate missed a constructor break.
+    # ``_synthesize_dataclass_init_signature`` mirrors the synthesised
+    # init from the field annotations so the snapshot moves when the
+    # field list does.
+    # ------------------------------------------------------------------
+    def test_dataclass_adding_required_field_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        # ``age`` is added as a required field, so existing callers of
+        # ``User(name)`` break with a ``TypeError: missing argument``.
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_adding_optional_field_is_detected_as_signature_change(self):
+        # Adding an OPTIONAL field (with a default) is still a public
+        # surface change — callers introspecting fields, constructing
+        # positionally, or pickling instances may be affected. The
+        # snapshot diff should fire so reviewers can decide.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int = 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_removing_field_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_explicit_init_still_takes_precedence(self):
+        # When a ``@dataclass`` class has an explicit ``__init__``,
+        # dataclasses skip synthesising one and uses the user's. The
+        # snapshot must follow suit — adding a field annotation while
+        # keeping the explicit init signature should NOT trip the gate.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    def __init__(self, name: str):\n"
+            "        self.name = name\n"
+        )
+        # Add a class-level annotation that runtime dataclasses would
+        # have folded into the synthesised init — but the explicit
+        # ``__init__`` takes precedence, so callers are not affected.
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    metadata: dict\n"
+            "    def __init__(self, name: str):\n"
+            "        self.name = name\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclasses_dataclass_attribute_decorator_form_works(self):
+        # The attribute form ``@dataclasses.dataclass`` should be
+        # recognised identically to the bare ``@dataclass`` form.
+        # Adding a required field MUST trip the gate.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_classvar_field_is_excluded(self):
+        # ``ClassVar`` annotations are class-level constants per PEP
+        # 557, NOT positional init params. Toggling a ``ClassVar``
+        # annotation must NOT trip the dataclass init synthesis (the
+        # synthesised constructor is unchanged at runtime).
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "from typing import ClassVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        # Add a ``ClassVar``-typed attribute — this changes module
+        # source but the synthesised ``__init__`` signature stays
+        # ``(name: str)``.
+        after = (
+            "from dataclasses import dataclass\n"
+            "from typing import ClassVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    DEFAULT_ROLE: ClassVar[str] = 'guest'\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-5): the pass-2 synthesizer
+    # ignored ``kw_only=True`` / ``KW_ONLY`` / ``InitVar`` / ``field(
+    # init=False)`` — all of which alter the runtime constructor
+    # signature. These tests pin the four corrected behaviours.
+    # ------------------------------------------------------------------
+    def test_dataclass_kw_only_decorator_change_is_detected(self):
+        # Flipping ``@dataclass`` to ``@dataclass(kw_only=True)`` makes
+        # every field kw-only at runtime: callers passing positionally
+        # break with ``TypeError``. The snapshot must move.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(kw_only=True)\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_kw_only_sentinel_added_is_detected(self):
+        # Inserting ``_: KW_ONLY`` between fields converts trailing
+        # fields to kw-only. Callers passing positionally break.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass, KW_ONLY\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass, KW_ONLY\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    _: KW_ONLY\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_initvar_field_is_included(self):
+        # ``InitVar`` params are part of the synthesised ``__init__``
+        # signature even though they are not stored as instance
+        # attributes. Adding one is a constructor-shape change.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, InitVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    seed: InitVar[int] = 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_initvar_change_is_detected(self):
+        # Flipping ``InitVar[int]`` to a plain ``int`` annotation
+        # changes the field semantics (constructor param without
+        # instance storage → constructor param WITH instance storage).
+        # The annotation text differs so the snapshot diffs.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass, InitVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    seed: InitVar[int] = 0\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    seed: int = 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_init_false_field_is_excluded_from_synth(self):
+        # ``field(init=False, ...)`` fields are NOT part of the
+        # synthesised ``__init__`` so adding one must NOT trip the
+        # public-surface gate (false-positive from the iter-4 build).
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    cache: dict = field(init=False, default_factory=dict)\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_init_true_field_is_included(self):
+        # Explicit ``init=True`` (the default) keeps the field IN the
+        # synth: adding one is a real constructor-shape change.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    extras: dict = field(init=True, default_factory=dict)\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_field_without_init_kwarg_is_included(self):
+        # ``field(default=...)`` with no ``init`` kwarg defaults to
+        # ``init=True`` at runtime, so the field stays in the synth.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    extras: dict = field(default_factory=dict)\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-6): the synth ignored
+    # ``@dataclass(init=False)`` (which keeps ``object.__init__``)
+    # and did not pull in fields declared on dataclass-decorated base
+    # classes. Both gaps allowed real constructor-shape regressions to
+    # slip past the gate.
+    # ------------------------------------------------------------------
+    def test_dataclass_init_false_decorator_flip_to_default_is_detected(self):
+        # ``@dataclass(init=False)`` does NOT synthesise an __init__ —
+        # the class keeps ``object.__init__`` (zero positional args).
+        # Flipping to the default ``@dataclass`` adds a synthesised
+        # ``(name: str)`` constructor: callers must update.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_init_false_decorator_keeps_zero_arg_signature(self):
+        # Adding fields under ``@dataclass(init=False)`` does NOT change
+        # the runtime constructor (still ``object.__init__()``). The
+        # snapshot must NOT diff — false-positive that the bare-synth
+        # implementation would have raised.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclasses_dataclass_init_false_form_works(self):
+        # The attribute form ``@dataclasses.dataclass(init=False)``
+        # should be recognised identically to the bare-import form.
+        # Adding a field still must NOT trip the gate.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_inherited_field_added_to_private_base_is_detected(self):
+        # Reviewer's exact repro: ``_Base`` gains a required field;
+        # ``User`` itself is unchanged. The runtime ``User`` constructor
+        # signature changes from ``User(base, name)`` to
+        # ``User(base, token, name)`` — public-surface regression.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "    token: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_unchanged_inheritance_is_allowed(self):
+        # Same inheritance shape on both sides; no fields change. The
+        # snapshot must be stable — adding inheritance support must not
+        # create churn in unchanged modules.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_unresolved_base_is_marked_uncertain(self):
+        # When the base class is imported from another module we cannot
+        # see its fields. The snapshot encodes that with an
+        # ``[inherited_unresolved]`` token: adding a field LOCALLY
+        # still trips the gate (the derived synth changes), but a
+        # purely-base change we can't observe correctly slips through —
+        # the gate is conservative for invisible parents.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+            _snapshot_public_signatures,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "from external_mod import Base\n"
+            "@dataclass\n"
+            "class User(Base):\n"
+            "    name: str\n"
+        )
+        # Local change: adding a required field. Must trip.
+        after_local = (
+            "from dataclasses import dataclass\n"
+            "from external_mod import Base\n"
+            "@dataclass\n"
+            "class User(Base):\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        # First: signature snapshot includes the marker.
+        sig_before = _snapshot_public_signatures(before, "python")
+        assert "[inherited_unresolved]" in sig_before["User"]
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after_local,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_multiple_inheritance_mro_order(self):
+        # ``class C(A, B)`` synth must follow Python's @dataclass
+        # field-collection semantics: ``__dataclass_fields__`` is
+        # populated in REVERSE-MRO order so later bases override
+        # earlier ones in dict-insertion order. Concretely the synth
+        # is ``(b, a, c)`` — B's fields, then A's, then C's own.
+        # Reordering bases to ``class C(B, A)`` flips the synth to
+        # ``(a, b, c)`` so a base-order swap is observed as a
+        # constructor regression.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+            _snapshot_public_signatures,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class A:\n"
+            "    a: int\n"
+            "@dataclass\n"
+            "class B:\n"
+            "    b: int\n"
+            "@dataclass\n"
+            "class C(A, B):\n"
+            "    c: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class A:\n"
+            "    a: int\n"
+            "@dataclass\n"
+            "class B:\n"
+            "    b: int\n"
+            "@dataclass\n"
+            "class C(B, A):\n"
+            "    c: int\n"
+        )
+
+        # Sanity: snapshot follows reverse-MRO (matching Python's
+        # ``@dataclass`` __dataclass_fields__ ordering).
+        sig = _snapshot_public_signatures(before, "python")
+        assert "(b: int, a: int, c: int)" in sig["C"]
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "C" in excinfo.value.changed_signatures
+
+    def test_dataclass_single_inheritance_still_matches_runtime(self):
+        # Regression check that single inheritance (the common case)
+        # still produces ``base_fields ++ derived_fields`` — the
+        # reverse-MRO refactor must not regress this. Reverse iteration
+        # over a single-element base list is a no-op, so the derived
+        # synth remains ``(base, name)``.
+        from pdd.code_generator_main import _snapshot_public_signatures
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class Derived(Base):\n"
+            "    name: str\n"
+        )
+
+        sig = _snapshot_public_signatures(source, "python")
+        assert "(base: str, name: str)" in sig["Derived"]
+
+    def test_dataclass_diamond_inheritance_dedupes_by_name(self):
+        # Diamond: ``class C(A, B)`` where both ``A`` and ``B`` inherit
+        # from a shared ``X`` (X has field ``x``). The synth must
+        # include ``x`` exactly once — Python's @dataclass merges
+        # fields by name via ``__dataclass_fields__``'s dict semantics.
+        #
+        # In our walk order: reversed(bases) processes B first, then A.
+        # Each branch contributes its inherited ``x`` (from X). Under
+        # the outer dict-merge in ``_synthesize_dataclass_init_signature``,
+        # the LAST write wins — which is A's contribution (A is
+        # processed after B in walk order). Either branch carries the
+        # same field text, so the resulting position is X's original
+        # slot at the front of the field list.
+        from pdd.code_generator_main import _snapshot_public_signatures
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class X:\n"
+            "    x: int\n"
+            "@dataclass\n"
+            "class A(X):\n"
+            "    a: int\n"
+            "@dataclass\n"
+            "class B(X):\n"
+            "    b: int\n"
+            "@dataclass\n"
+            "class C(A, B):\n"
+            "    c: int\n"
+        )
+
+        sig = _snapshot_public_signatures(source, "python")
+        rendered = sig["C"]
+        # ``x`` appears once; reverse-MRO walk order yields
+        # ``(x, b, a, c)`` after dedup by field name. Top-level
+        # classes carry the ``[class]`` binding-kind prefix.
+        assert rendered.count("x: int") == 1
+        assert rendered == "[class] (x: int, b: int, a: int, c: int)"
+
+    def test_dataclass_init_false_base_contributes_inherited_fields(self):
+        # External reviewer's exact repro: a base decorated with
+        # ``@dataclass(init=False)`` STILL contributes its fields to a
+        # derived ``@dataclass``'s synthesised ``__init__``. The
+        # ``init=False`` flag only suppresses the BASE's own
+        # ``__init__`` synthesis — Python still records its fields in
+        # ``__dataclass_fields__`` and the derived class merges them
+        # when synthesising its own init. Adding a required field to
+        # the base must therefore change the derived's snapshot and
+        # trip the gate.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class Child(_Base):\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "    token: str\n"
+            "@dataclass\n"
+            "class Child(_Base):\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Child" in excinfo.value.changed_signatures
+
+    def test_dataclass_init_false_base_unchanged_inheritance_is_allowed(self):
+        # Companion to the regression test: no field changes anywhere
+        # in the inheritance chain. The snapshot must be stable —
+        # including a ``@dataclass(init=False)`` base in the walker
+        # must not introduce churn for unchanged modules.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class Child(_Base):\n"
+            "    name: str\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_explicit_init_still_takes_precedence_with_inheritance(self):
+        # When the derived class has an explicit ``__init__``,
+        # dataclasses skip synthesising — inheritance must NOT be
+        # walked. Adding a field to the base would otherwise look like
+        # a synth diff, but the explicit init shields callers.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+            "    def __init__(self, x: int):\n"
+            "        self.x = x\n"
+        )
+        # Base gains a field — explicit ``__init__`` on User does not
+        # call ``super().__init__`` here, so callers are unaffected.
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "    token: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+            "    def __init__(self, x: int):\n"
+            "        self.x = x\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+
+class TestFrontMatterStripping:
+    """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
+    matter must NOT opt the prompt out of the gates. Opt-outs come from
+    the prompt BODY only. Defensive hardening — no shipped prompt
+    currently uses YAML front matter, but a future convention must not
+    silently disable conformance gates.
+    """
+
+    def test_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Directive is INSIDE the front matter block — it must be ignored.
+        prompt_with_front_matter = (
+            "---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+            "title: My Module\n"
+            "---\n"
+            "Generate a module without `old_helper`.\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    def test_body_breaking_change_still_opts_out_removal_gate(self):
+        # Sanity: the same directive in the BODY must still opt out.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        prompt_in_body = (
+            "---\n"
+            "title: My Module\n"
+            "---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        # Should NOT raise: opt-out lives in the body after the front matter.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            prompt_in_body,
+        )
+
+    def test_front_matter_breaking_change_does_not_opt_out_churn_gate(self, tmp_path):
+        from pdd.code_generator_main import (
+            TestChurnError,
+            _verify_test_churn,
+        )
+
+        prompt_with_front_matter = (
+            "---\n"
+            "BREAKING-CHANGE: rewrite tests\n"
+            "owner: someone\n"
+            "---\n"
+            "Add a small helper.\n"
+        )
+        existing_tests = "\n".join(
+            f"def test_case_{i}():\n    assert True" for i in range(40)
+        )
+        new_tests = "def test_new():\n    assert True\n"
+        test_path = tmp_path / "test_module.py"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                existing_code=existing_tests,
+                generated_code=new_tests,
+                prompt_name="module_Python.prompt",
+                output_path=str(test_path),
+                prompt_content=prompt_with_front_matter,
+            )
+
+    def test_unterminated_front_matter_is_not_stripped(self):
+        # An opening `---\n` without a closing `---\n` must NOT swallow the
+        # entire prompt. Defensive against a malformed prompt.
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\nBREAKING-CHANGE: remove foo\nno closing fence ever\n"
+        assert _strip_yaml_front_matter(prompt) == prompt
+
+    def test_strip_helper_returns_body_after_fence(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\nfoo: bar\n---\nbody line\n"
+        assert _strip_yaml_front_matter(prompt) == "body line\n"
+
+    def test_strip_helper_handles_empty_prompt(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        assert _strip_yaml_front_matter(None) == ""
+        assert _strip_yaml_front_matter("") == ""
+        assert _strip_yaml_front_matter("plain prompt") == "plain prompt"
+
+    # ------------------------------------------------------------------
+    # Iter-2 Blocker 1: front matter stripping must tolerate CRLF line
+    # endings, a leading UTF-8 BOM, and a closing fence at EOF (no
+    # trailing newline). Windows editors hand us all three, so a missed
+    # fence variant leaves ``BREAKING-CHANGE:`` metadata visible to the
+    # directive parser and silently opts the prompt out of the gates.
+    # ------------------------------------------------------------------
+    def test_strip_helper_handles_crlf_front_matter(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\r\nfoo: bar\r\n---\r\nbody line\r\n"
+        assert _strip_yaml_front_matter(prompt) == "body line\r\n"
+
+    def test_strip_helper_handles_bom_front_matter(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "﻿---\nfoo: bar\n---\nbody line\n"
+        assert _strip_yaml_front_matter(prompt) == "body line\n"
+
+    def test_strip_helper_handles_eof_terminated_front_matter(self):
+        # Closing ``---`` is the last line of the file (no trailing
+        # newline). Must still be recognized so a buried
+        # BREAKING-CHANGE inside the block does not leak into the body.
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\nfoo: bar\n---"
+        assert _strip_yaml_front_matter(prompt) == ""
+
+    def test_strip_helper_handles_trailing_whitespace_on_fence(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---  \nfoo: bar\n---  \nbody\n"
+        assert _strip_yaml_front_matter(prompt) == "body\n"
+
+    def test_strip_helper_strips_lone_bom_without_front_matter(self):
+        # A leading BOM with no front matter still needs stripping so a
+        # subsequent first-line BREAKING-CHANGE directive scan sees a
+        # clean body.
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "﻿BREAKING-CHANGE: remove old_helper\n"
+        assert _strip_yaml_front_matter(prompt) == "BREAKING-CHANGE: remove old_helper\n"
+
+    def test_crlf_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # CRLF-ended front matter — previous regex only matched ``\n``
+        # variants, so the directive leaked into the body scan.
+        prompt_with_front_matter = (
+            "---\r\n"
+            "BREAKING-CHANGE: remove old_helper\r\n"
+            "title: My Module\r\n"
+            "---\r\n"
+            "Generate a module without `old_helper`.\r\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    def test_bom_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        prompt_with_front_matter = (
+            "﻿---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+            "title: My Module\n"
+            "---\n"
+            "Generate a module without `old_helper`.\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    def test_eof_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        # Closing ``---`` is the final line of the file (no trailing
+        # newline). Directive must still be ignored.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        prompt_with_front_matter = (
+            "---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+            "title: My Module\n"
+            "---"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols

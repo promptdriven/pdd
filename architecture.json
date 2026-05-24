@@ -1964,7 +1964,7 @@
   },
   {
     "reason": "CLI entry point for the cmd test command.",
-    "description": "Command-line interface for cmd test. Parses arguments, orchestrates the workflow, and formats output.",
+    "description": "Command-line interface for cmd test. Parses arguments, orchestrates the workflow, and formats output. Before overwriting an existing non-empty test file in either native or agentic generation, applies the shared TestChurnError gate from code_generator_main; high-churn agentic rewrites restore the pre-existing file before raising so broad regression coverage is not discarded.",
     "dependencies": [],
     "priority": 56,
     "filename": "cmd_test_main_python.prompt",
@@ -1980,7 +1980,7 @@
         "commands": [
           {
             "name": "cmd_test_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None, language: str | None, coverage_report: str | None, existing_tests: list[str] | None, target_coverage: float | None, merge: bool | None, strength: float | None = None, temperature: float | None = None) -> tuple[str, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None) -> TestResult"
           }
         ]
       }
@@ -1992,7 +1992,7 @@
   },
   {
     "reason": "CLI entry point for the code generator command.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default).",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError — for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix — so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) — `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError — when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. Both new exceptions share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. The conformance and public-surface / test-churn gate-call sites in `code_generator_main` gate on `generated_code_content is not None` (NOT a truthy check) so an empty provider response over an existing module / test file still trips PublicSurfaceRegressionError / TestChurnError instead of silently truncating to 0 bytes; for non-Python artifacts the gates cannot inspect (JSON, YAML, prompts, etc.) `code_generator_main` additionally raises `click.UsageError(\"Refusing to overwrite ...\")` immediately before the write when existing content is non-empty and the generated content is empty/whitespace-only. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case.",
     "dependencies": [
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
@@ -2034,6 +2034,16 @@
             "name": "ArchitectureConformanceError",
             "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
             "returns": "ArchitectureConformanceError"
+          },
+          {
+            "name": "PublicSurfaceRegressionError",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "returns": "PublicSurfaceRegressionError"
+          },
+          {
+            "name": "TestChurnError",
+            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "returns": "TestChurnError"
           }
         ]
       }
@@ -2805,7 +2815,7 @@
   },
   {
     "reason": "Coordinates sync workflow steps and state management.",
-    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, stops early on repeated missing-symbol sets, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits build_conformance_hard_failure_from_error diagnostics before re-raising a final conformance failure.",
+    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt"
@@ -5306,7 +5316,7 @@
   },
   {
     "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
-    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits repeated missing-symbol sets, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error diagnostics before re-raising a final conformance failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
+    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostics before re-raising the final failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
     "dependencies": [
       "core/cloud_python.prompt",
       "code_generator_main_python.prompt",
@@ -6589,16 +6599,24 @@
         "functions": [
           {
             "name": "run_agentic_test_generate",
-            "signature": "(prompt_path: str, code_path: str, test_path: str, project_root: str) -> Tuple[bool, str, str]",
-            "returns": "Tuple[bool, str, str]",
+            "signature": "(prompt_file: Path, code_file: Path, output_test_file: Path, *, verbose: bool = False, quiet: bool = False, repair_directive: str | None = None) -> TestResult",
+            "returns": "TestResult",
             "sideEffects": [
-              "None"
+              "Reads working-tree content of pre-existing test-like files (matching `_is_test_output_path`) under `project_root` BEFORE the agent runs so the alt-path churn check has a baseline that covers tracked-clean, tracked-dirty, and untracked alt-path tests uniformly; on `TestChurnError` restores the snapshotted pre-run content to the alt path so the repair loop sees the actual pre-sync state (NOT `git show HEAD`, which would clobber dirty local edits)."
             ]
           },
           {
             "name": "_get_file_mtimes",
             "signature": "(root: Path) -> dict[Path, float]",
             "returns": "dict[Path, float]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_snapshot_pre_test_contents",
+            "signature": "(project_root: Path, candidate_paths: Iterable[Path]) -> dict[Path, str]",
+            "returns": "dict[Path, str]",
             "sideEffects": [
               "None"
             ]
@@ -7376,7 +7394,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7384,10 +7402,10 @@
           },
           {
             "name": "run_global_sync",
-            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]",
+            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder is forwarded via sync_options so --timeout-adder stretches the per-module wall-clock cap on the global-sync path the same way it does on run_agentic_sync"
+              "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder, strength, temperature, and context_override are forwarded via sync_options so child retries keep the parent config/model knobs"
             ]
           },
           {
@@ -7416,7 +7434,7 @@
   },
   {
     "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects architecture-conformance failures from per-module sync subprocesses (line prefix 'Architecture conformance error for ') and retries the same module up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact missing symbols; stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the missing-symbol set repeats, and on hard failure records a structured '=== architecture conformance failure ===' block plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
+    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses — architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) — and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block — '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) — plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
@@ -7463,6 +7481,22 @@
             "name": "build_dep_graph_from_architecture_data",
             "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult",
             "returns": "DepGraphFromArchitectureResult",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "build_public_surface_hard_failure_from_error",
+            "signature": "(exc: PublicSurfaceRegressionError, basename: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "build_test_churn_hard_failure_from_error",
+            "signature": "(exc: TestChurnError, basename: str) -> str",
+            "returns": "str",
             "sideEffects": [
               "None"
             ]
@@ -8266,7 +8300,7 @@
           },
           {
             "name": "commit_and_push",
-            "signature": "(healed_modules: Sequence[DriftInfo], skip_ci: bool, checkpoint: bool, finalized_modules: Optional[List[Tuple[str, str]]] = None)",
+            "signature": "(healed_modules: Sequence[DriftInfo], skip_ci: bool = False, checkpoint: bool = False, finalized_modules: Optional[List[Tuple[str, str]]] = None)",
             "returns": "bool"
           }
         ]

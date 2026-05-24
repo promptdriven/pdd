@@ -208,6 +208,9 @@ def sync(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            strength=ctx.obj.get("strength"),
+            temperature=ctx.obj.get("temperature"),
+            context_override=ctx.obj.get("context"),
         )
 
     if durable or durable_branch or no_resume or durable_max_parallel is not None:
@@ -255,6 +258,9 @@ def _run_agentic_sync_dispatch(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    context_override: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -281,6 +287,9 @@ def _run_agentic_sync_dispatch(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            strength=strength,
+            temperature=temperature,
+            context_override=context_override,
         )
 
         if not quiet:
@@ -337,6 +346,9 @@ def _run_global_sync_dispatch(
             one_session=one_session,
             local=ctx.obj.get("local", False),
             timeout_adder=timeout_adder,
+            strength=ctx.obj.get("strength"),
+            temperature=ctx.obj.get("temperature"),
+            context_override=ctx.obj.get("context"),
         )
 
         if not quiet:
