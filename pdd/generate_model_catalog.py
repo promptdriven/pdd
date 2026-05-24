@@ -143,6 +143,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "gemini-3.1-pro-preview": 1461,
     "gemini-3-pro": 1444,              # [CODE] #9
     "gemini-3-pro-preview": 1444,
+    "gemini-3.5-flash": 1442,           # GA release; pdd_cloud catalog (#1136)
     "gemini-3-flash": 1440,            # [CODE] #12
     "gemini-3-flash-preview": 1440,
     "gemini-2.5-pro": 1206,            # [CODE] huge Text→Code drop
@@ -1036,6 +1037,18 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # LiteLLM's bundled registry. Keep this list small: these are compatibility
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
+    {
+        "provider": "Google Vertex AI",
+        "model": "vertex_ai/gemini-3.5-flash",
+        "input": 1.5,
+        "output": 9.0,
+        "base_url": "",
+        "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "global",
+    },
     {
         "provider": "Google Vertex AI",
         "model": "vertex_ai/gemini-3-flash-preview",
