@@ -356,6 +356,12 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
+    # JSON flags on nested commands must keep stdout parseable and avoid
+    # machine-oriented invocations producing local debug artifacts.
+    json_mode = "--json" in sys.argv
+    quiet = quiet or json_mode
+    core_dump = core_dump and not json_mode
+
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
 
@@ -462,7 +468,7 @@ def cli(
             )
 
     # Perform auto-update check unless disabled
-    if os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
+    if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:
                 console.print("[info]Checking for updates...[/info]")
