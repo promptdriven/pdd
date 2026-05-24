@@ -1,78 +1,87 @@
+"""
+Example usage of the pdd.llm_invoke module.
+
+This script demonstrates how to invoke Large Language Models using the PDD standard interface,
+including basic generation, structured Pydantic outputs, and batch processing.
+"""
 import os
 import sys
-from typing import Optional, Dict, Any
 from pydantic import BaseModel
 
-try:
-    # Import the target function and logging utility from the module
-    from pdd.llm_invoke import llm_invoke, set_verbose_logging
-except ImportError:
-    # Mock for graceful degradation if module is not present in environment
-    def llm_invoke(*args, **kwargs) -> Dict[str, Any]:
-        return {"result": None, "model_name": "mock_model", "cost": 0.0}
-    def set_verbose_logging(*args, **kwargs) -> None:
-        pass
+# Import the main invocation function and logging utility
+from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
-class Joke(BaseModel):
-    """Pydantic model to enforce the structure of the LLM's response."""
-    setup: str
-    punchline: str
-    rating: int
-
-def main() -> None:
-    """Main execution function demonstrating basic and structured LLM invocations."""
-    # Ensure output directory exists if we needed to write files
-    os.makedirs("./output", exist_ok=True)
-
-    # We check for a common API key to ensure the example can run non-interactively.
-    # llm_invoke supports many providers, but we check OPENAI_API_KEY here as a baseline.
-    api_key: Optional[str] = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("OPENAI_API_KEY not set. Set it to run this example.")
+def main():
+    # Prevent interactive API key prompts in this headless example
+    os.environ["PDD_FORCE"] = "1"
+    
+    # Require an API key to proceed with the example
+    if not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")):
+        print("No standard LLM API key found in the environment.")
+        print("Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to run this example.")
         sys.exit(0)
 
-    # Enable verbose logging to see the internal model selection and token usage details
-    set_verbose_logging(verbose=True)
+    # Optional: Enable detailed internal logging for the module
+    # set_verbose_logging(True)
 
-    print("\n--- Example 1: Basic Text Generation ---")
-    # llm_invoke takes a prompt template and a dictionary of inputs to format it.
-    # strength=0.5 selects the base model defined in your llm_model.csv or environment.
-    basic_response: Dict[str, Any] = llm_invoke(
-        prompt="Explain what a {topic} is in one short sentence.",
-        input_json={"topic": "variable"},
+    print("=== Example 1: Basic LLM Invocation ===")
+    # Invoke an LLM using a prompt template and JSON input variables
+    # 'strength' controls the model selection (0.0 = cheapest, 0.5 = base, 1.0 = most capable)
+    response = llm_invoke(
+        prompt="Tell me a very short joke about {topic}.",
+        input_json={"topic": "programmers"},
         strength=0.5, 
-        temperature=0.3,
-        verbose=True
+        temperature=0.7,
+        verbose=False
     )
+    print(f"Result: {response['result']}")
+    print(f"Model used: {response['model_name']}")
+    print(f"Estimated Cost: ${response['cost']:.6f}\n")
 
-    print("\nResult:")
-    print(basic_response.get("result", "No result"))
-    print(f"Model Used: {basic_response.get('model_name', 'Unknown')}")
-    print(f"Estimated Cost: ${basic_response.get('cost', 0.0):.6f}")
+    print("=== Example 2: Structured Output with Pydantic ===")
+    # Define the desired output schema
+    class JokeStructure(BaseModel):
+        setup: str
+        punchline: str
+        rating: int
 
-    print("\n--- Example 2: Structured Output using Pydantic ---")
-    # By passing output_pydantic, llm_invoke ensures the response is parsed into this model.
-    structured_response: Dict[str, Any] = llm_invoke(
-        prompt="Tell me a developer joke about {topic}.",
-        input_json={"topic": "recursion"},
+    # By passing output_pydantic, the module forces the LLM to return valid JSON matching the schema
+    response_structured = llm_invoke(
+        prompt="Create a joke about {topic}.",
+        input_json={"topic": "data science"},
         strength=0.5,
         temperature=0.7,
-        output_pydantic=Joke,
-        verbose=True
+        output_pydantic=JokeStructure
     )
-
-    print("\nStructured Result (Parsed Object):")
-    # The result is automatically validated and returned as the Pydantic model instance
-    joke_obj = structured_response.get("result")
-    if isinstance(joke_obj, Joke):
-        print(f"Setup: {joke_obj.setup}")
-        print(f"Punchline: {joke_obj.punchline}")
-        print(f"Rating: {joke_obj.rating}/10")
+    
+    # The result is automatically parsed into the requested Pydantic model
+    result_obj = response_structured['result']
+    if isinstance(result_obj, JokeStructure):
+        print(f"Setup: {result_obj.setup}")
+        print(f"Punchline: {result_obj.punchline}")
+        print(f"Rating: {result_obj.rating}/10\n")
     else:
-        print("Failed to parse structured output properly.")
-        
-    print(f"Model Used: {structured_response.get('model_name', 'Unknown')}")
-    print(f"Estimated Cost: ${structured_response.get('cost', 0.0):.6f}")
+        # Fallback string representation if parsing completely fails
+        print(f"Result: {result_obj}\n")
+
+    print("=== Example 3: Batch Mode ===")
+    # Pass a list of dictionaries to process multiple inputs efficiently
+    batch_input = [
+        {"topic": "cats"},
+        {"topic": "dogs"},
+    ]
+    response_batch = llm_invoke(
+        prompt="Write a one-sentence fact about {topic}.",
+        input_json=batch_input,
+        strength=0.0, # Use cheapest model for batching
+        temperature=0.1,
+        use_batch_mode=True
+    )
+    
+    # Result is a list of strings corresponding to the inputs
+    results_list = response_batch['result']
+    for i, res in enumerate(results_list):
+        print(f"Input {i+1}: {res}")
 
 if __name__ == "__main__":
     main()
