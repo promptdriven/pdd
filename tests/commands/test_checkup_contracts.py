@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from pdd.commands.checkup import checkup
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "contract_check"
+REPO_ROOT = Path(__file__).parents[2]
 
 
 def test_checkup_contract_check_valid_prompt_json() -> None:
@@ -48,3 +53,41 @@ def test_checkup_contract_check_strict_is_forwarded() -> None:
     )
 
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_exit_code"),
+    [("valid_contract_python.prompt", 0), ("missing_modal_python.prompt", 1)],
+)
+def test_checkup_contract_check_real_cli_json_stdout_is_parseable_only(
+    fixture_name: str, expected_exit_code: int
+) -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "true",
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pdd",
+            "checkup",
+            "contract",
+            "check",
+            "--json",
+            str(FIXTURES / fixture_name),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_exit_code
+    payload = json.loads(result.stdout)
+    assert isinstance(payload, list)
