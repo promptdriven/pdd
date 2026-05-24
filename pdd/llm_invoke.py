@@ -2057,7 +2057,6 @@ def _is_permanent_invalid_request_error(exc: Exception) -> bool:
     permanent_markers = (
         "is not supported for this model",
         "unsupported parameter",
-        "unsupported_parameter",
         "thinking.type",
         "output_config.effort",
     )

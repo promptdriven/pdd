@@ -6996,7 +6996,6 @@ class TestGemini3TemperatureClamp:
 
 
 # ==============================================================================
-<<<<<<< HEAD
 # Regression tests: github_copilot token-file existence check (no PDD_FORCE gate)
 #
 # Bug context: prior to this change, the token-file existence guard in
@@ -7159,7 +7158,6 @@ def test_is_permanent_invalid_request_error_flags_unsupported_parameter_phrase()
     import litellm
     for phrase in (
         "unsupported parameter 'foo'",
-        "unsupported_parameter: bar",
         "output_config.effort is invalid",
         "thinking.type must be one of: adaptive",
     ):
@@ -7190,3 +7188,55 @@ def test_is_permanent_invalid_request_error_ignores_unrelated_bad_request():
     except TypeError:
         exc = litellm.BadRequestError("Some transient validation hiccup")
     assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_llm_invoke_fast_fails_on_permanent_invalid_request_error(
+    mock_load_models, mock_set_llm_cache
+):
+    """Integration test: when litellm.completion raises a permanent
+    invalid_request_error, llm_invoke() must re-raise immediately rather
+    than cascade through every remaining candidate model. This proves the
+    fast-fail wiring at the call site actually fires, not just that the
+    classifier returns the right boolean in isolation."""
+    import litellm
+
+    try:
+        permanent_exc = litellm.BadRequestError(
+            message=(
+                'AnthropicException - {"type":"error","error":'
+                '{"type":"invalid_request_error","message":'
+                '"\\"thinking.type.enabled\\" is not supported for this model. '
+                'Use \\"thinking.type.adaptive\\""}}'
+            ),
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        permanent_exc = litellm.BadRequestError(
+            "thinking.type.enabled is not supported for this model"
+        )
+
+    first_model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_completion.side_effect = permanent_exc
+
+            # llm_invoke() must propagate the permanent BadRequestError
+            # instead of returning "all_candidate_models_failed" / a
+            # RuntimeError after walking the full candidate list.
+            with pytest.raises(litellm.BadRequestError):
+                llm_invoke(
+                    "Valid prompt about {topic}",
+                    {"topic": "cats"},
+                    0.5,
+                    0.7,
+                    False,
+                )
+
+            # And only the first candidate should have been attempted —
+            # the fast-fail prevents cascading. Three candidates exist in
+            # the mock model list, so anything > 1 means the cascade ran.
+            assert mock_completion.call_count == 1, (
+                f"fast-fail did not trigger: litellm.completion was called "
+                f"{mock_completion.call_count} times, expected 1"
+            )
