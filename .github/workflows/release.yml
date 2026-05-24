@@ -52,6 +52,8 @@ jobs:
     permissions:
       contents: write
       id-token: write
+    env:
+      HAS_CLAUDE_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,6 +87,82 @@ jobs:
           else
             gh release create "$tag" --generate-notes --verify-tag --target main
           fi
+
+      - name: Setup Node for Claude Code
+        if: env.HAS_CLAUDE_OAUTH == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Rewrite release notes with Claude Code
+        if: env.HAS_CLAUDE_OAUTH == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          prev_tag=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
+          if [ -z "$prev_tag" ]; then
+            echo "No previous tag found; keeping auto-generated notes."
+            exit 0
+          fi
+          echo "Summarizing ${prev_tag}..${tag} with Claude Code."
+
+          npm install -g @anthropic-ai/claude-code@2.1.150
+
+          # Build context: commit log, diff stat, filtered/truncated diff.
+          commits=$(git log "${prev_tag}..${tag}" --pretty=format:'- %s (%h)')
+          stats=$(git diff --stat "${prev_tag}..${tag}")
+          diff=$(git diff "${prev_tag}..${tag}" \
+            -- ':(exclude)*.lock' ':(exclude)package-lock.json' \
+               ':(exclude)*test-durations.json' ':(exclude)dist/*' \
+               ':(exclude)*.min.js' ':(exclude)*.snap' \
+            | head -c 80000)
+
+          prompt_file=$(mktemp)
+          {
+            printf '%s\n' \
+              'Write concise, accurate, user-facing release notes for a CLI tool from the' \
+              'context below. Audience: developers using the `pdd` CLI.' \
+              '' \
+              'Format (markdown, no code fences around the whole thing):' \
+              '- One-line summary at the top.' \
+              '- Then sections "### Features", "### Fixes", "### Internal" — omit any' \
+              '  section that has no entries.' \
+              '- 1-7 bullets per section, each a single short sentence describing' \
+              '  user-visible behavior. Reference PR/issue numbers if shown in the' \
+              '  commit messages (e.g. "#1015"). Skip pure CI/test-infra churn unless' \
+              '  it changes observable behavior.' \
+              '' \
+              'Do not invent changes. If the diff is dominated by one theme, lead with' \
+              'it. Output only the release notes — no preamble, no sign-off.' \
+              '' \
+              'CONTEXT:'
+            printf '\nCommits:\n%s\n\nFiles changed:\n%s\n\nDiff (truncated):\n%s\n' \
+              "$commits" "$stats" "$diff"
+          } >"$prompt_file"
+
+          notes_file=$(mktemp --suffix=.md)
+          if ! claude -p \
+                --model sonnet \
+                --tools "" \
+                --no-session-persistence \
+                --output-format text \
+                <"$prompt_file" >"$notes_file"; then
+            echo "Claude Code failed; keeping auto-generated notes."
+            exit 0
+          fi
+          if [ ! -s "$notes_file" ]; then
+            echo "Claude Code produced no output; keeping auto-generated notes."
+            exit 0
+          fi
+
+          echo "--- New release notes ---"
+          cat "$notes_file"
+          echo "-------------------------"
+          gh release edit "$tag" --notes-file "$notes_file"
+          echo "Updated release notes for $tag."
 
       - name: Post release notes to Discord
         env:
