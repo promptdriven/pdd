@@ -318,15 +318,15 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
 
     if not found:
         # Decide whether to prompt based on whether any CLI has OAuth.
-        from pdd.cli_detector import _has_provider_oauth
+        from pdd.cli_detector import _has_cli_oauth
         oauth_providers: List[str] = []
         if cli_results:
             for r in cli_results:
                 if getattr(r, "skipped", False):
                     continue
-                prov = getattr(r, "provider", None)
-                if prov and _has_provider_oauth(prov):
-                    oauth_providers.append(prov)
+                cli_name = getattr(r, "cli_name", None)
+                if cli_name and _has_cli_oauth(cli_name):
+                    oauth_providers.append(getattr(r, "provider", cli_name))
 
         if oauth_providers:
             uniq = ", ".join(sorted(set(oauth_providers)))
@@ -634,11 +634,11 @@ def _cli_credential_label(r: Any) -> str:
         2. _has_provider_oauth(provider) == True → "OAuth/subscription credential configured"
         3. neither                                → "no credentials"
     """
-    from pdd.cli_detector import _has_provider_oauth
+    from pdd.cli_detector import _has_cli_oauth
     if getattr(r, "api_key_configured", False):
         return "API key set"
-    provider = getattr(r, "provider", None)
-    if provider and _has_provider_oauth(provider):
+    cli_name = getattr(r, "cli_name", None)
+    if cli_name and _has_cli_oauth(cli_name):
         return "OAuth/subscription credential configured"
     return "no credentials"
 
@@ -806,7 +806,7 @@ def run_setup() -> None:
     try:
         _print_pdd_logo()
 
-        from pdd.cli_detector import detect_and_bootstrap_cli, _has_provider_oauth
+        from pdd.cli_detector import detect_and_bootstrap_cli, _has_cli_oauth
 
         _print_step_banner("Phase 1: Agentic CLI Bootstrap")
         cli_results = detect_and_bootstrap_cli()
@@ -816,14 +816,14 @@ def run_setup() -> None:
             if getattr(r, "skipped", False):
                 continue
             api_key_ok = bool(getattr(r, "api_key_configured", False))
-            provider = getattr(r, "provider", None)
+            cli_name_r = getattr(r, "cli_name", None)
             oauth_ok = False
             try:
-                oauth_ok = bool(provider and _has_provider_oauth(provider))
+                oauth_ok = bool(cli_name_r and _has_cli_oauth(cli_name_r))
             except Exception:
                 oauth_ok = False
             if not api_key_ok and not oauth_ok:
-                name = getattr(r, "cli_name", "?") or "?"
+                name = cli_name_r or "?"
                 print(f"{YELLOW}No credentials configured for {name}: "
                       f"set an API key or sign in via the CLI.{RESET}")
 

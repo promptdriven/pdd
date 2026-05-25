@@ -1008,6 +1008,15 @@ def _get_google_cli_name(env: Optional[Dict[str, str]] = None) -> Optional[str]:
         )
         if not has_api_key and _has_gemini_oauth_only():
             return "gemini"
+        # If the only available credential is GEMINI_API_KEY (not consumed by agy)
+        # and there is no agy OAuth, route to legacy gemini so the key actually works.
+        has_agy_usable_cred = bool(
+            env.get("ANTIGRAVITY_API_KEY")
+            or env.get("GOOGLE_API_KEY")
+            or _has_agy_oauth_credentials()
+        )
+        if not has_agy_usable_cred and env.get("GEMINI_API_KEY"):
+            return "gemini"
         return "agy"
     if agy_bin:
         return "agy"
@@ -1044,11 +1053,22 @@ def get_available_agents() -> List[str]:
     # "Authentication required.", is a worse UX than just routing to a
     # different available provider — pair the auth signal with the binary.
     google_bin = _get_google_cli_binary()
-    has_google_key = (
-        os.environ.get("GOOGLE_API_KEY")
-        or os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("ANTIGRAVITY_API_KEY")
-    )
+    google_cli_name = _get_google_cli_name()
+    # Pair the API-key signal with the active binary: ANTIGRAVITY_API_KEY is
+    # consumed by agy but not by legacy gemini, and GEMINI_API_KEY is not
+    # consumed by agy. GOOGLE_API_KEY is accepted by both.
+    if google_cli_name == "agy":
+        has_google_key = bool(
+            os.environ.get("ANTIGRAVITY_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
+    elif google_cli_name == "gemini":
+        has_google_key = bool(
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
+    else:
+        has_google_key = False
     has_vertex_auth = (
         os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
         and (
@@ -1057,7 +1077,6 @@ def get_available_agents() -> List[str]:
         )
     )
     has_matching_oauth = False
-    google_cli_name = _get_google_cli_name()
     if google_cli_name == "agy":
         has_matching_oauth = _has_agy_oauth_credentials()
     elif google_cli_name == "gemini":
@@ -2074,10 +2093,14 @@ def run_agentic_task(
     Returns:
         (success, output_text, cost_usd, provider_used)
     """
+    # get_agent_provider_preference() must be called first: for
+    # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
+    # effect, which get_available_agents() then reads to evaluate auth correctly.
+    provider_pref = get_agent_provider_preference()
     agents = get_available_agents()
 
     # Filter agents based on preference order
-    candidates = [p for p in get_agent_provider_preference() if p in agents]
+    candidates = [p for p in provider_pref if p in agents]
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
