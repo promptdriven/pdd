@@ -46,7 +46,11 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
     - Ensure sync_order.sh is added to changed_files for Step 13 to commit
     - Print warning if circular dependencies detected
 12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
-13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
+13. **Stale State Detection**: Clear persisted state and start fresh when EITHER of the following holds:
+    a. `issue_updated_at` differs from stored `state["issue_updated_at"]` (issue was modified since last run), OR
+    b. **Clean Restart Request**: A clean-restart intent is detected in `issue_content` (which includes the issue body and any appended comments). Implement `_detect_clean_restart_request(issue_content: str) -> bool` that returns True when the content contains explicit restart phrasing such as (case-insensitive): "clean restart", "restart cleanly", "restarting cleanly", "fresh restart", "start fresh", "start over", "ignore (the )?previous run", "ignore previous (generated )?(artifacts|PR|run)", or "run the full pdd-issue (autonomous )?(solving )?flow from the current issue requirements". When a clean-restart is detected, call `clear_workflow_state(...)` and treat the run as a fresh start (do NOT load `start_step`/`step_outputs` from prior state). The detection MUST run before any decision to resume from cached state.
+
+    Additionally, after clearing for a clean-restart, the bot MUST emit a startup comment via `post_step_comment(...)` that clearly says "Clean restart" (vs. "Resuming") and names the model, base branch, and command being run. After issuing the startup comment, `_fetch_issue_updated_at()` MUST NOT be allowed to absorb the bot's own restart-acknowledgement comment timestamp back into state in a way that would mask a subsequent legitimate restart request — record the detected restart marker (e.g. `state["clean_restart_handled_for"] = <hash of detected phrase + comment id>`) so the same restart phrase is not re-detected on every tick.
 14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
 
 % Per-Step Timeouts

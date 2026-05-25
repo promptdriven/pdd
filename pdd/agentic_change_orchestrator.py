@@ -1339,6 +1339,42 @@ def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Op
     return None
 
 
+_CLEAN_RESTART_PATTERNS = [
+    re.compile(r"\bclean[-\s]restart\b", re.IGNORECASE),
+    re.compile(r"\brestart(?:ing)?\s+cleanly\b", re.IGNORECASE),
+    re.compile(r"\bfresh\s+restart\b", re.IGNORECASE),
+    re.compile(r"\bstart\s+fresh\b", re.IGNORECASE),
+    re.compile(r"\bstart\s+over\b", re.IGNORECASE),
+    re.compile(r"\bignore\s+(?:the\s+)?previous\s+run\b", re.IGNORECASE),
+    re.compile(
+        r"\bignore\s+(?:that\s+|the\s+)?previous(?:ly)?\s+(?:generated\s+)?"
+        r"(?:artifacts?|PRs?|run)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\brun\s+the\s+full\s+pdd-issue\s+(?:autonomous\s+)?(?:solving\s+)?"
+        r"flow\s+from\s+the\s+current\s+issue\s+requirements\b",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _detect_clean_restart_request(issue_content: str) -> Optional[str]:
+    """Return the matched clean-restart phrase from ``issue_content`` or None.
+
+    Scans ``issue_content`` (issue body + comments) for explicit user-driven
+    clean-restart phrases. Returns the matched substring on hit so callers can
+    record an idempotency marker.
+    """
+    if not issue_content:
+        return None
+    for pattern in _CLEAN_RESTART_PATTERNS:
+        m = pattern.search(issue_content)
+        if m:
+            return m.group(0)
+    return None
+
+
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -1394,6 +1430,55 @@ def run_agentic_change_orchestrator(
             state = None
             loaded_gh_id = None
 
+    # Detect user-driven clean-restart requests in issue body / comments.
+    # Required by issue #1180 acceptance criteria: if the user posts an
+    # explicit "clean restart" / "Restarting cleanly" / "ignore previous
+    # generated artifacts" / "run the full pdd-issue ... flow" instruction,
+    # we MUST drop any persisted state and start fresh from step 1 — even
+    # when issue_updated_at matches the stored value (the timestamp-only
+    # staleness check above is unreliable across stop -> re-label cycles).
+    clean_restart_phrase = _detect_clean_restart_request(issue_content)
+    clean_restart_active = False
+    if clean_restart_phrase:
+        already_handled = False
+        if state is not None:
+            handled_for = state.get("clean_restart_handled_for") or ""
+            if handled_for and (
+                handled_for == clean_restart_phrase
+                or handled_for in clean_restart_phrase
+                or clean_restart_phrase in handled_for
+            ):
+                already_handled = True
+            elif state.get("clean_restart_handled") and state.get(
+                "last_completed_step", 0
+            ) > 0:
+                # Idempotency: a prior tick already acknowledged this restart
+                # request and made progress; do not loop.
+                already_handled = True
+        if not already_handled:
+            clean_restart_active = True
+            if not quiet:
+                console.print(
+                    "[yellow]Clean restart requested - clearing persisted "
+                    "state and starting fresh[/yellow]"
+                )
+                console.print(
+                    f"[bold]Clean restart[/bold] for issue #{issue_number} | "
+                    f"command: pdd-issue (change) | base branch: "
+                    f"{repo_owner}/{repo_name}@main | model: claude-opus-4-7"
+                )
+            clear_workflow_state(
+                cwd,
+                issue_number,
+                "change",
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+            )
+            state = None
+            loaded_gh_id = None
+
     # Initialize variables from state or defaults
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
@@ -1420,6 +1505,11 @@ def run_agentic_change_orchestrator(
         model_used = "unknown"
         github_comment_id = None
         worktree_path = None
+        if clean_restart_active and clean_restart_phrase:
+            # Idempotency: persist a marker so subsequent ticks don't loop
+            # by re-detecting the same restart phrase on each invocation.
+            state["clean_restart_handled_for"] = clean_restart_phrase
+            state["clean_restart_handled"] = True
 
     step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
