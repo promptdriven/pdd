@@ -912,13 +912,11 @@ def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str
     in sync so that availability detection and subprocess construction always
     agree on which binary is selected.
 
-    Selection rules (``auto`` mode when both binaries are installed):
-        1. No API key at all AND only legacy Gemini OAuth → ``gemini`` (avoids
-           Antigravity device-code re-prompt for existing Gemini users).
-        2. Only ``GEMINI_API_KEY`` set (no ``GOOGLE_API_KEY`` /
-           ``ANTIGRAVITY_API_KEY`` / agy OAuth) → ``gemini`` (GEMINI_API_KEY
-           is not consumed by agy; routing to agy would fail at runtime).
-        3. Otherwise → ``agy`` (preferred per the migration plan).
+    Selection rules:
+        - ``agy`` / ``gemini``: explicit pin (errors at run time if missing).
+        - ``auto`` (default): use the same logical-name resolver as
+          ``_get_google_cli_name`` so command construction and the launched
+          executable cannot disagree.
     """
     if env is None:
         env = os.environ
@@ -927,42 +925,67 @@ def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str
         return _find_cli_binary("agy")
     if pref == "gemini":
         return _find_cli_binary("gemini")
-    agy_bin = _find_cli_binary("agy")
-    gemini_bin = _find_cli_binary("gemini")
-    if agy_bin and gemini_bin:
-        has_api_key = any(
-            env.get(k)
-            for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY")
-        )
-        if not has_api_key and _has_gemini_oauth_only():
-            return gemini_bin
-        has_agy_usable_cred = bool(
-            env.get("ANTIGRAVITY_API_KEY")
-            or env.get("GOOGLE_API_KEY")
-            or _has_agy_oauth_credentials()
-        )
-        if not has_agy_usable_cred and env.get("GEMINI_API_KEY"):
-            return gemini_bin
-        return agy_bin
-    return agy_bin or gemini_bin
+    cli_name = _get_google_cli_name(env)
+    return _find_cli_binary(cli_name) if cli_name else None
 
 
 def _has_agy_oauth_credentials() -> bool:
-    """Return True when the Antigravity (``agy``) OAuth file is populated.
+    """Return True when Antigravity (``agy``) appears signed in locally.
 
-    The Antigravity installer / first run stores its OAuth tokens at
-    ``~/.gemini/antigravity-cli/oauth_creds.json`` (a sibling of the legacy
-    Gemini path). Mirrors the shape parse done by
-    ``_has_gemini_oauth_credentials`` but scoped to the Antigravity path.
+    Antigravity CLI authenticates through the OS secure keyring for
+    subscription/Google Sign-In users, so a populated
+    ``~/.gemini/antigravity-cli/oauth_creds.json`` is not the only valid
+    auth signal. Count the JSON token file when present, and otherwise accept
+    the Antigravity onboarding + active Google account files as the local
+    keyring-backed sign-in marker. Runtime still surfaces an actionable
+    "Authentication required." error if the keyring session is stale.
     """
     creds_path = Path.home() / ".gemini" / "antigravity-cli" / "oauth_creds.json"
     try:
         data = json.loads(creds_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and bool(
+            data.get("refresh_token") or data.get("access_token")
+        ):
+            return True
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    onboarding_path = (
+        Path.home() / ".gemini" / "antigravity-cli" / "cache" / "onboarding.json"
+    )
+    accounts_path = Path.home() / ".gemini" / "google_accounts.json"
+    try:
+        onboarding = json.loads(onboarding_path.read_text(encoding="utf-8"))
+        accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    if not isinstance(data, dict):
+    if not isinstance(onboarding, dict) or not isinstance(accounts, dict):
         return False
-    return bool(data.get("refresh_token") or data.get("access_token"))
+    onboarding_complete = bool(
+        onboarding.get("onboardingComplete")
+        or onboarding.get("consumerOnboardingComplete")
+        or onboarding.get("enterpriseOnboardingComplete")
+    )
+    active_account = accounts.get("active")
+    return (
+        onboarding_complete
+        and isinstance(active_account, str)
+        and bool(active_account.strip())
+    )
+
+
+def _has_google_vertex_auth(env: Optional[Dict[str, str]] = None) -> bool:
+    """Return True when Google Vertex auth env is configured for the CLIs."""
+    if env is None:
+        env = os.environ
+    if env.get("GOOGLE_GENAI_USE_VERTEXAI") != "true":
+        return False
+    return bool(
+        env.get("GOOGLE_APPLICATION_CREDENTIALS")
+        or env.get("GOOGLE_CLOUD_PROJECT")
+        or env.get("VERTEXAI_PROJECT")
+        or env.get("VERTEX_PROJECT")
+    )
 
 
 def _has_legacy_gemini_oauth_credentials() -> bool:
@@ -975,18 +998,6 @@ def _has_legacy_gemini_oauth_credentials() -> bool:
     if not isinstance(data, dict):
         return False
     return bool(data.get("refresh_token") or data.get("access_token"))
-
-
-def _has_gemini_oauth_only() -> bool:
-    """Return True iff legacy Gemini OAuth is present AND agy OAuth is not.
-
-    Used by ``_get_google_cli_binary``'s ``auto`` mode to avoid selecting
-    ``agy`` when the only stored OAuth belongs to the legacy CLI — running
-    ``agy --print`` in that state hangs on the interactive device-code
-    prompt and the new agy plain-text parse branch surfaces it as
-    "Authentication required." instead of silently falling back.
-    """
-    return _has_legacy_gemini_oauth_credentials() and not _has_agy_oauth_credentials()
 
 
 def _get_google_cli_name(env: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -1008,21 +1019,6 @@ def _get_google_cli_name(env: Optional[Dict[str, str]] = None) -> Optional[str]:
     agy_bin = _find_cli_binary("agy")
     gemini_bin = _find_cli_binary("gemini")
     if agy_bin and gemini_bin:
-        has_api_key = any(
-            env.get(k)
-            for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY")
-        )
-        if not has_api_key and _has_gemini_oauth_only():
-            return "gemini"
-        # If the only available credential is GEMINI_API_KEY (not consumed by agy)
-        # and there is no agy OAuth, route to legacy gemini so the key actually works.
-        has_agy_usable_cred = bool(
-            env.get("ANTIGRAVITY_API_KEY")
-            or env.get("GOOGLE_API_KEY")
-            or _has_agy_oauth_credentials()
-        )
-        if not has_agy_usable_cred and env.get("GEMINI_API_KEY"):
-            return "gemini"
         return "agy"
     if agy_bin:
         return "agy"
@@ -1050,9 +1046,8 @@ def get_available_agents() -> List[str]:
     # 2. Google (Gemini / Antigravity)
     # Available if the resolved Google CLI binary exists AND a non-interactive
     # auth path that *pairs with that specific binary* is configured. API keys
-    # (GOOGLE_API_KEY / GEMINI_API_KEY / ANTIGRAVITY_API_KEY) and Vertex auth
-    # work with both binaries, so when any of those is set the binary's OAuth
-    # file is not required. But OAuth files are binary-specific: agy reads
+    # are binary-specific, while Vertex auth works with both binaries. OAuth
+    # files are binary-specific: agy reads
     # ~/.gemini/antigravity-cli/oauth_creds.json; legacy gemini reads
     # ~/.gemini/oauth_creds.json. Marking google "available" because *some*
     # Google OAuth exists, then having the binary fail at runtime with
@@ -1061,12 +1056,16 @@ def get_available_agents() -> List[str]:
     google_bin = _get_google_cli_binary()
     google_cli_name = _get_google_cli_name()
     # Pair the API-key signal with the active binary: ANTIGRAVITY_API_KEY is
-    # consumed by agy but not by legacy gemini, and GEMINI_API_KEY is not
-    # consumed by agy. GOOGLE_API_KEY is accepted by both.
+    # consumed by agy but not by legacy gemini. GOOGLE_API_KEY is accepted by
+    # both, and PDD bridges GEMINI_API_KEY to GOOGLE_API_KEY for agy.
     if google_cli_name == "agy":
         has_google_key = bool(
             os.environ.get("ANTIGRAVITY_API_KEY")
             or os.environ.get("GOOGLE_API_KEY")
+            # Compatibility: PDD maps GEMINI_API_KEY to GOOGLE_API_KEY for
+            # the agy subprocess so existing Gemini-key setups keep working
+            # after the default binary moves to Antigravity.
+            or os.environ.get("GEMINI_API_KEY")
         )
     elif google_cli_name == "gemini":
         has_google_key = bool(
@@ -1075,13 +1074,7 @@ def get_available_agents() -> List[str]:
         )
     else:
         has_google_key = False
-    has_vertex_auth = (
-        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
-        and (
-            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
-        )
-    )
+    has_vertex_auth = _has_google_vertex_auth()
     has_matching_oauth = False
     if google_cli_name == "agy":
         has_matching_oauth = _has_agy_oauth_credentials()
@@ -2895,11 +2888,22 @@ def _run_with_provider(
             # stdout; the agy parse branch further down treats stdout as the
             # response body and surfaces `cost=0, model=null` to the audit
             # log because the CLI does not currently expose usage stats.
+            # Unlike the legacy gemini CLI, agy handles the print prompt text
+            # directly. Asking it to "read the file" in non-interactive mode can
+            # send it searching outside cwd and timeout before it reads the
+            # prompt. Pass the prompt body inline and use agy's non-interactive
+            # permission flag, matching the yolo/skip-permissions posture of
+            # the other agentic CLI branches.
             cmd = [
                 cli_path,
+                "--dangerously-skip-permissions",
                 "--print",
-                f"Read the file {prompt_path.name} for your full instructions and execute them.",
+                prompt_content,
             ]
+            if env.get("GEMINI_API_KEY") and not (
+                env.get("GOOGLE_API_KEY") or env.get("ANTIGRAVITY_API_KEY")
+            ):
+                env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
             if timeout:
                 cmd.extend(["--print-timeout", f"{int(timeout)}s"])
 

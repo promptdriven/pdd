@@ -66,10 +66,18 @@ PROVIDER_PRIMARY_KEY: Dict[str, Optional[str]] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     # GOOGLE_API_KEY is accepted by both agy and legacy gemini, making it the
-    # universal key for the Google provider slot. GEMINI_API_KEY only works
-    # with the legacy gemini CLI; ANTIGRAVITY_API_KEY only with agy — using
-    # either as the primary would break setup for whichever binary is selected.
+    # universal key for the Google provider slot. PDD also bridges an existing
+    # GEMINI_API_KEY to GOOGLE_API_KEY for agy subprocesses, but prompting for
+    # GOOGLE_API_KEY avoids saving a legacy-only or agy-only key by default.
     "google": "GOOGLE_API_KEY",
+    "opencode": None,
+}
+
+CLI_PRIMARY_KEY: Dict[str, Optional[str]] = {
+    "claude": "ANTHROPIC_API_KEY",
+    "codex": "OPENAI_API_KEY",
+    "agy": "GOOGLE_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
     "opencode": None,
 }
 
@@ -336,7 +344,7 @@ def _opencode_config_has_usable_credential() -> bool:
 
 
 def _has_provider_oauth(provider: str) -> bool:
-    """Return True if a stored OAuth/subscription credential exists."""
+    """Return True if a stored OAuth/subscription/config credential exists."""
     home = Path.home()
     if provider == "anthropic":
         if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
@@ -354,6 +362,8 @@ def _has_provider_oauth(provider: str) -> bool:
             return True
         return False
     if provider == "google":
+        if _has_google_vertex_auth():
+            return True
         # Mirror the Issue #813 round-9 shape parse used for Claude: a
         # bare ``exists()`` check false-positives on stale, empty, or
         # logged-out OAuth files that still contain bytes but no usable
@@ -470,11 +480,31 @@ def _has_api_key(provider: str) -> bool:
     return bool(key and os.environ.get(key))
 
 
+def _has_google_vertex_auth(env: Optional[Dict[str, str]] = None) -> bool:
+    """Return True when Google Vertex auth env is configured."""
+    if env is None:
+        env = os.environ
+    if env.get("GOOGLE_GENAI_USE_VERTEXAI") != "true":
+        return False
+    return bool(
+        env.get("GOOGLE_APPLICATION_CREDENTIALS")
+        or env.get("GOOGLE_CLOUD_PROJECT")
+        or env.get("VERTEXAI_PROJECT")
+        or env.get("VERTEX_PROJECT")
+    )
+
+
+def _primary_key_for_cli(cli: str) -> Optional[str]:
+    """Return the preferred API key to prompt/save for a specific CLI."""
+    return CLI_PRIMARY_KEY.get(cli, PROVIDER_PRIMARY_KEY.get(CLI_PROVIDER.get(cli, "")))
+
+
 def _has_cli_api_key(cli: str) -> bool:
     """Return True if an API key usable by *cli* is present.
 
     ``ANTIGRAVITY_API_KEY`` is consumed by ``agy`` but not by legacy ``gemini``.
-    ``GEMINI_API_KEY`` is consumed by ``gemini`` but not by ``agy``.
+    PDD maps ``GEMINI_API_KEY`` to ``GOOGLE_API_KEY`` for the ``agy`` subprocess
+    so existing Gemini-key users can migrate without renaming their key.
     ``GOOGLE_API_KEY`` is accepted by both Google CLIs.
     All non-Google CLIs delegate to ``_has_api_key``.
     """
@@ -482,6 +512,7 @@ def _has_cli_api_key(cli: str) -> bool:
         return bool(
             os.environ.get("ANTIGRAVITY_API_KEY")
             or os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
         )
     if cli == "gemini":
         return bool(
@@ -491,7 +522,17 @@ def _has_cli_api_key(cli: str) -> bool:
     return _has_api_key(CLI_PROVIDER.get(cli, ""))
 
 
-def _displayed_google_key() -> str:
+def _displayed_google_key(cli: Optional[str] = None) -> str:
+    if cli == "agy":
+        for k in ("GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY", "GEMINI_API_KEY"):
+            if os.environ.get(k):
+                return k
+        return "GOOGLE_API_KEY"
+    if cli == "gemini":
+        for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            if os.environ.get(k):
+                return k
+        return "GOOGLE_API_KEY"
     for k in ("GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY", "GEMINI_API_KEY"):
         if os.environ.get(k):
             return k
@@ -508,6 +549,13 @@ def _credential_status_label(provider: str) -> str:
     if provider == "opencode":
         return "OpenCode provider credential"
     return provider
+
+
+def _credential_status_label_for_cli(cli: str) -> str:
+    provider = CLI_PROVIDER.get(cli, "")
+    if provider == "google":
+        return _displayed_google_key(cli)
+    return _credential_status_label(provider)
 
 
 # ---------------------------------------------------------------------------
@@ -574,9 +622,10 @@ def _default_index(rows: List[dict]) -> int:
 
 
 def _has_cli_oauth(cli: str) -> bool:
-    """Return True if the OAuth credential specific to *cli* is present.
+    """Return True if the OAuth/config credential specific to *cli* is present.
 
-    For Google CLIs the OAuth files are binary-specific:
+    For Google CLIs, Vertex env auth works with both binaries, while the
+    OAuth/subscription file markers are binary-specific:
     - ``agy``   → ``~/.gemini/antigravity-cli/oauth_creds.json``
     - ``gemini`` → ``~/.gemini/oauth_creds.json``
 
@@ -587,9 +636,34 @@ def _has_cli_oauth(cli: str) -> bool:
     """
     home = Path.home()
     if cli == "agy":
+        if _has_google_vertex_auth():
+            return True
         p = home / ".gemini" / "antigravity-cli" / "oauth_creds.json"
-        return p.exists() and _google_oauth_file_has_oauth(p)
+        if p.exists() and _google_oauth_file_has_oauth(p):
+            return True
+        onboarding_path = home / ".gemini" / "antigravity-cli" / "cache" / "onboarding.json"
+        accounts_path = home / ".gemini" / "google_accounts.json"
+        try:
+            onboarding = json.loads(onboarding_path.read_text(encoding="utf-8"))
+            accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(onboarding, dict) or not isinstance(accounts, dict):
+            return False
+        onboarding_complete = bool(
+            onboarding.get("onboardingComplete")
+            or onboarding.get("consumerOnboardingComplete")
+            or onboarding.get("enterpriseOnboardingComplete")
+        )
+        active_account = accounts.get("active")
+        return (
+            onboarding_complete
+            and isinstance(active_account, str)
+            and bool(active_account.strip())
+        )
     if cli == "gemini":
+        if _has_google_vertex_auth():
+            return True
         p = home / ".gemini" / "oauth_creds.json"
         return p.exists() and _google_oauth_file_has_oauth(p)
     return _has_provider_oauth(CLI_PROVIDER[cli])
@@ -629,11 +703,11 @@ def _print_selection_table(rows: List[dict]) -> None:
         else:
             install_str = "Not found"
         if row["has_key"]:
-            cred_str = f"[green]\u2713[/green] {_credential_status_label(provider)} set"
+            cred_str = f"[green]\u2713[/green] {_credential_status_label_for_cli(cli)} set"
         elif row["has_oauth"]:
-            cred_str = "[green]\u2713[/green] OAuth/subscription login configured"
+            cred_str = "[green]\u2713[/green] OAuth/subscription/config credential configured"
         else:
-            cred_str = f"[red]\u2717[/red] {_credential_status_label(provider)} not set"
+            cred_str = f"[red]\u2717[/red] {_credential_status_label_for_cli(cli)} not set"
         console.print(
             f"{idx}. {label} ({prov_disp}) — {install_str}; {cred_str}"
         )
@@ -785,7 +859,7 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
         # --- Credential step ---------------------------------------------
         if has_oauth and not had_key:
             console.print(
-                f"[green]\u2713[/green] OAuth/subscription login configured for "
+                f"[green]\u2713[/green] OAuth/subscription/config credential configured for "
                 f"{CLI_LABEL[cli]} — using the stored credential."
             )
             if provider == "anthropic":
@@ -808,7 +882,9 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
                     "[dim]Docs: https://opencode.ai/docs/providers[/dim]"
                 )
             else:
-                key_name = PROVIDER_PRIMARY_KEY[provider]
+                key_name = _primary_key_for_cli(cli)
+                if key_name is None:
+                    key_name = _credential_status_label_for_cli(cli)
                 try:
                     val = _prompt_input(
                         f"Enter your {key_name} (press Enter to skip): "
@@ -876,7 +952,7 @@ def detect_cli_tools() -> None:
     for cli in CLI_PREFERENCE:
         path = _which(cli)
         provider = CLI_PROVIDER[cli]
-        has_key = _has_api_key(provider)
+        has_key = _has_cli_api_key(cli)
         if path:
             console.print(
                 f"[green]\u2713[/green] {CLI_LABEL[cli]} — Found at {path}"
@@ -888,9 +964,7 @@ def detect_cli_tools() -> None:
 
     for cli, provider, has_key in missing:
         if has_key:
-            key_name = PROVIDER_PRIMARY_KEY.get(provider) or _credential_status_label(
-                provider
-            )
+            key_name = _primary_key_for_cli(cli) or _credential_status_label_for_cli(cli)
             install_hint = CLI_INSTALL_HINT.get(cli) or AGY_MANUAL_INSTALL_HINT
             console.print(
                 f"{key_name} is set but {CLI_LABEL[cli]} is not installed. "

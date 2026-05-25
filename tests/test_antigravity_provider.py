@@ -36,6 +36,17 @@ from pdd.agentic_common import (
 from pdd import cli_detector
 
 
+def _clear_google_vertex_env(monkeypatch):
+    for var in (
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_PROJECT",
+        "VERTEX_PROJECT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 # ---------------------------------------------------------------------------
 # Finding 2: env precedence
 # ---------------------------------------------------------------------------
@@ -120,6 +131,9 @@ def test_run_with_provider_agy_does_not_pass_output_format(tmp_path, monkeypatch
     invoked_cmd = run_mock.call_args.args[0]
     assert invoked_cmd[0] == "/usr/local/bin/agy"
     assert "--print" in invoked_cmd
+    assert "--dangerously-skip-permissions" in invoked_cmd
+    assert "instructions" in invoked_cmd
+    assert not any("Read the file" in arg for arg in invoked_cmd)
     assert "--output-format" not in invoked_cmd, (
         "agy 1.0.1 does NOT support --output-format; appending it makes "
         f"`agy --print` exit 1 before producing any output. Got cmd={invoked_cmd!r}"
@@ -229,6 +243,40 @@ def test_run_with_provider_agy_does_not_pass_gemini_only_flags(tmp_path, monkeyp
         )
 
 
+def test_run_with_provider_agy_maps_gemini_key_to_google_key(tmp_path, monkeypatch):
+    """Existing ``GEMINI_API_KEY`` users should keep working with agy by default."""
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("instructions", encoding="utf-8")
+
+    fake_proc = MagicMock(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+
+    captured: dict = {}
+
+    def fake_run(*args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return fake_proc
+
+    with (
+        patch(
+            "pdd.agentic_common._get_google_cli_binary",
+            return_value="/usr/local/bin/agy",
+        ),
+        patch("pdd.agentic_common._get_google_cli_name", return_value="agy"),
+        patch("pdd.agentic_common._subprocess_run", side_effect=fake_run),
+    ):
+        success, _, _, _ = _run_with_provider(
+            "google", prompt_file, tmp_path, timeout=10, quiet=True,
+        )
+
+    assert success is True
+    assert captured["env"]["GOOGLE_API_KEY"] == "gemini-key"
+
+
 # ---------------------------------------------------------------------------
 # Finding 3: install URL + shell
 # ---------------------------------------------------------------------------
@@ -275,19 +323,20 @@ def test_agy_install_hint_in_cli_install_hint_table_is_none():
 
 
 # ---------------------------------------------------------------------------
-# Re-review finding 2: auto-mode OAuth pairing
+# Re-review finding 2: auto-mode Google CLI migration default
 # ---------------------------------------------------------------------------
 
 
-def test_get_google_cli_binary_auto_picks_gemini_when_only_legacy_oauth(monkeypatch):
+def test_get_google_cli_binary_auto_picks_agy_even_when_only_legacy_oauth(monkeypatch):
     """When both binaries are installed and only the legacy Gemini OAuth
-    file is populated, `auto` mode must return the gemini binary so the
-    user does not get an unexpected Antigravity OAuth round-trip.
+    file is populated, `auto` mode still returns agy. Legacy gemini is now
+    an explicit rollback path (`PDD_GOOGLE_CLI=gemini`), not the default.
     """
     monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    _clear_google_vertex_env(monkeypatch)
 
     from pdd import agentic_common
 
@@ -306,16 +355,14 @@ def test_get_google_cli_binary_auto_picks_gemini_when_only_legacy_oauth(monkeypa
     ):
         resolved = agentic_common._get_google_cli_binary(env={})
 
-    assert resolved == "/usr/local/bin/gemini", (
-        f"Expected legacy gemini when only legacy OAuth exists, got {resolved!r}"
+    assert resolved == "/usr/local/bin/agy", (
+        f"Expected agy as the default Google CLI, got {resolved!r}"
     )
 
 
-def test_get_google_cli_binary_auto_picks_agy_when_api_key_set(monkeypatch):
-    """An API key (any of GOOGLE_API_KEY / GEMINI_API_KEY /
-    ANTIGRAVITY_API_KEY) works with both binaries, so the migration-plan
-    preference (`agy` first) should still apply even with only the legacy
-    OAuth file present.
+def test_get_google_cli_binary_auto_picks_agy_when_google_api_key_set(monkeypatch):
+    """GOOGLE_API_KEY works with both Google binaries, so the migration-plan
+    preference (`agy` first) should still apply.
     """
     from pdd import agentic_common
 
@@ -339,6 +386,34 @@ def test_get_google_cli_binary_auto_picks_agy_when_api_key_set(monkeypatch):
     assert resolved == "/usr/local/bin/agy", (
         f"Expected agy when an API key is set (works with both); got {resolved!r}"
     )
+
+
+def test_get_google_cli_binary_auto_picks_agy_when_vertex_auth_set(monkeypatch):
+    """Vertex auth is usable by agy, so legacy OAuth should not force gemini."""
+    from pdd import agentic_common
+
+    monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(
+            agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True
+        ),
+        patch.object(
+            agentic_common, "_has_agy_oauth_credentials", lambda: False
+        ),
+    ):
+        assert agentic_common._get_google_cli_name() == "agy"
+        assert agentic_common._get_google_cli_binary() == "/usr/local/bin/agy"
 
 
 def test_get_google_cli_binary_auto_picks_agy_when_agy_oauth_present():
@@ -537,9 +612,11 @@ def test_build_rows_gemini_does_not_count_antigravity_api_key(monkeypatch):
         )
 
 
-def test_build_rows_gemini_api_key_does_not_count_for_agy(monkeypatch):
-    """Mirror: ``GEMINI_API_KEY`` must not mark the ``agy`` CLI row as having a
-    usable API key — that key is consumed by ``gemini``, not ``agy``.
+def test_build_rows_gemini_api_key_counts_for_agy_compat(monkeypatch):
+    """``GEMINI_API_KEY`` should keep working after the default moves to agy.
+
+    PDD bridges it to ``GOOGLE_API_KEY`` for the agy subprocess, so the setup
+    table may mark both Google rows as credentialed.
     """
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
@@ -550,8 +627,8 @@ def test_build_rows_gemini_api_key_does_not_count_for_agy(monkeypatch):
     gemini_row = next((r for r in rows if r["cli"] == "gemini"), None)
 
     assert agy_row is not None
-    assert not agy_row["has_key"], (
-        "GEMINI_API_KEY must not be counted as a usable key for the agy CLI row"
+    assert agy_row["has_key"], (
+        "GEMINI_API_KEY must count as a PDD compatibility key for the agy CLI row"
     )
     if gemini_row is not None:
         assert gemini_row["has_key"], (
@@ -559,9 +636,11 @@ def test_build_rows_gemini_api_key_does_not_count_for_agy(monkeypatch):
         )
 
 
-def test_get_available_agents_excludes_google_with_gemini_key_and_agy_pin(monkeypatch):
-    """``PDD_GOOGLE_CLI=agy`` + only ``GEMINI_API_KEY`` set must NOT mark google
-    available — GEMINI_API_KEY does not work with the ``agy`` binary.
+def test_get_available_agents_includes_google_with_gemini_key_and_agy_pin(monkeypatch):
+    """``PDD_GOOGLE_CLI=agy`` + only ``GEMINI_API_KEY`` remains usable.
+
+    Runtime maps the key to ``GOOGLE_API_KEY`` for the agy subprocess so local
+    Gemini-key users do not have to rename their credential during migration.
     """
     monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -582,10 +661,121 @@ def test_get_available_agents_excludes_google_with_gemini_key_and_agy_pin(monkey
     ):
         agents = agentic_common.get_available_agents()
 
-    assert "google" not in agents, (
-        "GEMINI_API_KEY must not enable google when PDD_GOOGLE_CLI=agy; "
+    assert "google" in agents, (
+        "GEMINI_API_KEY should enable google through the agy compatibility bridge; "
         f"got {agents!r}"
     )
+
+
+def test_get_available_agents_includes_google_with_agy_pin_and_vertex_auth(monkeypatch):
+    """Vertex auth remains a valid Google provider credential for agy."""
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+
+    from pdd import agentic_common
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
+    ):
+        agents = agentic_common.get_available_agents()
+
+    assert "google" in agents, f"Vertex auth should enable google; got {agents!r}"
+
+
+def test_get_google_cli_binary_matches_name_when_only_gemini_api_key(monkeypatch):
+    """Auto mode must not split logical name and executable path.
+
+    With both binaries installed and only ``GEMINI_API_KEY`` set, the logical
+    resolver now routes to ``agy`` because PDD bridges the key to
+    ``GOOGLE_API_KEY`` for the subprocess. The executable resolver must return
+    the same binary.
+    """
+    from pdd import agentic_common
+
+    monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    _clear_google_vertex_env(monkeypatch)
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
+    ):
+        assert agentic_common._get_google_cli_name() == "agy"
+        assert agentic_common._get_google_cli_binary() == "/usr/local/bin/agy"
+
+
+def test_agy_oauth_accepts_keyring_subscription_marker(monkeypatch, tmp_path):
+    """Antigravity subscription login is keyring-backed, not always an OAuth file.
+
+    A real local ``agy --print`` run can succeed with no
+    ``~/.gemini/antigravity-cli/oauth_creds.json`` when onboarding and active
+    Google-account markers are present. Treat that as a valid subscription auth
+    signal so setup/runtime do not drop working Gemini subscription users.
+    """
+    from pdd import agentic_common
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    onboarding = tmp_path / ".gemini" / "antigravity-cli" / "cache" / "onboarding.json"
+    onboarding.parent.mkdir(parents=True)
+    onboarding.write_text(
+        '{"consumerOnboardingComplete": true, "onboardingComplete": true}',
+        encoding="utf-8",
+    )
+    accounts = tmp_path / ".gemini" / "google_accounts.json"
+    accounts.write_text('{"active": "user@example.com"}', encoding="utf-8")
+
+    assert cli_detector._has_cli_oauth("agy") is True
+    assert agentic_common._has_agy_oauth_credentials() is True
+
+
+def test_google_vertex_auth_counts_as_cli_config(monkeypatch, tmp_path):
+    """Vertex env auth should prevent setup from prompting for a Google API key."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
+
+    with patch.object(cli_detector, "_find_cli_binary", lambda name: f"/usr/local/bin/{name}"):
+        rows = cli_detector._build_rows()
+
+    agy_row = next(r for r in rows if r["cli"] == "agy")
+    gemini_row = next(r for r in rows if r["cli"] == "gemini")
+
+    assert agy_row["has_key"] is False
+    assert gemini_row["has_key"] is False
+    assert agy_row["has_oauth"] is True
+    assert gemini_row["has_oauth"] is True
+
+
+def test_google_setup_prompts_for_universal_google_key(monkeypatch):
+    """Google setup should default to the key accepted by both Google CLIs."""
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    assert cli_detector._primary_key_for_cli("agy") == "GOOGLE_API_KEY"
+    assert cli_detector._primary_key_for_cli("gemini") == "GOOGLE_API_KEY"
+    assert cli_detector._credential_status_label_for_cli("agy") == "GOOGLE_API_KEY"
+    assert cli_detector._credential_status_label_for_cli("gemini") == "GOOGLE_API_KEY"
 
 
 # ---------------------------------------------------------------------------
@@ -596,11 +786,10 @@ def test_get_available_agents_excludes_google_with_gemini_key_and_agy_pin(monkey
 def test_get_google_cli_binary_and_name_agree_with_only_gemini_key(monkeypatch):
     """With both binaries installed and only GEMINI_API_KEY set, both
     ``_get_google_cli_name()`` and ``_get_google_cli_binary()`` must select
-    ``gemini`` — GEMINI_API_KEY is not consumable by ``agy``.
+    ``agy`` — PDD bridges GEMINI_API_KEY to GOOGLE_API_KEY for the agy subprocess.
 
-    Regression for the split where _get_google_cli_name() returned "gemini"
-    but _get_google_cli_binary() returned the agy path, causing agy to be
-    launched with legacy gemini flags (--output-format json, --yolo).
+    Regression guard: the logical-name resolver and executable resolver must
+    stay in sync so command construction uses the flags for the selected binary.
     """
     monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -624,11 +813,11 @@ def test_get_google_cli_binary_and_name_agree_with_only_gemini_key(monkeypatch):
         name = agentic_common._get_google_cli_name()
         binary = agentic_common._get_google_cli_binary()
 
-    assert name == "gemini", (
-        f"_get_google_cli_name() must return 'gemini' when only GEMINI_API_KEY is set; got {name!r}"
+    assert name == "agy", (
+        f"_get_google_cli_name() must return 'agy' when only GEMINI_API_KEY is set; got {name!r}"
     )
-    assert binary == gemini_path, (
-        f"_get_google_cli_binary() must return the gemini path when only GEMINI_API_KEY is set; "
+    assert binary == agy_path, (
+        f"_get_google_cli_binary() must return the agy path when only GEMINI_API_KEY is set; "
         f"got {binary!r}"
     )
 
@@ -648,8 +837,9 @@ def test_provider_primary_key_google_is_google_api_key():
     """
     assert cli_detector.PROVIDER_PRIMARY_KEY["google"] == "GOOGLE_API_KEY", (
         "PROVIDER_PRIMARY_KEY['google'] must be 'GOOGLE_API_KEY' (accepted by both agy and "
-        "legacy gemini); 'GEMINI_API_KEY' only works with legacy gemini and 'ANTIGRAVITY_API_KEY' "
-        "only works with agy — using either as the primary breaks setup for one of the binaries"
+        "legacy gemini); 'GEMINI_API_KEY' is a legacy key that PDD bridges for agy, and "
+        "'ANTIGRAVITY_API_KEY' only works with agy — using either as the primary breaks "
+        "setup for one of the binaries"
     )
 
 
@@ -718,6 +908,7 @@ def test_build_rows_agy_has_oauth_false_when_only_legacy_file(monkeypatch, tmp_p
     in that state, mis-labelling ``agy`` as OAuth-ready in the setup table.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     # Populate ONLY the legacy Gemini OAuth file.
     legacy = tmp_path / ".gemini" / "oauth_creds.json"
     legacy.parent.mkdir(parents=True)
@@ -742,6 +933,7 @@ def test_build_rows_gemini_has_oauth_false_when_only_agy_file(monkeypatch, tmp_p
     show ``has_oauth=False`` while the agy row shows ``has_oauth=True``.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     agy_dir = tmp_path / ".gemini" / "antigravity-cli"
     agy_dir.mkdir(parents=True)
     (agy_dir / "oauth_creds.json").write_text('{"access_token": "at"}', encoding="utf-8")
@@ -802,8 +994,8 @@ def test_get_google_cli_name_auto_prefers_agy_with_agy_oauth(monkeypatch):
     assert name == "agy"
 
 
-def test_get_google_cli_name_auto_falls_back_to_gemini_when_only_legacy_oauth(monkeypatch):
-    """In auto mode, fall back to ``gemini`` when only legacy OAuth exists."""
+def test_get_google_cli_name_auto_uses_agy_even_when_only_legacy_oauth(monkeypatch):
+    """In auto mode, use ``agy`` when installed even if only legacy OAuth exists."""
     from pdd import agentic_common
 
     monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
@@ -817,7 +1009,7 @@ def test_get_google_cli_name_auto_falls_back_to_gemini_when_only_legacy_oauth(mo
     ):
         name = agentic_common._get_google_cli_name()
 
-    assert name == "gemini"
+    assert name == "agy"
 
 
 def test_run_with_provider_agy_uses_agy_cmd_with_symlink_path(tmp_path, monkeypatch):
