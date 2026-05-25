@@ -4715,7 +4715,9 @@ class TestLoadModelData:
         df = llm_mod._load_model_data(csv_path)
         assert len(df) == 3
         assert "avg_cost" in df.columns
-        assert df["api_key"].dtype == object  # string type
+        # pandas 3+ string-inference may produce a dedicated str dtype rather
+        # than object; accept either via the public string-dtype predicate.
+        assert pd.api.types.is_string_dtype(df["api_key"])
 
     def test_missing_column_raises(self, llm_mod, tmp_path):
         content = "provider,model,input\nopenai,gpt-4,30\n"
@@ -6993,3 +6995,250 @@ class TestGemini3TemperatureClamp:
             "Gemini 3 in batch mode must also be clamped to temperature=1, "
             f"got {captured_kwargs.get('temperature')}"
         )
+
+
+# ==============================================================================
+# Regression tests: github_copilot token-file existence check (no PDD_FORCE gate)
+#
+# Bug context: prior to this change, the token-file existence guard in
+# ``_ensure_api_key`` was gated on ``os.environ.get('PDD_FORCE')``. Server
+# contexts (Cloud Run) don't set PDD_FORCE, so github_copilot/* candidate
+# rows passed the check, triggered litellm's device-flow OAuth, and hung
+# for minutes waiting for human authorization that would never come.
+# After the fix, the check fires unconditionally: missing token → skip
+# with a clear hint; token present → proceed as before.
+# ==============================================================================
+
+
+def test_github_copilot_skipped_when_token_missing_no_pdd_force(tmp_path, monkeypatch):
+    """Server context (no PDD_FORCE) with no OAuth token file should skip
+    the model instead of hanging on litellm device-flow."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    token_dir = tmp_path / "no_token_here"
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is False
+
+
+def test_github_copilot_allowed_when_token_present_no_pdd_force(tmp_path, monkeypatch):
+    """Authenticated CLI user (no PDD_FORCE) with a valid token file should
+    proceed normally. This protects existing Copilot users."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    token_dir = tmp_path / "token_dir"
+    token_dir.mkdir(parents=True)
+    (token_dir / "api-key.json").write_text("{\"fake\": \"token\"}")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is True
+
+
+def test_github_copilot_skipped_with_pdd_force_when_token_missing(tmp_path, monkeypatch):
+    """Preserves behavior for PDD_FORCE-set callers (CLI --force mode and
+    server subprocesses): the existing check still fires after the gate
+    is removed, just unconditionally."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "missing"))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is False
+
+
+# ==============================================================================
+# Regression tests: _is_permanent_invalid_request_error classifier + fast-fail
+#
+# Background: Anthropic enforced thinking.type.adaptive for Opus 4.7 on
+# 2026-05-23. The legacy thinking.type.enabled shape now produces a 400
+# "is not supported for this model" — and pdd-cli was cascading through
+# every Anthropic-relay provider (Vertex/Bedrock/Azure/OpenRouter/
+# Perplexity) sending the same wrong shape and getting the same 400 from
+# each, before hitting github_copilot device-flow which hung for minutes.
+# These tests cover the classifier that fast-fails such cases.
+# ==============================================================================
+
+
+class _FakeBadRequest(Exception):
+    """Stand-in for litellm.BadRequestError that doesn't require importing
+    litellm at test-collection time (some test envs don't have it)."""
+
+
+def test_is_permanent_invalid_request_error_flags_unsupported_parameter():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    # Real BadRequestError instance with the canonical Anthropic Opus-4.7
+    # rejection message. Use whatever constructor litellm expects.
+    try:
+        exc = litellm.BadRequestError(
+            message='AnthropicException - {"error":{"type":"invalid_request_error",'
+                    '"message":"\\"thinking.type.enabled\\" is not supported for this model."}}',
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        # constructor signature may vary across litellm versions; fall back
+        exc = litellm.BadRequestError("thinking.type.enabled is not supported for this model")
+    assert _is_permanent_invalid_request_error(exc) is True
+
+
+def test_is_permanent_invalid_request_error_does_not_flag_context_window():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    ctx_err_cls = getattr(litellm.exceptions, "ContextWindowExceededError", None)
+    if ctx_err_cls is None:
+        import pytest
+        pytest.skip("litellm has no ContextWindowExceededError")
+    try:
+        exc = ctx_err_cls(
+            message="This model's maximum context length is 200000 tokens",
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        exc = ctx_err_cls("context length exceeded")
+    # Context-window IS retryable (try a model with bigger context)
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_is_permanent_invalid_request_error_ignores_non_bad_request():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    # Generic exception — not a BadRequestError, should not be classified
+    # as permanent (let existing retry logic handle it).
+    assert _is_permanent_invalid_request_error(RuntimeError("transient blip")) is False
+    assert _is_permanent_invalid_request_error(TimeoutError()) is False
+
+
+def test_is_permanent_invalid_request_error_ignores_rate_limit_error():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    rate_err_cls = getattr(litellm.exceptions, "RateLimitError", None)
+    if rate_err_cls is None:
+        import pytest
+        pytest.skip("litellm has no RateLimitError")
+    try:
+        exc = rate_err_cls(
+            message="rate_limit_exceeded",
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        exc = rate_err_cls("rate_limit_exceeded")
+    # Rate limits are transient — retry path should run
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_is_permanent_invalid_request_error_flags_unsupported_parameter_phrase():
+    """Cover other allow-listed phrases beyond the specific Anthropic shape."""
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    for phrase in (
+        "unsupported parameter 'foo'",
+        "output_config.effort is invalid",
+        "thinking.type must be one of: adaptive",
+    ):
+        try:
+            exc = litellm.BadRequestError(
+                message=phrase,
+                model="claude-opus-4-7",
+                llm_provider="anthropic",
+            )
+        except TypeError:
+            exc = litellm.BadRequestError(phrase)
+        assert _is_permanent_invalid_request_error(exc) is True, (
+            f"Expected phrase to flag as permanent: {phrase!r}"
+        )
+
+
+def test_is_permanent_invalid_request_error_ignores_unrelated_bad_request():
+    """BadRequestError with a message NOT in the allow-list should fall
+    through to existing retry logic (return False)."""
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    try:
+        exc = litellm.BadRequestError(
+            message="Some transient validation hiccup",
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        exc = litellm.BadRequestError("Some transient validation hiccup")
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_llm_invoke_fast_fails_on_permanent_invalid_request_error(
+    mock_load_models, mock_set_llm_cache
+):
+    """Integration test: when litellm.completion raises a permanent
+    invalid_request_error, llm_invoke() must re-raise immediately rather
+    than cascade through every remaining candidate model. This proves the
+    fast-fail wiring at the call site actually fires, not just that the
+    classifier returns the right boolean in isolation."""
+    import litellm
+
+    try:
+        permanent_exc = litellm.BadRequestError(
+            message=(
+                'AnthropicException - {"type":"error","error":'
+                '{"type":"invalid_request_error","message":'
+                '"\\"thinking.type.enabled\\" is not supported for this model. '
+                'Use \\"thinking.type.adaptive\\""}}'
+            ),
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        permanent_exc = litellm.BadRequestError(
+            "thinking.type.enabled is not supported for this model"
+        )
+
+    first_model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_completion.side_effect = permanent_exc
+
+            # llm_invoke() must propagate the permanent BadRequestError
+            # instead of returning "all_candidate_models_failed" / a
+            # RuntimeError after walking the full candidate list.
+            with pytest.raises(litellm.BadRequestError):
+                llm_invoke(
+                    "Valid prompt about {topic}",
+                    {"topic": "cats"},
+                    0.5,
+                    0.7,
+                    False,
+                )
+
+            # And only the first candidate should have been attempted —
+            # the fast-fail prevents cascading. Three candidates exist in
+            # the mock model list, so anything > 1 means the cascade ran.
+            assert mock_completion.call_count == 1, (
+                f"fast-fail did not trigger: litellm.completion was called "
+                f"{mock_completion.call_count} times, expected 1"
+            )

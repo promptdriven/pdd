@@ -25,6 +25,8 @@ from pdd.agentic_sync_runner import (
     _BOX_CHARS_RE,
     _format_duration,
     _parse_conformance_failure,
+    _parse_public_surface_failure,
+    _parse_test_churn_failure,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
@@ -1508,6 +1510,302 @@ class TestSyncOneModule:
         assert "Required missing exports" in directive
         assert "On `update_main`" in directive
 
+    def test_parse_public_surface_failure(self):
+        stderr = (
+            "Public surface regression for update_main_Python.prompt: "
+            "removed public symbols: calculate_sha256, git. "
+            "Output: pdd/update_main.py. "
+            "Pre surface size: 12. Post surface size: 10."
+        )
+
+        directive, signature = _parse_public_surface_failure("", stderr)
+
+        assert signature == ("removed:calculate_sha256", "removed:git")
+        assert "- calculate_sha256" in directive
+        assert "BREAKING-CHANGE:" in directive
+
+    def test_parse_public_surface_failure_reads_signature_changes(self):
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: calculate\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+        )
+
+        directive, signature = _parse_public_surface_failure("", stderr)
+
+        assert signature == ("signature_changed:calculate",)
+        assert "Restore compatible signatures" in directive
+
+    def test_public_surface_hard_failure_separates_signature_changes(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: calculate\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+        )
+
+        block = runner._build_public_surface_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "removed: <none>" in block
+        assert "signature_changed: calculate" in block
+        assert "removed: sig:calculate" not in block
+
+    def test_parse_test_churn_failure(self):
+        stderr = (
+            "Test churn threshold exceeded for test_update_main_Python.prompt: "
+            "churn ratio 0.82 exceeds threshold 0.40. "
+            "Output: tests/test_update_main.py. Pre lines: 100. Post lines: 95."
+        )
+
+        directive, signature = _parse_test_churn_failure("", stderr)
+
+        assert signature == ("ratio=0.82", "pre_lines=100")
+        assert "Reduce churn below threshold 0.40" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_hard_failure_reads_structured_line_counts(self, _mock_env):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for test_update_main_Python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_update_main.py\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 95\n"
+        )
+
+        block = runner._build_test_churn_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "=== test churn threshold exceeded ===" in block
+        assert "churn ratio: 0.82" in block
+        assert "threshold: 0.40" in block
+        assert "pre lines: 100" in block
+        assert "post lines: 95" in block
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Medium 2 (iter-3): the parsers MUST recover
+    # the retry directive and signature tuple from the EXACT block
+    # emitted by `build_public_surface_hard_failure_from_error` and
+    # `build_test_churn_hard_failure_from_error`. The existing
+    # parse-only tests use ad-hoc stderr fragments; these round-trip
+    # tests prevent a builder field rename from silently breaking the
+    # subprocess-level retry path.
+    # -----------------------------------------------------------------
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_public_surface_round_trip_through_parser(self, _mock_env):
+        """Build the hard-failure block from a typed error, feed it back
+        through `_parse_public_surface_failure`, and assert the parser
+        recovers a usable retry directive and the (removed, changed)
+        signature tuple exactly as the next-attempt loop expects.
+        """
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import (
+            build_public_surface_hard_failure_from_error,
+        )
+
+        exc = PublicSurfaceRegressionError(
+            prompt_name="update_main_Python.prompt",
+            output_path="pdd/update_main.py",
+            removed_symbols=["calculate_sha256", "git_helper"],
+            changed_signatures=["resolve_prompt_code_pair"],
+            pre_surface_size=12,
+            post_surface_size=10,
+        )
+
+        # The builder emits `str(exc)` first, which itself carries the
+        # `Public surface regression for ...` prefix the parser keys on
+        # — plus the structured `=== public surface regression ===`
+        # block with `removed:` / `signature_changed:` fields.
+        block = build_public_surface_hard_failure_from_error(exc, "update_main")
+
+        parsed = _parse_public_surface_failure("", block)
+        assert parsed is not None
+        directive, signature = parsed
+
+        # Signature tuple is sorted removals first, then sorted signature
+        # changes (matches the parser contract used by the retry loop).
+        assert signature == (
+            "removed:calculate_sha256",
+            "removed:git_helper",
+            "signature_changed:resolve_prompt_code_pair",
+        )
+
+        # Retry directive carries the actionable bullets the next
+        # generation attempt needs (under PDD_REPAIR_DIRECTIVE).
+        assert "Restore these public symbols" in directive
+        assert "- calculate_sha256" in directive
+        assert "- git_helper" in directive
+        assert "Restore compatible signatures" in directive
+        assert "- resolve_prompt_code_pair" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_round_trip_through_parser(self, _mock_env):
+        """Build the hard-failure block from a typed `TestChurnError`,
+        feed it back through `_parse_test_churn_failure`, and assert
+        the parser recovers the retry directive and signature tuple
+        the next-attempt loop expects.
+        """
+        from pdd.code_generator_main import TestChurnError
+        from pdd.agentic_sync_runner import (
+            build_test_churn_hard_failure_from_error,
+        )
+
+        exc = TestChurnError(
+            prompt_name="test_update_main_Python.prompt",
+            output_path="tests/test_update_main.py",
+            churn_ratio=0.82,
+            threshold=0.40,
+            pre_line_count=100,
+            post_line_count=95,
+        )
+
+        block = build_test_churn_hard_failure_from_error(exc, "update_main")
+
+        parsed = _parse_test_churn_failure("", block)
+        assert parsed is not None
+        directive, signature = parsed
+
+        # Signature tuple mirrors what the helper short-circuits on:
+        # `(ratio=..., pre_lines=...)`. Both come from the structured
+        # fields the builder writes.
+        assert signature == ("ratio=0.82", "pre_lines=100")
+
+        # Retry directive carries the documented opt-out instructions.
+        assert "Reduce churn below threshold 0.40" in directive
+        assert "current churn is 0.82" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_public_surface_hard_failure_includes_breaking_change_note(
+        self, _mock_env
+    ):
+        """The structured hard-failure block MUST tell reviewers how to
+        opt the prompt out of the gate — ``agentic_sync_runner_python.prompt``
+        item 9d requires the ``BREAKING-CHANGE:`` directive instruction
+        to ride along with the diagnostics block."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import (
+            build_public_surface_hard_failure_from_error,
+        )
+
+        exc = PublicSurfaceRegressionError(
+            prompt_name="update_main_Python.prompt",
+            output_path="pdd/update_main.py",
+            removed_symbols=["calculate_sha256"],
+            changed_signatures=[],
+            pre_surface_size=10,
+            post_surface_size=9,
+        )
+
+        block = build_public_surface_hard_failure_from_error(exc, "update_main")
+        assert "BREAKING-CHANGE:" in block
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_hard_failure_includes_breaking_change_note(
+        self, _mock_env
+    ):
+        """The structured test-churn hard-failure block MUST include the
+        ``BREAKING-CHANGE: rewrite tests`` directive instruction so the
+        reviewer learns how to opt out of the gate from the failure
+        diagnostics alone."""
+        from pdd.code_generator_main import TestChurnError
+        from pdd.agentic_sync_runner import (
+            build_test_churn_hard_failure_from_error,
+        )
+
+        exc = TestChurnError(
+            prompt_name="test_update_main_Python.prompt",
+            output_path="tests/test_update_main.py",
+            churn_ratio=0.75,
+            threshold=0.40,
+            pre_line_count=120,
+            post_line_count=80,
+        )
+
+        block = build_test_churn_hard_failure_from_error(exc, "update_main")
+        assert "BREAKING-CHANGE:" in block
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015, iter-5): the subprocess hard-failure
+    # path uses the AsyncSyncRunner's INTERNAL builders
+    # (`_build_public_surface_hard_failure` /
+    # `_build_test_churn_hard_failure`), not the importable ones above.
+    # End users see THESE blocks, so they MUST carry the same
+    # ``BREAKING-CHANGE:`` opt-out instruction.
+    # -----------------------------------------------------------------
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_runner_public_surface_hard_block_includes_breaking_change(
+        self, _mock_env
+    ):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: calculate_sha256\n"
+            "signature_changed: <none>\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 10\n"
+            "post_surface_size: 9\n"
+        )
+
+        block = runner._build_public_surface_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "BREAKING-CHANGE:" in block
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_runner_test_churn_hard_block_includes_breaking_change(
+        self, _mock_env
+    ):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for test_foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"
+            "pre_line_count: 120\n"
+            "post_line_count: 80\n"
+        )
+
+        block = runner._build_test_churn_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "BREAKING-CHANGE:" in block
+
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
             basenames=["foo"],
@@ -1570,6 +1868,45 @@ class TestSyncOneModule:
         second_env = mock_popen.call_args_list[1].kwargs["env"]
         assert "PDD_REPAIR_DIRECTIVE" not in first_env
         assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_failure_retries_once_with_repair_directive(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 95\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success
+        assert cost == pytest.approx(0.0)
+        assert error == ""
+        assert mock_popen.call_count == 2
+        first_env = mock_popen.call_args_list[0].kwargs["env"]
+        second_env = mock_popen.call_args_list[1].kwargs["env"]
+        assert "PDD_REPAIR_DIRECTIVE" not in first_env
+        assert "Test churn repair required" in second_env["PDD_REPAIR_DIRECTIVE"]
+        assert "Reduce churn below threshold 0.40; current churn is 0.82" in second_env["PDD_REPAIR_DIRECTIVE"]
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
@@ -1701,6 +2038,47 @@ class TestSyncOneModule:
         cmd = mock_popen.call_args[0][0]
         assert cmd[:4] == ["/usr/bin/pdd", "--force", "--local", "sync"]
         assert cmd[4] == "foo"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_model_and_context_options_are_forwarded_to_child_sync(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Repair retries must not re-resolve context/model knobs differently."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={
+                "context": "backend",
+                "strength": 0.7,
+                "temperature": 0.2,
+            },
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, _ = runner._sync_one_module("foo")
+
+        assert success
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[:8] == [
+            "/usr/bin/pdd",
+            "--force",
+            "--context",
+            "backend",
+            "--strength",
+            "0.7",
+            "--temperature",
+            "0.2",
+        ]
+        assert cmd[8] == "sync"
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)

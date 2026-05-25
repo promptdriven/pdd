@@ -2014,6 +2014,55 @@ _PROVIDER_PREFIX_TO_PROVIDER = {
 }
 
 
+def _is_permanent_invalid_request_error(exc: Exception) -> bool:
+    """Classify whether an exception represents a permanent parameter
+    rejection that retrying through other candidate models cannot fix.
+
+    Used by the candidate-iteration loop in :func:`llm_invoke` to fast-
+    fail the cascade when the request shape itself is wrong (e.g. an
+    unsupported parameter for the model class). Every other provider that
+    relays the same model family will reject the same shape identically,
+    so cascading through them wastes time and hides the root error.
+
+    Intentionally conservative — only clear "wrong parameter" cases are
+    treated as permanent. Context-window errors are explicitly retryable
+    (a different model may have a larger context). Rate limits, transient
+    5xxs, auth failures, and everything else fall through to the existing
+    retry logic.
+
+    Concrete trigger that motivated this: Anthropic enforcing
+    ``thinking.type.adaptive`` for Opus 4.7 on 2026-05-23, where the
+    legacy ``thinking.type.enabled`` shape produces a 400 ``not supported
+    for this model``. Retrying through Vertex/Bedrock/Azure/OpenRouter/
+    Perplexity hits the same Anthropic API and the same 400, every time.
+    """
+    try:
+        import litellm
+    except ImportError:
+        return False
+
+    # Context-window-exceeded is a BadRequestError subclass but IS
+    # retryable: a different model with a larger context may succeed.
+    ctx_err = getattr(litellm.exceptions, "ContextWindowExceededError", None)
+    if ctx_err is not None and isinstance(exc, ctx_err):
+        return False
+
+    bad_req = getattr(litellm.exceptions, "BadRequestError", None)
+    if bad_req is not None and not isinstance(exc, bad_req):
+        return False
+
+    msg = str(exc).lower()
+    # Conservative allow-list of phrases that indicate a permanent
+    # parameter rejection. Extend cautiously — when in doubt, retry.
+    permanent_markers = (
+        "is not supported for this model",
+        "unsupported parameter",
+        "thinking.type",
+        "output_config.effort",
+    )
+    return any(marker in msg for marker in permanent_markers)
+
+
 def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     """Return ``(alt_name, required_provider)`` pairs to try when the literal
     form of ``base_model_name`` is not in the CSV.
@@ -2309,11 +2358,15 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     api_key_field = str(model_info.get('api_key', '') or '')
 
     if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
-        # GitHub Copilot models use an interactive OAuth device flow managed by
-        # litellm.  In non-interactive (--force) mode we must skip the model
-        # unless the user has already authenticated (token file exists).
+        # github_copilot uses litellm-managed device-flow OAuth. If the
+        # cached token file is missing, litellm hangs waiting for a human
+        # to complete the device flow — never a viable code path in server
+        # / non-interactive contexts. Skip the model with a clear hint
+        # regardless of PDD_FORCE; CLI users who set up Copilot via
+        # ``pdd setup`` will have the token file present and proceed
+        # normally. Caller is _ensure_api_key in llm_invoke.py.
         model_name = str(model_info.get('model', ''))
-        if model_name.startswith("github_copilot/") and os.environ.get('PDD_FORCE'):
+        if model_name.startswith("github_copilot/"):
             token_dir = Path(os.environ.get(
                 'GITHUB_COPILOT_TOKEN_DIR',
                 str(Path.home() / ".config" / "litellm" / "github_copilot"),
@@ -2322,8 +2375,9 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
             token_path = token_dir / api_key_file
             if not token_path.exists():
                 logger.warning(
-                    f"Skipping GitHub Copilot model '{model_name}' in --force mode: "
-                    f"no OAuth token found at {token_path}. Run 'pdd setup' to authenticate."
+                    f"Skipping GitHub Copilot model '{model_name}': "
+                    f"no OAuth token at {token_path}. "
+                    f"Run 'pdd setup' to authenticate Copilot, or unset it to skip silently."
                 )
                 return False
         if verbose:
@@ -4585,6 +4639,20 @@ def llm_invoke(
                 # Log more details in verbose mode
                 if verbose:
                     logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
+                # Fast-fail on permanent parameter errors: every other
+                # candidate that proxies the same model family will reject
+                # the same shape identically. Surface the root error
+                # instead of burying it under cascade noise (and avoid
+                # hanging on github_copilot device-flow OAuth deeper in
+                # the candidate list). See
+                # :func:`_is_permanent_invalid_request_error` for the
+                # conservative allow-list of phrases this matches.
+                if _is_permanent_invalid_request_error(e):
+                    logger.error(
+                        f"[FAST-FAIL] Permanent invalid_request_error from "
+                        f"{model_name_litellm}; not cascading through other candidates."
+                    )
+                    raise
                 break # Break inner loop, try next model candidate
 
         # If the inner loop was broken (not by success), continue to the next candidate model

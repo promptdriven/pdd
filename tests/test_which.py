@@ -57,7 +57,7 @@ def _run_pdd_which(args: list[str], env: dict[str, str] | None = None, cwd: str 
     # Import inside helper so test collection doesn't fail if CLI wiring changes.
     from pdd.cli import cli
 
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     return runner.invoke(cli, ["which", *args], env=env, catch_exceptions=False, prog_name="pdd")
 
 
