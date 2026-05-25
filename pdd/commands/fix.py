@@ -153,6 +153,7 @@ def fix(
                 timeout_adder=timeout_adder,
                 max_cycles=max_cycles,
                 resume=False if clean_restart else resume,
+                clean_restart=clean_restart,
                 force=force,
                 verbose=verbose,
                 quiet=quiet,
