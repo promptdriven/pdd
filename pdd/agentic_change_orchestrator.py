@@ -441,6 +441,23 @@ def _resolve_main_ref(git_root: Path) -> str:
     return "HEAD"
 
 
+def _resolve_main_ref_name(git_root: Path) -> str:
+    """Return the human-readable ref name (e.g. 'origin/main') that resolved.
+
+    Same probe order as _resolve_main_ref, but returns the name of the ref
+    instead of its commit SHA — useful for display purposes such as the
+    Step 0 startup comment where a SHA is opaque to the reader.
+    """
+    for ref in ("origin/main", "origin/master", "main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            cwd=git_root, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return ref
+    return "HEAD"
+
+
 def _setup_worktree(
     cwd: Path,
     issue_number: int,
@@ -1504,7 +1521,7 @@ def run_agentic_change_orchestrator(
         model_used = "unknown"
         github_comment_id = None
         worktree_path = None
-        if clean_restart:
+        if effective_clean_restart:
             state["clean_restart"] = True
 
     # Normalize step comments tracking (Set[int] of step indices already posted)
@@ -1580,7 +1597,7 @@ def run_agentic_change_orchestrator(
             mode_label = "Starting fresh"
 
         git_root_for_baseref = _get_git_root(cwd) or cwd
-        base_ref_label = _resolve_main_ref(git_root_for_baseref)
+        base_ref_label = _resolve_main_ref_name(git_root_for_baseref)
 
         startup_body = (
             f"## Step 0/13: Workflow Startup\n\n"

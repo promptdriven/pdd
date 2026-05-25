@@ -2332,6 +2332,136 @@ def test_persisted_clean_restart_resume_still_detects_stale_state(mock_dependenc
     )
 
 
+def test_stale_detect_after_persisted_clean_restart_preserves_flag(mock_dependencies, temp_cwd):
+    """After a stale-state clear during a persisted-clean-restart resume, the fresh
+    state dict must still carry clean_restart=True.
+
+    Scenario: clean-restart run saves state with clean_restart=True through step 4.
+    Issue gets new feedback. User resumes normally. Stale detection fires, clears
+    state, and restarts from step 1. The new state must have clean_restart=True so
+    that the NEXT resume (if step 9+ fails again) still skips the PR guard, uses
+    --force-with-lease in worktree setup, and passes clean_restart='true' to Step 13.
+
+    Finding from PR #1150 round-7 review: the fresh-state branch used
+    `if clean_restart:` (raw CLI flag, which is False on a plain resume), so a
+    stale-detect restart silently dropped the persisted flag.
+    """
+    mocks = mock_dependencies
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, f"ok {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    # Persisted state from a stopped clean restart, with an OLD issue timestamp.
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 4,
+            "step_outputs": {str(i): f"out{i}" for i in range(1, 5)},
+            "issue_updated_at": "2026-01-01T10:00:00Z",
+            "worktree_path": str(temp_cwd),
+            "clean_restart": True,
+        },
+        "ghid",
+    )
+
+    saved_states: list = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir,
+                     repo_owner, repo_name, use_github_state=True,
+                     github_comment_id=None, **kwargs):
+        saved_states.append(dict(state))
+        return "ghid"
+
+    mocks["save_state"].side_effect = capture_save
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        return_value=True,
+    ):
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=42,
+            issue_author="me",
+            issue_title="Bug",
+            issue_updated_at="2026-01-02T09:00:00Z",  # newer than stored
+            cwd=temp_cwd,
+            quiet=True,
+            clean_restart=False,  # normal resume — stale detect fires
+        )
+
+    assert saved_states, "save_workflow_state was never called"
+    first_save = saved_states[0]
+    assert first_save.get("clean_restart") is True, (
+        "After stale-detect clear during persisted-clean-restart resume, the fresh "
+        f"state must still carry clean_restart=True; got {first_save.get('clean_restart')!r}"
+    )
+
+
+def test_startup_comment_shows_ref_name_not_sha(mock_dependencies, temp_cwd):
+    """The Req 16 startup comment must show the branch name (e.g. 'origin/main')
+    not the commit SHA. A SHA is opaque to readers trying to verify the workflow
+    started from the intended branch.
+
+    Finding from PR #1150 round-7 review: _resolve_main_ref() returns the SHA;
+    the startup comment was using it directly for the 'Base branch' field.
+    """
+    mocks = mock_dependencies
+    mocks["run"].side_effect = lambda **kw: (True, f"ok {kw.get('label','')}", 0.1, "gpt-4")
+
+    captured_bodies: list = []
+
+    def capture_startup(repo_owner, repo_name, issue_number, step_num,
+                        body, posted_steps, cwd):
+        if step_num == 0:
+            captured_bodies.append(body)
+        return True
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        side_effect=capture_startup,
+    ), patch(
+        "pdd.agentic_change_orchestrator._resolve_main_ref_name",
+        return_value="origin/main",
+    ):
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=42,
+            issue_author="me",
+            issue_title="Bug",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert captured_bodies, "Step 0 startup comment was never posted"
+    body = captured_bodies[0]
+    assert "origin/main" in body, (
+        f"Startup comment 'Base branch' must show ref name ('origin/main'), not a SHA; "
+        f"got body={body!r}"
+    )
+    # Ensure it is not a SHA (40 hex chars)
+    import re
+    sha_pattern = re.compile(r'\b[0-9a-f]{40}\b')
+    assert not sha_pattern.search(body), (
+        f"Startup comment must not contain a raw SHA; body={body!r}"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Bug #448: JSON in step output causes KeyError in subsequent step formatting
 # -----------------------------------------------------------------------------
