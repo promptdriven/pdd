@@ -39,8 +39,8 @@ Trust-boundary invariants:
   gate runs and before any tool-resolution (``shutil.which``) call
   inside discovery. An operator with ``PATH=.:$PATH`` (or a PATH
   entry that points at the loop's worktree) would otherwise let a
-  PR-shipped ``./mypy`` / ``./npm`` / ``./npx`` shim become the gate
-  binary (iter-40 Finding 1). Tool argv stored on ``Gate.cmd`` is
+  PR-shipped ``./git`` / ``./mypy`` / ``./npm`` / ``./npx`` shim become
+  the gate binary (iter-40 Finding 1). Tool argv stored on ``Gate.cmd`` is
   ALWAYS the absolute path returned by ``shutil.which`` against the
   sanitized PATH, never the bare tool name, so ``subprocess.run``
   cannot re-consult PATH at execution time.
@@ -511,26 +511,37 @@ def _extract_tsc_project_paths(
     resolves each against the worktree. Directory targets stay as
     directories — ``_collect_tsconfig_chain_paths`` knows to look
     for ``<dir>/tsconfig.json`` (iter-37 Finding 2).
+
+    Tokenize the RAW command (not a lowercased copy): only the flag
+    NAMES (``-p`` / ``--project``) are case-insensitive — the path
+    operands they introduce are real filesystem paths and must keep
+    their original case. On case-sensitive filesystems (Linux/CI)
+    a script ``tsc -p Config/Build.json --noEmit`` whose path was
+    pre-lowercased to ``config/build.json`` would resolve to a
+    non-existent file, ``_collect_tsconfig_chain_paths`` would
+    silently return an empty chain, and a PR-touched
+    ``Config/Build.json`` setting ``incremental: true`` would slip
+    past the tsconfig-emit guard.
     """
     if not script_command:
         return []
-    lowered = script_command.lower()
     try:
-        tokens = shlex.split(lowered, posix=True)
+        tokens = shlex.split(script_command, posix=True)
     except ValueError:
-        tokens = lowered.split()
+        tokens = script_command.split()
     flag_words = ("--project", "-p")
     flag_equals = tuple(f + "=" for f in flag_words)
     raw_paths: List[str] = []
     i = 0
     while i < len(tokens):
         tok = tokens[i]
-        if tok in flag_words and i + 1 < len(tokens):
+        tok_cmp = tok.lower()
+        if tok_cmp in flag_words and i + 1 < len(tokens):
             raw_paths.append(tokens[i + 1])
             i += 2
             continue
         for prefix in flag_equals:
-            if tok.startswith(prefix):
+            if tok_cmp.startswith(prefix):
                 raw_paths.append(tok[len(prefix):])
                 break
         i += 1
@@ -1835,7 +1846,12 @@ def _mypy_declares_local_plugin(pyproject_text: str) -> bool:
     return False
 
 
-def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[str]:
+def _resolve_pr_base_spec(
+    worktree: Path,
+    base_ref: Optional[str],
+    *,
+    git_cmd: Optional[str] = None,
+) -> Optional[str]:
     """Resolve ``base_ref`` to a refspec verifiable inside ``worktree``.
 
     Returns the resolved refspec (e.g. ``"origin/main"``) when it exists,
@@ -1849,6 +1865,10 @@ def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[s
     and never raises: a non-git worktree, missing tool, or hang returns
     ``None`` and the caller falls back to the working-tree-only check.
     """
+    trusted_git = git_cmd or _resolve_trusted_git(worktree)
+    if not trusted_git:
+        return None
+    git_env = _build_subprocess_env(worktree)
     candidates: List[str] = []
     if base_ref:
         # When the caller already resolved a fully-qualified ref
@@ -1874,8 +1894,9 @@ def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[s
         seen.add(cand)
         try:
             res = subprocess.run(
-                ["git", "-C", str(worktree), "rev-parse", "--verify", cand],
+                [trusted_git, "-C", str(worktree), "rev-parse", "--verify", cand],
                 capture_output=True,
+                env=git_env,
                 text=True,
                 check=False,
                 timeout=5,
@@ -1888,7 +1909,7 @@ def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[s
     return None
 
 
-def _git_diff_check_gate(base_spec: Optional[str] = None) -> Gate:
+def _git_diff_check_gate(git_cmd: str, base_spec: Optional[str] = None) -> Gate:
     """Build the ``git diff --check`` gate.
 
     When ``base_spec`` is provided the gate runs against the PR range
@@ -1901,7 +1922,7 @@ def _git_diff_check_gate(base_spec: Optional[str] = None) -> Gate:
     if base_spec:
         return Gate(
             name="git-diff-check",
-            cmd=["git", "diff", "--check", f"{base_spec}...HEAD"],
+            cmd=[git_cmd, "diff", "--check", f"{base_spec}...HEAD"],
             source=f"git:{base_spec}...HEAD",
             required_fix_hint=(
                 f"Run `git diff --check {base_spec}...HEAD` locally and fix "
@@ -1910,7 +1931,7 @@ def _git_diff_check_gate(base_spec: Optional[str] = None) -> Gate:
         )
     return Gate(
         name="git-diff-check",
-        cmd=["git", "diff", "--check"],
+        cmd=[git_cmd, "diff", "--check"],
         source="git",
         required_fix_hint=(
             "Run `git diff --check` locally and fix the whitespace/conflict "
@@ -1919,7 +1940,7 @@ def _git_diff_check_gate(base_spec: Optional[str] = None) -> Gate:
     )
 
 
-def _is_git_worktree(worktree: Path) -> bool:
+def _is_git_worktree(worktree: Path, *, git_cmd: Optional[str] = None) -> bool:
     """Return True when ``worktree`` is inside a git checkout.
 
     A non-git directory (typical in unit tests that mock
@@ -1928,12 +1949,17 @@ def _is_git_worktree(worktree: Path) -> bool:
     those callers. Production review loops always run inside a real
     ``git fetch pull/N/head`` worktree so this guard is invisible there.
     """
+    trusted_git = git_cmd or _resolve_trusted_git(worktree)
+    if not trusted_git:
+        return False
     if (worktree / ".git").exists():
         return True
+    git_env = _build_subprocess_env(worktree)
     try:
         result = subprocess.run(
-            ["git", "-C", str(worktree), "rev-parse", "--is-inside-work-tree"],
+            [trusted_git, "-C", str(worktree), "rev-parse", "--is-inside-work-tree"],
             capture_output=True,
+            env=git_env,
             text=True,
             check=False,
             timeout=5,
@@ -1971,9 +1997,10 @@ def discover_gates(
     """
     _ = extra_allow  # reserved for v2; CLI plumbing already passes it through.
     gates: List[Gate] = []
-    if _is_git_worktree(worktree):
-        base_spec = _resolve_pr_base_spec(worktree, base_ref)
-        gates.append(_git_diff_check_gate(base_spec))
+    trusted_git = _resolve_trusted_git(worktree)
+    if trusted_git and _is_git_worktree(worktree, git_cmd=trusted_git):
+        base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
+        gates.append(_git_diff_check_gate(trusted_git, base_spec))
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
     gates.extend(_discover_python_gates(worktree, changed_files))
     # Stable order: git-diff-check first, then language-specific gates
@@ -2112,6 +2139,18 @@ def _resolve_tool(tool: str, worktree: Path) -> Optional[str]:
     the runner cannot fall back to it.
     """
     return shutil.which(tool, path=_sanitized_path(worktree))
+
+
+def _resolve_trusted_git(worktree: Path) -> Optional[str]:
+    """Return an absolute git binary path outside ``worktree``.
+
+    The gate layer invokes git before the normal per-gate runner in
+    discovery, changed-file scanning, and PR-base refresh. Those call
+    sites must not run bare ``git`` with ``cwd=worktree`` because an
+    inherited ``PATH=.:$PATH`` would execute a PR-shipped ``./git`` shim
+    before the sanitized runner starts.
+    """
+    return _resolve_tool("git", worktree)
 
 
 def _build_subprocess_env(worktree: Optional[Path] = None) -> Dict[str, str]:

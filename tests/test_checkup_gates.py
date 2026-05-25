@@ -1537,7 +1537,8 @@ class TestDiscoverGates:
         )
         gates = discover_gates(tmp_path, changed_files=(), base_ref="main")
         diff_gate = next(g for g in gates if g.name == "git-diff-check")
-        assert diff_gate.cmd == ["git", "diff", "--check", "main...HEAD"]
+        assert Path(diff_gate.cmd[0]).is_absolute()
+        assert diff_gate.cmd[1:] == ["diff", "--check", "main...HEAD"]
 
     def test_git_diff_check_falls_back_when_base_ref_unresolvable(
         self, tmp_path: Path
@@ -1563,7 +1564,8 @@ class TestDiscoverGates:
             base_ref="branch-that-does-not-exist",
         )
         diff_gate = next(g for g in gates if g.name == "git-diff-check")
-        assert diff_gate.cmd == ["git", "diff", "--check"]
+        assert Path(diff_gate.cmd[0]).is_absolute()
+        assert diff_gate.cmd[1:] == ["diff", "--check"]
 
     def test_git_diff_check_falls_back_to_main_master_when_no_base_ref(
         self, tmp_path: Path
@@ -1581,7 +1583,8 @@ class TestDiscoverGates:
         diff_gate = next(g for g in gates if g.name == "git-diff-check")
         # Either ``master...HEAD`` or ``main...HEAD`` depending on the
         # local ``init.defaultBranch`` — both satisfy the contract.
-        assert diff_gate.cmd[:3] == ["git", "diff", "--check"]
+        assert Path(diff_gate.cmd[0]).is_absolute()
+        assert diff_gate.cmd[1:3] == ["diff", "--check"]
         if len(diff_gate.cmd) > 3:
             assert diff_gate.cmd[3].endswith("...HEAD")
 
@@ -1624,7 +1627,45 @@ class TestDiscoverGates:
         diff_gate = next(g for g in gates if g.name == "git-diff-check")
         # The gate must run against the dedicated ref directly, not
         # ``origin/refs/...`` or a fallback like ``main...HEAD``.
-        assert diff_gate.cmd == ["git", "diff", "--check", f"{local_ref}...HEAD"]
+        assert Path(diff_gate.cmd[0]).is_absolute()
+        assert diff_gate.cmd[1:] == ["diff", "--check", f"{local_ref}...HEAD"]
+
+    def test_git_diff_check_uses_trusted_git_under_dot_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Greg PR #1095 review: gate-layer git must not execute a
+        worktree-local ``./git`` shim when the operator has
+        ``PATH=.:$PATH``.
+        """
+        from pdd.checkup_gates import discover_gates, run_gates
+
+        _git_init(tmp_path)
+        shim = tmp_path / "git"
+        marker = tmp_path / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        gates = discover_gates(tmp_path, changed_files=())
+        diff_gate = next(g for g in gates if g.name == "git-diff-check")
+        assert Path(diff_gate.cmd[0]).is_absolute()
+        assert Path(diff_gate.cmd[0]).resolve() != shim.resolve()
+
+        results = run_gates(
+            tmp_path,
+            [diff_gate],
+            artifacts_dir=tmp_path / ".pdd" / "gates",
+            round_number=1,
+            mode="review",
+        )
+
+        assert results[0].exit_code == 0
+        assert not marker.exists()
 
     def test_tsc_noemit_skipped_when_node_modules_typescript_absent(
         self, tmp_path: Path
@@ -2524,6 +2565,77 @@ class TestDiscoverGates:
         gates = discover_gates(tmp_path, changed_files=("src/foo.ts",))
         names = {g.name for g in gates}
         assert "npm:format:check" in names
+
+    def test_extract_tsc_project_paths_preserves_case(
+        self, tmp_path: Path
+    ) -> None:
+        """``_extract_tsc_project_paths``
+        previously lowercased the whole script command before
+        tokenizing. On a case-sensitive filesystem (Linux/CI), a
+        script ``tsc -p Config/Build.json --noEmit`` whose path was
+        pre-lowercased to ``config/build.json`` would resolve to a
+        non-existent file. The downstream chain walk would silently
+        return an empty chain, letting a PR-modified
+        ``Config/Build.json`` setting ``incremental: true`` slip past
+        the tsconfig-emit guard. Only the flag NAMES are case-
+        insensitive; the path operand MUST keep its original case.
+        """
+        from pdd.checkup_gates import _extract_tsc_project_paths
+
+        # Directory shape, mixed case path operand.
+        result = _extract_tsc_project_paths(
+            "tsc -p Config/Build.json --noEmit", tmp_path
+        )
+        assert len(result) == 1
+        # The resolved path keeps the mixed case the script supplied
+        # — Path.resolve() does not lowercase on a case-sensitive FS.
+        assert result[0].name == "Build.json"
+        assert result[0].parent.name == "Config"
+        # `--Project=` upper case (flag is case-insensitive) with
+        # case-bearing path operand.
+        result2 = _extract_tsc_project_paths(
+            "tsc --Project=Config/Build.json", tmp_path
+        )
+        assert len(result2) == 1
+        assert result2[0].name == "Build.json"
+        # Quoted form keeps case.
+        result3 = _extract_tsc_project_paths(
+            'tsc -p "Config/Build.json"', tmp_path
+        )
+        assert len(result3) == 1
+        assert result3[0].name == "Build.json"
+
+    def test_tsc_chain_signals_emit_from_mixed_case_script_path(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end case-sensitivity: a script
+        ``tsc -p Config/Build.json --noEmit`` whose ``Config/Build.json``
+        sets ``incremental: true`` must skip the tsc-typecheck script
+        gate. The case-preserved path is what makes the chain walk
+        find the file on a case-sensitive filesystem.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "tsconfig.json").write_text(
+            '{"compilerOptions": {}}', encoding="utf-8"
+        )
+        (tmp_path / "Config").mkdir()
+        (tmp_path / "Config" / "Build.json").write_text(
+            '{"compilerOptions": {"incremental": true}}', encoding="utf-8"
+        )
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json(
+                {"typecheck": "tsc -p Config/Build.json --noEmit"}
+            ),
+            encoding="utf-8",
+        )
+        # No PR diff touches tsconfig — the only thing keeping the
+        # gate from emitting is the chain emit-signal walk finding
+        # ``incremental: true`` in the case-bearing custom config.
+        gates = discover_gates(tmp_path, changed_files=("src/foo.ts",))
+        names = {g.name for g in gates}
+        assert "npm:typecheck" not in names
 
 
 class TestRunGates:

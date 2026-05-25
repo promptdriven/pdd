@@ -204,6 +204,20 @@ _SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:AKIA|ASIA|ABIA)[A-Z0-9]{16}\b"),
     # Slack tokens — diagnostics tools occasionally include them.
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    # Embedded basic-auth credentials in a URL:
+    # ``scheme://user:password@host``. Git stderr on a failed fetch
+    # routinely echoes the remote URL verbatim; the credential helper
+    # / runtime-minted installation token / configured PAT may be
+    # baked into the URL with a generic shape (custom-length internal
+    # token, ``x-access-token:<arbitrary>``) that none of the
+    # prefix-anchored patterns above can recognise. Use a lookbehind
+    # for ``://`` and a lookahead for ``@`` so the userinfo gets
+    # replaced while the scheme and host stay readable
+    # (``https://[REDACTED]@github.com/o/r.git``). The char classes
+    # exclude whitespace, ``/``, ``:`` (left side) and ``@`` so a
+    # path that happens to contain ``://`` followed by text and an
+    # ``@`` literal cannot trip a false match.
+    re.compile(r"(?<=://)[^\s:/@]+:[^\s/@]+(?=@)"),
 )
 
 
@@ -1749,6 +1763,22 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     return normalized
 
 
+def _run_trusted_gate_git(
+    worktree: Path,
+    args: Sequence[str],
+    **kwargs: Any,
+) -> subprocess.CompletedProcess:
+    """Run git for deterministic-gate support without consulting worktree PATH."""
+    from .checkup_gates import _build_subprocess_env, _resolve_trusted_git
+
+    git_cmd = _resolve_trusted_git(worktree)
+    if not git_cmd:
+        raise FileNotFoundError("trusted git binary not found on sanitized PATH")
+    kwargs.setdefault("cwd", worktree)
+    kwargs.setdefault("env", _build_subprocess_env(worktree))
+    return subprocess.run([git_cmd, *args], **kwargs)
+
+
 def _pr_changed_python_files(
     worktree: Path,
     pr_metadata: Optional[Dict[str, Any]],
@@ -1798,9 +1828,9 @@ def _pr_changed_python_files(
 
     for base in base_candidates:
         try:
-            verify = subprocess.run(
-                ["git", "rev-parse", "--verify", base],
-                cwd=worktree,
+            verify = _run_trusted_gate_git(
+                worktree,
+                ["rev-parse", "--verify", base],
                 capture_output=True,
                 text=True,
             )
@@ -1810,9 +1840,9 @@ def _pr_changed_python_files(
         if verify.returncode != 0:
             continue
         try:
-            diff = subprocess.run(
-                ["git", "diff", "--name-only", f"{base}...HEAD"],
-                cwd=worktree,
+            diff = _run_trusted_gate_git(
+                worktree,
+                ["diff", "--name-only", f"{base}...HEAD"],
                 capture_output=True,
                 text=True,
             )
@@ -1849,9 +1879,9 @@ def _pr_changed_python_files(
     # Fallback: most-recent-commit diff.  Better than ``[]`` on a single-
     # commit smoke test, and safe because the AST detector is fail-open.
     try:
-        diff = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
-            cwd=worktree,
+        diff = _run_trusted_gate_git(
+            worktree,
+            ["diff", "--name-only", "HEAD~1...HEAD"],
             capture_output=True,
             text=True,
         )
@@ -3799,9 +3829,9 @@ def _pr_changed_files_all(
 
     for base in base_candidates:
         try:
-            verify = subprocess.run(
-                ["git", "rev-parse", "--verify", base],
-                cwd=worktree,
+            verify = _run_trusted_gate_git(
+                worktree,
+                ["rev-parse", "--verify", base],
                 capture_output=True,
                 text=True,
             )
@@ -3811,9 +3841,9 @@ def _pr_changed_files_all(
         if verify.returncode != 0:
             continue
         try:
-            diff = subprocess.run(
-                ["git", "diff", "--name-only", f"{base}...HEAD"],
-                cwd=worktree,
+            diff = _run_trusted_gate_git(
+                worktree,
+                ["diff", "--name-only", f"{base}...HEAD"],
                 capture_output=True,
                 text=True,
             )
@@ -3858,9 +3888,9 @@ def _pr_changed_files_all(
             "commits"
         )
     try:
-        diff = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
-            cwd=worktree,
+        diff = _run_trusted_gate_git(
+            worktree,
+            ["diff", "--name-only", "HEAD~1...HEAD"],
             capture_output=True,
             text=True,
         )

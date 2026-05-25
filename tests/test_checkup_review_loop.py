@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -4306,6 +4307,72 @@ class TestPromptInjection:
         assert "prioritizing the blocking severities\n(blocker)" in prompt
         assert "every valid" in prompt
         assert "Do not use\n\"focused\"" in prompt
+
+
+class TestScrubSecretsPatterns:
+    """Direct unit tests for ``_scrub_secrets`` redaction patterns.
+
+    The integration tests cover end-to-end behaviour; these pin the
+    individual regex behaviours so a future "tighten" of the pattern
+    set can be caught at the smallest possible scope.
+    """
+
+    def test_redacts_generic_basic_auth_url_userinfo(self) -> None:
+        """Generic ``scheme://user:password@host`` credentials must be
+        replaced even when the password is a custom internal token
+        shape that does NOT match any prefix-anchored pattern
+        (``ghp_``/``ghs_``/``sk-``/``AIza``/etc.). Git stderr on a
+        failed fetch echoes such URLs verbatim; the lookbehind/
+        lookahead pattern preserves the surrounding scheme + host
+        so the diagnostic remains useful.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        leaky = (
+            "fatal: Authentication failed for "
+            "'https://x-access-token:customToken123456789@github.com/o/r.git/'"
+        )
+        scrubbed = _scrub_secrets(leaky)
+        assert "customToken123456789" not in scrubbed
+        assert "x-access-token:customToken123456789" not in scrubbed
+        # Scheme + host survive — operator can still read the URL shape.
+        assert "https://" in scrubbed
+        assert "github.com/o/r.git" in scrubbed
+        assert "[REDACTED]" in scrubbed
+
+    def test_redacts_basic_auth_for_arbitrary_scheme(self) -> None:
+        """Pattern must work for non-HTTPS schemes too — ``http://``,
+        ``ssh://``, ``git://`` all carry the same userinfo shape.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        for scheme in ("http", "https", "ssh", "git"):
+            line = f"remote: {scheme}://alice:s3cret-PA55W0RD@host.example/path"
+            scrubbed = _scrub_secrets(line)
+            assert "alice:s3cret-PA55W0RD" not in scrubbed, scheme
+            assert "[REDACTED]" in scrubbed, scheme
+            assert f"{scheme}://" in scrubbed, scheme
+            assert "host.example" in scrubbed, scheme
+
+    def test_url_userinfo_pattern_leaves_plain_urls_alone(self) -> None:
+        """No userinfo → no redaction. A bare ``https://github.com/...``
+        URL must survive verbatim so the diagnostic context the
+        operator needs is not over-redacted.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        plain = "fatal: cannot connect to https://github.com/o/r.git"
+        assert _scrub_secrets(plain) == plain
+
+    def test_url_userinfo_does_not_match_path_with_at(self) -> None:
+        """``foo://bar/baz@quux`` is a path with a literal ``@``, not
+        userinfo — the lookahead/lookbehind around ``://``…``@``
+        plus the no-slash char classes prevent a false match.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        path_with_at = "loaded https://example.com/path/v1@2024/file.txt"
+        assert _scrub_secrets(path_with_at) == path_with_at
 
 
 class TestParseHelpers:
@@ -11451,6 +11518,34 @@ class TestPrChangedFilesScannerBaseLocalRef:
         # in this synthetic repo at all).
         assert "pkg/feature.py" in files
 
+    def test_pr_changed_files_all_uses_trusted_git_under_dot_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from pdd.checkup_review_loop import _pr_changed_files_all
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        shim = worktree / "git"
+        marker = worktree / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        files = _pr_changed_files_all(
+            worktree,
+            {
+                "base_ref": "release-1.4",
+                "base_local_ref": local_ref,
+            },
+        )
+
+        assert "pkg/feature.py" in files
+        assert not marker.exists()
+
     def test_pr_changed_python_files_uses_base_local_ref(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _pr_changed_python_files
 
@@ -11461,3 +11556,31 @@ class TestPrChangedFilesScannerBaseLocalRef:
         }
         files = _pr_changed_python_files(worktree, pr_metadata)
         assert files == ["pkg/feature.py"]
+
+    def test_pr_changed_python_files_uses_trusted_git_under_dot_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from pdd.checkup_review_loop import _pr_changed_python_files
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        shim = worktree / "git"
+        marker = worktree / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        files = _pr_changed_python_files(
+            worktree,
+            {
+                "base_ref": "release-1.4",
+                "base_local_ref": local_ref,
+            },
+        )
+
+        assert files == ["pkg/feature.py"]
+        assert not marker.exists()
