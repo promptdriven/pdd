@@ -1440,10 +1440,16 @@ def run_agentic_change_orchestrator(
         cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
     )
 
+    # Compute effective flag: CLI flag OR persisted flag from a prior clean-restart
+    # invocation that stopped mid-run. A plain `pdd change` resume after a failed
+    # clean-restart Step 13 must still skip the PR guard and use force-push semantics
+    # in worktree setup — both of which require the persisted flag, not just the CLI one.
+    effective_clean_restart = clean_restart or bool((state or {}).get("clean_restart", False))
+
     # Guard: if an open PR already exists for this issue, return early.
     # Skipped under clean_restart (Req 15) because the caller explicitly wants
     # to ignore the previously generated change/issue-{N} branch / PR.
-    if not clean_restart:
+    if not effective_clean_restart:
         existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
         if existing_pr:
             if not quiet:
@@ -1453,7 +1459,7 @@ def run_agentic_change_orchestrator(
     # Check for stale state: if issue was updated since state was saved, start fresh.
     # Skipped under clean_restart (Req 15) — state has already been cleared above,
     # and the issue_updated_at comparison would be against an empty state.
-    if not clean_restart and state is not None and issue_updated_at:
+    if not effective_clean_restart and state is not None and issue_updated_at:
         stored_updated_at = state.get("issue_updated_at")
         if stored_updated_at and stored_updated_at != issue_updated_at:
             # Issue was modified - state is stale
@@ -1614,7 +1620,7 @@ def run_agentic_change_orchestrator(
              current_work_dir = worktree_path
              context["worktree_path"] = str(worktree_path)
         else:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)
+            wt_path, err = _setup_worktree(cwd, issue_number, quiet, clean_restart=effective_clean_restart)
             if not wt_path:
                 return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
             worktree_path = wt_path
@@ -1669,7 +1675,7 @@ def run_agentic_change_orchestrator(
                 except subprocess.CalledProcessError:
                     pass
 
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)
+                wt_path, err = _setup_worktree(cwd, issue_number, quiet, clean_restart=effective_clean_restart)
                 if not wt_path:
                     return False, f"Failed to create worktree: {err}", total_cost, model_used, []
                 worktree_path = wt_path
@@ -2270,8 +2276,6 @@ def run_agentic_change_orchestrator(
             previous_fixes,
             synthesized_conflict_lines,
         )
-        # Use effective flag: persisted state wins for resumes after a failed Step 13.
-        effective_clean_restart = clean_restart or bool(state.get("clean_restart", False))
         context["clean_restart"] = "true" if effective_clean_restart else "false"
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")

@@ -5960,6 +5960,116 @@ class TestCleanRestartMode:
             f"got {ctx['clean_restart']!r}"
         )
 
+    def test_resume_with_persisted_clean_restart_skips_pr_guard(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """When state["clean_restart"]=True was persisted by a prior clean-restart
+        invocation and the user resumes with plain pdd change (clean_restart=False CLI),
+        the existing-PR guard must be skipped — the PR from the stopped clean restart
+        should not block the continuation.
+
+        Finding from PR #1150 round-5 review: effective_clean_restart was only
+        computed near Step 13; the PR guard used only the raw CLI flag.
+        """
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # An open PR exists from the stopped clean-restart run.
+        mocks["check_pr"].return_value = "https://github.com/owner/repo/pull/77"
+        # Resumed state with clean_restart=True persisted.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 6,
+                "step_outputs": {str(i): f"out{i}" for i in range(1, 7)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd),
+                "clean_restart": True,
+            },
+            "ghid",
+        )
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            success, msg, *_ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=False,  # normal resume
+            )
+
+        assert mocks["check_pr"].call_count == 0, (
+            "Resume with persisted clean_restart=True MUST skip the PR guard; "
+            f"_check_existing_pr was called {mocks['check_pr'].call_count} time(s)."
+        )
+        assert "PR already exists" not in msg, (
+            f"Resuming clean-restart run must not early-return with 'PR already exists'; msg={msg!r}"
+        )
+
+    def test_resume_with_persisted_clean_restart_uses_effective_flag_for_worktree(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """When state["clean_restart"]=True is persisted and the user resumes with
+        plain pdd change, the worktree setup call must receive effective_clean_restart=True
+        so it skips the remote-fetch / branch-reuse path and forces the base ref
+        from main — not reintroduce the old stopped-run branch.
+
+        Finding from PR #1150 round-5 review: both _setup_worktree call sites
+        passed only the raw CLI flag.
+        """
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Resumed state: clean_restart was persisted, worktree no longer exists.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 8,
+                "step_outputs": {str(i): f"out{i}" for i in range(1, 9)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd / "gone-worktree"),  # does not exist
+                "clean_restart": True,
+            },
+            "ghid",
+        )
+
+        setup_calls: list = []
+
+        def fake_setup(cwd, issue_num, quiet, **kwargs):
+            setup_calls.append(kwargs)
+            return (temp_cwd, None)
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_change_orchestrator._setup_worktree",
+            side_effect=fake_setup,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=False,  # normal resume — flag comes from state
+            )
+
+        assert setup_calls, "_setup_worktree was not called (worktree path should have been missing)"
+        for call_kwargs in setup_calls:
+            assert call_kwargs.get("clean_restart") is True, (
+                f"_setup_worktree must receive clean_restart=True from effective flag; "
+                f"got {call_kwargs.get('clean_restart')!r}"
+            )
+
     def test_clean_restart_pre_clear_failure_is_warned_not_fatal(
         self, mock_dependencies, temp_cwd,
     ):
