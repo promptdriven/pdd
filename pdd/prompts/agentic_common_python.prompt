@@ -21,11 +21,11 @@
       {"name": "post_pr_comment", "signature": "(repo_owner, repo_name, pr_number, body, cwd) -> bool", "returns": "bool"},
       {"name": "post_final_comment", "signature": "(repo_owner, repo_name, issue_number, reason, total_cost, steps_completed, total_steps, cwd) -> bool", "returns": "bool"},
       {"name": "validate_cached_state", "signature": "(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]", "returns": "Union[int, float]"},
-      {"name": "github_save_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None) -> Optional[int]", "returns": "Optional[int]"},
+      {"name": "github_save_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]", "returns": "Optional[int]"},
       {"name": "github_load_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Tuple[Optional[Dict], Optional[int]]", "returns": "Tuple[Optional[Dict], Optional[int]]"},
       {"name": "github_clear_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> bool", "returns": "bool"},
       {"name": "load_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]", "returns": "Tuple[Optional[Dict], Optional[int]]"},
-      {"name": "save_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]", "returns": "Optional[int]"},
+      {"name": "save_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]", "returns": "Optional[int]"},
       {"name": "clear_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None", "returns": "None"}
     ]
   }
@@ -178,8 +178,11 @@ Instruction: `"Read the file {prompt_file.name} for instructions. You have full 
 - Google/OpenAI/OpenCode: Same as standard (no per-tool restrictions).
 
 % GitHub State Persistence
-- `_find_state_comment`: Use `gh api ... --paginate`.
-- `save_workflow_state`: Local first, then GitHub. If `github_save_state` returns `None`, return `None` (detect divergence).
+- `_find_state_comment`: Use `gh api ... --paginate`. Returns only the FIRST matching marker — sufficient for the happy path; callers needing to handle the duplicate-marker hazard must use `_find_all_state_comments` instead.
+- `_find_all_state_comments`: Same paginated list call, but returns EVERY comment id whose body carries the workflow's state marker (issue #1149). Required for `github_clear_state`'s sweep behavior and for `github_save_state(..., dedupe=True)`. Returns `[]` on any error.
+- `github_clear_state`: MUST delete EVERY matching state comment, not just the first one. The legacy single-comment delete left older duplicate markers behind (a possible artifact of a prior race) so a future normal resume would silently pick the stale one. Iterate `_find_all_state_comments` and best-effort delete each; return `True` only if every delete succeeded.
+- `github_save_state` (`dedupe: bool = False`, keyword-only): when `dedupe=True` AND `comment_id is None`, the helper first lists every existing state comment via `_find_all_state_comments`. If any exist, it PATCHes the highest-id (most-recent) marker in place with the new state and DELETEs the rest, returning the adopted id; if none exist, it falls through to the normal POST. This closes the clean-restart race where a concurrent worker re-created a state comment in the gap between the pre-clear sweep and the first save. `dedupe=False` (default) preserves the original blind-POST behavior so the extra list-comments cost is opt-in. Concurrent-worker races AFTER the first save (both workers holding valid `github_comment_id`s pointing at different physical comments) are out of scope: the orchestrator's whole-life invariant is "exactly one state comment, the one we know about", and the dedupe path closes only the pre-first-save window.
+- `save_workflow_state` (`dedupe: bool = False`, keyword-only): writes local first, then GitHub. If `github_save_state` returns `None`, return `None` (detect divergence). Forwards `dedupe` verbatim to `github_save_state` so caller-side opt-in surfaces all the way down.
 
 % Instructions
 1. Implement `_subprocess_run` using `Popen(..., start_new_session=True)`. Catch `TimeoutExpired` and kill process group (`-proc.pid`).
