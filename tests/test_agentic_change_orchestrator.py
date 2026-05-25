@@ -5604,3 +5604,291 @@ class TestTrustedStepCommentPosting:
             "Failed Step 12 should not have posted a fallback comment "
             f"or burned composite key 112. Saw: {step_nums}"
         )
+
+
+# -----------------------------------------------------------------------------
+# Clean Restart Mode (issue #1149) — Req 15 + Req 16
+# -----------------------------------------------------------------------------
+
+class TestCleanRestartMode:
+    """Verify that clean_restart=True clears persisted state, skips the
+    existing-PR guard, forces start_step=1 even when prior state exists,
+    and posts the mode-aware Step 0 startup comment."""
+
+    def _make_side_effect(self):
+        """Run all steps successfully so the orchestrator reaches Step 13."""
+        def side_effect(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+            if label == "step10":
+                return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/owner/repo/pull/9", 0.1, "gpt-4")
+            return (True, f"output {label}", 0.1, "gpt-4")
+        return side_effect
+
+    def test_clean_restart_clears_state_before_load(self, mock_dependencies, temp_cwd):
+        """clean_restart=True must call clear_workflow_state BEFORE
+        load_workflow_state so the rest of the orchestrator sees an
+        empty slate. Verified by inspecting mock call order."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        parent_mock = MagicMock()
+        parent_mock.attach_mock(mocks["clear_state"], "clear_state")
+        parent_mock.attach_mock(mocks["load_state"], "load_state")
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        method_names = [call[0] for call in parent_mock.mock_calls]
+        first_clear = method_names.index("clear_state")
+        first_load = method_names.index("load_state")
+        assert first_clear < first_load, (
+            f"clear_workflow_state must be called BEFORE load_workflow_state "
+            f"under clean_restart=True; observed order: {method_names}"
+        )
+
+    def test_clean_restart_skips_existing_pr_guard(self, mock_dependencies, temp_cwd):
+        """clean_restart=True must NOT call _check_existing_pr — the
+        caller explicitly wants to ignore any previously generated PR."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Even if a previous PR DID exist, clean restart should not see it.
+        mocks["check_pr"].return_value = "https://github.com/owner/repo/pull/99"
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            success, msg, *_ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        assert mocks["check_pr"].call_count == 0, (
+            "Under clean_restart=True the existing-PR guard MUST be skipped; "
+            f"_check_existing_pr was called {mocks['check_pr'].call_count} time(s)."
+        )
+        # And we should not have early-returned with the "PR already exists" message.
+        assert "PR already exists" not in msg
+
+    def test_clean_restart_forces_start_at_step_one_despite_cached_state(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """clean_restart=True must run Step 1 even when load_workflow_state
+        somehow returns prior step-output cache (e.g. a race against another
+        worker that re-wrote state after the pre-clear)."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Simulate a stale resume cache surviving the pre-clear.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 8,
+                "step_outputs": {str(i): f"cached step{i}" for i in range(1, 9)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd / "stale-worktree"),
+            },
+            "ghid",
+        )
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        labels = [c.kwargs.get("label", "") for c in mocks["run"].call_args_list]
+        assert "step1" in labels, (
+            f"clean_restart=True must execute Step 1, not skip via cached "
+            f"last_completed_step=8. Labels seen: {labels}"
+        )
+
+    def test_clean_restart_posts_step0_startup_comment(self, mock_dependencies, temp_cwd):
+        """clean_restart=True must post the Req 16 startup comment with
+        step_num=0, Mode='Clean restart', and named base branch."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        step0_calls = [
+            c for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        ]
+        assert step0_calls, (
+            "Req 16: a startup comment with step_num=0 MUST be posted. "
+            f"Got step_nums={[c.kwargs.get('step_num') for c in mock_post_once.call_args_list]}"
+        )
+        body = step0_calls[0].kwargs.get("body", "")
+        assert "Step 0/13: Workflow Startup" in body
+        assert "Clean restart" in body, (
+            f"Startup comment body MUST advertise Mode='Clean restart' under "
+            f"clean_restart=True; got body={body!r}"
+        )
+        assert "Base branch" in body
+        assert "pdd-issue" in body
+
+    def test_normal_run_posts_starting_fresh_startup_comment(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """clean_restart=False + no prior state must post Mode='Starting fresh'."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        step0_calls = [
+            c for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        ]
+        assert step0_calls, "Step 0 startup comment must be posted on a fresh run."
+        body = step0_calls[0].kwargs.get("body", "")
+        assert "Starting fresh" in body, (
+            f"Body should advertise Mode='Starting fresh' on a fresh run; got {body!r}"
+        )
+
+    def test_resume_run_posts_resuming_startup_comment(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """clean_restart=False + cached state with last_completed_step>0
+        must post Mode='Resuming from step N'."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 7,
+                "step_outputs": {str(i): f"cached step{i}" for i in range(1, 8)},
+                "issue_updated_at": "",
+            },
+            "ghid",
+        )
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        step0_calls = [
+            c for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        ]
+        assert step0_calls, "Step 0 startup comment must be posted on a resume run."
+        body = step0_calls[0].kwargs.get("body", "")
+        assert "Resuming from step 8" in body, (
+            f"Body should advertise Mode='Resuming from step 8' (8 = "
+            f"last_completed_step 7 + 1); got {body!r}"
+        )
+
+    def test_clean_restart_pre_clear_failure_is_warned_not_fatal(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """If clear_workflow_state raises during the pre-clear, the
+        orchestrator must log-and-continue rather than abort: the user
+        explicitly asked for a clean restart, and the worst-case
+        consequence is just that we proceed with whatever state load
+        returns (which the defensive `not clean_restart` guard will
+        still ignore on the resume-data branch)."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # First call raises (pre-clear), subsequent calls (e.g. stale-state
+        # path / end-of-run clear) succeed.
+        mocks["clear_state"].side_effect = [RuntimeError("github 500"), None, None]
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            success, msg, *_ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        assert success is True, (
+            f"Pre-clear failure under clean_restart MUST be log-and-continue; "
+            f"orchestrator aborted instead with msg={msg!r}"
+        )

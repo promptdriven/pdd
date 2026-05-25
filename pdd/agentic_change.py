@@ -179,7 +179,9 @@ def run_agentic_change(
         timeout_adder: Additional time to add to step timeouts.
         use_github_state: If True, persists state to GitHub comments.
         reasoning_time: Optional maximum reasoning time for models that support it.
-        clean_restart: If True, ignores any existing state and starts from step 1.
+        clean_restart: If True, discard any persisted state for this issue
+            and start a fresh full pdd-issue flow from the default base
+            branch (issue #1149).
 
     Returns:
         Tuple containing:

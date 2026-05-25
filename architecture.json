@@ -5870,7 +5870,7 @@
         "functions": [
           {
             "name": "run_agentic_change_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, clean_restart)",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]

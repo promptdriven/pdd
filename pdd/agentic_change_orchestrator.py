@@ -1348,36 +1348,63 @@ def run_agentic_change_orchestrator(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 13-step agentic change workflow.
-    
+
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
 
     # Ensure any stale agentic progress from previous runs is cleared.
     clear_agentic_progress()
-    
+
     if not quiet:
         console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
 
     state_dir = _get_state_dir(cwd)
+
+    # Clean Restart (Req 15, issue #1149): discard persisted local + GitHub
+    # state up front so the rest of this function sees an empty slate. This
+    # MUST run BEFORE load_workflow_state so the reload returns None and the
+    # existing-PR guard / stale-state / cached-worktree paths cannot resume
+    # the previous run's branch.
+    if clean_restart:
+        try:
+            clear_workflow_state(
+                cwd, issue_number, "change", state_dir,
+                repo_owner, repo_name, use_github_state,
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: clean_restart pre-clear failed (continuing with fresh in-memory state): {e}[/yellow]"
+                )
+        if not quiet:
+            console.print(
+                f"[bold cyan]Clean restart requested for issue #{issue_number} — discarded persisted state.[/bold cyan]"
+            )
 
     # Load state
     state, loaded_gh_id = load_workflow_state(
         cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
     )
 
-    # Guard: if an open PR already exists for this issue, return early
-    existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
-    if existing_pr:
-        if not quiet:
-            console.print(f"[yellow]PR already exists for issue #{issue_number}: {existing_pr}[/yellow]")
-        return True, f"PR already exists: {existing_pr}", 0.0, "unknown", []
+    # Guard: if an open PR already exists for this issue, return early.
+    # Skipped under clean_restart (Req 15) because the caller explicitly wants
+    # to ignore the previously generated change/issue-{N} branch / PR.
+    if not clean_restart:
+        existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
+        if existing_pr:
+            if not quiet:
+                console.print(f"[yellow]PR already exists for issue #{issue_number}: {existing_pr}[/yellow]")
+            return True, f"PR already exists: {existing_pr}", 0.0, "unknown", []
 
-    # Check for stale state: if issue was updated since state was saved, start fresh
-    if state is not None and issue_updated_at:
+    # Check for stale state: if issue was updated since state was saved, start fresh.
+    # Skipped under clean_restart (Req 15) — state has already been cleared above,
+    # and the issue_updated_at comparison would be against an empty state.
+    if not clean_restart and state is not None and issue_updated_at:
         stored_updated_at = state.get("issue_updated_at")
         if stored_updated_at and stored_updated_at != issue_updated_at:
             # Issue was modified - state is stale
@@ -1387,8 +1414,12 @@ def run_agentic_change_orchestrator(
             state = None
             loaded_gh_id = None
 
-    # Initialize variables from state or defaults
-    if state is not None:
+    # Initialize variables from state or defaults.
+    # Under clean_restart, defensively ignore any state that survived the
+    # pre-clear (e.g. a race against another worker that re-wrote the
+    # comment after clear_workflow_state ran) so this run cannot resume
+    # from a stale step-output cache or reuse the previous worktree path.
+    if state is not None and not clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
@@ -1466,11 +1497,49 @@ def run_agentic_change_orchestrator(
         context["files_to_stage"] = ", ".join(changed_files)
 
     start_step = last_completed_step + 1
-    
+
     if last_completed_step > 0 and not quiet:
         console.print(f"Resuming change workflow for issue #{issue_number}")
         console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
         console.print(f"   Starting from Step {start_step}")
+
+    # Req 16 (issue #1149): post a one-shot startup comment so the issue
+    # reader can see, at a glance, whether this run is resuming or
+    # clean-starting, the model in use, and the base branch / command.
+    # Uses step_num=0 so post_step_comment_once dedupes correctly across
+    # resumes. Failure to post is log-and-continue: gh CLI missing or a
+    # network blip MUST NOT take the workflow down.
+    try:
+        if clean_restart:
+            mode_label = "Clean restart"
+        elif start_step > 1:
+            mode_label = f"Resuming from step {start_step}"
+        else:
+            mode_label = "Starting fresh"
+
+        git_root_for_baseref = _get_git_root(cwd) or cwd
+        base_ref_label = _resolve_main_ref(git_root_for_baseref)
+
+        startup_body = (
+            f"## Step 0/13: Workflow Startup\n\n"
+            f"- **Mode**: {mode_label}\n"
+            f"- **Model**: {model_used}\n"
+            f"- **Base branch**: {base_ref_label}\n"
+            f"- **Command**: pdd-issue (full change → sync flow)\n"
+        )
+        post_step_comment_once(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=0,
+            body=startup_body,
+            posted_steps=step_comments_set,
+            cwd=cwd,
+        )
+        state["step_comments"] = sorted(step_comments_set)
+    except Exception as e:
+        if not quiet:
+            console.print(f"[yellow]Warning: startup comment post failed (continuing): {e}[/yellow]")
 
     steps_config = [
         (1, "duplicate", "Search for duplicate issues"),

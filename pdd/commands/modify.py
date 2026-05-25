@@ -181,8 +181,10 @@ def split(
     is_flag=True,
     default=False,
     help=(
-        "Discard persisted solving state for this issue and start a fresh full "
-        "pdd-issue flow from the default base branch."
+        "Discard any persisted solving state for this issue and start a fresh "
+        "full pdd-issue flow from the default base branch, ignoring any "
+        "previously generated change/issue-N branch artifacts. Use when "
+        "recovering from a stopped or wrong-model run."
     ),
 )
 @click.pass_context
@@ -210,8 +212,10 @@ def change(
     ctx.ensure_object(dict)
 
     if clean_restart and manual:
-        raise click.UsageError("--clean-restart is only valid in agentic mode and cannot be used with --manual")
-    
+        raise click.UsageError(
+            "--clean-restart is only valid in agentic mode and cannot be used with --manual"
+        )
+
     try:
         # Set budget in context for manual mode usage
         ctx.obj["budget"] = budget
@@ -287,6 +291,7 @@ def change(
                 use_github_state=not no_github_state,
                 clean_restart=clean_restart,
                 reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
+                clean_restart=clean_restart,
             )
 
             # Display results using click.echo as requested

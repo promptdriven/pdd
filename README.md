@@ -2306,6 +2306,8 @@ The 13-step workflow:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
+**Clean Restart** (`--clean-restart`, issue #1149): Discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. Cannot be combined with `--manual`.
+
 **Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
 **Worktree Branching Behavior**: When running `pdd change`, `pdd bug`, or `pdd split`, a new git worktree is created based on your current HEAD:
