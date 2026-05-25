@@ -179,7 +179,7 @@ For CLI enthusiasts, implement GitHub issues directly:
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
-   - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/install.sh | sh` (uses `~/.gemini/antigravity-cli/` OAuth login if present, otherwise `GEMINI_API_KEY`/`GOOGLE_API_KEY`/`ANTIGRAVITY_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin the Antigravity binary, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection when both are installed (`auto` prefers `agy`).
+   - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | sh` (uses `~/.gemini/antigravity-cli/` OAuth login if present, otherwise `GEMINI_API_KEY`/`GOOGLE_API_KEY`/`ANTIGRAVITY_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin the Antigravity binary, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection when both are installed (`auto` prefers `agy`).
    - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; PDD keeps the legacy `gemini` binary as a fallback (`PDD_GOOGLE_CLI=gemini`) until Antigravity auth/config is fully verified for all users.
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
@@ -2106,9 +2106,9 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Requires the `claude` CLI to be installed and in your `PATH`.
     *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
     *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Authenticates with `~/.gemini` OAuth credentials (run `gemini` interactively once to populate), `GOOGLE_API_KEY`/`GEMINI_API_KEY`, or Vertex AI service-account credentials.
+2.  **Google (Antigravity `agy` / legacy `gemini`):**
+    *   Requires either the `agy` CLI (preferred, install via `curl -fsSL https://antigravity.google/cli/install.sh | sh`) **or** the legacy `gemini` CLI (`npm install -g @google/gemini-cli`) to be on your `PATH`. `agy` is selected by default when both are present; binary selection is gated by `PDD_GOOGLE_CLI=agy|gemini|auto`. Setting `PDD_AGENTIC_PROVIDER=antigravity` is the explicit pin to `agy` and overrides any prior `PDD_GOOGLE_CLI` value.
+    *   Authenticates with `~/.gemini/oauth_creds.json` or `~/.gemini/antigravity-cli/oauth_creds.json` OAuth credentials (run `agy` or `gemini` interactively once to populate), `GOOGLE_API_KEY` / `GEMINI_API_KEY` / `ANTIGRAVITY_API_KEY`, or Vertex AI service-account credentials. Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; the legacy `gemini` binary remains the safe rollback path until that date.
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
@@ -2364,7 +2364,7 @@ This produces prompts that are more concise while remaining clear to developers 
 
 **Prerequisites**: Requires one of these CLI tools installed and configured:
 - `claude` (Anthropic Claude Code)
-- `gemini` (Google Gemini CLI)
+- `agy` (Google Antigravity CLI, preferred for Google provider) **or** `gemini` (legacy Google Gemini CLI, rollback)
 - `codex` (OpenAI Codex CLI)
 - `opencode` (OpenCode CLI)
 
@@ -3211,7 +3211,8 @@ PDD uses several environment variables to customize its behavior:
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
-- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens include `anthropic`, `google`, `openai`, and `opencode` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`).
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
+- **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy`, fall back to `gemini`). Used by both availability detection and command construction so they cannot disagree.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 
