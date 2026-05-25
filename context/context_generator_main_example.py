@@ -1,84 +1,148 @@
+"""Example: how to invoke `context_generator_main` to generate example code.
+
+This script demonstrates the CLI wrapper `context_generator_main` from
+`pdd.context_generator_main`. It mocks the internal `context_generator`
+dependency so the example runs without an LLM call or network access.
+
+context_generator_main signature:
+    (ctx: click.Context, prompt_file: str, code_file: str,
+     output: Optional[str], format: Optional[str] = None) -> Tuple[str, float, str]
+
+Inputs:
+    - ctx: a click.Context. The wrapper reads keys from ctx.obj such as
+      'strength' (float), 'temperature' (float), 'time' (float|None),
+      'force' (bool), 'quiet' (bool), 'verbose' (bool), 'local' (bool),
+      'context' (str|None), 'confirm_callback' (Callable|None).
+    - prompt_file: filesystem path (str) to the .prompt file.
+    - code_file:   filesystem path (str) to the source code file.
+    - output: optional output path. If it has a non-empty suffix the
+      wrapper writes to that exact path verbatim (.md/.yml/.py are all honored).
+      If it has no suffix, the wrapper applies a format/language-driven extension.
+    - format: optional 'code' or 'md'. None means use construct_paths default.
+
+Returns:
+    (generated_code: str, total_cost_usd: float, model_name: str)
+"""
+
 import os
-import asyncio
+import sys
 from pathlib import Path
+from unittest.mock import patch
+
 import click
-from pdd.context_generator_main import context_generator_main
 
-def run_example():
-    """
-    Demonstrates the usage of context_generator_main to generate example code.
-    
-    Inputs to context_generator_main:
-        - ctx (click.Context): Click context containing global options (strength, temperature, etc.)
-        - prompt_file (str): Path to the .prompt file used to generate the original code.
-        - code_file (str): Path to the existing source code file.
-        - output (Optional[str]): Path to save the generated example. If None, uses default naming.
-        - format (Optional[str]): Output format (default: None, uses 'code'). Valid values: 'code' (uses language extension), 'md' (markdown).
+# Ensure the package can be imported regardless of cwd.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-    Outputs of context_generator_main:
-        - generated_code (str): The resulting example code string.
-        - total_cost (float): The cost of the LLM operation in USD.
-        - model_name (str): The name of the AI model that performed the generation.
-    """
-    # 1. Setup directory structure in ./output
-    output_dir = Path("./output")
-    output_dir.mkdir(exist_ok=True)
+from pdd.context_generator_main import context_generator_main  # noqa: E402
 
-    prompt_path = output_dir / "math_utils_python.prompt"
-    code_path = output_dir / "math_utils.py"
-    example_output_path = output_dir / "math_utils_example.py"
 
-    # 2. Create dummy input files
-    prompt_path.write_text(
-        "Task: Create a utility for basic math operations.\n"
-        "Include a function 'add(a, b)' that returns the sum.",
-        encoding="utf-8"
+def build_ctx(local: bool = True, quiet: bool = False) -> click.Context:
+    """Build a Click context with the keys the wrapper reads from ctx.obj."""
+    ctx = click.Context(click.Command("example"))
+    ctx.obj = {
+        "verbose": False,
+        "strength": 0.5,
+        "temperature": 0.0,
+        "time": None,
+        "force": True,
+        "quiet": quiet,
+        "local": local,           # True => skip cloud entirely; no network or auth
+        "context": None,
+        "confirm_callback": None,
+    }
+    return ctx
+
+
+def main() -> None:
+    work_dir = Path(os.path.dirname(__file__)) / "_cgm_example_output"
+    work_dir.mkdir(exist_ok=True)
+
+    prompt_file = work_dir / "math_utils_python.prompt"
+    code_file = work_dir / "math_utils.py"
+    output_file = work_dir / "math_utils_example.py"
+
+    prompt_file.write_text(
+        "Task: Create a utility module with a function `add(a, b)` that returns a + b.",
+        encoding="utf-8",
     )
-    
-    code_path.write_text(
-        "def add(a, b):\n    return a + b",
-        encoding="utf-8"
-    )
-
-    # 3. Mock the Click Context object
-    # In a real CLI, this is provided by the @click.group or @click.command decorators
-    class MockContext:
-        def __init__(self):
-            self.obj = {
-                'strength': 0.7,        # LLM power (0.0 to 1.0)
-                'temperature': 0.2,     # Randomness (0.0 to 1.0)
-                'force': True,          # Overwrite existing files
-                'quiet': False,         # Show Rich console output
-                'verbose': True,        # Detailed logging
-                'time': 0.5             # Thinking time budget (0.0 to 1.0)
-            }
-            self.params = {'local': True} # Force local for this demo to avoid network calls
-
-    ctx = click.Context(click.Command('example'), obj=MockContext().obj)
-    ctx.params = {'local': True}
-
-    # 4. Execute the main wrapper
-    # This function handles path resolution, preprocessing, cloud/local logic, and syntax fixing
-    generated_code, cost, model = context_generator_main(
-        ctx=ctx,
-        prompt_file=str(prompt_path),
-        code_file=str(code_path),
-        output=str(example_output_path)
+    code_file.write_text(
+        "def add(a, b):\n    return a + b\n",
+        encoding="utf-8",
     )
 
-    # 5. Display results
-    print(f"--- Generation Results ---")
-    print(f"Model Used: {model}")
-    print(f"Total Cost: ${cost:.6f}")
-    print(f"Output saved to: {example_output_path}")
-    print("\nGenerated Code Snippet:")
-    print("-" * 20)
-    print(generated_code[:150] + "...")
+    # The wrapper delegates to `construct_paths` (resolves config + reads files)
+    # and `context_generator` (calls the LLM). We mock both so this example
+    # runs offline and deterministically.
+    fake_construct_paths_return = (
+        {},  # resolved_config
+        {
+            "prompt_file": prompt_file.read_text(encoding="utf-8"),
+            "code_file": code_file.read_text(encoding="utf-8"),
+        },
+        {"output": str(output_file)},  # output_file_paths
+        "python",  # language
+    )
+
+    fake_example_code = (
+        "from math_utils import add\n"
+        "\n"
+        "if __name__ == \"__main__\":\n"
+        "    print(add(2, 3))\n"
+    )
+
+    ctx = build_ctx(local=True, quiet=False)
+
+    print("=== Demo 1: default output path, format=None (uses construct_paths default) ===")
+    with patch("pdd.context_generator_main.construct_paths", return_value=fake_construct_paths_return), \
+         patch("pdd.context_generator_main.context_generator",
+               return_value=(fake_example_code, 0.001234, "mock-model-v1")):
+        generated_code, total_cost, model_name = context_generator_main(
+            ctx=ctx,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            output=None,           # use construct_paths default
+            format=None,
+        )
+
+    print(f"model_name = {model_name}")
+    print(f"total_cost = ${total_cost:.6f}")
+    print(f"wrote: {output_file}")
+    print("--- generated code ---")
+    print(generated_code)
+
+    print()
+    print("=== Demo 2: explicit --output with .yml suffix is honored verbatim ===")
+    # Per spec / issue #1183: explicit suffixes MUST be honored verbatim.
+    # Even though language is 'yaml' (canonically .yaml), the user's .yml wins.
+    yaml_prompt = work_dir / "cfg.prompt"
+    yaml_code = work_dir / "cfg.yaml"
+    yaml_output = work_dir / "cfg_example.yml"
+    yaml_prompt.write_text("Task: produce a sample yaml config.", encoding="utf-8")
+    yaml_code.write_text("foo: bar\n", encoding="utf-8")
+
+    yaml_construct_paths_return = (
+        {},
+        {"prompt_file": "Task: produce a sample yaml config.", "code_file": "foo: bar\n"},
+        {"output": str(work_dir / "cfg_default.yaml")},
+        "yaml",
+    )
+
+    with patch("pdd.context_generator_main.construct_paths", return_value=yaml_construct_paths_return), \
+         patch("pdd.context_generator_main.context_generator",
+               return_value=("foo: bar\nbaz: qux\n", 0.0001, "mock-model-v1")):
+        _, _, _ = context_generator_main(
+            ctx=ctx,
+            prompt_file=str(yaml_prompt),
+            code_file=str(yaml_code),
+            output=str(yaml_output),  # user explicitly chose .yml
+            format="code",
+        )
+
+    print(f"explicit user path honored: {yaml_output} exists? {yaml_output.exists()}")
+    rewritten = work_dir / "cfg_example.yaml"
+    print(f"would-be rewritten .yaml NOT created: {rewritten} exists? {rewritten.exists()}")
+
 
 if __name__ == "__main__":
-    # Ensure environment variables required by internal modules are present
-    # (Normally these are set in the user's shell environment)
-    if "NEXT_PUBLIC_FIREBASE_API_KEY" not in os.environ:
-        os.environ["NEXT_PUBLIC_FIREBASE_API_KEY"] = "mock_key"
-    
-    run_example()
+    main()

@@ -108,23 +108,16 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         prompt_content = input_strings.get("prompt_file", "")
         code_content = input_strings.get("code_file", "")
         if output and not output.endswith("/") and not Path(output).is_dir():
-            # When format is specified, ensure the output path uses the correct extension
-            if format is not None:
-                output_path = Path(output)
-                format_lower = format.lower()
-                if format_lower == "md":
-                    # Replace extension with .md to match format constraint
+            output_path = Path(output)
+            if output_path.suffix:
+                resolved_output = output
+            else:
+                if format is not None and format.lower() == "md":
                     resolved_output = str(output_path.with_suffix(".md"))
-                elif format_lower == "code":
-                    # For code format, determine the correct language extension based on language
+                else:
                     lang_key = language.lower() if language else ''
                     lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
                     resolved_output = str(output_path.with_suffix(lang_ext))
-                else:
-                    # Fallback (shouldn't happen due to click.Choice validation)
-                    resolved_output = output
-            else:
-                resolved_output = output
         else:
             resolved_output = output_file_paths.get("output")
         is_local = ctx.obj.get("local", False)
