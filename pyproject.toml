@@ -142,3 +142,15 @@ local_scheme = "no-local-version"
 # Enabling the `subprocess` patch implicitly turns on `parallel = true`,
 # producing per-process data files that `coverage combine` merges.
 patch = ["subprocess"]
+
+[tool.coverage.report]
+# Mirrors the fallback excludes that pdd/sync_orchestration.py applies
+# via a temporary --cov-config when no project coverage config is
+# present. Declaring [tool.coverage.run] above flips _has_coverage_config
+# to True, which suppresses that fallback, so we must restate the
+# excludes here to keep `if __name__ == "__main__":` and `pragma: no
+# cover` lines out of coverage measurement.
+exclude_lines = [
+    "if __name__ == .__main__.",
+    "pragma: no cover",
+]
