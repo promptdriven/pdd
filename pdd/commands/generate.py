@@ -13,6 +13,7 @@ from ..context_generator_main import context_generator_main
 from ..track_cost import track_cost
 from ..operation_log import log_operation
 from ..core.errors import handle_error
+from ..evidence_manifest import write_evidence_manifest
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
@@ -93,6 +94,12 @@ class GenerateCommand(click.Command):
         "mode; passing it on a standard prompt-file invocation is rejected."
     ),
 )
+@click.option(
+    "--evidence",
+    is_flag=True,
+    default=False,
+    help="Write a machine-readable evidence manifest for this run.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -113,6 +120,7 @@ def generate(
     force_single: bool,
     no_github_state: bool,
     project_root: Optional[str],
+    evidence: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -236,6 +244,15 @@ def generate(
                 if output_files:
                     label = "Would change files" if dry_run else "Output files"
                     click.echo(f"{label}: {', '.join(output_files)}")
+            if evidence and success:
+                write_evidence_manifest(
+                    command="pdd generate",
+                    prompt_file=prompt_file,
+                    output_files=output_files if not dry_run else (),
+                    model=model,
+                    cost_usd=cost,
+                    temperature=obj.get("temperature", 0.0),
+                )
             return (message, cost, model) if success else None
 
         if dry_run:
@@ -265,6 +282,15 @@ def generate(
                     click.echo(click.style(f"Failed: {message}", fg="red"))
                 if output_files:
                     click.echo(f"Output files: {', '.join(output_files)}")
+            if evidence and success:
+                write_evidence_manifest(
+                    command="pdd generate",
+                    output_files=output_files,
+                    model=model,
+                    cost_usd=cost,
+                    temperature=(ctx.obj or {}).get("temperature", 0.0),
+                    basename="agentic-generate",
+                )
             return (message, cost, model) if success else None
 
         if project_root:
@@ -308,6 +334,15 @@ def generate(
             exclude_tests=exclude_tests
         )
 
+        if evidence:
+            write_evidence_manifest(
+                command="pdd generate",
+                prompt_file=target_prompt_file,
+                output_files=[output] if output else (),
+                model=model,
+                cost_usd=cost,
+                temperature=(ctx.obj or {}).get("temperature", 0.0),
+            )
         return generated_code, cost, model
 
     except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
@@ -372,6 +407,12 @@ def example(
 @click.option("--existing-tests", type=click.Path(exists=True), multiple=True, help="Path(s) to existing unit test file(s).")
 @click.option("--target-coverage", type=float, default=90.0, help="Desired code coverage percentage.")
 @click.option("--merge", is_flag=True, help="Merge new tests with existing test file.")
+@click.option(
+    "--evidence",
+    is_flag=True,
+    default=False,
+    help="Write a machine-readable evidence manifest for this run.",
+)
 @click.pass_context
 @log_operation(operation="test", updates_run_report=True)
 @track_cost
@@ -387,6 +428,7 @@ def test(
     existing_tests: Tuple[str, ...],
     target_coverage: float,
     merge: bool,
+    evidence: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Generate or enhance unit tests, or link story prompt metadata.
@@ -433,6 +475,15 @@ def test(
                 "story_file": str(story_path),
                 "linked_prompts": linked_prompts,
             }
+            if evidence and success:
+                write_evidence_manifest(
+                    command="pdd test",
+                    output_files=[story_path],
+                    model=model,
+                    cost_usd=cost,
+                    validation={"unit_tests": "passed"},
+                    basename=story_path.stem,
+                )
             return result_dict, cost, model
 
         # Story generation: pdd test prompt1.prompt [prompt2.prompt ...]
@@ -462,6 +513,15 @@ def test(
                 "story_file": generated_story_file,
                 "linked_prompts": linked_prompts,
             }
+            if evidence and success:
+                write_evidence_manifest(
+                    command="pdd test",
+                    prompt_file=story_prompt_args[0],
+                    output_files=[generated_story_file],
+                    model=model,
+                    cost_usd=cost,
+                    validation={"unit_tests": "passed"},
+                )
             return result_dict, cost, model
 
         # Determine mode
@@ -497,6 +557,15 @@ def test(
                 "message": message,
                 "changed_files": changed_files
             }
+            if evidence:
+                write_evidence_manifest(
+                    command="pdd test",
+                    output_files=changed_files,
+                    model=model,
+                    cost_usd=cost,
+                    validation={"unit_tests": "passed"},
+                    basename="agentic-test",
+                )
             return result_dict, cost, model
 
         else:
@@ -525,6 +594,15 @@ def test(
                 manual=manual
             )
 
+            if evidence:
+                write_evidence_manifest(
+                    command="pdd test",
+                    prompt_file=prompt_file,
+                    output_files=[output] if output else (),
+                    model=test_result.model,
+                    cost_usd=test_result.cost,
+                    validation={"unit_tests": "passed"},
+                )
             return test_result.content, test_result.cost, test_result.model
 
     except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):

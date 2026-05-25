@@ -13,6 +13,7 @@ from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility
+from ..evidence_manifest import write_evidence_manifest
 
 DEFAULT_SYNC_BUDGET = 20.0
 
@@ -121,6 +122,12 @@ DEFAULT_SYNC_BUDGET = 20.0
     default=None,
     help="Maximum parallel module worktrees in durable mode. Default: current runner concurrency.",
 )
+@click.option(
+    "--evidence",
+    is_flag=True,
+    default=False,
+    help="Write a machine-readable evidence manifest for this run.",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -143,6 +150,7 @@ def sync(
     durable_branch: Optional[str],
     no_resume: bool,
     durable_max_parallel: Optional[int],
+    evidence: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -167,7 +175,7 @@ def sync(
         if durable or durable_branch or no_resume or durable_max_parallel is not None:
             raise click.UsageError("Durable sync options require a GitHub issue URL.")
         effective_one_session = one_session if one_session is not None else False
-        return _run_global_sync_dispatch(
+        global_result = _run_global_sync_dispatch(
             ctx=ctx,
             budget=budget,
             skip_verify=skip_verify,
@@ -180,6 +188,16 @@ def sync(
             one_session=effective_one_session,
             timeout_adder=timeout_adder,
         )
+        if evidence and global_result:
+            _, cost, model = global_result
+            write_evidence_manifest(
+                command="pdd sync",
+                model=model,
+                cost_usd=cost,
+                temperature=ctx.obj.get("temperature", 0.0),
+                basename="global-sync",
+            )
+        return global_result
 
     # Detect GitHub issue URL -> dispatch to agentic sync
     if _is_github_issue_url(basename):
@@ -191,7 +209,7 @@ def sync(
             )
         # Default to one-session for agentic sync unless explicitly disabled
         effective_one_session = one_session if one_session is not None else True
-        return _run_agentic_sync_dispatch(
+        agentic_result = _run_agentic_sync_dispatch(
             ctx=ctx,
             issue_url=basename,
             budget=budget,
@@ -212,6 +230,16 @@ def sync(
             temperature=ctx.obj.get("temperature"),
             context_override=ctx.obj.get("context"),
         )
+        if evidence and agentic_result:
+            _, cost, model = agentic_result
+            write_evidence_manifest(
+                command="pdd sync",
+                model=model,
+                cost_usd=cost,
+                temperature=ctx.obj.get("temperature", 0.0),
+                basename="agentic-sync",
+            )
+        return agentic_result
 
     if durable or durable_branch or no_resume or durable_max_parallel is not None:
         raise click.UsageError("Durable sync options require a GitHub issue URL.")
@@ -233,6 +261,14 @@ def sync(
             agentic_mode=agentic,
             one_session=effective_one_session,
         )
+        if evidence:
+            write_evidence_manifest(
+                command="pdd sync",
+                basename=basename,
+                model=model_name,
+                cost_usd=total_cost,
+                temperature=ctx.obj.get("temperature", 0.0),
+            )
         return str(result), total_cost, model_name
     except click.Abort:
         raise
