@@ -1493,6 +1493,8 @@ def run_agentic_change_orchestrator(
         model_used = "unknown"
         github_comment_id = None
         worktree_path = None
+        if clean_restart:
+            state["clean_restart"] = True
 
     # Normalize step comments tracking (Set[int] of step indices already posted)
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))
@@ -2268,7 +2270,9 @@ def run_agentic_change_orchestrator(
             previous_fixes,
             synthesized_conflict_lines,
         )
-        context["clean_restart"] = "true" if clean_restart else "false"
+        # Use effective flag: persisted state wins for resumes after a failed Step 13.
+        effective_clean_restart = clean_restart or bool(state.get("clean_restart", False))
+        context["clean_restart"] = "true" if effective_clean_restart else "false"
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
         # Preprocess to escape curly braces in included content
