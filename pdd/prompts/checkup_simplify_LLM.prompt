@@ -1,0 +1,37 @@
+% Conservative code simplification pass for PDD checkup.
+
+% Mode: {mode}
+% Repository root: {repo_root}
+% Files to analyze (do not expand beyond this list unless a file imports from them):
+{file_list}
+
+% Goals
+- Reduce unnecessary complexity, duplication, and verbose patterns.
+- Improve readability and naming where safe.
+- Preserve behavior, public APIs, error handling, and test expectations.
+- Prefer small, reviewable edits.
+
+% Constraints
+- Do not add features or change CLI / HTTP contracts.
+- Do not remove intentional error handling.
+- Do not edit generated evidence under `.pdd/evidence/` or `.pdd/meta/`.
+- Do not change files outside the list above.
+
+% Mode rules
+- If mode is `dry-run`: do **not** modify any files. Produce suggestions only.
+- If mode is `apply`: you may edit files in the list. Make only safe simplifications.
+
+% Required machine-readable footer (must be the last block in your response)
+Emit a single JSON object on its own line prefixed exactly with `SIMPLIFY_REPORT_JSON:`.
+The JSON must include:
+- `"kind": "pdd.checkup.simplify"`
+- `"files_analyzed"`: array of repo-relative paths
+- `"suggestions"`: array of objects with `path` and `items` (string bullets)
+- `"summary"`: short string
+
+After the JSON line, emit `FILES_MODIFIED:` comma-separated repo-relative paths you changed,
+or `FILES_MODIFIED: none` in dry-run or when nothing changed.
+
+% Example footer shape
+SIMPLIFY_REPORT_JSON: {{"kind":"pdd.checkup.simplify","files_analyzed":["pdd/foo.py"],"suggestions":[{{"path":"pdd/foo.py","items":["merged duplicate validation"]}}],"summary":"1 file with suggestions"}}
+FILES_MODIFIED: none
