@@ -1,5 +1,17 @@
 # Getting Started with PDD using a Free Gemini API Key
 
+> **Migration notice (issue #1182):** Google is sunsetting the consumer-tier
+> Gemini CLI on **2026-06-18**. New installs should use the **Antigravity CLI
+> (`agy`)** — the supported successor — which PDD selects via
+> `PDD_AGENTIC_PROVIDER=antigravity` (or `PDD_AGENTIC_PROVIDER=google`, which
+> prefers `agy` when present and falls back to legacy `gemini` during the
+> rollback window). The Gemini steps below continue to work for existing
+> users for the duration of the rollback window so nothing breaks immediately;
+> when you're ready, install `agy` via Google's native Antigravity installer,
+> set `ANTIGRAVITY_API_KEY` (or sign in to populate `~/.antigravity/oauth_creds.json`),
+> and re-run `pdd setup`. The same `GEMINI_API_KEY` / Vertex paths below also
+> still work via the legacy `gemini` binary while it remains installed.
+
 This example shows you how to set up **Prompt-Driven Development (PDD)** with a free **Gemini API key** and run the built-in **Hello** example.
 
 > **Goal:** By the end, you'll have PDD installed, Gemini configured, and `pdd sync` running on the Hello example.
@@ -61,7 +73,7 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed
+  1.  Detects agentic CLI tools (Claude, Antigravity (`agy`), Gemini, Codex, OpenCode) and offers installation and credential configuration if needed
   2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
   4. Optionally creates a `.pddrc` project config

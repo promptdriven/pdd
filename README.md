@@ -179,7 +179,8 @@ For CLI enthusiasts, implement GitHub issues directly:
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
+   - **Antigravity CLI (`agy`)**: install via Google's native Antigravity installer (replaces the deprecated Gemini CLI ahead of Google's 2026-06-18 consumer-tier Gemini CLI cutoff; uses `ANTIGRAVITY_API_KEY` or `~/.antigravity/oauth_creds.json`). Selectable via `PDD_AGENTIC_PROVIDER=antigravity`, or via `PDD_AGENTIC_PROVIDER=google` which prefers `agy` when present and falls back to the legacy `gemini` binary during the rollback window.
+   - **Gemini CLI** (legacy, kept for rollback): `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`). Deprecated upstream; prefer Antigravity for new installs.
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
@@ -241,7 +242,7 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription credentials such as Claude Max/Pro, Gemini OAuth, or Codex ChatGPT login, or OpenCode provider auth/config.
+  1.  Detects agentic CLI tools (Claude, Antigravity (`agy`), Gemini, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription credentials such as Claude Max/Pro, Antigravity OAuth, legacy Gemini OAuth, or Codex ChatGPT login, or OpenCode provider auth/config.
   2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription credential or config, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
   4. Optionally creates a `.pddrc` project config
@@ -2075,7 +2076,7 @@ In this example, `pdd fix` will be run for each test file, and the fixed test fi
 For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
 
 **How it Works:**
-If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, OpenAI's Codex, or OpenCode.
+If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Anthropic's Claude, Google's Antigravity (`agy`, the supported successor to the legacy Gemini CLI), Google's Gemini (legacy, kept for rollback), OpenAI's Codex, or OpenCode.
 
 **How to Use:**
 
@@ -2105,13 +2106,19 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Requires the `claude` CLI to be installed and in your `PATH`.
     *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
     *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
+2.  **Google Antigravity (`agy`)** — supported Google CLI:
+    *   Requires the `agy` CLI to be installed and in your `PATH` (install via Google's native Antigravity installer).
+    *   Authenticates with `ANTIGRAVITY_API_KEY` or with a stored OAuth credential at `~/.antigravity/oauth_creds.json`.
+    *   Selectable via `PDD_AGENTIC_PROVIDER=antigravity`. Under `PDD_AGENTIC_PROVIDER=google`, pdd prefers `agy` when present and falls back to legacy `gemini` for the rollback window.
+    *   pdd does NOT forward Gemini-only flags (`--model`, `--output-format`, `--allowed-tools`, `--yolo`, `-o`) to `agy`; the `--print-timeout` flag is used only when an `agy --help` capability probe confirms support.
+3.  **Google Gemini (legacy — kept for rollback)**:
+    *   Requires the `gemini` CLI to be installed and in your `PATH`. Deprecated upstream ahead of Google's 2026-06-18 consumer-tier cutoff; prefer Antigravity for new installs.
     *   Authenticates with `~/.gemini` OAuth credentials (run `gemini` interactively once to populate), `GOOGLE_API_KEY`/`GEMINI_API_KEY`, or Vertex AI service-account credentials.
-3.  **OpenAI Codex/GPT:**
+    *   Used automatically as a fallback under `PDD_AGENTIC_PROVIDER=google` when `agy` is not detected. To pin the legacy binary during the migration, set `PDD_AGENTIC_PROVIDER=gemini`.
+4.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
-4.  **OpenCode (provider-agnostic):**
+5.  **OpenCode (provider-agnostic):**
     *   Requires the `opencode` CLI to be installed and in your `PATH` (`npm install -g opencode-ai`).
     *   Authenticates with OpenCode provider credentials from `opencode auth login` (stored in `~/.local/share/opencode/auth.json`), OpenCode JSON config (`~/.config/opencode/opencode.json` or project `opencode.json`), or underlying provider env vars such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, etc.
     *   Recommended: set `OPENCODE_MODEL=provider/model` (for example, `anthropic/claude-sonnet-4-5`) to avoid relying on default model resolution.
@@ -2172,7 +2179,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription credential or config (recommended) or an API key in the environment
+- At least one supported agent CLI (Claude, Antigravity (`agy`), legacy Gemini, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription credential or config (recommended) or an API key in the environment
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2352,7 +2359,7 @@ Update prompts based on code changes. This command operates in two primary modes
 
 **Agentic Prompt Optimization (Default)**
 
-The `update` command uses an agentic AI (Claude Code, Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+The `update` command uses an agentic AI (Claude Code, Antigravity (`agy`), legacy Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
 
 1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
 2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
@@ -2363,7 +2370,8 @@ This produces prompts that are more concise while remaining clear to developers 
 
 **Prerequisites**: Requires one of these CLI tools installed and configured:
 - `claude` (Anthropic Claude Code)
-- `gemini` (Google Gemini CLI)
+- `agy` (Google Antigravity CLI — supported successor to legacy Gemini CLI)
+- `gemini` (Google Gemini CLI — legacy, kept for rollback)
 - `codex` (OpenAI Codex CLI)
 - `opencode` (OpenCode CLI)
 
@@ -2455,7 +2463,7 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 
 Example (agentic vs simple mode):
 ```bash
-# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+# Default: Agentic mode (uses claude/agy/gemini/codex/opencode for intelligent optimization)
 pdd update --git my_module_python.prompt src/my_module.py
 
 # Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)
@@ -2538,7 +2546,7 @@ Options:
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription credential or config, or an API key in your environment (see [Prerequisites](#prerequisites) for details).
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Antigravity (`agy`), legacy Gemini, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription credential or config, or an API key in your environment (see [Prerequisites](#prerequisites) for details).
 
 Example:
 ```
