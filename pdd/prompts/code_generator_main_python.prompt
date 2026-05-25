@@ -1,3 +1,10 @@
+<pdd-reason>Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.</pdd-reason>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+<pdd-dependency>code_generator_python.prompt</pdd-dependency>
+<pdd-dependency>incremental_code_generator_python.prompt</pdd-dependency>
+<pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>

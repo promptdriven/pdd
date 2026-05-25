@@ -597,6 +597,40 @@ def test_sync_orchestration_exception(mock_project_dir, mock_construct_paths, mo
     assert "Unexpected API error" in lang_result["error"]
 
 
+def test_sync_no_op_success_details_never_renders_none(
+    mock_project_dir, mock_construct_paths, mock_sync_orchestration, capsys
+):
+    """Regression for #1103: a no-op success must never render 'None' in the Details column.
+
+    Reproduces the historical orchestrator shape (no 'summary', 'error': None) so that the
+    summary table fallback is exercised, and asserts the table does not contain the literal
+    string 'None'.
+    """
+    (mock_project_dir / "prompts" / "noop_app_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.0,
+        "model_name": "",
+        "error": None,
+        "operations_completed": [],
+        "skipped_operations": [],
+    }
+
+    ctx = create_mock_context({})
+    results, total_cost, _ = sync_main(
+        ctx, "noop_app", 3, 10.0, False, False, 90.0, False
+    )
+
+    assert results["overall_success"] is True
+    assert total_cost == 0.0
+
+    captured = capsys.readouterr()
+    combined = (captured.out or "") + (captured.err or "")
+    assert "PDD Sync Complete" in combined, "expected the final summary table to print"
+    assert "None" not in combined, f"no-op success details rendered 'None': {combined!r}"
+
+
 def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Normal (non-log) sync should thread ctx.obj['context'] to construct_paths and sync_orchestration."""
     # Create prompt for python
@@ -1537,6 +1571,116 @@ class TestOneSessionSyncOutputFromConfig:
         assert captured_envs[0] is None
         # After sync_main returns, the prior outer value is restored.
         assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
+
+# --- Tests for the two early-out sync_result branches (#1103) ---
+
+
+class TestSyncMainEarlyOutSummaryKeys:
+    """sync_main builds two ``sync_result`` dicts in early-out branches:
+    (a) one-session sync sees ``decision.operation == "nothing"`` and skips,
+    (b) generate phase failed to produce a code file. Both branches MUST
+    set a ``summary`` so the final Details column does not collapse to
+    ``"No details."``. Codex review pointer: sync_main.py:931 + :1043."""
+
+    @pytest.mark.timeout(30)
+    def test_one_session_already_synced_sets_summary(
+        self, mock_project_dir, mock_construct_paths
+    ):
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% already-synced module"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "nothing"
+
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+        fake_pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+        fake_pdd_files["code"].write_text("def tiny():\n    pass\n")
+
+        with patch(
+            "pdd.sync_main.get_pdd_file_paths", return_value=fake_pdd_files
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ):
+            ctx = create_mock_context({"local": True})
+            results, _total, _model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        lang_result = results["results_by_language"]["python"]
+        assert lang_result["success"] is True
+        summary = lang_result.get("summary")
+        assert summary, (
+            "one-session already-synced path MUST set a non-empty summary; "
+            f"got result: {lang_result}"
+        )
+        assert "already synchronized" in summary.lower()
+
+    @pytest.mark.timeout(30)
+    def test_one_session_generate_failed_sets_summary(
+        self, mock_project_dir, mock_construct_paths
+    ):
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% module whose generate phase fails"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "generate"
+
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+
+        # codegen runs but never writes the code file -> generate-failed branch.
+        def fake_codegen(*_args, **_kwargs):
+            return ("", False, 0.0, "mock-model")
+
+        with patch(
+            "pdd.code_generator_main.code_generator_main",
+            side_effect=fake_codegen,
+        ), patch(
+            "pdd.sync_main.get_pdd_file_paths", return_value=fake_pdd_files
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ):
+            ctx = create_mock_context({"local": True})
+            results, _total, _model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        lang_result = results["results_by_language"]["python"]
+        assert lang_result["success"] is False
+        summary = lang_result.get("summary")
+        assert summary, (
+            "generate-failed branch MUST set a non-empty summary; "
+            f"got result: {lang_result}"
+        )
+        # Surfaces both the step and the original reason.
+        assert "generate" in summary.lower()
+        assert "code generation failed" in summary.lower()
 
 
 # --- Tests for sync skipping LLM-only basenames ---

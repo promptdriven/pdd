@@ -15,6 +15,7 @@ from ..agentic_change import run_agentic_change
 from ..update_main import update_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from ..core.utils import echo_model_line
 from ..operation_log import log_operation
 
 console = Console()
@@ -149,7 +150,7 @@ def split(
                 click.echo(f"Status: {status}")
                 click.echo(f"Message: {message}")
                 click.echo(f"Cost: ${cost:.4f}")
-                click.echo(f"Model: {model}")
+                echo_model_line(model)
                 if changed_files:
                     click.echo("Changed files:")
                     for f in changed_files:
@@ -280,7 +281,7 @@ def change(
                 click.echo(f"Status: {status}")
                 click.echo(f"Message: {message}")
                 click.echo(f"Cost: ${cost:.4f}")
-                click.echo(f"Model: {model}")
+                echo_model_line(model)
                 if changed_files:
                     click.echo("Changed files:")
                     for f in changed_files:
