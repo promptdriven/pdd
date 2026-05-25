@@ -1077,6 +1077,9 @@ def run_global_sync(
     one_session: bool = False,
     local: bool = False,
     timeout_adder: float = 0.0,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    context_override: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
     project_root = _find_project_root(Path.cwd())
@@ -1164,6 +1167,9 @@ def run_global_sync(
             "local": local,
             "target_coverage": target_coverage,
             "timeout_adder": timeout_adder,
+            "strength": strength,
+            "temperature": temperature,
+            "context": context_override,
         },
         github_info=None,
         quiet=quiet,
@@ -1868,6 +1874,9 @@ def run_agentic_sync(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    context_override: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -2194,6 +2203,9 @@ def run_agentic_sync(
         "max_attempts": max_attempts,
         "one_session": one_session,
         "timeout_adder": timeout_adder,
+        "strength": strength,
+        "temperature": temperature,
+        "context": context_override,
     }
 
     github_info = {

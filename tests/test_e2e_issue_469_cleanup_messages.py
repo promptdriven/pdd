@@ -87,7 +87,7 @@ class TestIssue469CleanupMessagesE2E:
             # Import the full CLI entry point (not just the sessions group)
             from pdd.cli import cli
 
-            runner = CliRunner(mix_stderr=False)
+            runner = CliRunner()
             result = runner.invoke(cli, ["sessions", "cleanup", "--all", "--force"])
 
         # BUG ASSERTION 1: No misleading success message
@@ -148,7 +148,7 @@ class TestIssue469CleanupMessagesE2E:
 
             from pdd.cli import cli
 
-            runner = CliRunner(mix_stderr=False)
+            runner = CliRunner()
             result = runner.invoke(cli, ["sessions", "cleanup", "--all", "--force"])
 
         # Both messages should appear for partial failure

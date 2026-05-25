@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.238",
-  "timestamp": "2026-05-16T20:50:00.404547+00:00",
-  "command": "fix",
-  "prompt_hash": "1fff863a3ee0bfb0a089bcbb45ab5dd31e029c99da7d1091f96ee320d3db06a2",
-  "code_hash": "78311b392805cb4914b6e65760be57299270cf2af9cec597100244fd1475e098",
-  "example_hash": "d587ecf2e5a8b620b51409f1b1f37f270838403da4299a5262fa6eef167c8f7e",
-  "test_hash": "1513a83211efd7ee746315a28e0a45ca5b90de923a49aab487f52f2846b9a763",
+  "pdd_version": "0.0.249",
+  "timestamp": "2026-05-25T04:21:57.728100+00:00",
+  "command": "example",
+  "prompt_hash": "dd8b2c15b0b0838f376aab4114efe7fcd943ab2d82489b5d168f93df09a1ae19",
+  "code_hash": "00f98fc9ec2180d5ff77cf6cf800c078281a530ccca249b1d1b8f90306345b40",
+  "example_hash": "550e750fb041fb73dc92462d4f266bc999102ddd8e4efd3b40dbab0bb1d0d879",
+  "test_hash": "7749c5ad23df256dd0ef597a31ea6cec04be766d7e62d9ad9f01dc37d6840b46",
   "test_files": {
-    "test_ci_drift_heal.py": "1513a83211efd7ee746315a28e0a45ca5b90de923a49aab487f52f2846b9a763"
+    "test_ci_drift_heal.py": "7749c5ad23df256dd0ef597a31ea6cec04be766d7e62d9ad9f01dc37d6840b46"
   },
   "include_deps": {
     "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
@@ -16,7 +16,7 @@
     "context/architecture_sync_example.py": "3dbf29b2f53c4ad341c5722e2778ce1c3ffde318e1b2c0161c343e28505c32fa",
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
-    "context/operation_log_example.py": "6cd7962ab255d6080aeb97897175250f987ce936cf7333e7601f10834405a940",
+    "context/operation_log_example.py": "2660def7012d9b79bad3db33cf399ac603cc1c35dff0b064cbdd2638a013de1d",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/sync_determine_operation_example.py": "94a333b37d9875bcc9b39e22d4d00de1b196ad2f7e0fa997e6f638e153dbdfad"
   }

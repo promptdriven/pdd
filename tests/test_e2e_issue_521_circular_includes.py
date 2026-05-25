@@ -52,7 +52,7 @@ class TestIssue521CircularIncludesE2E:
         a_file.write_text("Hello\n<include>b_python.prompt</include>\n")
         b_file.write_text("World\n<include>a_python.prompt</include>\n")
 
-        runner = CliRunner(mix_stderr=False)
+        runner = CliRunner()
         result = runner.invoke(cli, [
             "--force", "preprocess",
             str(a_file), "--recursive",
@@ -87,7 +87,7 @@ class TestIssue521CircularIncludesE2E:
 
         self_file.write_text("Content\n<include>self_python.prompt</include>\n")
 
-        runner = CliRunner(mix_stderr=False)
+        runner = CliRunner()
         result = runner.invoke(cli, [
             "--force", "preprocess",
             str(self_file), "--recursive",
@@ -113,7 +113,7 @@ class TestIssue521CircularIncludesE2E:
         (tmp_path / "c_python.prompt").write_text("CCC\n<include>a_python.prompt</include>\n")
         output_file = tmp_path / "output.txt"
 
-        runner = CliRunner(mix_stderr=False)
+        runner = CliRunner()
         result = runner.invoke(cli, [
             "--force", "preprocess",
             str(tmp_path / "a_python.prompt"), "--recursive",

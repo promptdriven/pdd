@@ -93,7 +93,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 18. **CLI interface:** `argparse` with `--modules` (space/comma-separated), `--budget-cap` (float), `--skip-ci` (flag), `--diff-base` (string). Invoked as `python -m pdd.ci_drift_heal`.
 
-19. **Error handling:** Subprocess failures are captured per-module (continue healing remaining). Subprocess timeout is 1200s. `PromptRevertError` blocks the commit phase entirely. Return exit code 1 if any module failed (except in skip-ci/push-to-main mode).
+19. **Error handling:** Subprocess failures are captured per-module (continue healing remaining). Subprocess timeout defaults to 2400s and is overridable via the `PDD_HEAL_SUBPROCESS_TIMEOUT` env var (positive integer; invalid values fall back to the default); the resolver reads the env on each invocation so monkeypatched tests work. `PromptRevertError` blocks the commit phase entirely. Return exit code 1 if any module failed (except in skip-ci/push-to-main mode).
 
 20. **Output:** Rich console with drift summary table before healing. Per-module heal result and cost. Final summary of healed/failed/skipped counts.
 

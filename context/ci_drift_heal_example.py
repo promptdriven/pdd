@@ -1,91 +1,81 @@
-"""
-Example demonstrating how to use the ci_drift_heal module.
-
-This module is designed to run in CI pipelines to detect and auto-heal
-prompt and example drift in PDD modules.
-"""
+from __future__ import annotations
 
 import os
 import sys
 from unittest.mock import patch
 
-# Import the functions from the module
-from pdd.ci_drift_heal import main, detect_drift, DriftInfo
+from rich.console import Console
+
+# Import the functions and data structures from the module
+from pdd.ci_drift_heal import (
+    DriftInfo,
+    commit_and_push,
+    detect_drift,
+    heal_module,
+    main,
+)
+
+console = Console()
 
 
-def demonstrate_detect_drift():
-    """
-    Demonstrates how to call detect_drift directly to get lists of drifted modules.
-    """
-    print("--- Demonstrating detect_drift ---")
+def demonstrate_drift_info() -> None:
+    """Demonstrate how DriftInfo represents a drifted module.
     
-    # Mock the internal detection to return some dummy drift data
-    # so this example runs without a real PDD workspace.
-    mock_prompt_drifts = [
-        DriftInfo(
-            basename="example_module",
-            language="python",
-            operation="update",
-            reason="Code changed without prompt changes",
-            code_path="pdd/example_module.py",
-            prompt_path="prompts/example_module_python.prompt"
-        )
-    ]
-    mock_example_drifts = [
-        DriftInfo(
-            basename="another_module",
-            language="python",
-            operation="example",
-            reason="Prompt changed, example needs refresh",
-            code_path="pdd/another_module.py",
-            prompt_path="prompts/another_module_python.prompt",
-            example_path="context/another_module_example.py"
-        )
-    ]
-    
-    with patch("pdd.ci_drift_heal.detect_drift", return_value=(mock_prompt_drifts, mock_example_drifts)):
-        prompt_drifts, example_drifts = detect_drift(modules=None, diff_base="main")
-        
-        print(f"Detected {len(prompt_drifts)} modules needing prompt updates:")
-        for drift in prompt_drifts:
-            print(f"  - {drift.basename}: {drift.reason}")
-            
-        print(f"Detected {len(example_drifts)} modules needing example updates:")
-        for drift in example_drifts:
-            print(f"  - {drift.basename}: {drift.reason}")
+    DriftInfo is a dataclass used throughout ci_drift_heal to track the
+    state of a module that needs automated healing.
+    """
+    drift = DriftInfo(
+        basename="demo_module",
+        language="python",
+        operation="update",
+        reason="Prompt changed without code changes",
+        prompt_path="prompts/demo_module_python.prompt",
+        code_path="pdd/demo_module.py",
+        estimated_cost=0.15
+    )
+    console.print("[bold green]Created DriftInfo:[/bold green]")
+    console.print(f"  Basename: {drift.basename}")
+    console.print(f"  Operation: {drift.operation}")
+    console.print(f"  Reason: {drift.reason}")
 
 
-def demonstrate_main():
-    """
-    Demonstrates how to run the main entry point which detects drift, heals it,
-    and commits the changes.
-    """
-    print("\n--- Demonstrating main entry point ---")
+def demonstrate_mocked_main() -> None:
+    """Demonstrate the main entry point using mocked dependencies.
     
-    # We mock main so it doesn't actually try to run git commands or LLM calls in this example.
-    with patch("pdd.ci_drift_heal.main", return_value=0) as mock_main:
-        # Run main with a budget cap of $5.00, in push-to-main mode (skip_ci=True)
-        # and comparing against the 'main' branch (diff_base='main')
-        exit_code = main(
-            modules=["example_module"],  # Only heal specific modules
-            budget_cap=5.0,              # $5.00 limit for LLM costs
-            skip_ci=True,                # Add [skip ci] to commit message
-            diff_base="main"             # Base branch for drift detection
-        )
-        
-        print(f"Main function returned exit code: {exit_code}")
-        print(f"Main was called with arguments: {mock_main.call_args}")
+    Because ci_drift_heal orchestrates real git commands and subprocesses,
+    we mock the core Git and PDD subprocess logic here to safely show 
+    how the workflow executes.
+    """
+    console.print("\n[bold green]Running ci_drift_heal.main() with mocks...[/bold green]")
+    
+    # We mock detect_drift to return a dummy drift
+    dummy_drift = DriftInfo(
+        basename="mocked_module",
+        language="python",
+        operation="example",
+        reason="Mocked drift for example demonstration",
+        prompt_path="prompts/mocked_module_python.prompt",
+        code_path="pdd/mocked_module.py"
+    )
+    
+    # Patch out the heavy lifting functions so it runs safely in the example
+    with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [dummy_drift])), \
+         patch("pdd.ci_drift_heal.heal_module", return_value=True), \
+         patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+         patch("pdd.ci_drift_heal._repo_root", return_value=os.getcwd()):
+         
+         # Call the main entry point.
+         # In a real environment, this is invoked via: python -m pdd.ci_drift_heal
+         exit_code = main(
+             modules=["mocked_module"],  # Restrict healing to specific modules
+             budget_cap=5.0,             # Stop healing if LLM cost exceeds $5.00
+             skip_ci=True                # Prepend [skip ci] to the git commit message
+         )
+         console.print(f"[cyan]main() completed with exit code: {exit_code}[/cyan]")
 
 
 if __name__ == "__main__":
-    # Ensure output directory exists for any file operations
-    output_dir = os.path.join(os.path.dirname(__file__), "..", "output")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    print("PDD CI Drift Heal Example")
-    print("=========================")
-    
-    demonstrate_detect_drift()
-    demonstrate_main()
-    
-    print("\nExample completed successfully.")
+    console.print("[bold]ci_drift_heal Example[/bold]")
+    console.print("=====================")
+    demonstrate_drift_info()
+    demonstrate_mocked_main()

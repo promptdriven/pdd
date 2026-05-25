@@ -26,8 +26,31 @@ from rich.table import Table
 
 console = Console()
 
-_HEAL_SUBPROCESS_TIMEOUT = 1200
+_HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
 _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT = 5.0
+
+
+def _heal_subprocess_timeout() -> int:
+    """Resolve the per-module heal subprocess timeout in seconds.
+
+    Reads `PDD_HEAL_SUBPROCESS_TIMEOUT` from the environment on each call (so
+    callers and tests that mutate the env between invocations see the new
+    value). Invalid values — non-integer, non-positive, empty, or float
+    strings — fall back to `_HEAL_SUBPROCESS_TIMEOUT_DEFAULT` without raising.
+    """
+    raw = os.environ.get("PDD_HEAL_SUBPROCESS_TIMEOUT")
+    if raw is None:
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    raw = raw.strip()
+    if not raw:
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    if value <= 0:
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    return value
 _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 
 _PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
@@ -529,19 +552,20 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     """Run a `pdd ...` subprocess with protected-paths rollback on failure."""
     rollback_eligible = _capture_rollback_state(cmd, env)
 
+    timeout = _heal_subprocess_timeout()
     try:
         result = subprocess.run(
             cmd,
             env=env,
             capture_output=True,
             text=True,
-            timeout=_HEAL_SUBPROCESS_TIMEOUT,
+            timeout=timeout,
         )
         success = result.returncode == 0
         stderr = getattr(result, "stderr", "") or ""
     except subprocess.TimeoutExpired:
         success = False
-        stderr = f"timeout after {_HEAL_SUBPROCESS_TIMEOUT}s"
+        stderr = f"timeout after {timeout}s"
     except FileNotFoundError:
         return False
     except Exception as exc:
