@@ -2257,6 +2257,81 @@ def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_
     assert "step5" in labels_called, "Step 5 should be called when resuming"
 
 
+def test_persisted_clean_restart_resume_still_detects_stale_state(mock_dependencies, temp_cwd):
+    """Persisted clean_restart=True in workflow state must NOT suppress staleness
+    detection on a normal resume.
+
+    Scenario: A clean-restart run completes steps 1-6 and saves state with
+    clean_restart=True. The user adds new feedback to the issue. The user then
+    resumes with plain `pdd change` (no --clean-restart flag). The issue's
+    updated_at timestamp has changed; the orchestrator must detect the mismatch
+    and start fresh so the new feedback is incorporated, not silently ignored.
+
+    Finding from PR #1150 round-6 review: effective_clean_restart (which includes
+    persisted state) was used for the stale-detection guard, so a persisted
+    clean_restart=True would skip the staleness check, silently ignoring new
+    issue comments added between the stopped run and the resume.
+    """
+    mocks = mock_dependencies
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, f"ok {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    # Persisted state from a stopped clean restart, with an OLD issue timestamp.
+    old_timestamp = "2026-01-01T10:00:00Z"
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 6,
+            "step_outputs": {str(i): f"out{i}" for i in range(1, 7)},
+            "issue_updated_at": old_timestamp,
+            "worktree_path": str(temp_cwd),
+            "clean_restart": True,  # persisted from stopped clean restart
+        },
+        "ghid",
+    )
+
+    new_timestamp = "2026-01-02T09:00:00Z"  # issue updated after run stopped
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        return_value=True,
+    ):
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix with new comment",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=42,
+            issue_author="me",
+            issue_title="Bug",
+            issue_updated_at=new_timestamp,
+            cwd=temp_cwd,
+            quiet=True,
+            clean_restart=False,  # normal resume — flag NOT set
+        )
+
+    assert mocks["clear_state"].called, (
+        "Stale-state detection must run even when state['clean_restart']=True is persisted; "
+        "clear_workflow_state should have been called after detecting the timestamp mismatch"
+    )
+    labels = [c.kwargs.get("label", "") for c in mocks["run"].call_args_list]
+    assert "step1" in labels, (
+        "After stale-state clear, workflow must start from step 1 to incorporate new issue feedback; "
+        f"steps called: {labels}"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Bug #448: JSON in step output causes KeyError in subsequent step formatting
 # -----------------------------------------------------------------------------
