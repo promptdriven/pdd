@@ -2456,7 +2456,7 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 
 Example (agentic vs simple mode):
 ```bash
-# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+# Default: Agentic mode (uses claude/agy/gemini/codex/opencode for intelligent optimization)
 pdd update --git my_module_python.prompt src/my_module.py
 
 # Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)

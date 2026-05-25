@@ -663,7 +663,7 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
     Specific test for Gemini cached token logic.
     Flash Pricing: Input $0.35, Cached Multiplier 0.5 (so $0.175 effective).
     """
-    mock_shutil_which.return_value = "/bin/gemini"
+    mock_shutil_which.side_effect = lambda name: "/bin/gemini" if name == "gemini" else None
     os.environ["GEMINI_API_KEY"] = "key"
     # Force only google to be available
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["google"]):
@@ -937,9 +937,10 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     This test verifies that such false positives are rejected and that the
     system falls back to a provider that performs real work.
     """
-    mock_shutil_which.return_value = "/bin/exe"
+    mock_shutil_which.side_effect = lambda name: "/bin/exe" if name in ("claude", "gemini") else None
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
+    os.environ["PDD_GOOGLE_CLI"] = "gemini"
 
     # First provider (Anthropic): Returns "success" with $0.00 cost and minimal output
     # This is a false positive - no work was actually done
@@ -961,15 +962,11 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     google_real_success.stderr = ""
 
     def run_side_effect(cmd, **kwargs):
-        # Check if CLI path contains the provider name (e.g., /bin/exe contains "exe")
-        # Since _find_cli_binary is mocked to return "/bin/exe", we need a different approach
-        # Check the command path or any element for provider identification
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        if "anthropic" in str(kwargs.get('env', {}).get('_provider', '')) or cmd == ["/bin/exe", "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]:
+        if "--dangerously-skip-permissions" in cmd:
             # Anthropic command pattern
-            if "--dangerously-skip-permissions" in cmd:
-                return anthropic_false_positive
-        if "--yolo" in cmd:  # Gemini command pattern
+            return anthropic_false_positive
+        if "--yolo" in cmd or "--print" in cmd:
+            # Legacy Gemini CLI (--yolo) or Antigravity CLI (--print)
             return google_real_success
         return MagicMock(returncode=1)
 
@@ -1374,8 +1371,9 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     Should trigger fallback.
     """
     # Setup availability for Anthropic and Google
-    mock_shutil_which.return_value = "/bin/cmd"
+    mock_shutil_which.side_effect = lambda name: "/bin/cmd" if name in ("claude", "gemini") else None
     mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["PDD_GOOGLE_CLI"] = "gemini"
     
     # 1. Anthropic: Success but suspicious (0 cost, short output)
     suspicious_response = MagicMock()
