@@ -330,7 +330,7 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
 
         if oauth_providers:
             uniq = ", ".join(sorted(set(oauth_providers)))
-            print(f"{GREEN}✓ stored OAuth/subscription credentials detected "
+            print(f"{GREEN}✓ stored OAuth/subscription/config credentials detected "
                   f"({uniq}). No API key needed for the agentic CLI.{RESET}")
             print(f"{DIM}Hint: re-run `pdd setup` later to add an API key "
                   f"for direct litellm-backed commands.{RESET}")
@@ -631,7 +631,7 @@ def _cli_credential_label(r: Any) -> str:
 
     Priority (Issue #813 round-10):
         1. api_key_configured == True            → "API key set"
-        2. _has_provider_oauth(provider) == True → "OAuth/subscription credential configured"
+        2. _has_cli_oauth(cli_name) == True      → "OAuth/subscription/config credential configured"
         3. neither                                → "no credentials"
     """
     from pdd.cli_detector import _has_cli_oauth
@@ -639,7 +639,7 @@ def _cli_credential_label(r: Any) -> str:
         return "API key set"
     cli_name = getattr(r, "cli_name", None)
     if cli_name and _has_cli_oauth(cli_name):
-        return "OAuth/subscription credential configured"
+        return "OAuth/subscription/config credential configured"
     return "no credentials"
 
 
@@ -648,13 +648,13 @@ def _build_quick_start_lines(oauth_only_setup: bool) -> List[str]:
     summary file and the terminal print so the two views stay in sync."""
     if oauth_only_setup:
         return [
-            "Setup detected an OAuth-backed agentic CLI but no API key was "
+            "Setup detected an OAuth/subscription/config-backed agentic CLI but no API key was "
             "found in your environment.",
             "",
             "1) Issue-driven agentic commands (work NOW with OAuth):",
             "   These dispatch through the configured agentic CLI",
-            "   (claude/codex/gemini/opencode) as a subprocess and use its",
-            "   stored OAuth/subscription credential. No API key required.",
+            "   (claude/codex/agy/gemini/opencode) as a subprocess and use its",
+            "   stored OAuth/subscription/config credential. No API key required.",
             "     pdd generate <issue-url>",
             "     pdd change   <issue-url>",
             "     pdd bug      <issue-url>",
@@ -703,8 +703,9 @@ def _print_exit_summary(found_keys: List[Tuple[str, str]],
         if getattr(r, "skipped", False):
             continue
         try:
-            from pdd.cli_detector import _has_provider_oauth
-            if _has_provider_oauth(getattr(r, "provider", None)):
+            from pdd.cli_detector import _has_cli_oauth
+            cli_name = getattr(r, "cli_name", None)
+            if cli_name and _has_cli_oauth(cli_name):
                 has_oauth_cli = True
                 break
         except Exception:

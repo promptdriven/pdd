@@ -447,7 +447,7 @@ def test_oauth_only_user_skips_step1_api_key_prompt(tmp_path, monkeypatch):
     # The "add at least one API key" prompt must NOT fire.
     assert "To continue setup, add at least one API key" not in output
     # Instead, the green OAuth-detected confirmation should appear.
-    assert "stored OAuth/subscription credentials detected" in output
+    assert "stored OAuth/subscription/config credentials detected" in output
     # OAuth-only setup should not advertise the direct API-key quick-start path.
     assert "pdd generate success_python.prompt" not in output
 
@@ -819,7 +819,7 @@ def test_exit_summary_oauth_only_advertises_agentic_commands(tmp_path, monkeypat
     `pdd change <issue>`, `pdd bug <issue>`, `pdd fix <issue>`,
     `pdd test <issue>`, `pdd checkup <issue>`) dispatch through agentic
     workflows which spawn the configured CLI as a subprocess and use its
-    OAuth/subscription credential. They work NOW for OAuth-only users — that's
+    OAuth/subscription/config credential. They work NOW for OAuth-only users — that's
     the workflow this setup just enabled. Pointing such users only at `claude`
     standalone misrepresents what's available.
 
@@ -886,7 +886,7 @@ def test_exit_summary_oauth_only_summary_file_matches_terminal(tmp_path, monkeyp
     assert "pdd generate <prompt-file>" in summary
     assert "pdd sync <issue-url>" not in summary
     cli_block = summary[summary.find("CLIs Configured:"):summary.find("API Keys Configured:")]
-    assert "OAuth/subscription credential configured" in cli_block
+    assert "OAuth/subscription/config credential configured" in cli_block
     assert "no API key" not in cli_block
     # The summary file mentions both fallback paths so the user has options.
     assert "pdd setup" in summary

@@ -1,6 +1,6 @@
 [
   {
-    "reason": "Provides shared agentic CLI execution across Claude, Gemini, Codex, and OpenCode.",
+    "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
@@ -1558,7 +1558,7 @@
     }
   },
   {
-    "reason": "Coordinates agentic prompt updates through Claude, Gemini, Codex, or OpenCode CLIs.",
+    "reason": "Coordinates agentic prompt updates through Claude, Gemini/Antigravity, Codex, or OpenCode CLIs.",
     "description": "Coordinates repository-aware prompt update runs through external agentic CLIs and reports prompt/test changes.",
     "dependencies": [
       "agentic_update_LLM.prompt",
@@ -4493,7 +4493,7 @@
     }
   },
   {
-    "reason": "Detects and bootstraps Claude, Gemini, Codex, and OpenCode CLIs for pdd setup.",
+    "reason": "Detects and bootstraps Claude, Gemini/Antigravity, Codex, and OpenCode CLIs for pdd setup.",
     "description": "Detects installed agentic CLIs, bootstraps missing tools, checks OAuth/config/API credentials, and returns setup status rows.",
     "dependencies": [],
     "priority": 130,

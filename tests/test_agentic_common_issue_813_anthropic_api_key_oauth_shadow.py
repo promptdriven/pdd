@@ -161,6 +161,8 @@ def test_run_agentic_task_quiet_propagates_to_strip(capsys):
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "stale"}, clear=True), \
          patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
@@ -418,13 +420,15 @@ def test_run_with_provider_pops_stale_key_when_oauth_present(_isolated_env, tmp_
     the claude subprocess when OAuth is detected."""
     os.environ["ANTHROPIC_API_KEY"] = "stale-depleted"
 
-    # Avoid the gemini OAuth check from making real filesystem calls.
+    # Avoid Google CLI auth checks from making real filesystem calls.
     # Suppress OpenCode availability so the orchestrator does not fall
     # through to the opencode provider (which has its own auth model and
     # legitimately may carry ANTHROPIC_API_KEY into its subprocess) — that
     # would shift ``mock_run.call_args`` away from the claude call this
     # test pins.
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_has_opencode_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
@@ -453,6 +457,8 @@ def test_run_with_provider_keeps_key_for_api_key_only_setup(_isolated_env, tmp_p
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-real-prod"
 
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=False), \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
@@ -475,6 +481,8 @@ def test_run_with_provider_respects_keep_override(_isolated_env, tmp_path):
     os.environ["PDD_KEEP_ANTHROPIC_API_KEY"] = "1"
 
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True) as probe, \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
@@ -513,6 +521,8 @@ def test_run_with_provider_pops_key_when_oauth_token_env_set(_isolated_env, tmp_
     # Suppress OpenCode availability so we pin the claude call (see other
     # Issue #813 tests for the same rationale).
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_has_opencode_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
@@ -542,6 +552,8 @@ def test_run_with_provider_oauth_token_only_is_a_no_op(_isolated_env, tmp_path):
     # No ANTHROPIC_API_KEY.
 
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login") as probe, \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
@@ -574,6 +586,8 @@ def test_pop_does_not_mutate_parent_environ(_isolated_env, tmp_path):
     # Suppress OpenCode availability so the orchestrator pins the claude
     # provider (see other Issue #813 tests for the same rationale).
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_has_opencode_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
@@ -611,6 +625,8 @@ def test_pop_does_not_run_for_non_anthropic_providers(_isolated_env, tmp_path):
     with patch.object(agentic_common, "get_agent_provider_preference",
                       return_value=["openai"]), \
          patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_agy_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/codex"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
          patch.object(agentic_common, "_subprocess_run") as mock_run:

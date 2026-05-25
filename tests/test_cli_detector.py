@@ -515,7 +515,7 @@ class TestBootstrapApiKeyFlow:
         assert results[0].cli_name == "claude"
         assert results[0].api_key_configured is False  # API key still not set
         # The status line should report OAuth, not "not set" red ✗.
-        assert "OAuth/subscription login configured" in output
+        assert "OAuth/subscription/config credential configured" in output
         # The credential prompt must NOT fire (user only provided 1 input).
         assert "Enter your" not in output
 

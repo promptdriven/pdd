@@ -16,8 +16,8 @@ This tutorial walks through implementing a GitHub issue using PDD.
 - **GitHub CLI**: `brew install gh && gh auth login`
 - **One Agentic CLI** - Install at least one:
   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (Claude Max/Pro OAuth via `claude auth login` recommended, or `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
-  - **Antigravity CLI (`agy`, preferred)**: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (`~/.gemini/antigravity-cli/` OAuth or `GEMINI_API_KEY`/`GOOGLE_API_KEY`/`ANTIGRAVITY_API_KEY`; pin with `PDD_AGENTIC_PROVIDER=antigravity` or `PDD_GOOGLE_CLI=agy`)
-  - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (`~/.gemini` OAuth or `GOOGLE_API_KEY`). Google consumer-tier Gemini CLI cutoff: **2026-06-18**; PDD keeps this binary as a fallback via `PDD_GOOGLE_CLI=gemini`.
+  - **Antigravity CLI (`agy`, preferred)**: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (Antigravity OAuth or keyring-backed Google subscription sign-in, `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's `GEMINI_API_KEY` compatibility bridge; pin with `PDD_AGENTIC_PROVIDER=antigravity` or `PDD_GOOGLE_CLI=agy`)
+  - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (`~/.gemini` OAuth, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`). Google consumer-tier Gemini CLI cutoff: **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
   - **Codex CLI**: `npm install -g @openai/codex` (`codex login` ChatGPT account or `OPENAI_API_KEY`)
   - **OpenCode CLI**: `npm install -g opencode-ai` (`opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
