@@ -589,6 +589,71 @@ def test_get_available_agents_excludes_google_with_gemini_key_and_agy_pin(monkey
 
 
 # ---------------------------------------------------------------------------
+# Round-6 finding 1: _get_google_cli_binary and _get_google_cli_name must stay in sync
+# ---------------------------------------------------------------------------
+
+
+def test_get_google_cli_binary_and_name_agree_with_only_gemini_key(monkeypatch):
+    """With both binaries installed and only GEMINI_API_KEY set, both
+    ``_get_google_cli_name()`` and ``_get_google_cli_binary()`` must select
+    ``gemini`` — GEMINI_API_KEY is not consumable by ``agy``.
+
+    Regression for the split where _get_google_cli_name() returned "gemini"
+    but _get_google_cli_binary() returned the agy path, causing agy to be
+    launched with legacy gemini flags (--output-format json, --yolo).
+    """
+    monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    from pdd import agentic_common
+
+    agy_path = "/usr/local/bin/agy"
+    gemini_path = "/usr/local/bin/gemini"
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: agy_path if name == "agy" else (gemini_path if name == "gemini" else None),
+        ),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
+    ):
+        name = agentic_common._get_google_cli_name()
+        binary = agentic_common._get_google_cli_binary()
+
+    assert name == "gemini", (
+        f"_get_google_cli_name() must return 'gemini' when only GEMINI_API_KEY is set; got {name!r}"
+    )
+    assert binary == gemini_path, (
+        f"_get_google_cli_binary() must return the gemini path when only GEMINI_API_KEY is set; "
+        f"got {binary!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-6 finding 2: PROVIDER_PRIMARY_KEY["google"] must be GOOGLE_API_KEY
+# ---------------------------------------------------------------------------
+
+
+def test_provider_primary_key_google_is_google_api_key():
+    """``PROVIDER_PRIMARY_KEY["google"]`` must be ``GOOGLE_API_KEY`` — the only
+    key that works with both ``agy`` and legacy ``gemini``.
+
+    Regression for rev5 where it was still ``GEMINI_API_KEY``, causing setup to
+    prompt/save a key that ``agy`` cannot use, then report success while the
+    runtime had no usable credential.
+    """
+    assert cli_detector.PROVIDER_PRIMARY_KEY["google"] == "GOOGLE_API_KEY", (
+        "PROVIDER_PRIMARY_KEY['google'] must be 'GOOGLE_API_KEY' (accepted by both agy and "
+        "legacy gemini); 'GEMINI_API_KEY' only works with legacy gemini and 'ANTIGRAVITY_API_KEY' "
+        "only works with agy — using either as the primary breaks setup for one of the binaries"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Round-3 finding 3: pdd setup must shape-parse the Google OAuth file
 # ---------------------------------------------------------------------------
 

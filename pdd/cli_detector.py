@@ -65,7 +65,11 @@ class CliBootstrapResult:
 PROVIDER_PRIMARY_KEY: Dict[str, Optional[str]] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
-    "google": "GEMINI_API_KEY",
+    # GOOGLE_API_KEY is accepted by both agy and legacy gemini, making it the
+    # universal key for the Google provider slot. GEMINI_API_KEY only works
+    # with the legacy gemini CLI; ANTIGRAVITY_API_KEY only with agy — using
+    # either as the primary would break setup for whichever binary is selected.
+    "google": "GOOGLE_API_KEY",
     "opencode": None,
 }
 
@@ -488,10 +492,10 @@ def _has_cli_api_key(cli: str) -> bool:
 
 
 def _displayed_google_key() -> str:
-    for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY"):
+    for k in ("GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY", "GEMINI_API_KEY"):
         if os.environ.get(k):
             return k
-    return "GEMINI_API_KEY"
+    return "GOOGLE_API_KEY"
 
 
 def _credential_status_label(provider: str) -> str:
