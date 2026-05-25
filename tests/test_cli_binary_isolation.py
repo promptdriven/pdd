@@ -192,7 +192,7 @@ def test_canonical_source_matches_cli_preference():
     runtime assertion, but Fix B's static-analysis scan in CI would
     flag it. The pair (this test + Fix B static scan) is the contract.
     """
-    expected = {"gemini", "claude", "codex", "opencode"}
+    expected = {"gemini", "claude", "codex", "opencode", "agy"}
     assert set(CLI_PREFERENCE) == expected, (
         f"CLI_PREFERENCE drifted from the documented agentic-CLI set; "
         f"got {set(CLI_PREFERENCE)!r}. If a new agentic CLI was added, "

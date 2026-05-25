@@ -261,7 +261,10 @@ def get_agent_provider_preference() -> List[str]:
         for p in prefs:
             if p == "antigravity":
                 normalized.append("google")
-                os.environ.setdefault("PDD_GOOGLE_CLI", "agy")
+                # `PDD_AGENTIC_PROVIDER=antigravity` is an explicit pin to `agy`.
+                # Overwrite any prior `PDD_GOOGLE_CLI` (including a stale
+                # `gemini` rollback value) so the more-specific selector wins.
+                os.environ["PDD_GOOGLE_CLI"] = "agy"
             else:
                 normalized.append(p)
         # Deduplicate while preserving order
@@ -2737,8 +2740,17 @@ def _run_with_provider(
     elif provider == "google":
         resolved_bin = os.path.basename(cli_path)
         if resolved_bin == "agy":
-            # Antigravity CLI args
-            cmd = [cli_path, "--print", f"Read the file {prompt_path.name} for your full instructions and execute them."]
+            # Antigravity CLI args.
+            # `--output-format json` is REQUIRED: without it `agy --print` emits
+            # plain text and the shared JSON parser below fails with
+            # "Invalid JSON output". The flag is documented in `agy --help` and
+            # the official "Using AGY CLI" docs.
+            cmd = [
+                cli_path,
+                "--print",
+                f"Read the file {prompt_path.name} for your full instructions and execute them.",
+                "--output-format", "json",
+            ]
             if timeout:
                 cmd.extend(["--print-timeout", f"{int(timeout)}s"])
             
