@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change", "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_change", "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -23,8 +23,9 @@ Write the `pdd/agentic_change.py` module.
 CLI entry point for the agentic change workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 13-step change process (steps 1–13, with Step 8.5 pre-flight drift heal and Step 10.5 doc-sync verifier as inline sub-steps). The orchestrator handles state persistence to support resumption after clarification or architectural question pauses, and includes a review loop (steps 11–12) before creating a PR.
 
 % Requirements
-1. Function: `run_agentic_change(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 1a. The keyword-only `clean_restart: bool = False` parameter, when `True`, requests a clean restart of the workflow for this issue. It must be forwarded verbatim to the orchestrator (see Requirement 9). Default `False` preserves source compatibility for all existing callers.
+1b. The keyword-only `reasoning_time: Optional[float] = None` parameter MUST be forwarded verbatim to the orchestrator (see Requirement 9). It carries an explicit user-supplied `--time` value through to the agentic provider's reasoning-effort plumbing in `agentic_common._run_with_provider`; commands gate on `ctx.obj["time_explicit"]` before forwarding so the `DEFAULT_TIME` fallback is NOT passed in. Default `None` preserves source compatibility.
 2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number
 4. Supported URL formats:
@@ -40,7 +41,7 @@ CLI entry point for the agentic change workflow. Fetches a GitHub issue, extract
 6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` to get full context
 8. Clone/checkout the repository to a temp directory if not already in it
-9. Call orchestrator: `run_agentic_change_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state, clean_restart=clean_restart)`
+9. Call orchestrator: `run_agentic_change_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state, reasoning_time=reasoning_time, clean_restart=clean_restart)`
 10. Return aggregated results from orchestrator
 
 % Dependencies
