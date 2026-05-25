@@ -892,6 +892,31 @@ def test_resume_skips_completed_steps(mock_dependencies, default_args, tmp_path)
     assert 'step12' in called_labels
 
 
+def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_args):
+    """--clean-restart must not resume from cached workflow state."""
+    mock_run, _, _ = mock_dependencies
+    default_args["clean_restart"] = True
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with (
+        patch("pdd.agentic_bug_orchestrator.clear_workflow_state") as mock_clear,
+        patch("pdd.agentic_bug_orchestrator.load_workflow_state") as mock_load,
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    mock_clear.assert_called_once()
+    mock_load.assert_not_called()
+    assert "step1" in [call.kwargs["label"] for call in mock_run.call_args_list]
+
+
 def test_state_cleared_on_success(mock_dependencies, default_args, tmp_path):
     """
     Test that state file is deleted on successful completion.

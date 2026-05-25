@@ -600,6 +600,17 @@ def test_bug_agentic_mode_no_github_state(runner):
         assert result.exit_code == 0
         assert mock_agentic.call_args[1]["use_github_state"] is False
 
+
+def test_bug_agentic_mode_clean_restart(runner):
+    """Test 'bug' agentic mode forwards --clean-restart."""
+    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
+        mock_agentic.return_value = (True, "Fixed", 1.0, "gpt-4", [])
+
+        result = runner.invoke(bug, ["https://github.com/u/r/issues/1", "--clean-restart"])
+
+        assert result.exit_code == 0
+        assert mock_agentic.call_args[1]["clean_restart"] is True
+
 def test_bug_manual_mode_success(runner):
     """Test 'bug' in manual mode with 5 valid files."""
     with runner.isolated_filesystem():

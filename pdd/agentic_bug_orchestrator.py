@@ -1467,6 +1467,7 @@ def run_agentic_bug_orchestrator(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 12-step agentic bug investigation workflow.
@@ -1483,10 +1484,22 @@ def run_agentic_bug_orchestrator(
 
     state_dir = _get_state_dir(cwd)
 
-    # Load state
-    state, loaded_gh_id = load_workflow_state(
-        cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
-    )
+    if clean_restart:
+        try:
+            clear_workflow_state(
+                cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: clean_restart pre-clear failed (continuing with fresh in-memory state): {e}[/yellow]"
+                )
+        state, loaded_gh_id = None, None
+    else:
+        # Load state
+        state, loaded_gh_id = load_workflow_state(
+            cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+        )
 
     # Initialize variables from state or defaults
     if state is not None:
