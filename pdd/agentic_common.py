@@ -999,12 +999,23 @@ def get_available_agents() -> List[str]:
     if _find_cli_binary("claude"):
         available.append("anthropic")
 
-    # 2. Google (Gemini)
-    # Available if 'agy' or 'gemini' CLI exists AND any supported non-interactive auth
-    # path is configured. The Gemini CLI can run headless from its stored OAuth
-    # credentials even when GOOGLE_API_KEY/GEMINI_API_KEY are unset.
-    has_google_cli = _get_google_cli_binary() is not None
-    has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTIGRAVITY_API_KEY")
+    # 2. Google (Gemini / Antigravity)
+    # Available if the resolved Google CLI binary exists AND a non-interactive
+    # auth path that *pairs with that specific binary* is configured. API keys
+    # (GOOGLE_API_KEY / GEMINI_API_KEY / ANTIGRAVITY_API_KEY) and Vertex auth
+    # work with both binaries, so when any of those is set the binary's OAuth
+    # file is not required. But OAuth files are binary-specific: agy reads
+    # ~/.gemini/antigravity-cli/oauth_creds.json; legacy gemini reads
+    # ~/.gemini/oauth_creds.json. Marking google "available" because *some*
+    # Google OAuth exists, then having the binary fail at runtime with
+    # "Authentication required.", is a worse UX than just routing to a
+    # different available provider — pair the auth signal with the binary.
+    google_bin = _get_google_cli_binary()
+    has_google_key = (
+        os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("ANTIGRAVITY_API_KEY")
+    )
     has_vertex_auth = (
         os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
         and (
@@ -1012,9 +1023,15 @@ def get_available_agents() -> List[str]:
             or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
         )
     )
-    has_gemini_oauth = _has_gemini_oauth_credentials()
+    has_matching_oauth = False
+    if google_bin is not None:
+        resolved_name = os.path.basename(google_bin)
+        if resolved_name == "agy":
+            has_matching_oauth = _has_agy_oauth_credentials()
+        elif resolved_name == "gemini":
+            has_matching_oauth = _has_legacy_gemini_oauth_credentials()
 
-    if has_google_cli and (has_google_key or has_vertex_auth or has_gemini_oauth):
+    if google_bin and (has_google_key or has_vertex_auth or has_matching_oauth):
         available.append("google")
 
     # 3. OpenAI (Codex)

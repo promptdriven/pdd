@@ -159,9 +159,19 @@ def mock_env():
     # don't depend on the developer's `~/.local/share/opencode/auth.json` or
     # `~/.config/opencode/opencode.json`. Environment-variable signals (which
     # tests do set explicitly) are still honored by `_has_opencode_credentials`.
+    # PR #1153 round-3: ``get_available_agents`` now pairs the resolved
+    # Google CLI binary (agy / gemini) with the matching OAuth file via the
+    # per-binary predicates rather than the combined helper. Mock all three
+    # so a developer's real ``~/.gemini/oauth_creds.json`` does not leak
+    # availability into tests that explicitly assume "no OAuth".
     with (
         patch.dict(os.environ, {}, clear=True),
         patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=False),
+        patch("pdd.agentic_common._has_agy_oauth_credentials", return_value=False),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=False,
+        ),
         patch("pdd.agentic_common._opencode_auth_file_has_credentials", return_value=False),
         patch("pdd.agentic_common._iter_opencode_config_texts", return_value=[]),
     ):
@@ -1015,7 +1025,17 @@ def test_get_available_agents_google_gemini_cli_oauth(
     """Gemini CLI stored OAuth credentials are sufficient for Google provider."""
     mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
 
-    with patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True):
+    # PR #1153 round-3: availability now pairs the resolved binary with the
+    # matching per-binary OAuth predicate. The resolved binary here is the
+    # legacy ``gemini``, so the legacy OAuth predicate is what gates the
+    # signal; patch both helpers to keep the combined one consistent.
+    with (
+        patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=True,
+        ),
+    ):
         agents = get_available_agents()
 
     assert "google" in agents
@@ -1827,11 +1847,25 @@ class TestCliDiscoveryBug:
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
         monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+        # PR #1153 round-3: `get_available_agents` now pairs the resolved
+        # binary with the matching OAuth predicate. This test installs only
+        # the legacy `gemini` binary, so the legacy OAuth predicate is the
+        # one that gates availability; the combined helper is patched too
+        # for backward-compat with any caller that still reads it.
         monkeypatch.setattr(
             "pdd.agentic_common._has_gemini_oauth_credentials",
             lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_agy_oauth_credentials",
+            lambda: False,
         )
 
         npm_bin = tmp_path / ".npm-global" / "bin"
