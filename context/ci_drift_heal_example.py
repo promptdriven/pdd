@@ -20,7 +20,7 @@ console = Console()
 
 def demonstrate_drift_info() -> None:
     """Demonstrate how DriftInfo represents a drifted module.
-    
+
     DriftInfo is a dataclass used throughout ci_drift_heal to track the
     state of a module that needs automated healing.
     """
@@ -41,13 +41,13 @@ def demonstrate_drift_info() -> None:
 
 def demonstrate_mocked_main() -> None:
     """Demonstrate the main entry point using mocked dependencies.
-    
+
     Because ci_drift_heal orchestrates real git commands and subprocesses,
-    we mock the core Git and PDD subprocess logic here to safely show 
+    we mock the core Git and PDD subprocess logic here to safely show
     how the workflow executes.
     """
     console.print("\n[bold green]Running ci_drift_heal.main() with mocks...[/bold green]")
-    
+
     # We mock detect_drift to return a dummy drift
     dummy_drift = DriftInfo(
         basename="mocked_module",
@@ -57,13 +57,13 @@ def demonstrate_mocked_main() -> None:
         prompt_path="prompts/mocked_module_python.prompt",
         code_path="pdd/mocked_module.py"
     )
-    
+
     # Patch out the heavy lifting functions so it runs safely in the example
     with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [dummy_drift])), \
          patch("pdd.ci_drift_heal.heal_module", return_value=True), \
          patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
          patch("pdd.ci_drift_heal._repo_root", return_value=os.getcwd()):
-         
+
          # Call the main entry point.
          # In a real environment, this is invoked via: python -m pdd.ci_drift_heal
          exit_code = main(

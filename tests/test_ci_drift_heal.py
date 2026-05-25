@@ -2447,7 +2447,7 @@ class TestHealSubprocessTimeoutResolver:
         "٣",        # arabic-indic "٣" — int() accepts, regex doesn't
         "0x12",          # hex notation
         "1 2",           # embedded whitespace
-        "1\t",           # embedded tab (NB: leading/trailing whitespace stripped via .strip())
+        "1\t2",          # embedded tab (NB: only leading/trailing whitespace is stripped)
         "10000000000",   # > upper bound (3300), capped/rejected
         "3600",          # exactly the Cloud Build wall — rejected (no headroom)
         "999999999999",  # > upper bound

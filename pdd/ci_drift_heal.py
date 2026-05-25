@@ -27,6 +27,11 @@ from rich.table import Table
 console = Console()
 
 _HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
+# Upper bound for `PDD_HEAL_SUBPROCESS_TIMEOUT`. Must stay strictly below the
+# Cloud Build wall (3600s) so the script can fail fast with controlled
+# rollback before the build is killed. 3300s = 5 minutes of headroom.
+_HEAL_SUBPROCESS_TIMEOUT_UPPER_BOUND = 3300
+_ASCII_DECIMAL_RE = re.compile(r"\A[0-9]+\Z")
 _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT = 5.0
 
 
@@ -35,20 +40,26 @@ def _heal_subprocess_timeout() -> int:
 
     Reads `PDD_HEAL_SUBPROCESS_TIMEOUT` from the environment on each call (so
     callers and tests that mutate the env between invocations see the new
-    value). Invalid values — non-integer, non-positive, empty, or float
-    strings — fall back to `_HEAL_SUBPROCESS_TIMEOUT_DEFAULT` without raising.
+    value). The override must be a plain ASCII decimal integer in
+    ``(0, _HEAL_SUBPROCESS_TIMEOUT_UPPER_BOUND]``; leading/trailing whitespace
+    is stripped. Any other input — non-ASCII digits (e.g. unicode full-width
+    or arabic-indic), explicit sign, hex, float, embedded whitespace, empty,
+    or out-of-range values — falls back to ``_HEAL_SUBPROCESS_TIMEOUT_DEFAULT``
+    without raising. The upper bound keeps the value strictly below the Cloud
+    Build wall so the script can fail with controlled rollback rather than
+    being killed by the build harness.
     """
     raw = os.environ.get("PDD_HEAL_SUBPROCESS_TIMEOUT")
     if raw is None:
         return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
-    raw = raw.strip()
-    if not raw:
+    stripped = raw.strip()
+    if not stripped or not _ASCII_DECIMAL_RE.match(stripped):
         return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
     try:
-        value = int(raw)
-    except (TypeError, ValueError):
+        value = int(stripped)
+    except ValueError:  # pragma: no cover — regex already gates this
         return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
-    if value <= 0:
+    if value <= 0 or value > _HEAL_SUBPROCESS_TIMEOUT_UPPER_BOUND:
         return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
     return value
 _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
