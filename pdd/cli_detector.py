@@ -186,6 +186,32 @@ def _get_shell_info() -> "tuple[str, Path]":
 # ---------------------------------------------------------------------------
 
 
+def _google_oauth_file_has_oauth(path: Path) -> bool:
+    """Return True only when the Google OAuth file holds a usable token.
+
+    Mirrors ``_claude_credentials_file_has_oauth`` (Issue #813 round-9
+    pattern). A bare ``exists()`` check false-positives on stale, empty,
+    or logged-out files that still contain bytes but no usable token —
+    ``pdd setup`` would then skip the API-key prompt and leave the user
+    with broken auth at the first agentic call. Require a non-empty
+    ``refresh_token`` / ``access_token`` in the parsed JSON dict.
+
+    Used for BOTH ``~/.gemini/oauth_creds.json`` (legacy Gemini CLI) and
+    ``~/.gemini/antigravity-cli/oauth_creds.json`` (Antigravity CLI) —
+    the file schemas are intentionally aligned per Google's migration
+    plan. ``OSError`` and ``json.JSONDecodeError`` are swallowed so a
+    permissions error or a half-written file is treated as "no token".
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("refresh_token") or data.get("access_token"))
+
+
 def _claude_credentials_file_has_oauth(path: Path) -> bool:
     """Return True only when the on-disk file declares a usable OAuth token.
 
@@ -324,13 +350,25 @@ def _has_provider_oauth(provider: str) -> bool:
             return True
         return False
     if provider == "google":
-        try:
-            return (
-                (home / ".gemini" / "oauth_creds.json").exists()
-                or (home / ".gemini" / "antigravity-cli" / "oauth_creds.json").exists()
-            )
-        except OSError:
-            return False
+        # Mirror the Issue #813 round-9 shape parse used for Claude: a
+        # bare ``exists()`` check false-positives on stale, empty, or
+        # logged-out OAuth files that still contain bytes but no usable
+        # token. ``pdd setup`` would then skip the API-key prompt and
+        # leave the user with broken auth. Require a populated
+        # ``refresh_token`` / ``access_token`` (matches the same predicate
+        # used by ``pdd.agentic_common._has_agy_oauth_credentials`` /
+        # ``_has_legacy_gemini_oauth_credentials`` so setup and runtime
+        # availability detection cannot disagree).
+        for p in (
+            home / ".gemini" / "oauth_creds.json",
+            home / ".gemini" / "antigravity-cli" / "oauth_creds.json",
+        ):
+            try:
+                if p.exists() and _google_oauth_file_has_oauth(p):
+                    return True
+            except OSError:
+                continue
+        return False
     if provider == "openai":
         p = home / ".codex" / "auth.json"
         if p.exists():

@@ -28,7 +28,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pdd.agentic_common import _run_with_provider, get_agent_provider_preference
+from pdd.agentic_common import (
+    _run_with_provider,
+    get_agent_provider_preference,
+    get_available_agents,
+)
 from pdd import cli_detector
 
 
@@ -355,3 +359,151 @@ def test_get_google_cli_binary_auto_picks_agy_when_agy_oauth_present():
         resolved = agentic_common._get_google_cli_binary(env={})
 
     assert resolved == "/usr/local/bin/agy"
+
+
+# ---------------------------------------------------------------------------
+# Round-3 finding 1 & 2: availability must pair binary with matching OAuth
+# ---------------------------------------------------------------------------
+
+
+def test_get_available_agents_excludes_google_when_agy_pin_lacks_agy_oauth(monkeypatch):
+    """``PDD_GOOGLE_CLI=agy`` pinned + only legacy ``~/.gemini/oauth_creds.json``
+    (no API key, no Vertex) must NOT report google as available — agy will
+    hit "Authentication required." at runtime, so we should route to another
+    provider instead of advertising a broken one.
+    """
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    for k in (
+        "GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    from pdd import agentic_common
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+    ):
+        agents = get_available_agents()
+
+    assert "google" not in agents, (
+        f"google must not be advertised when PDD_GOOGLE_CLI=agy but only "
+        f"legacy OAuth exists and no API key is set; got {agents!r}"
+    )
+
+
+def test_get_available_agents_excludes_google_when_gemini_pin_lacks_legacy_oauth(monkeypatch):
+    """Mirror of the agy case: ``PDD_GOOGLE_CLI=gemini`` pinned + only
+    ``~/.gemini/antigravity-cli/oauth_creds.json`` (no API key) must not
+    advertise google either.
+    """
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "gemini")
+    for k in (
+        "GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    from pdd import agentic_common
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: True),
+    ):
+        agents = get_available_agents()
+
+    assert "google" not in agents, (
+        f"google must not be advertised when PDD_GOOGLE_CLI=gemini but only "
+        f"agy OAuth exists; got {agents!r}"
+    )
+
+
+def test_get_available_agents_includes_google_when_api_key_covers_pin(monkeypatch):
+    """API keys work with both binaries, so any of GOOGLE_API_KEY /
+    GEMINI_API_KEY / ANTIGRAVITY_API_KEY restores availability even when
+    the binary's OAuth file is missing.
+    """
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+
+    from pdd import agentic_common
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+    ):
+        agents = get_available_agents()
+
+    assert "google" in agents
+
+
+# ---------------------------------------------------------------------------
+# Round-3 finding 3: pdd setup must shape-parse the Google OAuth file
+# ---------------------------------------------------------------------------
+
+
+def test_has_provider_oauth_google_rejects_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert cli_detector._has_provider_oauth("google") is False
+
+
+def test_has_provider_oauth_google_rejects_empty_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    creds = tmp_path / ".gemini" / "oauth_creds.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text("", encoding="utf-8")
+    assert cli_detector._has_provider_oauth("google") is False
+
+
+def test_has_provider_oauth_google_rejects_token_less_json(monkeypatch, tmp_path):
+    """A JSON dict that parses but declares no refresh/access token must
+    NOT count as configured OAuth — that's how a logged-out file looks.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    creds = tmp_path / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text('{"misc": "noise"}', encoding="utf-8")
+    assert cli_detector._has_provider_oauth("google") is False
+
+
+def test_has_provider_oauth_google_accepts_populated_legacy(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    creds = tmp_path / ".gemini" / "oauth_creds.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text('{"refresh_token": "abc"}', encoding="utf-8")
+    assert cli_detector._has_provider_oauth("google") is True
+
+
+def test_has_provider_oauth_google_accepts_populated_antigravity(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    creds = tmp_path / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text('{"access_token": "xyz"}', encoding="utf-8")
+    assert cli_detector._has_provider_oauth("google") is True
+
+
+def test_has_provider_oauth_google_rejects_corrupt_json(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    creds = tmp_path / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    creds.parent.mkdir(parents=True)
+    creds.write_text("{not valid json", encoding="utf-8")
+    assert cli_detector._has_provider_oauth("google") is False
