@@ -230,7 +230,9 @@ def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock
     """Test when all agents are available."""
     mock_shutil_which.return_value = "/usr/bin/fake"
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-    os.environ["GEMINI_API_KEY"] = "AIza..."
+    # GOOGLE_API_KEY is accepted by both agy and legacy gemini, so google is
+    # available regardless of which binary auto-mode selects.
+    os.environ["GOOGLE_API_KEY"] = "AIza..."
     os.environ["OPENAI_API_KEY"] = "sk-..."
 
     agents = get_available_agents()
@@ -559,7 +561,9 @@ def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_
     """Test fallback from Anthropic (failure) to Google (success)."""
     # Setup availability for both
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["GEMINI_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini; safe to use here
+    # regardless of which Google binary auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     
     # Setup subprocess responses
     # First call (Anthropic) fails
@@ -1091,8 +1095,10 @@ def test_get_available_agents_google_vertex_ai_adc_auth(mock_shutil_which, mock_
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
-    mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini binaries, ensuring
+    # google is available regardless of which one auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
 
     agents = get_available_agents()

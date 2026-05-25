@@ -461,6 +461,134 @@ def test_get_available_agents_includes_google_when_api_key_covers_pin(monkeypatc
 
 
 # ---------------------------------------------------------------------------
+# Round-5 finding 1: call-ordering in run_agentic_task()
+# ---------------------------------------------------------------------------
+
+
+def test_provider_preference_before_availability_excludes_agy_without_auth(monkeypatch):
+    """``PDD_AGENTIC_PROVIDER=antigravity`` + legacy-only OAuth + both CLIs installed
+    must result in google NOT being advertised as available.
+
+    Regression for the call-ordering bug where ``get_available_agents()`` ran
+    before ``get_agent_provider_preference()`` set ``PDD_GOOGLE_CLI=agy``,
+    so ``get_available_agents()`` saw the legacy gemini OAuth and marked google
+    available — then execution was pinned to ``agy`` which failed auth at runtime.
+    The fix: call ``get_agent_provider_preference()`` first so its
+    ``PDD_GOOGLE_CLI=agy`` side effect is visible to ``get_available_agents()``.
+    """
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "antigravity")
+    # Use setenv (not delenv) so monkeypatch records PDD_GOOGLE_CLI for cleanup.
+    # get_agent_provider_preference() sets PDD_GOOGLE_CLI=agy directly on
+    # os.environ; without this registration, the side-effect leaks to later tests.
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "auto")
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY",
+              "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_APPLICATION_CREDENTIALS",
+              "GOOGLE_CLOUD_PROJECT"):
+        monkeypatch.delenv(k, raising=False)
+
+    from pdd import agentic_common
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True),
+    ):
+        # Correct order: preference first (sets PDD_GOOGLE_CLI=agy), then availability
+        provider_pref = agentic_common.get_agent_provider_preference()
+        agents = agentic_common.get_available_agents()
+
+    assert os.environ.get("PDD_GOOGLE_CLI") == "agy", (
+        "get_agent_provider_preference() must set PDD_GOOGLE_CLI=agy for antigravity"
+    )
+    assert "google" not in agents, (
+        "google must not be available when PDD_GOOGLE_CLI=agy but only legacy OAuth exists; "
+        f"preference={provider_pref!r}, agents={agents!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-5 finding 3: ANTIGRAVITY_API_KEY must not count for gemini CLI row
+# ---------------------------------------------------------------------------
+
+
+def test_build_rows_gemini_does_not_count_antigravity_api_key(monkeypatch):
+    """``ANTIGRAVITY_API_KEY`` must not mark the legacy ``gemini`` CLI row as
+    having a usable API key — that key is consumed by ``agy``, not ``gemini``.
+    """
+    monkeypatch.setenv("ANTIGRAVITY_API_KEY", "test-key")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    rows = cli_detector._build_rows()
+    gemini_row = next((r for r in rows if r["cli"] == "gemini"), None)
+    agy_row = next((r for r in rows if r["cli"] == "agy"), None)
+
+    assert gemini_row is not None
+    assert not gemini_row["has_key"], (
+        "ANTIGRAVITY_API_KEY must not be counted as a usable key for the gemini CLI row"
+    )
+    if agy_row is not None:
+        assert agy_row["has_key"], (
+            "ANTIGRAVITY_API_KEY must be counted as a usable key for the agy CLI row"
+        )
+
+
+def test_build_rows_gemini_api_key_does_not_count_for_agy(monkeypatch):
+    """Mirror: ``GEMINI_API_KEY`` must not mark the ``agy`` CLI row as having a
+    usable API key — that key is consumed by ``gemini``, not ``agy``.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    rows = cli_detector._build_rows()
+    agy_row = next((r for r in rows if r["cli"] == "agy"), None)
+    gemini_row = next((r for r in rows if r["cli"] == "gemini"), None)
+
+    assert agy_row is not None
+    assert not agy_row["has_key"], (
+        "GEMINI_API_KEY must not be counted as a usable key for the agy CLI row"
+    )
+    if gemini_row is not None:
+        assert gemini_row["has_key"], (
+            "GEMINI_API_KEY must be counted as a usable key for the gemini CLI row"
+        )
+
+
+def test_get_available_agents_excludes_google_with_gemini_key_and_agy_pin(monkeypatch):
+    """``PDD_GOOGLE_CLI=agy`` + only ``GEMINI_API_KEY`` set must NOT mark google
+    available — GEMINI_API_KEY does not work with the ``agy`` binary.
+    """
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+
+    from pdd import agentic_common
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: f"/usr/local/bin/{name}" if name in ("agy", "gemini") else None,
+        ),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
+    ):
+        agents = agentic_common.get_available_agents()
+
+    assert "google" not in agents, (
+        "GEMINI_API_KEY must not enable google when PDD_GOOGLE_CLI=agy; "
+        f"got {agents!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Round-3 finding 3: pdd setup must shape-parse the Google OAuth file
 # ---------------------------------------------------------------------------
 
@@ -643,12 +771,9 @@ def test_run_with_provider_agy_uses_agy_cmd_with_symlink_path(tmp_path, monkeypa
     captured: dict = {}
 
     def fake_popen(cmd, **kwargs):
-        captured["cmd"] = cmd
+        captured["cmd"] = list(cmd)
         proc = MagicMock()
-        proc.stdout = MagicMock()
-        proc.stdout.__iter__ = MagicMock(return_value=iter([]))
-        proc.wait = MagicMock(return_value=0)
-        proc.poll = MagicMock(return_value=0)
+        proc.communicate.return_value = ("", "")
         proc.returncode = 0
         return proc
 
@@ -656,26 +781,21 @@ def test_run_with_provider_agy_uses_agy_cmd_with_symlink_path(tmp_path, monkeypa
 
     with (
         patch.object(agentic_common, "_find_cli_binary", lambda name: symlink_path if name == "agy" else None),
+        patch.object(agentic_common, "_get_google_cli_name", return_value="agy"),
         patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: True),
         patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
         patch("subprocess.Popen", fake_popen),
-        patch("subprocess.run", MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))),
     ):
-        try:
-            _run_with_provider(
-                provider="google",
-                prompt_path=prompt_file,
-                stdin_content=None,
-                env=dict(os.environ),
-                cwd=str(tmp_path),
-                verbose=False,
-                quiet=True,
-            )
-        except Exception:
-            pass  # we only care about cmd shape, not full execution
-
-    if "cmd" in captured:
-        assert "--output-format" not in captured["cmd"], (
-            "agy cmd must not include --output-format even via wrapper path"
+        _run_with_provider(
+            provider="google",
+            prompt_path=prompt_file,
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
         )
-        assert "--print" in captured["cmd"] or symlink_path in captured["cmd"]
+
+    assert symlink_path == captured["cmd"][0], "wrapper path must be used as the binary"
+    assert "--print" in captured["cmd"], "agy cmd must use --print flag"
+    assert "--output-format" not in captured["cmd"], (
+        "agy cmd must not include --output-format even via wrapper path"
+    )

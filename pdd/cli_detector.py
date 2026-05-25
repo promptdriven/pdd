@@ -466,6 +466,27 @@ def _has_api_key(provider: str) -> bool:
     return bool(key and os.environ.get(key))
 
 
+def _has_cli_api_key(cli: str) -> bool:
+    """Return True if an API key usable by *cli* is present.
+
+    ``ANTIGRAVITY_API_KEY`` is consumed by ``agy`` but not by legacy ``gemini``.
+    ``GEMINI_API_KEY`` is consumed by ``gemini`` but not by ``agy``.
+    ``GOOGLE_API_KEY`` is accepted by both Google CLIs.
+    All non-Google CLIs delegate to ``_has_api_key``.
+    """
+    if cli == "agy":
+        return bool(
+            os.environ.get("ANTIGRAVITY_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
+    if cli == "gemini":
+        return bool(
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
+    return _has_api_key(CLI_PROVIDER.get(cli, ""))
+
+
 def _displayed_google_key() -> str:
     for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTIGRAVITY_API_KEY"):
         if os.environ.get(k):
@@ -580,7 +601,7 @@ def _build_rows() -> List[dict]:
                 "cli": cli,
                 "provider": provider,
                 "path": _find_cli_binary(cli),
-                "has_key": _has_api_key(provider),
+                "has_key": _has_cli_api_key(cli),
                 "has_oauth": _has_cli_oauth(cli),
             }
         )
