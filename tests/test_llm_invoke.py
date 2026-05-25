@@ -4715,7 +4715,9 @@ class TestLoadModelData:
         df = llm_mod._load_model_data(csv_path)
         assert len(df) == 3
         assert "avg_cost" in df.columns
-        assert df["api_key"].dtype == object  # string type
+        # pandas 3+ string-inference may produce a dedicated str dtype rather
+        # than object; accept either via the public string-dtype predicate.
+        assert pd.api.types.is_string_dtype(df["api_key"])
 
     def test_missing_column_raises(self, llm_mod, tmp_path):
         content = "provider,model,input\nopenai,gpt-4,30\n"
