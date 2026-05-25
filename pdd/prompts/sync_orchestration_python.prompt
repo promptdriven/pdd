@@ -1,5 +1,8 @@
+<pdd-reason>Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.</pdd-reason>
+
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+
 # sync_orchestration_python.prompt
 
 Create a Python module that orchestrates the complete PDD (Prompt-Driven Development) sync workflow by coordinating operations and animations in parallel.
@@ -66,6 +69,11 @@ Defense in depth: at the top of `sync_orchestration()`, replace `None` values fo
 
 Returns a dictionary containing:
 - `success`: bool indicating overall success
+- `summary`: String summary of the sync operation results:
+    - On success (no-op): MUST be "No sync operations required; selected target is already synchronized."
+    - On success (terminal decision): MUST include the decision reason (e.g., "Accepted as complete: <reason>")
+    - On success (work performed): MUST summarize completed operations (e.g., "Completed: generate, example, test")
+    - On failure: MUST include the failing step (e.g., "Step generate failed")
 - `operations_completed`: List of completed operation names
 - `skipped_operations`: List of skipped operation names
 - `total_cost`: float total cost in dollars
@@ -119,10 +127,10 @@ Returns a dictionary containing:
         <include>context/python_env_detector_example.py</include>
     </python_env_detector>
     <get_run_command>
-        <!-- Invalid selector for context/get_run_command_example.py: Function 'get_run_command_for_file' not found in source -->
+        <include select="def:get_run_command_for_file">pdd/get_run_command.py</include>
     </get_run_command>
     <pytest_output>
-        <!-- Invalid selector for context/pytest_output_example.py: Function 'extract_failing_files_from_output' not found in source -->
+        <include select="def:extract_failing_files_from_output,def:_find_project_root">pdd/pytest_output.py</include>
     </pytest_output>
 </examples>
 
@@ -337,7 +345,7 @@ entry = create_log_entry(
 
 ### Local helpers (implement in this module)
 
-- `_display_sync_log(basename, language, verbose)` - Format and display sync log using `load_operation_log()`
+- `_display_sync_log(basename, language, verbose)` - Format and display sync log using `load_operation_log()`. Suppress the `Model:` header if the model name is empty, "unknown", or "N/A" (case-insensitive).
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
 - `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
 - `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage; uses `test_files` when provided

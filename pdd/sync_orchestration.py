@@ -84,6 +84,52 @@ def _truncate_text(text: str, limit_chars: int) -> str:
     return text[:limit_chars] + f"\n... (truncated, {len(text)} total chars)"
 
 
+def _compose_sync_summary(
+    *,
+    success: bool,
+    operations_completed: List[str],
+    skipped_operations: List[str],
+    errors: List[str],
+    terminal_reason: Optional[str] = None,
+) -> str:
+    """Compose a truthful, scoped summary line for the sync result.
+
+    - No-op success: "No sync operations required; selected target is already synchronized."
+    - Success with work: "Completed: <ops>" (and "; skipped: <ops>" when applicable)
+    - Failure: "Step <first> failed: <reason>" using the first error.
+    When ``terminal_reason`` is provided for an accepted-as-complete decision
+    (e.g. coverage below target but tests skipped, or test_extend unsupported
+    for the target language), it is appended so the user understands WHY the
+    run was accepted instead of seeing only "no operations required". #1103.
+    The selected-target scoping comes from the caller (sync_main renders this per language).
+    """
+    if not success:
+        first_err = next((e for e in errors if e), "")
+        if first_err:
+            return f"Sync failed: {first_err}"
+        return "Sync failed."
+
+    completed = [op for op in (operations_completed or []) if op]
+    skipped = [op for op in (skipped_operations or []) if op]
+    reason = (terminal_reason or "").strip()
+
+    if not completed and not skipped:
+        base = "No sync operations required; selected target is already synchronized."
+        if reason:
+            return f"{base} Accepted as complete: {reason}"
+        return base
+
+    parts: List[str] = []
+    if completed:
+        parts.append(f"Completed: {', '.join(completed)}")
+    if skipped:
+        parts.append(f"skipped: {', '.join(skipped)}")
+    summary = "; ".join(parts)
+    if reason:
+        summary = f"{summary}; accepted as complete: {reason}"
+    return summary
+
+
 def _run_fix_operation_test_subprocess(*args: Any, **kwargs: Any) -> Any:
     """subprocess.run for fix-phase test capture; separate symbol so tests can patch reliably."""
     return subprocess.run(*args, **kwargs)
@@ -1971,6 +2017,7 @@ def sync_orchestration(
             return {
                 "success": False,
                 "error": f"Failed to construct paths: {str(e)}",
+                "summary": f"Failed to construct paths: {str(e)}",
                 "operations_completed": [],
                 "errors": [f"Path construction failed: {str(e)}"]
             }
@@ -2059,6 +2106,7 @@ def sync_orchestration(
         last_model_name: str = "unknown"
         operation_history: List[str] = []
         operation_rollback: Optional[OperationFileRollback] = None
+        terminal_reason: Optional[str] = None
         MAX_CYCLE_REPEATS = 2
         try:
             log_event(
@@ -2317,6 +2365,14 @@ def sync_orchestration(
                         # Emit phase marker for parent process to parse (agentic sync progress tracking)
                         print(f"PDD_PHASE: {current_function_name_ref[0]}", flush=True)
                         success = operation in ['all_synced', 'nothing']
+                        # Preserve the decision reason for terminal success states so the
+                        # final summary can surface accepted-as-complete details
+                        # (e.g. coverage skipped, test_extend not supported, unparseable
+                        # coverage). Without this the summary collapses to a generic
+                        # "no operations required" message and the user never sees why
+                        # we accepted the run as complete (#1103).
+                        if operation == 'all_synced' and decision.reason:
+                            terminal_reason = decision.reason
                         error_msg = None
                         if operation == 'fail_and_request_manual_merge':
                             msg = f"Manual merge required: {decision.reason}"
@@ -3401,7 +3457,14 @@ def sync_orchestration(
             'total_time': time.time() - start_time,
             'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items() if p != 'test_files'},
             'errors': errors,
-            'error': "; ".join(errors) if errors else None,  # Add this line
+            'error': "; ".join(errors) if errors else None,
+            'summary': _compose_sync_summary(
+                success=not errors,
+                operations_completed=operations_completed,
+                skipped_operations=skipped_operations,
+                errors=errors,
+                terminal_reason=terminal_reason,
+            ),
             'model_name': last_model_name,
         }
 
@@ -3468,10 +3531,11 @@ def sync_orchestration(
             "total_cost": current_cost_ref[0],
             "model_name": "",
             "error": "Sync process interrupted or returned no result.",
+            "summary": "Sync interrupted: app exited without result.",
             "operations_completed": [],
             "errors": ["App exited without result"]
         }
-    
+
     return result
 
 if __name__ == '__main__':

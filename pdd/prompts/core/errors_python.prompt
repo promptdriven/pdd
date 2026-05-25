@@ -1,3 +1,5 @@
+<pdd-reason>Central error handling and reporting for the CLI.</pdd-reason>
+
 # prompts/core/errors_python.prompt
 % You are an expert Python engineer. Your goal is to write the error handling logic for the PDD CLI in `pdd/core/errors.py`.
 
