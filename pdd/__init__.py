@@ -25,6 +25,13 @@ DEFAULT_TEMPERATURE = 0.0
 
 DEFAULT_TIME = 0.25
 
+# Default budgeting/retry/coverage constants. Defined here so submodules can
+# `from . import DEFAULT_BUDGET, DEFAULT_MAX_ATTEMPTS, DEFAULT_TARGET_COVERAGE`
+# without circular imports.
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_BUDGET = 5.0
+DEFAULT_TARGET_COVERAGE = 90.0
+
 # Public OAuth credentials for cloud mode
 # These are safe to embed as they are public client identifiers:
 # - Firebase API keys are designed to be public (client-side)

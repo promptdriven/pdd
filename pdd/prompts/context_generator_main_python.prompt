@@ -1,3 +1,18 @@
+<pdd-reason>CLI wrapper that generates example code from a prompt and code file, honoring user-supplied --output extensions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "context_generator_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str])", "returns": "Tuple[str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will use 'construct_paths' to resolve and read the prompt and code file contents and to compute output locations; it will then invoke 'context_generator' and handle saving the result.
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
@@ -23,6 +38,7 @@
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the existing code file.
         - `output` - An optional string containing the path where to save the generated example code. If None, uses default naming convention.
+        - `format` - An optional string for the output format (`"code"` or `"md"`). When `None`, the user did not request a format constraint and any user-supplied `--output` extension is honored verbatim. When set, it constrains the output extension (see "Output file handling" below).
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
             - `str`: The generated example code.
@@ -70,8 +86,17 @@
     - Output file handling:
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
-        * Otherwise, write to the explicit `output` path provided by the user.
+        * Otherwise, the user supplied an explicit `--output` file path. The user's path MUST be honored verbatim — including its extension — unless `format` is explicitly set AND the user-supplied path has no suffix or a suffix that conflicts with the requested format. Specifically:
+            - If `format` is `None`: write to the user-supplied `output` path unchanged. Do NOT call `with_suffix(...)` and do NOT consult `BUILTIN_EXT_MAP`. This is the durable fix for issue #1148: a user who types `--output foo.yml` MUST get `foo.yml`, not `foo.yaml`; a user who types `--output foo.md` MUST get `foo.md`, not `foo.markdown`.
+            - If `format == "md"`: if the user-supplied path already ends in `.md`, honor it verbatim; otherwise rewrite the suffix to `.md`.
+            - If `format == "code"`: if the user-supplied path has a non-empty suffix, honor it verbatim (the user has chosen which of several valid extensions for the language they want — e.g., `.yml` vs `.yaml`, `.md` vs `.markdown`). Only when the user-supplied path has no suffix do we fall back to the language-derived extension from `BUILTIN_EXT_MAP` (with the historical fallback to `f".{lang_key}"` and ultimately `.py`).
         * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
+
+    - Testable contract cases for output path resolution (issue #1148):
+        1. `--output foo.yml` (no `--format`, language YAML) MUST write to `foo.yml`, not `foo.yaml`.
+        2. `--output foo.md` (no `--format`, language Markdown) MUST write to `foo.md`, not `foo.markdown`.
+        3. `--output foo` with no suffix and `--format code` (language Python) MUST write to `foo.py`.
+        4. `--output foo.txt` with `--format md` MUST write to `foo.md` (explicit format overrides conflicting suffix).
     - Python syntax validation (for Python language only):
         * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.
         * If syntax is invalid, attempt to fix a common LLM failure pattern: JSON metadata garbage appended at the end of the file (e.g., lines containing `"explanation":`, `"focus":`, `"description":`, `"code":`, `"filename":`).

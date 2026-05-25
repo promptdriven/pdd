@@ -1,3 +1,16 @@
+<pdd-reason>Resolves PDD configuration, validates inputs, and computes output paths and language detection for all PDD commands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "construct_paths", "signature": "(input_file_paths: dict, force: bool, quiet: bool, command: str, command_options: dict, create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None)", "returns": "Tuple[Dict[str, Any], dict, Dict[str, str], str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that resolves configuration, validates input files, determines output paths, and handles overwrite confirmation.
 
 <include>context/python_preamble.prompt</include>
@@ -102,6 +115,7 @@
 6. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
    - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
    - Use get_extension with fallback to built-in extension map (BUILTIN_EXT_MAP) if PDD_PATH unavailable.
+   - `BUILTIN_EXT_MAP` MUST include `'markdown': '.md'` so that the Markdown language falls back to `.md` instead of the synthesized `.markdown` extension (issue #1148). Keep `'yaml': '.yaml'` and `'yml': '.yml'` as distinct entries so the map honors whichever spelling the caller resolved.
    - When get_language raises ValueError (PDD_PATH unset), fall back to reading language_format.csv
      directly from the script's data/ directory.
    - `_is_known_language(name)` validates against a comprehensive set of known languages including:
