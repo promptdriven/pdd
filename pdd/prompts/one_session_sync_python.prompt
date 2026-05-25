@@ -1,3 +1,11 @@
+<pdd-reason>Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of sequential sync/fix/test calls.</pdd-reason>
+
+<pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
+<pdd-dependency>fix_code_loop_python.prompt</pdd-dependency>
+<pdd-dependency>fix_verification_errors_loop_python.prompt</pdd-dependency>
+<pdd-dependency>generate_test_python.prompt</pdd-dependency>
+<pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -18,8 +26,8 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 9. Function: `run_one_session_sync(basename, language, pdd_files, project_root, *, target_coverage=90.0, budget=None, verbose=False, quiet=False, timeout=None) -> Dict[str, Any]`
 10. Validates code file exists; raises `FileNotFoundError` if not
 11. Forwards `verbose` and `quiet` to `run_agentic_task(instruction=prompt, cwd=project_root, verbose=verbose, quiet=quiet, label="one_session_sync:{basename}", timeout=timeout or 1200, max_retries=2)`. Passes `max_retries=2` so the single-provider false-positive retry path in `run_agentic_task` actually fires — cloud one-session sync runs with anthropic-only (`len(candidates) == 1`), and the default `max_retries=1` means a single transient empty-result response from Claude Code fails the entire sync.
-12. Returns dict with keys: `success`, `total_cost`, `model_name`, `operations_completed`, `errors`
-13. On success, `operations_completed` = `["example", "crash_fix", "verify", "test"]`
+12. Returns dict with keys: `success`, `total_cost`, `model_name`, `operations_completed`, `errors`, `summary`
+13. On success, `summary` MUST be "No sync operations required; selected target is already synchronized." if no work was needed; MUST include the decision reason (e.g., "Accepted as complete: <reason>") for successful terminal decisions; otherwise MUST summarize completed operations (e.g., "Completed: generate, example, test"). On failure, MUST include the failing step (e.g., "Step generate failed"). `operations_completed` = `["example", "crash_fix", "verify", "test"]` on full success.
 14. Progress file at `{project_root}/.pdd_one_session_progress_{safe_basename}` — agent writes `STEP_COMPLETE:<step>` lines
 15. Heartbeat thread polls progress file every 10s and prints step-level updates via Rich console
 16. Cleans up stale progress files before starting and after completion
@@ -45,7 +53,7 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 % Error Handling
 - Raise `FileNotFoundError` if code file missing: "Code file not found: {path}\nRun `pdd generate {basename}` first."
 - Raise `FileNotFoundError` if prompt template missing
-- On agentic task failure, return `errors` list with first 500 chars of output text
+- On agentic task failure, return `errors` list with first 500 chars of output text; set `summary` to "Step {step} failed" identifying the last uncompleted step based on progress file markers.
 - **Test-Churn Repair Loop (#1015 Codex iter-2)**: When the agentic session succeeds AND there was a pre-existing test file, snapshot the pre-existing content BEFORE invoking the session and then run `_verify_test_churn` against the generated file after the session completes. If `_verify_test_churn` raises `TestChurnError`, restore the pre-existing file and route through the same `PDD_REPAIR_DIRECTIVE` retry contract used by `sync_orchestration._run_test_op_with_churn_retry`:
     - Wrap the agentic-task call + churn-check in a bounded loop capped at `min(MAX_CONFORMANCE_ATTEMPTS, 2)` iterations (test-churn retries rarely converge — one retry only).
     - On each `TestChurnError`, restore the pre-existing test file, accumulate `attempt_cost` onto `accumulated_cost`, set `PDD_REPAIR_DIRECTIVE = exc.repair_directive` for the next attempt, and rebuild the heartbeat thread + clean the progress file so the retry can report fresh step-level updates.

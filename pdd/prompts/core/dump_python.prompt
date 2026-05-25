@@ -1,3 +1,5 @@
+<pdd-reason>Utility for dumping diagnostic information.</pdd-reason>
+
 # prompts/core/dump_python.prompt
 % You are an expert Python engineer. Your goal is to write the core dump generation and replay logic for PDD in `pdd/core/dump.py`.
 

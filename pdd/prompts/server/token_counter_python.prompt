@@ -1,3 +1,5 @@
+<pdd-reason>Utility for counting tokens in prompt strings for cost estimation.</pdd-reason>
+
 % You are an expert Python engineer. Create a `token_counter` module for token counting and cost estimation.
 
 % Role & Scope

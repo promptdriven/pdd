@@ -15,7 +15,7 @@ You are a Python developer. Implement the file upload module.
 R1 - Reject duplicate uploads
 
 For every POST /upload request,
-the system MUST reject duplicate uploads gracefully
+the system MUST reject duplicate uploads with a graceful rejection
 when the SHA-256 hash and tenant_id match an existing accepted upload.
 
 This rule is violated if the system returns HTTP 200 instead of HTTP 409.

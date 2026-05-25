@@ -94,17 +94,10 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     """
     test_path = Path(test_file)
     ext = test_path.suffix
-    lang_formats: Optional[dict] = None
 
     resolved_language = language
     if resolved_language is None:
-        try:
-            resolved_language = get_language(ext)
-        except ValueError:
-            # get_language intentionally requires an initialized PDD_PATH.
-            # Command resolution can still use the packaged CSV it already reads.
-            lang_formats = _load_language_format()
-            resolved_language = lang_formats.get(ext, {}).get("language", "").strip()
+        resolved_language = get_language(ext)
 
     # 1. For TypeScript/TSX: detect Jest or Vitest config and use appropriate runner
     if ext in ('.ts', '.tsx') and resolved_language and resolved_language.lower() in ('typescript', 'typescriptreact'):
@@ -114,8 +107,7 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
             return TestCommand(command=f"{runner_cmd} {test_path.resolve()}", cwd=config_dir)
 
     # 2. Check CSV for run_test_command
-    if lang_formats is None:
-        lang_formats = _load_language_format()
+    lang_formats = _load_language_format()
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
