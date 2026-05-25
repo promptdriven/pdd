@@ -3,7 +3,7 @@ AWS Bedrock,anthropic.claude-opus-4-7,5.0,25.0,1565,,AWS_ACCESS_KEY_ID|AWS_SECRE
 AWS Bedrock,anthropic.claude-sonnet-4-6,3.0,15.0,1525,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
 AWS Bedrock,zai.glm-4.7,0.6,2.2,1440,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
 AWS Bedrock,minimax.minimax-m2.1,0.3,1.2,1392,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,none,
-Anthropic,claude-opus-4-7,5.0,25.0,1565,,ANTHROPIC_API_KEY,128000,True,budget,
+Anthropic,claude-opus-4-7,5.0,25.0,1565,,ANTHROPIC_API_KEY,16000,True,adaptive,
 Anthropic,claude-sonnet-4-6,3.0,15.0,1525,,ANTHROPIC_API_KEY,128000,True,budget,
 Anthropic,claude-haiku-4-5,1.0,5.0,1316,,ANTHROPIC_API_KEY,128000,True,budget,
 Azure AI,azure_ai/claude-opus-4-7,5.0,25.0,1565,,AZURE_AI_API_KEY,128000,True,budget,
