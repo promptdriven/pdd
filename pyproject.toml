@@ -134,3 +134,11 @@ filterwarnings = [
 version_file = "pdd/_version.py"
 tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 local_scheme = "no-local-version"
+
+[tool.coverage.run]
+# pytest-cov 7 removed its .pth-based subprocess coverage support. Use
+# coverage.py 7.10+ patch directives so child processes (notably
+# pdd/sync_orchestration.py's worker subprocesses) are still measured.
+# Enabling the `subprocess` patch implicitly turns on `parallel = true`,
+# producing per-process data files that `coverage combine` merges.
+patch = ["subprocess"]
