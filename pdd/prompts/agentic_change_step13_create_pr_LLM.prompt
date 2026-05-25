@@ -75,11 +75,11 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
      gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
      ```
 
-   Use `gh pr create` to create a PR that:
-   - References the original issue
-   - Summarizes the prompt changes made
-   - Lists files modified
-   - Includes next steps for reviewer
+   Whether creating or editing, the PR must:
+   - Reference the original issue
+   - Summarize the prompt changes made
+   - List files modified
+   - Include next steps for reviewer
 
 5. **Link PR to issue**
    - The PR body should include `Closes #{issue_number}` or `Fixes #{issue_number}`
