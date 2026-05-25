@@ -7,9 +7,11 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+      github-actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "chore(ci)"
-      include: "scope"
 
   - package-ecosystem: pip
     directory: "/"
@@ -18,7 +20,8 @@ updates:
     groups:
       pip:
         patterns: ["*"]
+      pip-security:
+        applies-to: security-updates
+        patterns: ["*"]
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
-    open-pull-requests-limit: 5
