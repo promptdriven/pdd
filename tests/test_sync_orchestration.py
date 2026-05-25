@@ -13,7 +13,7 @@ import click
 # may carry their own @pytest.mark.timeout override.
 pytestmark = pytest.mark.timeout(450)
 
-from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error
+from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error, _compose_sync_summary
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 
 # Test Plan:
@@ -8831,3 +8831,74 @@ class TestVerifyCodeSurfaceAfterWriteIsHardFailure:
         assert result is None
         # Disk state unchanged.
         assert code_path.read_text(encoding="utf-8") == pre_code
+
+
+class TestComposeSyncSummaryTerminalReason:
+    """Regression coverage for #1103: the final summary must carry the
+    accepted-as-complete reason from an `all_synced` decision so the user
+    can see WHY the run was accepted (e.g. coverage skipped, test_extend
+    not supported for language)."""
+
+    def test_no_op_success_without_reason_uses_default_text(self):
+        summary = _compose_sync_summary(
+            success=True,
+            operations_completed=[],
+            skipped_operations=[],
+            errors=[],
+        )
+        assert summary == (
+            "No sync operations required; selected target is already synchronized."
+        )
+
+    def test_no_op_success_with_terminal_reason_surfaces_reason(self):
+        reason = (
+            "Tests pass (5 passed). Coverage 65.0% below target but "
+            "test_extend not supported for typescript - accepting as complete"
+        )
+        summary = _compose_sync_summary(
+            success=True,
+            operations_completed=[],
+            skipped_operations=[],
+            errors=[],
+            terminal_reason=reason,
+        )
+        assert summary.startswith(
+            "No sync operations required; selected target is already synchronized."
+        )
+        assert reason in summary
+        assert "Accepted as complete" in summary
+
+    def test_completed_ops_with_terminal_reason_appends_note(self):
+        summary = _compose_sync_summary(
+            success=True,
+            operations_completed=["crash", "verify"],
+            skipped_operations=[],
+            errors=[],
+            terminal_reason="Coverage 0.0% could not be verified - accepting as complete",
+        )
+        assert "Completed: crash, verify" in summary
+        assert "accepted as complete" in summary
+        assert "could not be verified" in summary
+
+    def test_failure_path_ignores_terminal_reason(self):
+        summary = _compose_sync_summary(
+            success=False,
+            operations_completed=["crash"],
+            skipped_operations=[],
+            errors=["Crash fix failed: traceback"],
+            terminal_reason="should not appear",
+        )
+        assert summary.startswith("Sync failed:")
+        assert "should not appear" not in summary
+
+    def test_blank_terminal_reason_does_not_append_separator(self):
+        summary = _compose_sync_summary(
+            success=True,
+            operations_completed=[],
+            skipped_operations=[],
+            errors=[],
+            terminal_reason="   ",
+        )
+        assert summary == (
+            "No sync operations required; selected target is already synchronized."
+        )

@@ -923,6 +923,14 @@ def run_one_session_sync(
     if not success:
         errors.append(output_text[:500] if output_text else "One-session sync failed")
 
+    # sync_main's summary table reads result.get("summary") first and falls
+    # through to result.get("error"); without summary on success, the success
+    # row collapses to the "No details." fallback (#1103).
+    if success:
+        summary = f"One-session sync complete (operations: {', '.join(operations)})"
+    else:
+        summary = "; ".join(errors) if errors else "One-session sync failed"
+
     return {
         "success": success,
         # Use accumulated cost so failed-then-retried attempts charge the
@@ -932,7 +940,6 @@ def run_one_session_sync(
         "model_name": accumulated_provider or provider,
         "operations_completed": operations,
         "errors": errors,
-        # sync_main's summary table reads result.get("error") (singular).
-        # Without this key, one-session errors display as "No details."
+        "summary": summary,
         "error": "; ".join(errors) if errors else "",
     }

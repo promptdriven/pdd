@@ -1,3 +1,5 @@
+<pdd-reason>Resolves configuration, validates input files, and determines output paths.</pdd-reason>
+
 % You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that resolves configuration, validates input files, determines output paths, and handles overwrite confirmation.
 
 <include>context/python_preamble.prompt</include>
