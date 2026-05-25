@@ -1,4 +1,5 @@
 import ast
+import difflib
 import glob
 import logging
 import os
@@ -10,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Set
 
 import click
 from rich.console import Console
@@ -36,6 +37,32 @@ from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+# Extensions for languages that follow the `<name>_test.<ext>` /
+# `<name>_spec.<ext>` sibling-file convention (file lives next to
+# production code, not under `tests/`). Used by
+# `_is_test_output_path` so the test-churn gate auto-covers any
+# supported language whose test runner picks up that pattern. Adding
+# a new language with this naming convention to `language_format.csv`
+# should also be appended here; doing so eliminates the
+# `_is_test_output_path` extension-by-extension fix cycle (see PR
+# #1015 external review iter-12 follow-ups). PascalCase JVM/.NET/
+# Swift conventions (`FooTest.java`, `WidgetSpec.kt`) are matched
+# separately to keep the check case-sensitive and dodge
+# `latest.kt`-style false positives.
+_LANGUAGE_TEST_FILE_EXTS: Tuple[str, ...] = (
+    ".py",
+    ".go",
+    ".rb",
+    ".rs",
+    ".exs",
+    ".ex",
+    ".dart",
+    ".clj",
+    ".cljc",
+    ".lua",
+    ".php",
+)
 
 
 class ArchitectureConformanceError(click.UsageError):
@@ -112,6 +139,108 @@ class ArchitectureConformanceError(click.UsageError):
         return "\n".join(lines)
 
 
+class PublicSurfaceRegressionError(click.UsageError):
+    """Raised when generation removes public symbols from an existing module."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        removed_symbols: List[str],
+        pre_surface_size: int,
+        post_surface_size: int,
+        changed_signatures: Optional[List[str]] = None,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.removed_symbols = list(removed_symbols)
+        self.changed_signatures = list(changed_signatures or [])
+        self.pre_surface_size = int(pre_surface_size)
+        self.post_surface_size = int(post_surface_size)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        self._repair_directive_override = repair_directive
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Public surface regression for {prompt_name}:\n"
+            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}\n"
+            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}\n"
+            f"output: {output_display}\n"
+            f"pre_surface_size: {self.pre_surface_size}\n"
+            f"post_surface_size: {self.post_surface_size}"
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        if self._repair_directive_override:
+            return self._repair_directive_override
+        lines = ["Public surface regression repair required."]
+        if self.removed_symbols:
+            lines.append("Restore these public symbols from the existing module:")
+            for sym in self.removed_symbols:
+                lines.append(f"- {sym}")
+        if self.changed_signatures:
+            lines.append("Restore compatible signatures for these public symbols:")
+            for sym in self.changed_signatures:
+                lines.append(f"- {sym}")
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended removals with BREAKING-CHANGE: remove <symbol>."
+        )
+        return "\n".join(lines)
+
+
+class TestChurnError(click.UsageError):
+    """Raised when generation rewrites too much of an existing test file."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        churn_ratio: float,
+        threshold: float,
+        pre_line_count: int,
+        post_line_count: int,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.churn_ratio = float(churn_ratio)
+        self.threshold = float(threshold)
+        self.pre_line_count = int(pre_line_count)
+        self.post_line_count = int(post_line_count)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        self._repair_directive_override = repair_directive
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Test churn threshold exceeded for {prompt_name}:\n"
+            f"ratio: {self.churn_ratio:.2f}\n"
+            f"threshold: {self.threshold:.2f}\n"
+            f"output: {output_display}\n"
+            f"pre_line_count: {self.pre_line_count}\n"
+            f"post_line_count: {self.post_line_count}"
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        if self._repair_directive_override:
+            return self._repair_directive_override
+        return (
+            "Test churn repair required.\n"
+            f"- Keep the existing broad test coverage in "
+            f"{self.output_path or '<unknown>'}.\n"
+            f"- Reduce unrelated rewrites below the configured churn threshold "
+            f"({self.threshold:.2f}); current churn is {self.churn_ratio:.2f}.\n"
+            "- Add or update only tests needed for the prompt change."
+        )
+
+
 # --- Helper Functions ---
 def _parse_llm_bool(value: str) -> bool:
     """Parse LLM boolean value from string."""
@@ -129,6 +258,1742 @@ def _env_flag_enabled(name: str) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Match a YAML front matter block: opening ``---`` on line 1, then any
+# content, then a closing ``---`` on its own line. We anchor to the start
+# of the string and require both fences to terminate with a newline so a
+# stray ``---`` that never closes does NOT eat the entire prompt body.
+# ``re.DOTALL`` so ``.`` matches newlines inside the block. Tolerates LF
+# or CRLF line endings, a leading UTF-8 BOM, trailing whitespace on the
+# fence lines, and a closing fence that is the final line of the file
+# (``\Z``). This mirrors ``_parse_front_matter`` so both helpers agree on
+# what counts as front matter — otherwise a CRLF or BOM prompt could
+# leave ``BREAKING-CHANGE:`` metadata visible to the directive parser.
+_YAML_FRONT_MATTER_RE = re.compile(
+    r"\A﻿?---[ \t]*\r?\n.*?\r?\n---[ \t]*(?:\r?\n|\Z)",
+    re.DOTALL,
+)
+
+
+def _strip_yaml_front_matter(prompt_content: Optional[str]) -> str:
+    """Return ``prompt_content`` with a leading YAML front matter block stripped.
+
+    Per the PR #1012 contract, BREAKING-CHANGE: opt-outs must come from the
+    prompt BODY — not from metadata. The stripped form is what every
+    BREAKING-CHANGE parser must see so that an indented directive inside
+    front matter cannot whitelist surface removals or test-churn rewrites.
+
+    The block must begin with ``---`` on line 1 (after an optional UTF-8
+    BOM) and close with a ``---`` line. CRLF line endings, mixed line
+    endings, trailing whitespace on the fence line, and a closing fence
+    that is the final line of the file (no trailing newline) are all
+    accepted — these match what ``_parse_front_matter`` already handles.
+    An unterminated opening fence is left alone so we never silently
+    swallow the entire prompt body.
+    """
+    if not prompt_content:
+        return ""
+    match = _YAML_FRONT_MATTER_RE.match(prompt_content)
+    if match is None:
+        # A leading UTF-8 BOM with NO front matter still needs stripping so
+        # downstream BREAKING-CHANGE: scans see a clean body — otherwise a
+        # BOM-only prompt would skip the fence but retain the BOM ahead of
+        # the first directive line.
+        if prompt_content.startswith("﻿"):
+            return prompt_content[1:]
+        return prompt_content
+    return prompt_content[match.end():]
+
+
+def _prompt_has_breaking_change_marker(prompt_content: Optional[str]) -> bool:
+    """Return True when the prompt explicitly opts into breaking changes."""
+    body = _strip_yaml_front_matter(prompt_content)
+    return bool(body and "BREAKING-CHANGE:" in body)
+
+
+# Match a BREAKING-CHANGE: directive only when it starts a line (optionally
+# indented). Buried prose like "see the BREAKING-CHANGE: marker doc" must NOT
+# trip the opt-out parsers, so the marker must be the first non-whitespace
+# token on its line.
+_BREAKING_CHANGE_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*BREAKING-CHANGE:[ \t]*(?P<directive>.*)$",
+    re.MULTILINE,
+)
+
+# A symbol token in a BREAKING-CHANGE directive is a bare or wrapped
+# identifier (optionally dotted for `Class.method`). Wrappers may be a
+# backtick, single quote, or double quote — they MUST match on both sides
+# (no `"old_helper'`). Prose words with embedded whitespace cannot match —
+# the directive accepts a delimited symbol list, not arbitrary prose. We
+# allow a leading verb (the action) to be stripped before this regex runs
+# over the tail.
+_DIRECTIVE_SYMBOL_RE = re.compile(
+    r"^[ \t]*"
+    r"(?P<wrap>[`'\"])?"
+    r"(?P<symbol>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?(wrap)(?P=wrap))"
+    r"[ \t]*$"
+)
+
+
+def _iter_breaking_change_directives(prompt_content: Optional[str]) -> List[str]:
+    """Return the directive tails of anchored BREAKING-CHANGE: lines.
+
+    Only lines whose first non-whitespace tokens are ``BREAKING-CHANGE:`` are
+    treated as directives — buried mid-line markers (e.g. instructional prose
+    naming the marker by example) are intentionally ignored so a line like
+    ``Use BREAKING-CHANGE: remove old_helper to opt out`` does NOT register as
+    a real directive.
+
+    A leading YAML front matter block is stripped before the scan via
+    :func:`_strip_yaml_front_matter` so that an indented directive inside
+    metadata cannot opt the prompt out of the public-surface or
+    test-churn gates. Opt-outs come from the prompt BODY only.
+    """
+    body = _strip_yaml_front_matter(prompt_content)
+    if not body:
+        return []
+    return [
+        match.group("directive").strip()
+        for match in _BREAKING_CHANGE_DIRECTIVE_RE.finditer(body)
+    ]
+
+
+def _parse_breaking_change_symbols(directive_tail: str) -> Set[str]:
+    """Parse a comma-separated list of identifier symbols from a directive tail.
+
+    The tail is the text AFTER the action verb (e.g. after ``remove`` /
+    ``rename`` / ``change signature``). We only accept tokens that look like
+    bare or backticked Python identifiers (optionally dotted). Tokens with
+    embedded whitespace are rejected so prose like ``to opt out`` does not
+    leak in as a whitelist.
+    """
+    if not directive_tail:
+        return set()
+    # Drop a trailing sentence-terminator so "remove old_helper." parses cleanly.
+    cleaned = directive_tail.strip()
+    cleaned = cleaned.rstrip(".;:")
+    if not cleaned:
+        return set()
+    symbols: Set[str] = set()
+    for piece in cleaned.split(","):
+        match = _DIRECTIVE_SYMBOL_RE.match(piece)
+        if match:
+            symbols.add(match.group("symbol"))
+    return symbols
+
+
+def _prompt_breaking_change_removed_symbols(prompt_content: Optional[str]) -> Set[str]:
+    """Return public symbols explicitly listed for removal in BREAKING-CHANGE lines.
+
+    Only anchored ``BREAKING-CHANGE:`` lines (first non-whitespace tokens on
+    the line) participate. After the action verb (``remove``/``delete``/
+    ``drop``/``rename``, including the gerund/plural variants) the remainder
+    must be a comma-separated symbol list — prose tokens are rejected.
+    """
+    verb_re = re.compile(
+        r"^(?:remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|"
+        r"drop(?:s|ped|ping)?|"
+        r"renam(?:e|es|ed|ing))\b[ \t]*",
+        re.IGNORECASE,
+    )
+    allowed: Set[str] = set()
+    for directive in _iter_breaking_change_directives(prompt_content):
+        match = verb_re.match(directive)
+        if not match:
+            continue
+        tail = directive[match.end():]
+        allowed.update(_parse_breaking_change_symbols(tail))
+    return allowed
+
+
+def _prompt_breaking_change_signature_symbols(prompt_content: Optional[str]) -> Set[str]:
+    """Return public symbols explicitly listed for signature changes.
+
+    Only anchored ``BREAKING-CHANGE:`` lines participate. The directive must
+    start with a ``change`` verb followed by ``signature``/``signatures``/
+    ``api``/``contract`` (e.g. ``change signature calculate``); we accept
+    common verb tenses (``change``/``changes``/``changed``/``changing``).
+    After the verb pair the remainder must be a comma-separated symbol list.
+    """
+    head_re = re.compile(
+        r"^chang(?:e|es|ed|ing)\b[ \t]+"
+        r"(?:signature|signatures|api|contract)\b[ \t]*",
+        re.IGNORECASE,
+    )
+    allowed: Set[str] = set()
+    for directive in _iter_breaking_change_directives(prompt_content):
+        match = head_re.match(directive)
+        if not match:
+            continue
+        tail = directive[match.end():]
+        allowed.update(_parse_breaking_change_symbols(tail))
+    return allowed
+
+
+# Test-churn opt-out verbs. The marker doc and prompt body advertise both
+# imperative ("rewrite tests") and gerund ("rewriting tests") wording, so the
+# parser must accept both — anything documented in the directive emitted by
+# `TestChurnError.repair_directive` must opt out the gate when echoed back.
+_TEST_CHURN_OPT_OUT_RE = re.compile(
+    r"\b("
+    r"rewrit(?:e|es|ed|ing)|"
+    r"replac(?:e|es|ed|ing)|"
+    r"regenerat(?:e|es|ed|ing)|"
+    r"overwrit(?:e|es|ing|ten)|"
+    r"churn|"
+    r"remov(?:e|es|ed|ing)|"
+    r"drop(?:s|ped|ping)?"
+    r")\b",
+    re.IGNORECASE,
+)
+_TEST_CHURN_TARGET_RE = re.compile(r"\btests?\b", re.IGNORECASE)
+# Separators that break the verb-object phrase. If any of these appears
+# between the opt-out verb and `tests?`, the verb's nearest object is
+# something OTHER than tests, so the directive must NOT opt out the gate.
+# Examples: `rewrite docs and update tests` (the verb's object is "docs",
+# not "tests"); `rewrite calculator, update tests` (comma breaks the phrase).
+_TEST_CHURN_BRIDGE_BREAK_RE = re.compile(
+    r"[,;]|\b(?:and|but|then|or|plus|also)\b",
+    re.IGNORECASE,
+)
+
+
+def _prompt_allows_test_churn(prompt_content: Optional[str]) -> bool:
+    """Return True only for explicit test rewrite/churn breaking-change directives.
+
+    Only anchored ``BREAKING-CHANGE:`` directive lines count: prose that
+    mentions the marker mid-line (e.g. instructional text referring to it)
+    must NOT silently disable the test-churn gate. The directive must also
+    pair an opt-out verb (imperative or gerund — ``rewrite``/``rewriting``/
+    ``replace``/``replacing`` etc.) with the ``test``/``tests`` object: the
+    parser scans every opt-out verb match, and requires that ``tests?``
+    appear in the SAME verb-object phrase (no comma, semicolon, or
+    conjunction like ``and``/``but``/``then``/``or`` between the verb
+    and ``tests?``). That way:
+
+    - ``BREAKING-CHANGE: rewriting the failing tests`` opts out (verb's
+      object IS tests).
+    - ``BREAKING-CHANGE: rewrite the test suite for new helper`` opts out
+      (verb's object IS tests; trailing prose after a noun phrase is fine).
+    - ``BREAKING-CHANGE: rewrite docs and update tests`` does NOT opt out
+      (``rewrite``'s object is ``docs``; ``and`` breaks the phrase before
+      ``tests``, and ``update`` is not in the opt-out verb list).
+    - ``BREAKING-CHANGE: drop foo and rewrite tests`` DOES opt out (the
+      second verb ``rewrite`` directly governs ``tests``).
+    """
+    for directive in _iter_breaking_change_directives(prompt_content):
+        for verb_match in _TEST_CHURN_OPT_OUT_RE.finditer(directive):
+            tail = directive[verb_match.end():]
+            target_match = _TEST_CHURN_TARGET_RE.search(tail)
+            if not target_match:
+                continue
+            bridge = tail[: target_match.start()]
+            if _TEST_CHURN_BRIDGE_BREAK_RE.search(bridge):
+                # A separator/conjunction breaks the verb-object phrase, so
+                # `tests?` belongs to a DIFFERENT verb than the opt-out one.
+                continue
+            return True
+    return False
+
+
+def _is_python_generation(language: Optional[str], output_path: Optional[str]) -> bool:
+    detected = (language or "").lower()
+    return detected in {"python", "py"} or bool(
+        output_path and str(output_path).lower().endswith(".py")
+    )
+
+
+def _is_test_output_path(output_path: Optional[str]) -> bool:
+    if not output_path:
+        return False
+    path = pathlib.Path(str(output_path))
+    name = path.name
+    lower_name = name.lower()
+    js_like_test_suffixes = (
+        ".test.ts",
+        ".test.tsx",
+        ".test.js",
+        ".test.jsx",
+        ".spec.ts",
+        ".spec.tsx",
+        ".spec.js",
+        ".spec.jsx",
+    )
+    # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that
+    # live next to production code rather than under `tests/`. Go's
+    # `handler_test.go` is the canonical example; Ruby (`widget_spec.rb`),
+    # Rust (`widget_test.rs`), Elixir (`widget_test.exs`), Dart
+    # (`widget_test.dart`), Clojure, and Lua all follow analogous
+    # shapes. Driven by `_LANGUAGE_TEST_FILE_EXTS` so adding a new
+    # language to `language_format.csv` automatically covers its
+    # `_test.<ext>` / `_spec.<ext>` naming without another fix round.
+    if any(
+        lower_name.endswith(f"_test{ext}") or lower_name.endswith(f"_spec{ext}")
+        for ext in _LANGUAGE_TEST_FILE_EXTS
+    ):
+        return True
+    # PascalCase JVM/.NET/Swift test suffixes: `FooTest.java`,
+    # `FooIT.java` (Maven failsafe integration test), `FooTestCase.java`
+    # (older JUnit/TestNG), `BarTests.kt`, `WidgetSpec.kt`, ScalaTest's
+    # `FooSpec.scala`, ScalaCheck / Spock `FooSpec.groovy`, Swift
+    # `FooTests.swift`, xUnit/NUnit `FooTests.cs`. The agentic test
+    # prompt names `Test.java` as a recognised convention; the rest
+    # follow the same camel-case convention. Case-sensitive —
+    # lowercasing would false-positive on `latest.kt`, `manifest.java`,
+    # `request.scala`, `latest.groovy` etc. Languages whose test
+    # filenames are lowercase (Python/Go/Ruby/Rust/Elixir/Dart/...) are
+    # already handled by the `_test.<ext>` / `_spec.<ext>` branch above.
+    pascal_test_suffixes = (
+        "Test.java",
+        "Tests.java",
+        "TestCase.java",
+        "IT.java",
+        "Test.kt",
+        "Tests.kt",
+        "Spec.kt",
+        "Test.scala",
+        "Tests.scala",
+        "Spec.scala",
+        "Test.groovy",
+        "Tests.groovy",
+        "Spec.groovy",
+        "Tests.swift",
+        "Test.cs",
+        "Tests.cs",
+    )
+    return (
+        name.startswith("test_")
+        or lower_name.endswith(js_like_test_suffixes)
+        or name.endswith(pascal_test_suffixes)
+        or any(part in {"tests", "__tests__"} for part in path.parts)
+    )
+
+
+def _collect_bound_module_names(tree: ast.Module) -> Set[str]:
+    """Return the set of all module-level names bound by ``tree``.
+
+    Captures every name a ``from X import *`` would see, regardless of
+    underscore prefix — used to filter ``__all__`` entries down to ones
+    that are actually defined. The same kinds of bindings as
+    :func:`_snapshot_public_surface` (functions, classes, Assign,
+    AnnAssign-with-value, Import, ImportFrom) but without the
+    underscore-prefix filter.
+    """
+    bound: Set[str] = set()
+
+    def _walk_target(target: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            bound.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _walk_target(elt)
+        elif isinstance(target, ast.Starred):
+            _walk_target(target.value)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            bound.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                _walk_target(target)
+        elif isinstance(node, ast.AnnAssign):
+            if node.value is not None:
+                _walk_target(node.target)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound.add(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ImportFrom):
+            # ``from __future__ import …`` is a compiler directive, not
+            # a runtime module attribute callers can rely on. Excluding
+            # it here means ``__all__ = ["annotations"]`` does NOT
+            # promote the future-import binding into the public surface
+            # (which would otherwise diff as ``removed: annotations``
+            # when the directive is cleaned up after a Python-version
+            # bump). Mirrors the same skip in `_snapshot_public_surface`
+            # and `_snapshot_public_signatures`.
+            if node.module == "__future__":
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound.add(alias.asname or alias.name)
+    return bound
+
+
+def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
+    """Return module-level ``__all__`` names if declared as a clean literal list.
+
+    Walks every top-level assignment to ``__all__`` in source order and
+    tracks a "current parse" state matching Python runtime semantics
+    (subsequent assignments override earlier ones — the LAST assignment
+    wins):
+
+    - ``__all__ = [...]`` / ``__all__ = (...)`` whose elements are all
+      ``ast.Constant`` string literals → set state to that set of
+      strings.
+    - ``__all__ = sorted(...)`` / ``__all__ = X + Y`` / any other
+      non-literal RHS → set state to ``None``. The value is computed at
+      runtime so a static parser cannot trust it, and the heuristic
+      ("non-underscore") falls back.
+    - ``__all__ += [...]`` (``ast.AugAssign``) → set state to ``None``.
+      AugAssign mutates the previous list in place; even when the RHS
+      is a clean literal we cannot statically be sure what's in the
+      target object at that point (it could have been computed earlier).
+      The safest correct rule is "any AugAssign to __all__ → fall back".
+    - Bound ``ast.AnnAssign`` (``__all__: list[str] = [...]``) →
+      treated the same as a plain assignment.
+
+    Returns ``None`` when no clean ``__all__`` literal survives to the
+    end of the module, OR when ``__all__`` is never assigned at module
+    scope. In either case the fallback "non-underscore" heuristic
+    applies.
+    """
+    state: Optional[Set[str]] = None
+    for node in tree.body:
+        if isinstance(node, ast.AugAssign):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == "__all__":
+                # AugAssign is opaque: fall back to heuristic.
+                state = None
+            continue
+
+        targets: List[ast.AST] = []
+        value: Optional[ast.AST] = None
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        # Look for a target that is a plain `__all__` Name.
+        is_dunder_all_target = any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in targets
+        )
+        if not is_dunder_all_target or value is None:
+            continue
+        if not isinstance(value, (ast.List, ast.Tuple)):
+            # Computed __all__ (e.g. sorted(...), X + Y, name reference).
+            # The last assignment wins per Python runtime semantics, so
+            # this OVERRIDES any prior clean literal — reset to None so
+            # the heuristic falls back.
+            state = None
+            continue
+        names: Set[str] = set()
+        clean = True
+        for elt in value.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                names.add(elt.value)
+            else:
+                clean = False
+                break
+        # Whether clean or dirty, this assignment overrides any prior
+        # state. Clean literals replace state with the new set; dirty
+        # literals (non-string elements like a Name reference inside the
+        # list) reset to None because we cannot trust the runtime value.
+        state = names if clean else None
+    return state
+
+
+def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
+    """Collect public top-level functions/classes plus public class methods.
+
+    Recurses into public nested classes so a method on ``Outer.Inner`` is
+    recorded as ``Outer.Inner.method``; removing it would otherwise escape
+    both the removed-symbol diff and the signature-change diff because the
+    enclosing class ``Outer.Inner`` is unchanged.
+
+    Module-level ``ast.Assign`` / ``ast.AnnAssign`` targets, ``ast.Import``
+    aliases, and ``ast.ImportFrom`` aliases are ALSO captured as public
+    surface — removing a re-export like ``import git`` or a public constant
+    like ``PUBLIC_SETTING = ...`` is a real downstream-breaking change.
+
+    When the module declares ``__all__`` as a clean list/tuple of string
+    constants, that list is AUTHORITATIVE per Python semantics: a name is
+    public if and only if it appears in ``__all__``, even if the name is
+    underscore-prefixed (e.g. ``__all__ = ["_public_helper"]``). Symbols
+    not in ``__all__`` are NOT considered part of the public surface when
+    ``__all__`` is declared. If ``__all__`` is missing or malformed
+    (computed expression, non-string elements), the fallback heuristic
+    applies: capture top-level non-underscore names, skip private/dunder.
+    ``from X import *`` contributes no fixed name and is ignored.
+    """
+    if (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(code_text or "")
+    except SyntaxError:
+        return set()
+
+    dunder_all = _extract_dunder_all(tree)
+
+    names: set[str] = set()
+
+    def _walk_class(
+        class_node: ast.ClassDef,
+        qualname: str,
+        include_underscore: bool = False,
+    ) -> None:
+        """Recursively add dotted names for class members.
+
+        ``include_underscore=True`` is used when the enclosing top-level
+        class was explicitly opted into the public surface via
+        ``__all__``: in that case the user's intent is that the class
+        and its members ARE the public API, so underscore-prefixed
+        methods/nested classes are NOT silently excluded (consistent
+        with the existing ``__all__`` semantics where listing an
+        underscore-prefixed top-level name like ``_helper`` makes it
+        public). Outside of ``__all__`` scope the previous heuristic
+        applies and underscores filter out.
+        """
+        for child in class_node.body:
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if not include_underscore and child.name.startswith("_"):
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.add(f"{qualname}.{child.name}")
+            else:  # ast.ClassDef
+                nested_qualname = f"{qualname}.{child.name}"
+                names.add(nested_qualname)
+                _walk_class(child, nested_qualname, include_underscore)
+
+    if dunder_all is not None:
+        # __all__ is authoritative. Names declared in __all__ that are
+        # actually bound at module scope (anything in __all__ that isn't
+        # defined would be a runtime ImportError on `from X import *`,
+        # which is the module author's bug, not this gate's concern)
+        # form the public surface — INCLUDING the recursively-walked
+        # members of any class entry in __all__. Without that recursion
+        # a removal like `Service.run` would slip past the gate even
+        # though it's clearly part of the declared public class.
+        class_defs: Dict[str, ast.ClassDef] = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+        bound = _collect_bound_module_names(tree)
+        for name in dunder_all:
+            if name not in bound:
+                continue
+            names.add(name)
+            if name in class_defs:
+                # User opted the whole class into __all__; treat its
+                # members (including underscore-prefixed) as public.
+                _walk_class(class_defs[name], name, include_underscore=True)
+        return names
+
+    def _add_assign_targets(target: ast.AST) -> None:
+        """Walk an assignment target, adding public bare-name identifiers.
+
+        Handles tuple/list unpacking (``a, b = foo()`` and ``[a, b] = foo()``)
+        by recursing into element lists. Attribute/subscript targets are
+        ignored — those mutate existing objects, they don't create a new
+        module-level name.
+        """
+        if isinstance(target, ast.Name):
+            if not target.id.startswith("_"):
+                names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _add_assign_targets(elt)
+        elif isinstance(target, ast.Starred):
+            _add_assign_targets(target.value)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not node.name.startswith("_"):
+                names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            if not node.name.startswith("_"):
+                names.add(node.name)
+                _walk_class(node, node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                _add_assign_targets(target)
+        elif isinstance(node, ast.AnnAssign):
+            # Only bound annotations bind a runtime module attribute: a bare
+            # `PUBLIC_NAME: int` declaration is a type hint, not an export,
+            # so it would create false-positive regressions when removed.
+            # `PUBLIC_NAME: int = None` (explicit None value) still binds and
+            # is captured because `node.value` is the `ast.Constant(None)`
+            # node, not Python `None`.
+            if node.value is not None:
+                _add_assign_targets(node.target)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                # ``import foo.bar`` binds the top-level package name ``foo``;
+                # ``import foo.bar as baz`` binds ``baz``.
+                exposed = alias.asname or alias.name.split(".", 1)[0]
+                if exposed and not exposed.startswith("_"):
+                    names.add(exposed)
+        elif isinstance(node, ast.ImportFrom):
+            # ``from __future__ import annotations`` (and other future
+            # imports) are compiler directives, not module attributes —
+            # callers never write `mymodule.annotations`. Treating them
+            # as public surface would block harmless cleanup like
+            # removing the directive after a Python-version bump.
+            if node.module == "__future__":
+                continue
+            for alias in node.names:
+                # ``from X import *`` has alias.name == "*"; no fixed
+                # identifier is bound, so it does not contribute.
+                if alias.name == "*":
+                    continue
+                exposed = alias.asname or alias.name
+                if exposed and not exposed.startswith("_"):
+                    names.add(exposed)
+
+    return names
+
+
+def _diff_public_surface(pre: Set[str], post: Set[str]) -> List[str]:
+    """Return public symbols present before generation but absent after it."""
+    return sorted(set(pre) - set(post))
+
+
+def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
+    """Return a stable public-call signature string for a function-like AST node."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return ""
+    args = node.args
+    parts: List[str] = []
+
+    def add_arg(arg: ast.arg, default: Optional[ast.AST] = None) -> None:
+        text = arg.arg
+        if arg.annotation is not None:
+            text += f": {ast.unparse(arg.annotation)}"
+        if default is not None:
+            text += f"={ast.unparse(default)}"
+        parts.append(text)
+
+    posonly = list(args.posonlyargs)
+    regular = list(args.args)
+    # ``skip_first=True`` drops the implicit receiver (``self`` /
+    # ``cls``) so an instance method is compared receiver-stripped. The
+    # receiver lives in posonly when present (rare — e.g. PEP 570
+    # methods), otherwise in ``args.args``. Strip from the correct list
+    # so the remaining count used for the ``/`` marker insertion below
+    # stays accurate (external review PR #1015).
+    if skip_first:
+        if posonly:
+            posonly = posonly[1:]
+        elif regular:
+            regular = regular[1:]
+    positional = posonly + regular
+    defaults: List[Optional[ast.AST]] = [None] * (
+        len(positional) - len(args.defaults)
+    ) + list(args.defaults)
+    parts_before_positional = len(parts)
+    for arg, default in zip(positional, defaults):
+        add_arg(arg, default)
+    # Emit a literal ``/`` separator IMMEDIATELY after the
+    # positional-only group so ``def f(x, /, y)`` and ``def f(x, y)``
+    # produce DIFFERENT signature snapshots — kwarg-only callers
+    # (``f(x=1, y=2)``) succeed against the second but break against
+    # the first, and the public-surface gate must catch the
+    # regression. Mirror the ``*`` insertion below for ``kwonlyargs``.
+    # Skip when no posonly args remain after ``skip_first`` (a
+    # stripped lone-receiver posonly leaves zero, in which case the
+    # function is effectively a regular method and no ``/`` is
+    # needed). External review PR #1015.
+    if posonly:
+        parts.insert(parts_before_positional + len(posonly), "/")
+    if args.vararg:
+        text = "*" + args.vararg.arg
+        if args.vararg.annotation is not None:
+            text += f": {ast.unparse(args.vararg.annotation)}"
+        parts.append(text)
+    elif args.kwonlyargs:
+        parts.append("*")
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        add_arg(arg, default)
+    if args.kwarg:
+        text = "**" + args.kwarg.arg
+        if args.kwarg.annotation is not None:
+            text += f": {ast.unparse(args.kwarg.annotation)}"
+        parts.append(text)
+    returns = ""
+    if node.returns is not None:
+        returns = f" -> {ast.unparse(node.returns)}"
+    prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
+    return f"{prefix}({', '.join(parts)}){returns}"
+
+
+def _python_method_binding_kind(node: ast.AST) -> str:
+    """Return the binding kind ('instance', 'staticmethod', 'classmethod',
+    'property', 'property_accessor') for a class-body function-like node
+    based on its decorators.
+
+    Used by :func:`_snapshot_public_signatures` to prefix the captured
+    signature string so that a binding-kind flip (e.g. ``def f(self, x)``
+    becoming ``@staticmethod def f(x)``) is detected as a signature change
+    even though the receiver-stripped parameter list is identical. Without
+    this prefix, callers doing ``Class.f(1)`` would silently break across
+    generations because the gate compared only normalized params.
+
+    The ``property_accessor`` kind covers ``@x.setter`` / ``@x.getter`` /
+    ``@x.deleter`` Attribute decorators — the caller is expected to merge
+    these with the matching ``@property`` getter into a single combined
+    snapshot per property name (see ``_walk_class``). Returning a
+    dedicated kind for accessors prevents the last-write-wins overwrite
+    that previously let a setter-decorated function be classified as a
+    plain ``[instance]`` method.
+    """
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return "instance"
+    for decorator in getattr(node, "decorator_list", []):
+        # Recognize property accessor decorators FIRST so ``@x.setter``
+        # (an Attribute node with ``attr in {"setter","getter","deleter"}``)
+        # is not silently flattened to ``instance`` by the generic
+        # Attribute fallthrough below.
+        if (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr in {"setter", "getter", "deleter"}
+        ):
+            return "property_accessor"
+        name: Optional[str] = None
+        if isinstance(decorator, ast.Name):
+            name = decorator.id
+        elif isinstance(decorator, ast.Attribute):
+            name = decorator.attr
+        elif isinstance(decorator, ast.Call):
+            inner = decorator.func
+            if isinstance(inner, ast.Name):
+                name = inner.id
+            elif isinstance(inner, ast.Attribute):
+                name = inner.attr
+        if name == "staticmethod":
+            return "staticmethod"
+        if name == "classmethod":
+            return "classmethod"
+        if name == "property":
+            return "property"
+    return "instance"
+
+
+def _python_property_accessor_role(node: ast.AST) -> Optional[str]:
+    """Return ``'getter'`` / ``'setter'`` / ``'deleter'`` when ``node`` is a
+    property accessor — that is, decorated with ``@property`` (getter),
+    ``@<name>.setter``, ``@<name>.getter``, or ``@<name>.deleter``.
+
+    Returns ``None`` otherwise. Used by ``_walk_class`` to accumulate
+    accessor roles per property name so the final snapshot reflects ALL
+    accessors that exist (e.g. ``getter+setter``). Without this merge the
+    setter would overwrite the getter entry and a rewrite that replaced
+    the descriptor with a plain ``def x(self, value)`` could produce an
+    identical snapshot string.
+    """
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    for decorator in getattr(node, "decorator_list", []):
+        if isinstance(decorator, ast.Name) and decorator.id == "property":
+            return "getter"
+        if (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr in {"setter", "getter", "deleter"}
+        ):
+            return decorator.attr
+    return None
+
+
+def _is_dataclass_decorator(decorator: ast.AST) -> bool:
+    """Return True when ``decorator`` is a stdlib ``@dataclass`` form.
+
+    Recognises ALL four AST shapes the parser produces for the stdlib
+    ``dataclasses.dataclass`` decorator:
+
+    * ``@dataclass``                       -> ``ast.Name(id="dataclass")``
+    * ``@dataclasses.dataclass``           -> ``ast.Attribute(attr="dataclass",
+      value=ast.Name(id="dataclasses"))``
+    * ``@dataclass(frozen=True)``          -> ``ast.Call`` wrapping the Name form
+    * ``@dataclasses.dataclass(frozen=True)`` -> ``ast.Call`` wrapping the
+      Attribute form
+
+    SCOPE NOTE: this intentionally does NOT handle third-party
+    dataclass-like decorators such as ``@attr.s`` / ``@attrs.define`` /
+    ``@attr.define`` / ``@pydantic.dataclasses.dataclass`` (their
+    field-resolution rules diverge — e.g. ``attrs`` filters by
+    ``attr.ib()`` / ``attr.field()`` markers, ``pydantic`` honours
+    ``Field(...)`` defaults differently). The synthesised init signature
+    for those decorators falls back to the existing ``()`` shape and
+    field changes there are NOT yet detected by this snapshot. Future
+    iteration may extend coverage.
+    """
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    if isinstance(target, ast.Name) and target.id == "dataclass":
+        return True
+    if (
+        isinstance(target, ast.Attribute)
+        and target.attr == "dataclass"
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "dataclasses"
+    ):
+        return True
+    return False
+
+
+def _dataclass_decorator_is_kw_only(decorator: ast.AST) -> bool:
+    """Return True when ``decorator`` is ``@dataclass(kw_only=True)``.
+
+    Companion to :func:`_is_dataclass_decorator`. The caller is expected
+    to invoke this on a decorator that ALREADY passed the dataclass
+    check, so this helper focuses only on the ``kw_only`` keyword
+    extraction. Returns False for the bare ``@dataclass`` form (no Call
+    wrapper) and for any explicit ``kw_only=False`` — matching the
+    runtime default where fields are positional unless opted out.
+    """
+    if not isinstance(decorator, ast.Call):
+        return False
+    for keyword in decorator.keywords:
+        if (
+            keyword.arg == "kw_only"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+        ):
+            return True
+    return False
+
+
+def _dataclass_decorator_synthesizes_init(decorator: ast.AST) -> bool:
+    """Return True when this dataclass decorator synthesises ``__init__``.
+
+    The stdlib ``@dataclass`` decorator synthesises an ``__init__`` by
+    default. Callers that opt out via ``@dataclass(init=False)`` keep
+    the class's natural ``__init__`` (typically ``object.__init__`` —
+    zero positional args). The reviewer reproduced both directions of
+    the resulting regression:
+
+    * Flipping ``@dataclass(init=False)`` → ``@dataclass`` adds a
+      synthesised constructor; the gate must trip.
+    * Adding fields under ``@dataclass(init=False)`` leaves the runtime
+      ``__init__`` untouched; the gate must NOT trip.
+
+    Returns ``True`` for the bare ``@dataclass`` Name form (no Call
+    wrapper), the ``@dataclasses.dataclass`` Attribute form, and any
+    ``Call`` form whose keywords either omit ``init`` or set
+    ``init=True``. Returns ``False`` ONLY when an explicit
+    ``init=False`` keyword is present.
+
+    Companion to :func:`_is_dataclass_decorator`. Callers are expected
+    to invoke this on a decorator that ALREADY passed the dataclass
+    check.
+    """
+    if not isinstance(decorator, ast.Call):
+        # Bare ``@dataclass`` / ``@dataclasses.dataclass`` — default
+        # ``init=True``.
+        return True
+    for keyword in decorator.keywords:
+        if (
+            keyword.arg == "init"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+        ):
+            return False
+    return True
+
+
+def _is_kw_only_sentinel(annotation: Optional[ast.AST]) -> bool:
+    """Return True when ``annotation`` is the stdlib ``KW_ONLY`` sentinel.
+
+    Accepts bare ``KW_ONLY`` (``ast.Name``) and the module-qualified
+    ``dataclasses.KW_ONLY`` (``ast.Attribute``) forms. Used by
+    :func:`_synthesize_dataclass_init_signature` to recognise the
+    in-body marker that splits earlier positional fields from later
+    keyword-only fields.
+    """
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name) and annotation.id == "KW_ONLY":
+        return True
+    if isinstance(annotation, ast.Attribute) and annotation.attr == "KW_ONLY":
+        return True
+    return False
+
+
+def _dataclass_field_call_is_init_false(value: Optional[ast.AST]) -> bool:
+    """Return True for a ``field(init=False, ...)`` / ``dataclasses.field(init=False, ...)`` call.
+
+    Mirrors the stdlib ``dataclasses`` rule that a field whose
+    ``field(init=False)`` call excludes the attribute from the
+    synthesised ``__init__``. Used by
+    :func:`_synthesize_dataclass_init_signature` to drop such fields
+    from the snapshot — including them was a false-positive source
+    (``cache: dict = field(init=False, default_factory=dict)`` is an
+    implementation detail, not a constructor parameter).
+
+    Defensive about everything else: ``field(init=True)``,
+    ``field(default=...)`` without ``init``, or any non-``field`` call
+    return False so the field stays IN the snapshot. Matching the bare
+    ``field`` name and the ``dataclasses.field`` attribute form covers
+    the common import styles.
+    """
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Name):
+        if func.id != "field":
+            return False
+    elif isinstance(func, ast.Attribute):
+        if func.attr != "field":
+            return False
+    else:
+        return False
+    for keyword in value.keywords:
+        if (
+            keyword.arg == "init"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+        ):
+            return True
+    return False
+
+
+def _collect_dataclass_own_parts(class_node: ast.ClassDef) -> List[str]:
+    """Return the per-field signature tokens for a single dataclass's body.
+
+    Returns a list of strings that mix actual field tokens (``name:
+    annotation = default``) with the kw-only marker ``"*"`` inserted at
+    the correct positions. The caller stitches base-class tokens in
+    front of this list and post-processes the combined sequence.
+
+    Field-extraction rules mirror :func:`_synthesize_dataclass_init_signature`'s
+    historical body (kw-only decorator, ``KW_ONLY`` sentinel,
+    underscore skip, ``ClassVar`` skip, ``field(init=False)`` skip,
+    annotation/default verbatim text, ``InitVar`` left in).
+    """
+    decorator_kw_only = any(
+        _dataclass_decorator_is_kw_only(dec)
+        for dec in class_node.decorator_list
+        if _is_dataclass_decorator(dec)
+    )
+    parts: List[str] = []
+    kw_only_marker_inserted = False
+    if decorator_kw_only:
+        # ``@dataclass(kw_only=True)`` short-circuits to a single ``*``
+        # at the front; any ``_: KW_ONLY`` sentinel inside the body
+        # becomes redundant and must NOT emit a second marker.
+        parts.append("*")
+        kw_only_marker_inserted = True
+    for child in class_node.body:
+        if not isinstance(child, ast.AnnAssign):
+            continue
+        target = child.target
+        if not isinstance(target, ast.Name):
+            continue
+        # ``_: KW_ONLY`` is the canonical sentinel — its name starts
+        # with ``_`` so the underscore-prefix skip below would otherwise
+        # swallow it. Recognise the sentinel FIRST and translate it into
+        # a positional ``*`` marker (unless the decorator already
+        # injected one).
+        if _is_kw_only_sentinel(child.annotation):
+            if not kw_only_marker_inserted:
+                parts.append("*")
+                kw_only_marker_inserted = True
+            continue
+        name = target.id
+        if name.startswith("_"):
+            continue
+        annotation_text = ast.unparse(child.annotation) if child.annotation else ""
+        # ``ClassVar`` annotations are class-level constants per PEP
+        # 557, NOT init params. ``InitVar`` is intentionally NOT
+        # filtered: it IS an init parameter; the annotation text rides
+        # through verbatim so an ``InitVar[int]`` ↔ ``int`` flip diffs.
+        if "ClassVar" in annotation_text:
+            continue
+        if _dataclass_field_call_is_init_false(child.value):
+            # ``cache: dict = field(init=False, default_factory=dict)``
+            # — runtime constructor omits this field, so the snapshot
+            # must too.
+            continue
+        part = f"{name}: {annotation_text}" if annotation_text else name
+        if child.value is not None:
+            part += f" = {ast.unparse(child.value)}"
+        parts.append(part)
+    return parts
+
+
+def _part_field_name(part: str) -> Optional[str]:
+    """Extract the field name from a single synth token.
+
+    Tokens look like ``name: annotation = default`` or ``name`` — the
+    name is the substring up to the first ``:`` / ``=``. The kw-only
+    marker ``"*"`` and the ``[inherited_unresolved]`` sentinel return
+    ``None`` so callers know to leave them in place rather than dedupe.
+    """
+    if not part or part in {"*", "[inherited_unresolved]"}:
+        return None
+    head = part.split(":", 1)[0]
+    head = head.split("=", 1)[0]
+    head = head.strip()
+    return head or None
+
+
+def _collect_dataclass_inherited_parts(
+    class_node: ast.ClassDef,
+    class_defs: Optional[Dict[str, ast.ClassDef]],
+    imported_names: Optional[Set[str]],
+    visited: frozenset,
+) -> List[str]:
+    """Return synth tokens from this class's ``@dataclass`` base classes.
+
+    Walks base classes in REVERSE order (matching Python's
+    ``@dataclass`` runtime: ``__dataclass_fields__`` is populated in
+    reverse-MRO so later bases override earlier ones in the field-dict
+    insertion order, and the synthesised ``__init__`` parameter order
+    reflects that walk). For ``class C(A, B)`` we therefore yield
+    ``B``'s contributions first, then ``A``'s, and the outer merge in
+    :func:`_synthesize_dataclass_init_signature` appends ``C``'s own
+    fields last to produce ``(b, a, c)``.
+
+    For each ``Name`` base that resolves to a same-module ``ClassDef``
+    with a dataclass decorator, recursively gather ITS inherited parts
+    first and then ITS own parts. Bases that don't resolve locally
+    (cross-module imports, attribute-form references like ``pkg.Base``)
+    emit a single ``"[inherited_unresolved]"`` token so the final
+    signature is annotated as uncertain — local field changes still
+    diff, but we don't claim authoritative knowledge of the imported
+    base's fields.
+
+    The ``visited`` set guards against accidental self-reference cycles
+    (``class A(A): ...`` is illegal at runtime but the AST permits it).
+
+    A base decorated with ``@dataclass(init=False)`` STILL contributes
+    its annotated fields to a derived ``@dataclass``'s synth: the
+    ``init=False`` flag only suppresses the BASE's own ``__init__``
+    synthesis, while Python's dataclass machinery still records the
+    fields in ``__dataclass_fields__`` and the derived class picks
+    them up. We therefore walk a base's fields whenever it carries
+    ANY ``@dataclass`` decorator, regardless of the ``init`` flag.
+
+    Known limitation (documented for future iteration): ``KW_ONLY``
+    sentinel propagation across the inheritance boundary is not
+    modelled — the derived class re-emits its own marker.
+    """
+    if class_defs is None:
+        return []
+    inherited: List[str] = []
+    for base in reversed(class_node.bases):
+        if not isinstance(base, ast.Name):
+            # Attribute-form base (``pkg.Base``) or other expression —
+            # we can't see the source from here.
+            inherited.append("[inherited_unresolved]")
+            continue
+        base_name = base.id
+        if base_name in visited:
+            # Cycle guard. Real Python would raise ``TypeError`` at
+            # class creation; bail out gracefully so the snapshot stays
+            # well-formed.
+            continue
+        base_def = class_defs.get(base_name)
+        if base_def is None:
+            # Base is an imported name or otherwise not declared in
+            # this module — mark uncertain.
+            if imported_names is None or base_name in imported_names:
+                inherited.append("[inherited_unresolved]")
+            else:
+                # Base is a free name that's not a same-module class
+                # and not imported (e.g. ``object`` builtin) — no
+                # dataclass fields to merge.
+                continue
+            continue
+        base_dataclass_decorators = [
+            dec for dec in base_def.decorator_list if _is_dataclass_decorator(dec)
+        ]
+        if not base_dataclass_decorators:
+            # Non-dataclass base contributes no fields to the
+            # synthesised init.
+            continue
+        # NOTE: We intentionally do NOT skip bases decorated with
+        # ``@dataclass(init=False)``. Their fields still live in
+        # ``__dataclass_fields__`` and the derived dataclass merges
+        # them when synthesising ITS own ``__init__``. The
+        # ``init=False`` flag only matters to the BASE class's own
+        # init synthesis (handled in pass-3, not here).
+        new_visited = visited | {base_name}
+        inherited.extend(
+            _collect_dataclass_inherited_parts(
+                base_def, class_defs, imported_names, new_visited
+            )
+        )
+        inherited.extend(_collect_dataclass_own_parts(base_def))
+    return inherited
+
+
+def _synthesize_dataclass_init_signature(
+    class_node: ast.ClassDef,
+    class_defs: Optional[Dict[str, ast.ClassDef]] = None,
+    imported_names: Optional[Set[str]] = None,
+) -> str:
+    """Build a constructor signature for an ``@dataclass`` class with no explicit init.
+
+    Walks the class body in source order, treating each top-level
+    ``ast.AnnAssign`` (annotated assignment) whose target is a bare
+    ``ast.Name`` as a constructor field — matching the stdlib
+    ``dataclasses`` runtime behaviour (field order in the synthesised
+    ``__init__`` is the source order of the annotated attributes).
+
+    Keyword-only handling:
+
+    * ``@dataclass(kw_only=True)`` on the class decorator: ALL fields
+      go after a single ``*`` marker. Detected by
+      :func:`_dataclass_decorator_is_kw_only`.
+    * ``_: KW_ONLY`` sentinel inside the class body (``KW_ONLY`` or
+      ``dataclasses.KW_ONLY``): fields BEFORE the sentinel are
+      positional; fields AFTER are kw-only. Detected by
+      :func:`_is_kw_only_sentinel`. The sentinel itself contributes no
+      param. When the decorator already opts the whole class into
+      kw-only mode, the sentinel is redundant — emit only one ``*``.
+
+    Excluded from the synth:
+
+    * Underscore-prefixed field names: dataclass DOES synthesise an
+      init param for them at runtime, but they are NOT part of the
+      *public* API surface this snapshot tracks. The ``KW_ONLY``
+      sentinel check runs BEFORE this skip so the canonical ``_:
+      KW_ONLY`` marker still splits the signature.
+    * ``ClassVar[...]`` annotations: dataclasses skip these per PEP
+      557. Substring match on the unparsed annotation handles both
+      bare ``ClassVar`` and the ``typing.ClassVar`` / ``t.ClassVar``
+      forms.
+    * ``field(init=False, ...)`` defaults: the stdlib excludes these
+      from the synthesised ``__init__``. Detected by
+      :func:`_dataclass_field_call_is_init_false`.
+    * Plain ``ast.Assign`` without annotation: ``x = 5`` is a class-
+      level constant, NOT a dataclass field.
+
+    Included (vs. the previous iteration):
+
+    * ``InitVar[...]`` annotations: dataclasses DO pass these to
+      ``__init__`` (and ``__post_init__``) — they ARE constructor
+      parameters even though they are not stored as instance
+      attributes. Treating them as fields keeps ``inspect.signature``
+      and the snapshot in sync. Flipping an ``InitVar[int]`` to a
+      regular ``int`` annotation surfaces as a diff naturally because
+      the snapshot prints the verbatim annotation text.
+
+    Inheritance handling (added for PR #1015, iter-6; refined iter-7):
+
+    * When ``class_defs`` is provided, base classes named directly
+      (``class User(_Base)``) are resolved against the same-module
+      ``ClassDef`` map. Resolved bases that are themselves
+      ``@dataclass``-decorated contribute their fields FIRST, matching
+      the runtime constructor ordering (``base_fields ++
+      derived_own_fields``).
+    * Multiple inheritance follows REVERSE-MRO order, matching the
+      stdlib ``@dataclass`` rule that ``__dataclass_fields__`` is
+      populated by walking bases right-to-left so later bases overwrite
+      earlier ones in dict-insertion order. For ``class C(A, B)`` the
+      synth is therefore ``(b, a, c)`` — B's fields, then A's, then C's
+      own. Implemented by iterating ``reversed(class_node.bases)`` in
+      :func:`_collect_dataclass_inherited_parts`.
+    * Diamond inheritance dedupes by field name via the outer dict
+      merge: when both ``A`` and ``B`` inherit ``X`` (with field ``x``),
+      the synth contains ``x`` exactly once. In walk order the LAST
+      contribution wins, which under reverse-base iteration is the
+      LEFTMOST base's branch.
+    * ``@dataclass(init=False)`` bases STILL contribute their fields:
+      ``init=False`` only suppresses the BASE's own ``__init__`` synth;
+      derived dataclasses still merge those fields per
+      ``__dataclass_fields__`` semantics.
+    * Override semantics: if a base and the derived class declare the
+      same field name, the derived class's annotation/default text
+      replaces the base's WHILE PRESERVING the base's position. This
+      mirrors what ``@dataclass`` actually synthesises — Python's
+      insertion-order dict keeps the original slot when a key is
+      reassigned.
+    * Unresolved bases (cross-module imports, attribute-form
+      references) annotate the signature with an
+      ``[inherited_unresolved]`` token. Local field changes still
+      shift the snapshot; invisible upstream field changes do not — the
+      gate is intentionally conservative for cases it cannot see.
+
+    Default values are emitted verbatim via ``ast.unparse``. This
+    includes ``field(default_factory=...)`` and
+    ``field(default=sentinel)`` expressions — the snapshot diff
+    therefore reflects ANY change to the literal default text, even if
+    runtime semantics are equivalent. That is the conservative
+    behaviour callers expect from the public-surface gate.
+    """
+    own_parts = _collect_dataclass_own_parts(class_node)
+    inherited_parts = _collect_dataclass_inherited_parts(
+        class_node,
+        class_defs,
+        imported_names,
+        frozenset({class_node.name}),
+    )
+
+    # Merge inherited and own parts. Preserve the inherited slot for
+    # an override (derived class re-declares a base field): the
+    # position is the base's, but the annotation/default come from the
+    # derived class. ``dict[str, str]`` insertion order is stable on
+    # Python 3.7+ and update-in-place is positionally idempotent so
+    # this matches what ``@dataclass`` actually does.
+    merged_named: Dict[str, str] = {}
+    leading_markers: List[str] = []
+    seen_field = False
+    for part in inherited_parts:
+        field_name = _part_field_name(part)
+        if field_name is None:
+            if not seen_field:
+                # Leading kw-only / unresolved markers from inherited
+                # walk land in front of all fields.
+                leading_markers.append(part)
+            else:
+                # ``*`` inside an inherited sequence preserves
+                # positioning by encoding the marker as a synthetic
+                # entry whose key is unique (so dict lookups don't
+                # collide).
+                marker_key = f"__marker_{len(merged_named)}__"
+                merged_named[marker_key] = part
+            continue
+        seen_field = True
+        merged_named[field_name] = part
+    for part in own_parts:
+        field_name = _part_field_name(part)
+        if field_name is None:
+            marker_key = f"__marker_{len(merged_named)}__"
+            merged_named[marker_key] = part
+            continue
+        if field_name in merged_named:
+            # Override: keep base's slot, replace text with derived's.
+            merged_named[field_name] = part
+        else:
+            merged_named[field_name] = part
+
+    parts: List[str] = list(leading_markers) + list(merged_named.values())
+
+    # Strip a trailing ``*`` if no kw-only fields followed the sentinel
+    # — ``(*)`` is not a valid signature and would falsely diff against
+    # an empty ``()`` synth.
+    if parts and parts[-1] == "*":
+        parts.pop()
+    return f"({', '.join(parts)})"
+
+
+def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
+    """Collect signatures for public top-level functions, classes, and class methods.
+
+    Recurses into public nested classes so a method like ``Outer.Inner.method``
+    has its signature snapshot keyed by the same fully qualified name used in
+    :func:`_snapshot_public_surface`. Without this the removed-symbol diff and
+    the signature diff disagree on nested methods.
+
+    When the module declares ``__all__`` as a clean list/tuple of string
+    constants, that list is authoritative (same rule as
+    :func:`_snapshot_public_surface`): a top-level function/class is
+    captured only if it appears in ``__all__``, even when underscore-
+    prefixed. Without that mirror the removed-symbol diff and the
+    signature-drift diff would disagree on what is "public".
+
+    Class methods are stored with a leading ``[<kind>]`` binding prefix
+    (``[instance]``, ``[staticmethod]``, ``[classmethod]``, ``[property:...]``)
+    so that a binding flip — e.g. ``def f(self, v)`` → ``@staticmethod def
+    f(v)`` — produces a snapshot diff even when the receiver-stripped
+    parameter list matches. Property descriptors carry a sorted accessor
+    list (``[property:getter]``, ``[property:getter+setter]``, ...) so a
+    rewrite that drops the descriptor in favor of a plain ``def x(self,
+    value)`` cannot collide with the original snapshot.
+
+    Top-level functions / async functions / classes carry a symbol-kind
+    prefix (``[function]`` / ``[async_function]`` / ``[class]``) so a
+    replacement that swaps a public class with a same-named function (or
+    vice versa) is detected even when the receiver-stripped parameter
+    list happens to match. Callers that ``Service()`` against a class and
+    a function may both succeed on construction, but ``isinstance`` and
+    subclass checks break — the kind prefix surfaces the regression
+    before generation completes.
+    """
+    if (language or "").lower() not in {"python", "py"}:
+        return {}
+    try:
+        tree = ast.parse(code_text or "")
+    except SyntaxError:
+        return {}
+
+    dunder_all = _extract_dunder_all(tree)
+    # When __all__ is authoritative, a top-level name is "public" iff it's
+    # in __all__. Build a predicate that captures this.
+    if dunder_all is not None:
+        def _is_public_top_level(name: str) -> bool:
+            return name in dunder_all
+        # Classes opted into __all__ have their members treated as
+        # public regardless of underscore prefix, consistent with the
+        # __all__-authoritative branch in `_snapshot_public_surface`.
+        include_methods_underscore_for_top_class = True
+    else:
+        def _is_public_top_level(name: str) -> bool:
+            return not name.startswith("_")
+        include_methods_underscore_for_top_class = False
+
+    signatures: Dict[str, str] = {}
+
+    # Build a top-level ``name -> ClassDef`` map and the set of names
+    # introduced by imports. The synthesised-dataclass-init helper uses
+    # both to resolve same-module base classes (for inherited fields)
+    # and to mark cross-module bases as ``[inherited_unresolved]``.
+    # Nested classes are NOT registered: dataclass inheritance from a
+    # nested class is rare and the snapshot already tracks nested
+    # classes via their qualified name, so a regression in a nested
+    # base is caught by its own entry.
+    class_defs: Dict[str, ast.ClassDef] = {
+        node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+    imported_names: Set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                exposed = alias.asname or alias.name.split(".", 1)[0]
+                if exposed:
+                    imported_names.add(exposed)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                exposed = alias.asname or alias.name
+                if exposed:
+                    imported_names.add(exposed)
+
+    def _walk_class(
+        class_node: ast.ClassDef,
+        qualname: str,
+        include_underscore: bool = False,
+    ) -> None:
+        # Record the class itself with its constructor signature so that
+        # ADDING a required `__init__` parameter is caught (#1012, P1.B).
+        # The ``[class]`` kind prefix mirrors the top-level
+        # function/async-function/class kind tagging so a replacement
+        # that swaps the class for a function with a matching constructor
+        # signature is still flagged.
+        explicit_init: Optional[ast.AST] = None
+        for child in class_node.body:
+            if (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == "__init__"
+            ):
+                explicit_init = child
+                break
+        if explicit_init is not None:
+            class_signature = _format_python_signature(
+                explicit_init, skip_first=True
+            )
+        else:
+            # No explicit ``__init__`` — but if the class is a stdlib
+            # ``@dataclass``, the synthesised init mirrors the field
+            # annotations. Build it from the ``AnnAssign`` field list so
+            # that adding/removing/reordering required fields shows up as
+            # a snapshot diff (reviewer reproducer for PR #1015). Falls
+            # back to the previous bare ``()`` for non-dataclass classes
+            # and for unsupported decorator forms (``@attr.s``,
+            # ``@pydantic.dataclasses.dataclass``, etc).
+            dataclass_decorators = [
+                dec
+                for dec in class_node.decorator_list
+                if _is_dataclass_decorator(dec)
+            ]
+            is_dataclass = bool(dataclass_decorators)
+            # ``@dataclass(init=False)`` keeps the class's natural
+            # ``__init__`` (typically ``object.__init__`` — no fields
+            # injected). When ANY dataclass decorator opts out, do NOT
+            # synthesise from the class body: adding fields under
+            # ``init=False`` does not change the runtime constructor and
+            # must not falsely trip the gate; flipping ``init=False`` →
+            # default DOES change the constructor and SHOULD trip it
+            # (the ``()`` snapshot here vs the synth signature on the
+            # default branch).
+            init_synthesized = all(
+                _dataclass_decorator_synthesizes_init(dec)
+                for dec in dataclass_decorators
+            )
+            if is_dataclass and init_synthesized:
+                class_signature = _synthesize_dataclass_init_signature(
+                    class_node,
+                    class_defs=class_defs,
+                    imported_names=imported_names,
+                )
+            else:
+                class_signature = "()"
+        signatures[qualname] = f"[class] {class_signature}"
+
+        # First pass: accumulate property accessor roles per name so a
+        # getter + setter combination collapses into ONE merged
+        # ``[property:getter+setter]`` snapshot. Last-write-wins on the
+        # dict (the previous behaviour) let ``@x.setter`` overwrite
+        # ``@property`` and then misclassify the setter as ``[instance]``,
+        # which let a real rewrite to ``def x(self, value)`` produce the
+        # same snapshot string.
+        property_accessors: Dict[str, Set[str]] = {}
+        property_getter_nodes: Dict[str, ast.AST] = {}
+        for child in class_node.body:
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            role = _python_property_accessor_role(child)
+            if role is None:
+                continue
+            if not (include_underscore or not child.name.startswith("_")):
+                continue
+            property_accessors.setdefault(child.name, set()).add(role)
+            # Remember the getter node so we can capture its parameter
+            # signature in the final snapshot (the setter's ``(self,
+            # value)`` shape is intentionally NOT used as the canonical
+            # signature — accessors share the property identity but not
+            # the param list).
+            if role == "getter" and child.name not in property_getter_nodes:
+                property_getter_nodes[child.name] = child
+
+        for name, roles in property_accessors.items():
+            sorted_roles = "+".join(sorted(roles))
+            getter_node = property_getter_nodes.get(name)
+            if getter_node is not None:
+                getter_signature = _format_python_signature(
+                    getter_node, skip_first=True
+                )
+            else:
+                # ``@x.setter`` without an accompanying ``@property`` is
+                # syntactically valid but unusual; fall back to ``()`` so
+                # the entry still has a stable shape.
+                getter_signature = "()"
+            signatures[f"{qualname}.{name}"] = (
+                f"[property:{sorted_roles}] {getter_signature}"
+            )
+
+        # Note: when a class body redefines the same name with mixed
+        # binding kinds (e.g. plain ``def x`` followed by
+        # ``@property def x``), the snapshot reflects the last *plain*
+        # def encountered, not Python's runtime last-binding-wins
+        # semantics. This is a rare source pattern; the gate may emit a
+        # benign no-op diff in such cases. Documented for future
+        # tightening.
+        for child in class_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # __init__ already recorded above against ``qualname``;
+                # do not re-add as ``qualname.__init__``.
+                if child.name == "__init__":
+                    continue
+                # Property-decorated functions are handled in the
+                # accumulator pass above — skip them here so a
+                # last-write-wins overwrite cannot bury the merged
+                # ``[property:...]`` entry under an ``[instance]``
+                # snapshot from the setter.
+                if _python_property_accessor_role(child) is not None:
+                    continue
+                binding_kind = _python_method_binding_kind(child)
+                # ``staticmethod`` does NOT receive an implicit first arg
+                # so its signature should NOT strip the leading positional.
+                # ``classmethod`` / ``property`` / ``instance`` all bind
+                # implicitly and skip the receiver. ``property`` getters
+                # have a single ``self`` param that would otherwise vanish
+                # from the snapshot, but the binding-kind prefix makes the
+                # property-vs-method distinction observable on its own.
+                skip_first = binding_kind != "staticmethod"
+                if include_underscore or not child.name.startswith("_"):
+                    base_signature = _format_python_signature(
+                        child, skip_first=skip_first
+                    )
+                    signatures[f"{qualname}.{child.name}"] = (
+                        f"[{binding_kind}] {base_signature}"
+                    )
+            elif isinstance(child, ast.ClassDef) and (
+                include_underscore or not child.name.startswith("_")
+            ):
+                _walk_class(child, f"{qualname}.{child.name}", include_underscore)
+
+    def _record_assignment_target(target: ast.AST) -> None:
+        """Walk an assignment target, recording bare-name targets as ``[assignment]``.
+
+        Mirrors :func:`_snapshot_public_surface`'s ``_add_assign_targets`` so
+        an ``assignment ↔ def`` / ``assignment ↔ class`` kind flip becomes
+        a snapshot diff in BOTH directions (``Foo = type(...)`` → ``def
+        Foo()`` was previously invisible: surface kept ``Foo`` and the
+        signatures dict had no ``Foo`` entry, so the new ``def Foo()``
+        looked like an ADDED symbol, not a kind flip). Tuple/list/starred
+        unpacking recurses; subscript/attribute targets are ignored
+        (consistent with the surface helper — they mutate an existing
+        object rather than binding a module attribute).
+        """
+        if isinstance(target, ast.Name):
+            if _is_public_top_level(target.id):
+                # Source order in the outer loop means a later ``def``/
+                # ``class`` of the same name will overwrite this entry,
+                # matching Python's last-binding-wins runtime semantics.
+                signatures[target.id] = "[assignment]"
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _record_assignment_target(elt)
+        elif isinstance(target, ast.Starred):
+            _record_assignment_target(target.value)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public_top_level(node.name):
+            # Top-level kind prefix so swapping a public class with a
+            # same-named function (or vice versa) is detected even when
+            # the normalized parameter list matches. ``[function]`` vs
+            # ``[async_function]`` keeps an ``async def`` flip
+            # observable too — callers awaiting the result of a former
+            # sync function would otherwise silently see a coroutine.
+            kind = "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function"
+            signatures[node.name] = (
+                f"[{kind}] {_format_python_signature(node)}"
+            )
+        elif isinstance(node, ast.ClassDef) and _is_public_top_level(node.name):
+            _walk_class(
+                node,
+                node.name,
+                include_underscore=include_methods_underscore_for_top_class,
+            )
+        elif isinstance(node, ast.Assign):
+            # Record module-level assignments as ``[assignment]`` so a
+            # rewrite that flips an ``assignment → def/class`` (e.g.
+            # ``Foo = type("Foo", (), {})`` → ``def Foo(): pass``) shows
+            # up as a snapshot diff. Without this entry the surface
+            # helper keeps ``Foo`` in the public set unchanged and the
+            # signatures dict sees ``Foo`` as a NEW symbol, missing the
+            # kind flip. The reverse direction (``def`` → assignment)
+            # was already covered by the line-1128 fallback before this
+            # change; with this entry both directions now hit the
+            # primary ``changed_set`` path.
+            for target in node.targets:
+                _record_assignment_target(target)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            # Only annotated assignments with a bound value bind a
+            # runtime module attribute; a bare ``PUBLIC_NAME: int``
+            # declaration is a type hint, not an export. Mirrors the
+            # corresponding branch in ``_snapshot_public_surface``.
+            _record_assignment_target(node.target)
+        elif isinstance(node, ast.Import):
+            # Record re-exports so a silent break — ``import pathlib`` →
+            # ``pathlib = None``, or ``from pathlib import Path`` →
+            # ``def Path(): ...`` — registers as a snapshot diff instead
+            # of looking like a brand-new symbol. Without this entry the
+            # public-surface set still contains the bound name on both
+            # sides, but the signatures dict has nothing to compare the
+            # new ``def`` against; the regression slipped past iter-3
+            # (external review PR #1015).
+            for alias in node.names:
+                exposed = alias.asname or alias.name.split(".", 1)[0]
+                if not exposed or not _is_public_top_level(exposed):
+                    continue
+                if alias.asname:
+                    # ``import pathlib as p`` → ``p`` binds to the
+                    # ``pathlib`` module. Encoding the source module so
+                    # ``import os as p`` would still produce a distinct
+                    # entry.
+                    signatures[exposed] = f"[import:{alias.name}]"
+                else:
+                    # ``import pathlib`` and ``import a.b.c`` both bind
+                    # a single top-level name; record as plain
+                    # ``[import]`` — the diff key is the bound name
+                    # itself, the source is whatever's documented in
+                    # the prompt body.
+                    signatures[exposed] = "[import]"
+        elif isinstance(node, ast.ImportFrom):
+            # ``from X import *`` does NOT bind a fixed name (the
+            # surface helper already skips these) so it contributes
+            # nothing to the signatures dict either.
+            # Mirror ``_snapshot_public_surface``: ``from __future__
+            # import …`` is a compiler directive, not a runtime
+            # attribute callers would import. Without this skip a
+            # follow-up generation that drops the directive and adds a
+            # real ``annotations = …`` would falsely diff as a
+            # signature change (``[import:from __future__]`` →
+            # ``[assignment]``) on the same name.
+            if node.module == "__future__":
+                continue
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                exposed = alias.asname or alias.name
+                if not exposed or not _is_public_top_level(exposed):
+                    continue
+                if alias.asname:
+                    # ``from pathlib import Path as P`` records the
+                    # source identifier so re-pointing the alias at a
+                    # different attribute (``from os.path import join
+                    # as P``) flips the snapshot.
+                    signatures[exposed] = f"[import:from {module}:{alias.name}]"
+                else:
+                    # ``from pathlib import Path`` — the bound name is
+                    # ``alias.name`` so encoding the source module is
+                    # sufficient to distinguish it from a same-named
+                    # ``def Path()`` later in the file.
+                    signatures[exposed] = f"[import:from {module}]"
+    return signatures
+
+
+def _collect_python_public_surface(source: str) -> List[str]:
+    """Backward-compatible wrapper for older tests and local imports."""
+    return sorted(_snapshot_public_surface(source, "python"))
+
+
+def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
+    """Backward-compatible wrapper for the public marker helper."""
+    return _prompt_has_breaking_change_marker(prompt_content)
+
+
+def _verify_public_surface_regression(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    language: Optional[str],
+    prompt_content: Optional[str],
+) -> None:
+    """Fail when a mature Python module generation removes public symbols."""
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or _is_test_output_path(output_path)
+        or not _is_python_generation(language, output_path)
+    ):
+        return
+
+    before = _snapshot_public_surface(existing_code, language or "python")
+    after = _snapshot_public_surface(generated_code, language or "python")
+    if not before:
+        return
+    allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)
+    # ``BREAKING-CHANGE: remove Service`` is unambiguous about the whole
+    # class going away — auto-include every descendant ``Service.run``,
+    # ``Service.Inner.method`` etc. that the snapshot captured. Without
+    # this the caller has to list every member by hand, which defeats the
+    # opt-out. Only mirrors `_snapshot_public_surface`'s class-member
+    # recursion, so no new naming convention to learn.
+    expanded_allowed = set(allowed_removed)
+    for name in allowed_removed:
+        prefix = f"{name}."
+        for sym in before:
+            if sym.startswith(prefix):
+                expanded_allowed.add(sym)
+    removed = [
+        symbol
+        for symbol in _diff_public_surface(before, after)
+        if symbol not in expanded_allowed
+    ]
+    before_signatures = _snapshot_public_signatures(existing_code, language or "python")
+    after_signatures = _snapshot_public_signatures(generated_code, language or "python")
+    allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
+    changed_set = {
+        symbol
+        for symbol, signature in before_signatures.items()
+        if (
+            symbol in after_signatures
+            and after_signatures[symbol] != signature
+            and symbol not in allowed_signature_changes
+        )
+    }
+    for symbol in before_signatures:
+        if symbol in after_signatures or symbol in changed_set:
+            continue
+        if "." in symbol:
+            continue
+        if symbol in after and symbol not in allowed_signature_changes:
+            changed_set.add(symbol)
+    changed_signatures = sorted(changed_set)
+    if removed or changed_signatures:
+        raise PublicSurfaceRegressionError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            removed_symbols=removed,
+            changed_signatures=changed_signatures,
+            pre_surface_size=len(before),
+            post_surface_size=len(after),
+        )
+
+
+def _get_test_churn_threshold() -> float:
+    """Return the PDD_TEST_CHURN_THRESHOLD as a clamped 0..1 ratio.
+
+    Accepts either a decimal ratio (``"0.40"``) or a percent string
+    (``"40%"`` / ``"100%"``). The percent suffix is stripped and the value
+    is divided by 100 before clamping. Unparseable values (``"invalid"``)
+    log a warning and fall back to the documented default of ``0.40`` so
+    a typo doesn't silently disable the gate.
+    """
+    raw = os.environ.get("PDD_TEST_CHURN_THRESHOLD", "0.40")
+    text = (raw or "").strip()
+    if not text:
+        return 0.40
+    is_percent = text.endswith("%")
+    if is_percent:
+        text = text[:-1].rstrip()
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        logger.warning(
+            "PDD_TEST_CHURN_THRESHOLD=%r is not a number; "
+            "falling back to default 0.40.",
+            raw,
+        )
+        return 0.40
+    if is_percent:
+        value /= 100.0
+    if value < 0:
+        return 0.0
+    if value > 1:
+        return 1.0
+    return value
+
+
+def _compute_test_churn_ratio(pre_text: str, post_text: str) -> float:
+    before_lines = (pre_text or "").splitlines()
+    after_lines = (post_text or "").splitlines()
+    diff = difflib.unified_diff(before_lines, after_lines, lineterm="")
+    added = 0
+    removed = 0
+    for line in diff:
+        if line.startswith(("+++", "---", "@@")):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    if removed == 0:
+        return 0.0
+    return min(max(added, removed) / max(len(before_lines), 1), 1.0)
+
+
+def _calculate_test_churn_ratio(before: str, after: str) -> float:
+    """Backward-compatible wrapper for the prompt-named churn helper."""
+    return _compute_test_churn_ratio(before, after)
+
+
+def _verify_test_churn(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    prompt_content: Optional[str],
+) -> None:
+    """Fail when rewriting an existing test file exceeds the churn threshold."""
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or not _is_test_output_path(output_path)
+        or _prompt_allows_test_churn(prompt_content)
+    ):
+        return
+
+    threshold = _get_test_churn_threshold()
+    ratio = _compute_test_churn_ratio(existing_code, generated_code)
+    if ratio > threshold:
+        raise TestChurnError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            churn_ratio=ratio,
+            threshold=threshold,
+            pre_line_count=len(existing_code.splitlines()),
+            post_line_count=len(generated_code.splitlines()),
+        )
 
 def _should_wire_generated_exports(output_path: str) -> bool:
     """Return True when generated Python exports should be wired to __init__.py.
@@ -2012,17 +3877,12 @@ def code_generator_main(
                             temp_input_path = str(pathlib.Path(output_path).resolve())
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         else:
-                            # Write payload to a temp file for scripts expecting a file path input
+                            # Write payload to a temp file for scripts expecting a file path input.
+                            # LLM output must not touch output_path until conformance gates pass.
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                            if output_path and llm_enabled:
-                                temp_input_path = str(pathlib.Path(output_path).resolve())
-                                pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
-                                with open(temp_input_path, 'w', encoding='utf-8') as f:
-                                    f.write(stdin_payload or '')
-                            else:
-                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                                    tf.write(stdin_payload or '')
-                                    temp_input_path = tf.name
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                tf.write(stdin_payload or '')
+                                temp_input_path = tf.name
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
@@ -2071,8 +3931,22 @@ def code_generator_main(
                 finally:
                     if temp_input_path:
                         try:
-                            # Only delete temp files, not the actual output file when llm=false
-                            if llm_enabled or not (output_path and pathlib.Path(output_path).exists() and temp_input_path == str(pathlib.Path(output_path).resolve())):
+                            # Only delete temp files, not the actual output file when llm=false.
+                            is_resolved_output = bool(
+                                output_path
+                                and temp_input_path == str(pathlib.Path(output_path).resolve())
+                            )
+                            if (
+                                proc
+                                and proc.returncode == 0
+                                and llm_enabled
+                                and generated_code_content is not None
+                                and not is_resolved_output
+                            ):
+                                generated_code_content = pathlib.Path(temp_input_path).read_text(
+                                    encoding="utf-8"
+                                )
+                            if not is_resolved_output:
                                 os.unlink(temp_input_path)
                         except Exception:
                             pass
@@ -2144,8 +4018,12 @@ def code_generator_main(
                     raise click.UsageError(f"Generated output is not valid JSON: {jde}")
 
             # Architecture conformance check: verify generated code exports match
-            # the interface declarations in architecture.json (hard failure on mismatch)
-            if not _env_flag_enabled("PDD_SKIP_CONFORMANCE") and generated_code_content:
+            # the interface declarations in architecture.json (hard failure on mismatch).
+            # Gate on `is not None` rather than a truthy check so an empty generation
+            # over an existing module still fires the conformance gate — without this
+            # an empty body silently slipped past every gate and the writer below
+            # truncated the existing file to 0 bytes (external review iter-13 follow-up).
+            if not _env_flag_enabled("PDD_SKIP_CONFORMANCE") and generated_code_content is not None:
                 try:
                     _verify_architecture_conformance(
                         generated_code=generated_code_content,
@@ -2166,9 +4044,82 @@ def code_generator_main(
                     if verbose and not quiet:
                         console.print(f"[yellow]Warning: Architecture conformance check failed: {conform_err}[/yellow]")
 
+            if (
+                not _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                and generated_code_content is not None
+                and existing_code_content is not None
+            ):
+                # Gate on `is not None` rather than a truthy check so an
+                # empty generation over an existing module still fires the
+                # public-surface and test-churn gates. The truthy form
+                # previously skipped both gates whenever the provider
+                # returned "", and the writer below then truncated the
+                # existing file to 0 bytes — silent erasure of mature
+                # public APIs and test coverage (external review iter-13
+                # follow-up; reproduced with mocked local generation).
+                try:
+                    prompt_name = pathlib.Path(prompt_file).name
+                    _verify_public_surface_regression(
+                        existing_code=existing_code_content,
+                        generated_code=generated_code_content,
+                        prompt_name=prompt_name,
+                        output_path=output_path,
+                        language=language,
+                        prompt_content=prompt_content,
+                    )
+                    _verify_test_churn(
+                        existing_code=existing_code_content,
+                        generated_code=generated_code_content,
+                        prompt_name=prompt_name,
+                        output_path=output_path,
+                        prompt_content=prompt_content,
+                    )
+                except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                    if output_path and existing_code_content is not None:
+                        try:
+                            pathlib.Path(output_path).write_text(
+                                existing_code_content,
+                                encoding="utf-8",
+                            )
+                        except Exception as restore_err:
+                            if verbose and not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Could not restore {output_path} "
+                                    f"after compatibility gate failure: {restore_err}[/yellow]"
+                                )
+                    compat_err.total_cost = float(total_cost or 0.0)
+                    compat_err.model_name = model_name or "unknown"
+                    raise
+
             if output_path:
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
+
+                # Safety net for file types the public-surface / test-churn
+                # gates cannot inspect (non-Python source, JSON, YAML,
+                # prompt files, etc.): refuse to overwrite a non-empty
+                # existing file with empty / whitespace-only generated
+                # content. An empty body over an existing artifact is
+                # almost always an upstream provider/parse failure, and
+                # silently truncating to 0 bytes loses real work.
+                # `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape
+                # hatch for the rare intentional case.
+                if (
+                    existing_code_content
+                    and existing_code_content.strip()
+                    and (
+                        generated_code_content is None
+                        or not generated_code_content.strip()
+                    )
+                    and not _env_flag_enabled("PDD_ALLOW_EMPTY_GENERATION")
+                ):
+                    raise click.UsageError(
+                        f"Refusing to overwrite {output_path} with empty "
+                        f"generated content (existing file has "
+                        f"{len(existing_code_content)} chars). Empty output "
+                        f"typically indicates an upstream provider or parse "
+                        f"failure. Set PDD_ALLOW_EMPTY_GENERATION=1 to bypass."
+                    )
 
                 final_content = generated_code_content
 
