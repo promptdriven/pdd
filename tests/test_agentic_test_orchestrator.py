@@ -265,6 +265,36 @@ def test_resume_from_cached_state(mock_deps, default_args):
     assert "step5" in executed
 
 
+def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
+    """clean_restart should clear durable state and start from step 1."""
+    mocks = mock_deps
+    default_args["clean_restart"] = True
+
+    stale_state = {
+        "last_completed_step": 4,
+        "step_outputs": {"1": "old", "2": "old", "3": "old", "4": "old"},
+        "total_cost": 0.4,
+        "model_used": "anthropic",
+    }
+    mocks["load"].return_value = (stale_state, 100)
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    assert mocks["clear"].call_count >= 1
+    mocks["load"].assert_not_called()
+    assert "step1" in [c.kwargs["label"] for c in mocks["run"].call_args_list]
+
+
 def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
     """Issue #467: All-failed state should re-run from step 1."""
     mocks = mock_deps

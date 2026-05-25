@@ -48,6 +48,11 @@ def _is_user_story_file(value: str) -> bool:
     default=True,
     help="Resume from saved state if available (Agentic mode).",
 )
+@click.option(
+    "--clean-restart",
+    is_flag=True,
+    help="Discard saved agentic fix state and start from step 1 (Agentic mode).",
+)
 @click.option("--force", is_flag=True, help="Override branch mismatch safety check (Agentic mode).")
 @click.option(
     "--no-github-state",
@@ -106,6 +111,7 @@ def fix(
     timeout_adder: float,
     max_cycles: int,
     resume: bool,
+    clean_restart: bool,
     force: bool,
     no_github_state: bool,
     ci_retries: int,
@@ -136,6 +142,8 @@ def fix(
             raise click.UsageError("Missing arguments. See 'pdd fix --help'.")
 
         first_arg = args[0]
+        if clean_restart and (manual or not _is_issue_url(first_arg)):
+            raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 
         if not manual and _is_issue_url(first_arg):
             from ..agentic_e2e_fix import run_agentic_e2e_fix
@@ -144,7 +152,7 @@ def fix(
                 issue_url=first_arg,
                 timeout_adder=timeout_adder,
                 max_cycles=max_cycles,
-                resume=resume,
+                resume=False if clean_restart else resume,
                 force=force,
                 verbose=verbose,
                 quiet=quiet,

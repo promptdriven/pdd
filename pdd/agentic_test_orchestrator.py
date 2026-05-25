@@ -309,6 +309,7 @@ def run_agentic_test_orchestrator(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 18-step agentic test generation workflow.
@@ -325,9 +326,21 @@ def run_agentic_test_orchestrator(
         console.print(f"Generating tests for issue #{issue_number}: \"{issue_title}\"")
 
     state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(
-        cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
-    )
+    if clean_restart:
+        try:
+            clear_workflow_state(
+                cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: clean_restart pre-clear failed (continuing with fresh in-memory state): {e}[/yellow]"
+                )
+        state, loaded_gh_id = None, None
+    else:
+        state, loaded_gh_id = load_workflow_state(
+            cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
+        )
 
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)

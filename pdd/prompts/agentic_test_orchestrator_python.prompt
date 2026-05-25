@@ -59,3 +59,4 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 
 # Deliverable
 A Python module named `agentic_test_orchestrator.py` containing the primary entry point `run_agentic_test_orchestrator`. The function must return a tuple: `(success: bool, message: str, total_cost: float, model: str, changed_files: List[str])`.
+The entry point must accept `clean_restart: bool = False`; when true, call `clear_workflow_state(...)` before any `load_workflow_state(...)` and start from fresh in-memory state even if the clear fails.

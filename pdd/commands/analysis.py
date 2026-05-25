@@ -183,6 +183,12 @@ def conflicts(
     default=False,
     help="Disable GitHub state persistence (agentic mode only).",
 )
+@click.option(
+    "--clean-restart",
+    is_flag=True,
+    default=False,
+    help="Discard saved agentic bug state and start from step 1 (agentic mode only).",
+)
 @click.pass_context
 @track_cost
 def bug(
@@ -193,6 +199,7 @@ def bug(
     language: str = "Python",
     timeout_adder: float = 0.0,
     no_github_state: bool = False,
+    clean_restart: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate a unit test (manual) or investigate a bug (agentic).
 
@@ -205,6 +212,8 @@ def bug(
     try:
         obj = get_context_obj(ctx)
         if manual:
+            if clean_restart:
+                raise click.UsageError("--clean-restart cannot be used with --manual.")
             if len(args) != 5:
                 raise click.UsageError(
                     "Manual mode requires 5 arguments: PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT DESIRED_OUTPUT"
@@ -245,6 +254,7 @@ def bug(
                 timeout_adder=timeout_adder,
                 use_github_state=not no_github_state,
                 reasoning_time=obj.get("time") if obj.get("time_explicit") else None,
+                clean_restart=clean_restart,
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"
