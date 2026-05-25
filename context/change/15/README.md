@@ -135,6 +135,10 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
+  - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
+  - `md`: Generates markdown format with `.md` extension
+  When an explicit `--output` path is supplied with a non-empty extension (e.g. `--output foo.yml` or `--output foo.md`), that path is honored verbatim and the format/language-driven extension rewrite is NOT applied — even when `--format code` is the default. The `--format`-driven extension is only used when `--output` is omitted, points to a directory, ends with `/`, or has no suffix at all.
 
 Example:
 ```

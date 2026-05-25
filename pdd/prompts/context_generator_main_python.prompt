@@ -1,3 +1,23 @@
+<pdd-reason>CLI wrapper that generates example code from a prompt and code file, honoring explicit --output paths verbatim.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "context_generator_main",
+        "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str]) -> Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>context_generator_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will use 'construct_paths' to resolve and read the prompt and code file contents and to compute output locations; it will then invoke 'context_generator' and handle saving the result.
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
@@ -23,6 +43,7 @@
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the existing code file.
         - `output` - An optional string containing the path where to save the generated example code. If None, uses default naming convention.
+        - `format` - An optional string indicating the desired output format for the example. Valid values are `"code"` (default at the CLI layer) and `"md"`. May be `None` when the caller did not explicitly request a format.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
             - `str`: The generated example code.
@@ -70,8 +91,11 @@
     - Output file handling:
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
-        * Otherwise, write to the explicit `output` path provided by the user.
+        * Otherwise the user supplied an explicit output file path. Honor it as follows:
+            - If `Path(output).suffix` is non-empty (e.g. `.yml`, `.md`, `.py`), the wrapper MUST write to that exact path verbatim. Do NOT rewrite the extension based on `format` or `language` — even when `format == "code"` and the language's canonical extension differs (e.g. user supplied `.yml` but `language == "yaml"` canonically maps to `.yaml`; user supplied `.md` but `format == "md"`). The user has chosen which of the multiple valid extensions for the language they want.
+            - If `Path(output).suffix` is empty (no extension at all), the wrapper MAY apply a format/language-driven extension: `.md` when `format == "md"`, otherwise the language's extension via `BUILTIN_EXT_MAP` (falling back to `.<lang_key>` or `.py`).
         * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
+    - MUST NOT silently rewrite a user-supplied `--output` extension. When `output` is an explicit file path with a non-empty suffix, the on-disk artifact path MUST equal `output` exactly. This prevents the surprising case where `--output foo.yml` lands at `foo.yaml`, and prevents downstream planner tooling that records the requested `--output` path as metadata from re-emitting the same action in a loop.
     - Python syntax validation (for Python language only):
         * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.
         * If syntax is invalid, attempt to fix a common LLM failure pattern: JSON metadata garbage appended at the end of the file (e.g., lines containing `"explanation":`, `"focus":`, `"description":`, `"code":`, `"filename":`).

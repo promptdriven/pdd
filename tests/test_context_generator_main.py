@@ -262,50 +262,60 @@ def test_cloud_generation_receives_token_parameter(mock_ctx, mock_construct_path
 
 
 def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
-    """Test that --format md option overrides extension even with explicit --output path."""
+    """Per issue #1183 / current spec: explicit --output path with a non-empty
+    suffix MUST be honored verbatim. The wrapper must NOT rewrite the user's
+    suffix based on `format` (even when format == "md").
+    """
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "test.py"
     explicit_output = tmp_path / "custom_example.py"  # User provides .py extension
     prompt_file.write_text("Prompt")
     code_file.write_text("Code")
-    # construct_paths returns format-adjusted path with .md extension
     format_adjusted_path = str(tmp_path / "test_example.md")
     mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": format_adjusted_path}, "python")
-    mock_context_generator.return_value = ("# Markdown Example", 0.0, "model")
-    
-    # Call with format="md" and explicit output path
+    # Use Python-syntax-valid content so the syntax validator (which still runs
+    # for format=md when user gave .py extension) does not mutate it.
+    mock_context_generator.return_value = ("x = 1\n", 0.0, "model")
+
     context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="md")
-    
-    # Should have saved to .md file (extension overridden from .py)
-    expected_output = tmp_path / "custom_example.md"
-    assert expected_output.exists(), f"Expected output file {expected_output} to exist"
-    assert expected_output.read_text() == "# Markdown Example"
-    # Original .py path should not exist
-    assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
+
+    # The user's exact path (with .py) must be honored verbatim.
+    assert explicit_output.exists(), f"Expected user-supplied path {explicit_output} to be honored verbatim"
+    assert explicit_output.read_text() == "x = 1\n"
+    # The would-be rewritten .md path must NOT be created.
+    rewritten_md_path = tmp_path / "custom_example.md"
+    assert not rewritten_md_path.exists(), (
+        f"Spec violation: wrapper must not silently rewrite user-supplied extension to .md "
+        f"(file should not exist at {rewritten_md_path})"
+    )
 
 def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
-    """Test that --format code option uses language extension based on language variable even with explicit --output path."""
+    """Per issue #1183 / current spec: explicit --output path with a non-empty
+    suffix MUST be honored verbatim. The wrapper must NOT rewrite the user's
+    suffix based on `format` or `language` (even when format == "code").
+    """
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "test.py"
     explicit_output = tmp_path / "custom_example.md"  # User provides .md extension
     prompt_file.write_text("Prompt")
     code_file.write_text("Code")
-    # construct_paths returns the user's path unchanged (or default path) and language
-    default_path = str(tmp_path / "test_example.py")  # Default path would have .py extension
+    default_path = str(tmp_path / "test_example.py")
     mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": default_path}, "python")
-    mock_context_generator.return_value = ("# Python Example", 0.0, "model")
-    
-    # Call with format="code" and explicit output path with wrong extension
+    mock_context_generator.return_value = ("x = 1\n", 0.0, "model")
+
     context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
-    
-    # Should have saved to .py file (extension overridden from .md to match language)
-    expected_output = tmp_path / "custom_example.py"
-    assert expected_output.exists(), f"Expected output file {expected_output} to exist"
-    assert expected_output.read_text() == "# Python Example"
-    # Original .md path should not exist
-    assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
+
+    # The user's exact path (with .md) must be honored verbatim.
+    assert explicit_output.exists(), f"Expected user-supplied path {explicit_output} to be honored verbatim"
+    assert explicit_output.read_text() == "x = 1\n"
+    # The would-be rewritten .py path must NOT be created.
+    rewritten_py_path = tmp_path / "custom_example.py"
+    assert not rewritten_py_path.exists(), (
+        f"Spec violation: wrapper must not silently rewrite user-supplied extension to .py "
+        f"(file should not exist at {rewritten_py_path})"
+    )
 
 def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that --format md option works with default output path generation."""
@@ -386,6 +396,66 @@ def test_format_md_skips_python_syntax_validation(mock_ctx, mock_construct_paths
         # Verify the markdown content was saved unchanged
         assert output_file.exists()
         assert output_file.read_text() == markdown_content
+
+def test_explicit_output_yml_extension_honored_verbatim(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Per issue #1183: user-supplied .yml MUST NOT be rewritten to .yaml even
+    when language == "yaml" canonically maps to .yaml. The user has chosen which
+    of the multiple valid extensions for the language they want.
+    """
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.yaml"
+    explicit_output = tmp_path / "custom.yml"  # User specifies .yml not .yaml
+    prompt_file.write_text("Prompt")
+    code_file.write_text("foo: bar")
+    default_path = str(tmp_path / "test_example.yaml")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "foo: bar"}, {"output": default_path}, "yaml")
+    mock_context_generator.return_value = ("foo: bar\nbaz: qux\n", 0.0, "model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
+
+    assert explicit_output.exists(), f"User-supplied .yml path {explicit_output} must be honored verbatim"
+    rewritten_yaml_path = tmp_path / "custom.yaml"
+    assert not rewritten_yaml_path.exists(), (
+        f"Spec violation: .yml must not be silently rewritten to .yaml"
+    )
+
+
+def test_explicit_output_no_extension_uses_format_md(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Per spec: if Path(output).suffix is empty, the wrapper MAY apply a
+    format/language-driven extension (.md when format == 'md')."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    explicit_output = tmp_path / "custom_no_ext"  # No extension
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(tmp_path / "default.md")}, "python")
+    mock_context_generator.return_value = ("# Markdown\n", 0.0, "model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="md")
+
+    expected_md_path = tmp_path / "custom_no_ext.md"
+    assert expected_md_path.exists(), f"Extensionless path must get .md applied when format=md"
+
+
+def test_explicit_output_no_extension_uses_language_for_format_code(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Per spec: if Path(output).suffix is empty and format != 'md', the
+    wrapper applies the language's extension via BUILTIN_EXT_MAP."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    explicit_output = tmp_path / "custom_no_ext"  # No extension
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(tmp_path / "default.py")}, "python")
+    mock_context_generator.return_value = ("x = 1\n", 0.0, "model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
+
+    expected_py_path = tmp_path / "custom_no_ext.py"
+    assert expected_py_path.exists(), f"Extensionless path must get .py applied when format=code and language=python"
+
 
 def test_z3_syntax_fixer_logic():
     try:
