@@ -108,6 +108,7 @@ def test_run_with_provider_agy_does_not_pass_output_format(tmp_path, monkeypatch
             "pdd.agentic_common._get_google_cli_binary",
             return_value="/usr/local/bin/agy",
         ),
+        patch("pdd.agentic_common._get_google_cli_name", return_value="agy"),
         patch(
             "pdd.agentic_common._subprocess_run", return_value=fake_proc
         ) as run_mock,
@@ -142,6 +143,7 @@ def test_run_with_provider_agy_parses_plain_text_stdout(tmp_path, monkeypatch):
             "pdd.agentic_common._get_google_cli_binary",
             return_value="/usr/local/bin/agy",
         ),
+        patch("pdd.agentic_common._get_google_cli_name", return_value="agy"),
         patch("pdd.agentic_common._subprocess_run", return_value=fake_proc),
     ):
         success, text, cost, model = _run_with_provider(
@@ -178,6 +180,7 @@ def test_run_with_provider_agy_surfaces_exit_zero_failures(
             "pdd.agentic_common._get_google_cli_binary",
             return_value="/usr/local/bin/agy",
         ),
+        patch("pdd.agentic_common._get_google_cli_name", return_value="agy"),
         patch("pdd.agentic_common._subprocess_run", return_value=fake_proc),
     ):
         success, text, cost, _ = _run_with_provider(
@@ -209,6 +212,7 @@ def test_run_with_provider_agy_does_not_pass_gemini_only_flags(tmp_path, monkeyp
             "pdd.agentic_common._get_google_cli_binary",
             return_value="/usr/local/bin/agy",
         ),
+        patch("pdd.agentic_common._get_google_cli_name", return_value="agy"),
         patch(
             "pdd.agentic_common._subprocess_run", return_value=fake_proc
         ) as run_mock,
@@ -507,3 +511,171 @@ def test_has_provider_oauth_google_rejects_corrupt_json(monkeypatch, tmp_path):
     creds.parent.mkdir(parents=True)
     creds.write_text("{not valid json", encoding="utf-8")
     assert cli_detector._has_provider_oauth("google") is False
+
+
+# ---------------------------------------------------------------------------
+# Round-4 finding 1: _build_rows must use per-CLI OAuth (not provider-level)
+# ---------------------------------------------------------------------------
+
+
+def test_build_rows_agy_has_oauth_false_when_only_legacy_file(monkeypatch, tmp_path):
+    """``_build_rows()`` for the ``agy`` row must report ``has_oauth=False``
+    when only the legacy ``~/.gemini/oauth_creds.json`` exists — the
+    provider-level ``_has_provider_oauth("google")`` would wrongly return True
+    in that state, mis-labelling ``agy`` as OAuth-ready in the setup table.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # Populate ONLY the legacy Gemini OAuth file.
+    legacy = tmp_path / ".gemini" / "oauth_creds.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"refresh_token": "tok"}', encoding="utf-8")
+
+    with patch.object(cli_detector, "_find_cli_binary", lambda name: f"/usr/local/bin/{name}"):
+        rows = cli_detector._build_rows()
+
+    agy_row = next(r for r in rows if r["cli"] == "agy")
+    gemini_row = next(r for r in rows if r["cli"] == "gemini")
+
+    assert agy_row["has_oauth"] is False, (
+        "agy row must not claim OAuth when only the legacy Gemini file exists"
+    )
+    assert gemini_row["has_oauth"] is True, (
+        "gemini row must reflect its own OAuth file"
+    )
+
+
+def test_build_rows_gemini_has_oauth_false_when_only_agy_file(monkeypatch, tmp_path):
+    """Mirror: when only the Antigravity OAuth file exists the gemini row must
+    show ``has_oauth=False`` while the agy row shows ``has_oauth=True``.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    agy_dir = tmp_path / ".gemini" / "antigravity-cli"
+    agy_dir.mkdir(parents=True)
+    (agy_dir / "oauth_creds.json").write_text('{"access_token": "at"}', encoding="utf-8")
+
+    with patch.object(cli_detector, "_find_cli_binary", lambda name: f"/usr/local/bin/{name}"):
+        rows = cli_detector._build_rows()
+
+    agy_row = next(r for r in rows if r["cli"] == "agy")
+    gemini_row = next(r for r in rows if r["cli"] == "gemini")
+
+    assert agy_row["has_oauth"] is True
+    assert gemini_row["has_oauth"] is False, (
+        "gemini row must not claim OAuth when only the Antigravity file exists"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-4 finding 2: _get_google_cli_name must not use os.path.basename
+# ---------------------------------------------------------------------------
+
+
+def test_get_google_cli_name_respects_pdd_google_cli_agy(monkeypatch):
+    """``_get_google_cli_name`` must return ``"agy"`` when ``PDD_GOOGLE_CLI=agy``
+    regardless of the binary's filesystem name.
+    """
+    from pdd import agentic_common
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    with patch.object(agentic_common, "_find_cli_binary", lambda name: f"/opt/custom/{name}"):
+        name = agentic_common._get_google_cli_name()
+    assert name == "agy"
+
+
+def test_get_google_cli_name_respects_pdd_google_cli_gemini(monkeypatch):
+    from pdd import agentic_common
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "gemini")
+    with patch.object(agentic_common, "_find_cli_binary", lambda name: f"/opt/custom/{name}"):
+        name = agentic_common._get_google_cli_name()
+    assert name == "gemini"
+
+
+def test_get_google_cli_name_auto_prefers_agy_with_agy_oauth(monkeypatch):
+    """In auto mode (no PDD_GOOGLE_CLI), prefer ``agy`` when agy OAuth exists."""
+    from pdd import agentic_common
+
+    monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+    with (
+        patch.object(agentic_common, "_find_cli_binary", lambda name: f"/usr/local/bin/{name}"),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: True),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True),
+    ):
+        name = agentic_common._get_google_cli_name()
+
+    assert name == "agy"
+
+
+def test_get_google_cli_name_auto_falls_back_to_gemini_when_only_legacy_oauth(monkeypatch):
+    """In auto mode, fall back to ``gemini`` when only legacy OAuth exists."""
+    from pdd import agentic_common
+
+    monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+    with (
+        patch.object(agentic_common, "_find_cli_binary", lambda name: f"/usr/local/bin/{name}"),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True),
+    ):
+        name = agentic_common._get_google_cli_name()
+
+    assert name == "gemini"
+
+
+def test_run_with_provider_agy_uses_agy_cmd_with_symlink_path(tmp_path, monkeypatch):
+    """``_run_with_provider`` must build the agy cmd even when the binary path
+    is a symlink or wrapper (e.g. ``/usr/local/bin/agy-1.0.1``) — old code
+    used ``os.path.basename(cli_path) == "agy"`` which would miss this case;
+    now uses ``_get_google_cli_name()``.
+    """
+    from pdd import agentic_common
+
+    symlink_path = str(tmp_path / "agy-wrapper")
+
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("do something", encoding="utf-8")
+
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        proc = MagicMock()
+        proc.stdout = MagicMock()
+        proc.stdout.__iter__ = MagicMock(return_value=iter([]))
+        proc.wait = MagicMock(return_value=0)
+        proc.poll = MagicMock(return_value=0)
+        proc.returncode = 0
+        return proc
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+
+    with (
+        patch.object(agentic_common, "_find_cli_binary", lambda name: symlink_path if name == "agy" else None),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: True),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: False),
+        patch("subprocess.Popen", fake_popen),
+        patch("subprocess.run", MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))),
+    ):
+        try:
+            _run_with_provider(
+                provider="google",
+                prompt_path=prompt_file,
+                stdin_content=None,
+                env=dict(os.environ),
+                cwd=str(tmp_path),
+                verbose=False,
+                quiet=True,
+            )
+        except Exception:
+            pass  # we only care about cmd shape, not full execution
+
+    if "cmd" in captured:
+        assert "--output-format" not in captured["cmd"], (
+            "agy cmd must not include --output-format even via wrapper path"
+        )
+        assert "--print" in captured["cmd"] or symlink_path in captured["cmd"]

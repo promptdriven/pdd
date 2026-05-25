@@ -983,6 +983,39 @@ def _has_gemini_oauth_only() -> bool:
     return _has_legacy_gemini_oauth_credentials() and not _has_agy_oauth_credentials()
 
 
+def _get_google_cli_name(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Return the *logical* name of the selected Google CLI binary ("agy" or "gemini").
+
+    Uses the same resolution logic as ``_get_google_cli_binary`` but returns
+    the preference-key name rather than the filesystem path.  This decouples
+    binary-identity checks from ``os.path.basename(cli_path)``, which breaks
+    when ``.pddrc`` or ``PDD_GOOGLE_CLI`` points at a wrapper, symlink, or
+    versioned binary (e.g. ``/usr/local/bin/agy-1.0.1``).
+    """
+    if env is None:
+        env = os.environ
+    pref = env.get("PDD_GOOGLE_CLI", "auto").strip().lower()
+    if pref == "agy":
+        return "agy" if _find_cli_binary("agy") else None
+    if pref == "gemini":
+        return "gemini" if _find_cli_binary("gemini") else None
+    agy_bin = _find_cli_binary("agy")
+    gemini_bin = _find_cli_binary("gemini")
+    if agy_bin and gemini_bin:
+        has_api_key = any(
+            env.get(k)
+            for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY")
+        )
+        if not has_api_key and _has_gemini_oauth_only():
+            return "gemini"
+        return "agy"
+    if agy_bin:
+        return "agy"
+    if gemini_bin:
+        return "gemini"
+    return None
+
+
 def get_available_agents() -> List[str]:
     """
     Returns list of available provider names based on CLI existence and API key configuration.
@@ -1024,12 +1057,11 @@ def get_available_agents() -> List[str]:
         )
     )
     has_matching_oauth = False
-    if google_bin is not None:
-        resolved_name = os.path.basename(google_bin)
-        if resolved_name == "agy":
-            has_matching_oauth = _has_agy_oauth_credentials()
-        elif resolved_name == "gemini":
-            has_matching_oauth = _has_legacy_gemini_oauth_credentials()
+    google_cli_name = _get_google_cli_name()
+    if google_cli_name == "agy":
+        has_matching_oauth = _has_agy_oauth_credentials()
+    elif google_cli_name == "gemini":
+        has_matching_oauth = _has_legacy_gemini_oauth_credentials()
 
     if google_bin and (has_google_key or has_vertex_auth or has_matching_oauth):
         available.append("google")
@@ -2821,7 +2853,7 @@ def _run_with_provider(
                 "not this subprocess.[/dim]"
             )
     elif provider == "google":
-        resolved_bin = os.path.basename(cli_path)
+        resolved_bin = _get_google_cli_name(env)
         if resolved_bin == "agy":
             # Antigravity CLI args.
             # Verified empirically against agy 1.0.1: `--output-format` is NOT
@@ -3050,7 +3082,7 @@ def _run_with_provider(
     # Anything else with exit 0 is treated as the response body. Cost and
     # model are unknown — the audit log will show `cost=0, model=null`
     # until Google ships a structured-output mode.
-    if provider == "google" and os.path.basename(cli_path) == "agy":
+    if provider == "google" and _get_google_cli_name(env) == "agy":
         text = result.stdout.strip()
         if (
             text.startswith("Error:")

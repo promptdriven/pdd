@@ -548,6 +548,28 @@ def _default_index(rows: List[dict]) -> int:
     return 0
 
 
+def _has_cli_oauth(cli: str) -> bool:
+    """Return True if the OAuth credential specific to *cli* is present.
+
+    For Google CLIs the OAuth files are binary-specific:
+    - ``agy``   → ``~/.gemini/antigravity-cli/oauth_creds.json``
+    - ``gemini`` → ``~/.gemini/oauth_creds.json``
+
+    Using provider-level ``_has_provider_oauth("google")`` for both rows
+    would mark both as OAuth-available whenever *either* file exists, which
+    mis-labels ``agy`` as ready when only the legacy Gemini file is present.
+    All other CLIs delegate to ``_has_provider_oauth``.
+    """
+    home = Path.home()
+    if cli == "agy":
+        p = home / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+        return p.exists() and _google_oauth_file_has_oauth(p)
+    if cli == "gemini":
+        p = home / ".gemini" / "oauth_creds.json"
+        return p.exists() and _google_oauth_file_has_oauth(p)
+    return _has_provider_oauth(CLI_PROVIDER[cli])
+
+
 def _build_rows() -> List[dict]:
     """Detect each CLI and return a list of row dicts."""
     rows: List[dict] = []
@@ -559,7 +581,7 @@ def _build_rows() -> List[dict]:
                 "provider": provider,
                 "path": _find_cli_binary(cli),
                 "has_key": _has_api_key(provider),
-                "has_oauth": _has_provider_oauth(provider),
+                "has_oauth": _has_cli_oauth(cli),
             }
         )
     return rows
