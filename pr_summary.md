@@ -19,7 +19,7 @@ This PR is scoped to the user-visible output of `pdd sync` and related commands.
 ### Prompt changes (kept in sync with the runtime above)
 
 - `pdd/prompts/sync_orchestration_python.prompt`, `pdd/prompts/one_session_sync_python.prompt`, `pdd/prompts/sync_main_python.prompt` — Standardized no-op success and failure summary contracts; documented the `summary` field and the placeholder-rejection rule.
-- `pdd/prompts/bug_main_python.prompt`, `pdd/prompts/code_generator_main_python.prompt`, `pdd/prompts/update_main_python.prompt`, `pdd/prompts/commands/checkup_python.prompt`, `pdd/prompts/commands/maintenance_python.prompt`, `pdd/prompts/commands/modify_python.prompt` — Standardized Model-suppression contract.
+- `pdd/prompts/commands/checkup_python.prompt`, `pdd/prompts/commands/maintenance_python.prompt`, `pdd/prompts/commands/modify_python.prompt` — Standardized Model-suppression contract (kept in sync with the `echo_model_line` runtime helper added in this PR). Prompt-only suppression edits previously made to `bug_main`, `code_generator_main`, and `update_main` were reverted because this PR does not modify those modules' runtime — declaring a contract the runtime does not honor would let the next `pdd sync` rewrite stable, out-of-scope command behavior.
 - Several prompts that previously carried `<pdd-interface>` blocks declaring signatures that did not match the runtime have been corrected so conformance repair does not try to reshape stable signatures.
 
 ### Tests
