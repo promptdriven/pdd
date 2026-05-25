@@ -1457,9 +1457,14 @@ def run_agentic_change_orchestrator(
             return True, f"PR already exists: {existing_pr}", 0.0, "unknown", []
 
     # Check for stale state: if issue was updated since state was saved, start fresh.
-    # Skipped under clean_restart (Req 15) — state has already been cleared above,
-    # and the issue_updated_at comparison would be against an empty state.
-    if not effective_clean_restart and state is not None and issue_updated_at:
+    # Skipped only when the CLI --clean-restart flag is set (not when the persisted
+    # flag is inherited via effective_clean_restart): the CLI flag guarantees the
+    # pre-clear already ran and state is empty, so the comparison is meaningless.
+    # On a persisted-clean-restart resume (clean_restart=False CLI, state has
+    # clean_restart=True) we MUST still run this check — the user may have added
+    # issue comments between the stopped run and the resume, and the cached step
+    # outputs from the stopped run would otherwise ignore those new comments.
+    if not clean_restart and state is not None and issue_updated_at:
         stored_updated_at = state.get("issue_updated_at")
         if stored_updated_at and stored_updated_at != issue_updated_at:
             # Issue was modified - state is stale
