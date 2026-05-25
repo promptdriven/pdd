@@ -483,6 +483,14 @@ class TestRunOneSessionSync:
         assert result["model_name"] == "claude-code"
         assert result["operations_completed"] == ["example", "crash_fix", "verify", "test"]
         assert result["errors"] == []
+        # #1103 — success path MUST set a non-empty summary so sync_main's
+        # Details column does not collapse to "No details." for one-session
+        # success rows.
+        summary = result.get("summary")
+        assert summary, "success path must include a non-empty summary"
+        assert "one-session" in summary.lower()
+        for op in ("example", "crash_fix", "verify", "test"):
+            assert op in summary
 
     @patch("pdd.one_session_sync.run_agentic_task")
     @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
@@ -502,6 +510,9 @@ class TestRunOneSessionSync:
         assert result["operations_completed"] == []
         assert len(result["errors"]) == 1
         assert "Something went wrong" in result["errors"][0]
+        # Summary must surface the failure reason (not "No details.")
+        assert result.get("summary")
+        assert "Something went wrong" in result["summary"]
 
     def test_missing_code_file_raises(self, tmp_path):
         pdd_files = _make_pdd_files(tmp_path)

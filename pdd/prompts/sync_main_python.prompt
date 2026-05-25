@@ -1,3 +1,5 @@
+<pdd-reason>CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.</pdd-reason>
+
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
@@ -120,9 +122,13 @@
     - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
     - **Auto-submit on success**: After sync_orchestration returns success for a language (and not local mode), call `_auto_submit_example()` to submit the prompt+code pair to PDD Cloud, same as one-session mode. Use `get_pdd_file_paths()` to resolve the module file paths needed for submission. Wrap in try/except and log warnings on failure (do not abort sync).
 
-11. **User Feedback** (unless quiet=True):
+11. User Feedback (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)
-    - Display final results table (language, status, cost, details)
+    - Display final results table (Language, Status, Cost (USD), Details)
+    - **Details column**: Use `result.get("summary")` as the primary value.
+    - **Robust fallback**: If `summary` is missing, empty, or contains forbidden values ("None", "No details."), use "No sync operations required; selected target is already synchronized." for Success and "Step failed" for Failure (use `error` if available and not a forbidden value).
+    - **Forbidden values**: NEVER display the literal strings "None" or "No details." in the Details column, even if they are returned in `summary` or `error` by upstream components.
+    - Suppress the 'Model:' line in any execution summary if the model name is empty, 'unknown', or 'N/A' (case-insensitive).
     - Total time elapsed, total cost, overall status
 
 % Helper Functions (implement as internal functions):

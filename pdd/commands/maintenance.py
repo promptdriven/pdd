@@ -12,7 +12,7 @@ from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sy
 from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
-from ..core.utils import _run_setup_utility
+from ..core.utils import _run_setup_utility, echo_model_line
 
 DEFAULT_SYNC_BUDGET = 20.0
 
@@ -297,7 +297,7 @@ def _run_agentic_sync_dispatch(
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")
             click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
+            echo_model_line(model)
 
         if not success:
             raise click.exceptions.Exit(1)
@@ -356,7 +356,7 @@ def _run_global_sync_dispatch(
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")
             click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
+            echo_model_line(model)
 
         if not success:
             raise click.exceptions.Exit(1)
@@ -429,6 +429,9 @@ def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> 
             click.echo(f"UPDATED {entry['filename']}")
         elif not entry.get("success"):
             click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
+
+    for filename in result.get("registered", []):
+        click.echo(f"REGISTERED {filename}")
 
     sync_errors = result.get("errors", [])
     validation = result.get("validation", {})
