@@ -886,7 +886,7 @@ def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
 
     # Patch _setup_worktree to return our worktree path and create prompt files
     # after the mock setup (avoiding the rmtree in real _setup_worktree)
-    def mock_setup_worktree(cwd, issue_num, quiet):
+    def mock_setup_worktree(cwd, issue_num, quiet, **kwargs):
         prompts_dir = worktree_path / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "foo_python.prompt").write_text(
@@ -2811,7 +2811,7 @@ def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, tem
 
     saved_states = []
 
-    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None, **kwargs):
         saved_states.append(dict(state))
         return None
 
@@ -3155,7 +3155,7 @@ def test_step10_postcheck_preserves_existing_architecture_params(mock_dependenci
         }
     ]
 
-    def mock_setup_worktree(cwd, issue_num, quiet):
+    def mock_setup_worktree(cwd, issue_num, quiet, **kwargs):
         prompts_dir = worktree_path / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "orchestrator_python.prompt").write_text(
@@ -3526,7 +3526,7 @@ def test_sync_order_does_not_clobber_existing_sync_order_sh(mock_dependencies, t
     mock_run.side_effect = side_effect_run
     mock_template_loader.return_value = "Mocked Prompt Template"
 
-    def mock_setup_worktree(cwd, issue_num, quiet):
+    def mock_setup_worktree(cwd, issue_num, quiet, **kwargs):
         prompts_dir = worktree_path / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "foo_python.prompt").write_text(
@@ -5891,4 +5891,180 @@ class TestCleanRestartMode:
         assert success is True, (
             f"Pre-clear failure under clean_restart MUST be log-and-continue; "
             f"orchestrator aborted instead with msg={msg!r}"
+        )
+
+
+# -----------------------------------------------------------------------------
+# _setup_worktree clean_restart base-ref enforcement (issue #1149 round 2)
+# -----------------------------------------------------------------------------
+
+class TestSetupWorktreeCleanRestart:
+    """Direct unit tests on ``_setup_worktree`` to lock in Req 15's base-ref
+    guarantee. The orchestrator-level tests above mock out the helper, so
+    these are the only place the actual git plumbing under clean_restart
+    is verified.
+    """
+
+    def _patch_git(self, *, main_ref="abc123def456", remote_exists=False,
+                  local_exists=False, branch_delete_ok=True):
+        """Return a subprocess.run side_effect that fakes the git calls
+        ``_setup_worktree`` shells out to."""
+        calls = []
+
+        def side_effect(args, **kwargs):
+            calls.append(list(args))
+            cmd = list(args)
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = ""
+            m.stderr = ""
+
+            # git rev-parse --show-toplevel  (via _get_git_root)
+            if cmd[:2] == ["git", "rev-parse"] and "--show-toplevel" in cmd:
+                m.stdout = "/tmp/fake-root\n"
+                return m
+
+            # git rev-parse --verify <ref>  (via _resolve_main_ref)
+            if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+                # Honor the requested main_ref only for origin/main; fail
+                # the rest so _resolve_main_ref falls through deterministically.
+                if "origin/main" in cmd:
+                    m.stdout = f"{main_ref}\n"
+                    return m
+                # Force failure for other refs by raising
+                err = subprocess.CalledProcessError(128, cmd)
+                err.stderr = b"fatal: not a valid ref"
+                raise err
+
+            # git fetch origin <branch>
+            if cmd[:2] == ["git", "fetch"]:
+                if remote_exists:
+                    return m
+                err = subprocess.CalledProcessError(128, cmd)
+                err.stderr = b"fatal: couldn't find remote ref change/issue-99"
+                raise err
+
+            # git show-ref --verify refs/remotes/origin/<branch>
+            if cmd[:2] == ["git", "show-ref"] and "--verify" in cmd:
+                if remote_exists:
+                    return m
+                err = subprocess.CalledProcessError(1, cmd)
+                err.stderr = b""
+                raise err
+
+            # _branch_exists: git show-ref --verify refs/heads/<branch>
+            # Some branch_exists calls use show-ref; handled above.
+
+            # git branch -D
+            if cmd[:2] == ["git", "branch"] and "-D" in cmd:
+                if branch_delete_ok:
+                    return m
+                err = subprocess.CalledProcessError(1, cmd)
+                err.stderr = b"branch is currently checked out"
+                raise err
+
+            # git worktree ...
+            if cmd[:2] == ["git", "worktree"]:
+                return m
+
+            return m
+
+        return calls, side_effect
+
+    def test_clean_restart_skips_remote_fetch_even_when_remote_branch_exists(
+        self, tmp_path,
+    ):
+        """When ``origin/change/issue-N`` already exists from a stopped /
+        wrong-model run, ``clean_restart=True`` MUST skip the fetch +
+        remote-reuse path entirely and base the new worktree on
+        ``_resolve_main_ref(git_root)`` instead. Without this guarantee
+        the previous run's commits leak right back in — the bug
+        issue #1149 set out to eliminate."""
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        calls, side = self._patch_git(remote_exists=True)
+        with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=side), \
+             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_change_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_change_orchestrator._branch_exists", return_value=False):
+            wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
+
+        assert err is None, f"unexpected error: {err}"
+        # Direct behavioral check: no fetch call under clean_restart.
+        fetches = [c for c in calls if c[:2] == ["git", "fetch"]]
+        assert not fetches, (
+            "Under clean_restart=True _setup_worktree MUST NOT fetch the "
+            f"remote change/issue-N branch; saw fetch calls: {fetches!r}"
+        )
+        # Worktree was created from a real main ref, not from origin/<branch>.
+        adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+        assert adds, "expected a git worktree add invocation"
+        last_add = adds[-1]
+        assert "origin/change/issue-1149" not in last_add, (
+            f"clean_restart worktree must NOT base on origin/<branch>; saw: {last_add!r}"
+        )
+
+    def test_clean_restart_aborts_when_main_ref_falls_back_to_HEAD(
+        self, tmp_path,
+    ):
+        """If no main/master ref resolves, ``_resolve_main_ref`` returns
+        the literal string ``"HEAD"``. Silently using HEAD would base the
+        fresh worktree on the user's CURRENT feature branch — exactly
+        the "never the current HEAD" violation Req 15 calls out. Under
+        clean_restart we must abort with a clear error instead."""
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        # _resolve_main_ref calls subprocess.run WITHOUT check=True and
+        # gates on returncode. Force every rev-parse --verify to report
+        # returncode != 0 so _resolve_main_ref falls all the way through
+        # to its "HEAD" fallback string.
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = ""
+            m.stderr = ""
+            if cmd[:2] == ["git", "rev-parse"] and "--show-toplevel" in cmd:
+                m.stdout = str(tmp_path) + "\n"
+                return m
+            if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+                m.returncode = 128
+                return m
+            return m
+
+        with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=side_effect), \
+             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_change_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_change_orchestrator._branch_exists", return_value=False):
+            wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
+
+        assert wt is None, "Expected refusal when main_ref falls back to HEAD."
+        assert err and "clean restart" in err.lower() and "HEAD" in err, (
+            f"Expected a clear HEAD-fallback error message; got {err!r}"
+        )
+
+    def test_clean_restart_refuses_to_reuse_undeletable_local_branch(
+        self, tmp_path,
+    ):
+        """If the local ``change/issue-N`` branch exists and ``git branch
+        -D`` fails (e.g. it's checked out in another worktree), the
+        default code path reuses that local branch as the worktree base.
+        Under clean_restart that's a Req 15 violation; we abort with a
+        clear pointer to the offending worktree."""
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        calls, side = self._patch_git(branch_delete_ok=False)
+        with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=side), \
+             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_change_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_change_orchestrator._branch_exists", return_value=True), \
+             patch(
+                 "pdd.agentic_change_orchestrator._delete_branch",
+                 return_value=(False, "branch checked out elsewhere"),
+             ):
+            wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
+
+        assert wt is None
+        assert err and "clean restart" in err.lower(), (
+            f"Expected a clean-restart-refusal error; got {err!r}"
         )

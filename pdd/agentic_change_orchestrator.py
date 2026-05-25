@@ -441,9 +441,25 @@ def _resolve_main_ref(git_root: Path) -> str:
     return "HEAD"
 
 
-def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
+def _setup_worktree(
+    cwd: Path,
+    issue_number: int,
+    quiet: bool,
+    *,
+    clean_restart: bool = False,
+) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
+
+    Default behavior preserves cross-machine resume by reusing
+    ``origin/change/issue-{N}`` as the base when that branch already
+    exists remotely (so the second machine inherits the first machine's
+    prior work). Under ``clean_restart=True`` (issue #1149) the helper
+    MUST instead force the base to ``_resolve_main_ref(git_root)`` and
+    skip the remote-fetch / remote-reuse path entirely, so a stopped or
+    wrong-model run's artifacts on the existing remote branch cannot
+    leak into the fresh restart.
+
     Returns (worktree_path, error_message).
     """
     git_root = _get_git_root(cwd)
@@ -468,30 +484,33 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
             # Just a directory
             shutil.rmtree(worktree_path)
 
-    # Check if a remote branch exists with prior work to preserve
+    # Under clean_restart we must NOT inherit the prior remote branch's
+    # commits as our base. Skip the fetch + show-ref probe entirely so
+    # `remote_exists` stays False and the create-from-main path runs.
     remote_ref = f"origin/{branch_name}"
     remote_exists = False
-    try:
-        subprocess.run(
-            ["git", "fetch", "origin", branch_name],
-            cwd=git_root, capture_output=True, check=True
-        )
-        subprocess.run(
-            ["git", "show-ref", "--verify", f"refs/remotes/{remote_ref}"],
-            cwd=git_root, capture_output=True, check=True
-        )
-        remote_exists = True
-    except subprocess.CalledProcessError as e:
-        # Distinguish "branch doesn't exist on remote" (exit code 128 with
-        # "couldn't find remote ref") from transient network/auth errors.
-        stderr = ""
-        if e.stderr:
-            stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace")
-        if "couldn't find remote ref" in stderr or "not found" in stderr.lower():
-            pass  # Branch doesn't exist remotely — expected on first run
-        elif stderr:
-            if not quiet:
-                console.print(f"[yellow]Warning: git fetch failed for {branch_name}: {stderr.strip()}[/yellow]")
+    if not clean_restart:
+        try:
+            subprocess.run(
+                ["git", "fetch", "origin", branch_name],
+                cwd=git_root, capture_output=True, check=True
+            )
+            subprocess.run(
+                ["git", "show-ref", "--verify", f"refs/remotes/{remote_ref}"],
+                cwd=git_root, capture_output=True, check=True
+            )
+            remote_exists = True
+        except subprocess.CalledProcessError as e:
+            # Distinguish "branch doesn't exist on remote" (exit code 128 with
+            # "couldn't find remote ref") from transient network/auth errors.
+            stderr = ""
+            if e.stderr:
+                stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace")
+            if "couldn't find remote ref" in stderr or "not found" in stderr.lower():
+                pass  # Branch doesn't exist remotely — expected on first run
+            elif stderr:
+                if not quiet:
+                    console.print(f"[yellow]Warning: git fetch failed for {branch_name}: {stderr.strip()}[/yellow]")
 
     # Clean up local branch if it exists
     branch_exists = _branch_exists(cwd, branch_name)
@@ -499,8 +518,34 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
         success, _err = _delete_branch(cwd, branch_name)
         if success:
             branch_exists = False
+        elif clean_restart:
+            # Under clean_restart we cannot fall through to the
+            # "reuse existing local branch" path below — that would
+            # base the fresh restart on whatever the previous run
+            # left on the local change/issue-{N} branch, violating
+            # the Req 15 base-ref guarantee.
+            return None, (
+                f"Cannot perform clean restart: local branch {branch_name!r} "
+                "could not be deleted (it is likely checked out in another "
+                "worktree). Remove that worktree first, then retry."
+            )
 
-    # Create worktree — reuse remote branch if it has prior work
+    # Resolve base ref once. Under clean_restart, refuse to silently
+    # use the literal "HEAD" fallback (the user's CURRENT branch) —
+    # that would be exactly the "never the current HEAD" violation
+    # Requirement 15 calls out. Fail loudly instead.
+    base_ref = _resolve_main_ref(git_root)
+    if clean_restart and base_ref == "HEAD":
+        return None, (
+            "Cannot perform clean restart: no main/master ref resolves "
+            "(checked origin/main, origin/master, main, master). Refusing "
+            "to base the fresh worktree on the current HEAD, which would "
+            "drag the user's working branch into the restart."
+        )
+
+    # Create worktree — reuse remote branch if it has prior work (normal
+    # resume path). Under clean_restart, remote_exists is forced False
+    # above so this falls through to the create-from-main branch.
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         if branch_exists:
@@ -520,11 +565,15 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
                 console.print(f"[blue]Reusing remote branch {branch_name} (preserving prior changes)[/blue]")
         else:
             # No prior work — create new branch from main
-            base_ref = _resolve_main_ref(git_root)
             subprocess.run(
                 ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
                 cwd=git_root, capture_output=True, check=True
             )
+            if clean_restart and not quiet:
+                console.print(
+                    f"[bold cyan]Clean restart: created worktree from {base_ref!s} "
+                    f"(ignoring any existing {remote_ref}).[/bold cyan]"
+                )
         if not quiet:
             console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
         return worktree_path, None
@@ -1569,7 +1618,7 @@ def run_agentic_change_orchestrator(
              current_work_dir = worktree_path
              context["worktree_path"] = str(worktree_path)
         else:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
+            wt_path, err = _setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)
             if not wt_path:
                 return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
             worktree_path = wt_path
@@ -1624,7 +1673,7 @@ def run_agentic_change_orchestrator(
                 except subprocess.CalledProcessError:
                     pass
 
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet)
+                wt_path, err = _setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)
                 if not wt_path:
                     return False, f"Failed to create worktree: {err}", total_cost, model_used, []
                 worktree_path = wt_path
@@ -1770,7 +1819,7 @@ def run_agentic_change_orchestrator(
                     )
                     state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
                     state["step_comments"] = sorted(step_comments_set)
-                    save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                    save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
                     return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, []
             else:
                 consecutive_provider_failures = 0
@@ -1794,7 +1843,7 @@ def run_agentic_change_orchestrator(
                     if refreshed:
                         state["issue_updated_at"] = refreshed
                 state["step_comments"] = sorted(step_comments_set)
-                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
@@ -1817,7 +1866,7 @@ def run_agentic_change_orchestrator(
                 if refreshed:
                     state["issue_updated_at"] = refreshed
             state["step_comments"] = sorted(step_comments_set)
-            save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
         # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
@@ -1850,7 +1899,7 @@ def run_agentic_change_orchestrator(
                 state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
                 # Don't advance last_completed_step — keep it at its current value
                 state["step_comments"] = sorted(step_comments_set)
-                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
         if step_num == 10:
@@ -1992,6 +2041,7 @@ def run_agentic_change_orchestrator(
                         save_workflow_state(
                             cwd, issue_number, "change", state, state_dir,
                             repo_owner, repo_name, use_github_state, github_comment_id,
+                            dedupe=clean_restart,
                         )
                         return (
                             False,
@@ -2029,7 +2079,7 @@ def run_agentic_change_orchestrator(
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
 
-        save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+        save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
         if save_result:
             github_comment_id = save_result
             state["github_comment_id"] = github_comment_id
@@ -2141,7 +2191,7 @@ def run_agentic_change_orchestrator(
                     state["step_comments"] = sorted(step_comments_set)
                 except Exception as exc:  # pylint: disable=broad-except
                     console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
-            save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
             if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
         if review_iteration >= MAX_REVIEW_ITERATIONS:
             console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
@@ -2250,7 +2300,7 @@ def run_agentic_change_orchestrator(
              post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
              console.print("[red]Step 13 (PR Creation) failed.[/red]")
              state["step_comments"] = sorted(step_comments_set)
-             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=clean_restart)
              return False, "PR Creation failed", total_cost, model_used, changed_files
         try:
             s13_report = extract_step_report(s13_output)
