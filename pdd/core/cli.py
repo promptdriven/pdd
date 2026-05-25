@@ -93,6 +93,14 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
+def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
+    """Return whether this invocation needs prompt-lint machine output."""
+    pairs = set(zip(arguments, arguments[1:]))
+    return "--json" in arguments and (
+        ("prompt", "lint") in pairs or ("checkup", "lint") in pairs
+    )
+
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -356,9 +364,8 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
-    # JSON flags on nested commands must keep stdout parseable and avoid
-    # machine-oriented invocations producing local debug artifacts.
-    json_mode = "--json" in sys.argv
+    # Prompt-lint JSON output is intended for downstream machine consumers.
+    json_mode = _is_prompt_lint_json_invocation(sys.argv)
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 

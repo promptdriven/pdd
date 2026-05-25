@@ -1,4 +1,4 @@
-"""CLI tests for deterministic ``pdd checkup lint``."""
+"""CLI tests for deterministic prompt and story linting."""
 from __future__ import annotations
 
 import json
@@ -11,10 +11,19 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from pdd.cli import cli
 from pdd.commands.checkup import checkup
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "prompt_lint"
 REPO_ROOT = Path(__file__).parents[2]
+
+
+def test_prompt_lint_is_registered_on_public_cli() -> None:
+    result = CliRunner().invoke(cli, ["--quiet", "prompt", "lint", "--help"])
+
+    assert result.exit_code == 0
+    assert "Lint prompts and user stories" in result.output
+    assert "--stories" in result.output
 
 
 def test_checkup_lint_clean_prompt_json() -> None:
@@ -70,12 +79,42 @@ def test_checkup_lint_ambiguity_never_writes_without_explicit_apply(
     assert prompt.read_bytes() == before
 
 
+def test_prompt_lint_stories_reports_vague_acceptance_criteria() -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["--quiet", "prompt", "lint", "--stories", str(FIXTURES), "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = {Path(item["path"]).name: item for item in json.loads(result.output)}
+    vague_terms = {
+        issue["term"] for issue in payload["story__vague_criteria.md"]["issues"]
+    }
+    assert {"authorized", "valid", "duplicate", "gracefully", "complete", "successful"} <= vague_terms
+
+
+def test_prompt_lint_story_glossary_and_covers_suppress_defined_terms() -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["--quiet", "prompt", "lint", "--stories", str(FIXTURES), "--json"],
+    )
+
+    payload = {Path(item["path"]).name: item for item in json.loads(result.output)}
+    assert payload["story__clean.md"]["issues"] == []
+    assert payload["story__covers.md"]["issues"] == []
+
+
 @pytest.mark.parametrize(
-    ("fixture_name", "expected_exit_code"),
-    [("clean.prompt", 0), ("vague_undefined.prompt", 1)],
+    ("command", "fixture_name", "expected_exit_code"),
+    [
+        (("prompt", "lint"), "clean.prompt", 0),
+        (("prompt", "lint"), "vague_undefined.prompt", 1),
+        (("checkup", "lint"), "clean.prompt", 0),
+        (("checkup", "lint"), "vague_undefined.prompt", 1),
+    ],
 )
 def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
-    fixture_name: str, expected_exit_code: int
+    command: tuple[str, str], fixture_name: str, expected_exit_code: int
 ) -> None:
     env = os.environ.copy()
     env.update(
@@ -90,8 +129,7 @@ def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
             sys.executable,
             "-m",
             "pdd",
-            "checkup",
-            "lint",
+            *command,
             "--json",
             str(FIXTURES / fixture_name),
         ],

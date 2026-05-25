@@ -1,9 +1,10 @@
 """
 Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
-import click
 from pathlib import Path
 from typing import Optional, Tuple
+
+import click
 
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
@@ -247,7 +248,7 @@ from .prompt import prompt_lint
 )
 @click.pass_context
 @track_cost
-def checkup(
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,
@@ -318,7 +319,7 @@ def checkup(
                 param_hint="'TARGET'",
             )
         root = project_root if project_root is not None else Path.cwd()
-        from ..architecture_include_validation import run_validate_arch_includes_cli
+        from ..architecture_include_validation import run_validate_arch_includes_cli  # pylint: disable=import-outside-toplevel
 
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
@@ -459,6 +460,6 @@ def checkup(
 
     except (click.Abort, click.exceptions.Exit):
         raise
-    except Exception as exception:
+    except Exception as exception:  # pylint: disable=broad-exception-caught
         handle_error(exception, "checkup", ctx.obj.get("quiet", False))
         return None

@@ -227,10 +227,7 @@ def _detect_language_from_extensions(code_files: List[str]) -> str:
     counts: Counter[str] = Counter()
     for fpath in code_files:
         ext = os.path.splitext(fpath)[1]
-        try:
-            lang = get_language(ext)
-        except ValueError:
-            lang = ""
+        lang = get_language(ext)
         if lang:
             counts[lang.lower()] += 1
 

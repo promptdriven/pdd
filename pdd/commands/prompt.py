@@ -1,4 +1,4 @@
-"""Prompt lint command used by ``pdd checkup lint``."""
+"""Commands for inspecting prompt and story assets."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,11 @@ from typing import Optional
 import click
 
 from ..prompt_lint import LintResult, run_llm_ambiguity_pass, scan_prompt, scan_stories
+
+
+@click.group(name="prompt")
+def prompt_group() -> None:
+    """Inspect and maintain prompt assets."""
 
 
 def _exit_code(results: list[LintResult], *, strict: bool) -> int:
@@ -41,7 +46,7 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     help="Run an advisory LLM ambiguity review through PDD Cloud.",
 )
 @click.pass_context
-def prompt_lint(
+def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches
     ctx: click.Context,
     target: Optional[str],
     stories_dir: Optional[str],
@@ -98,3 +103,6 @@ def prompt_lint(
     if strict:
         raise click.exceptions.Exit(_exit_code(results, strict=True))
     raise click.exceptions.Exit(deterministic_exit_code)
+
+
+prompt_group.add_command(prompt_lint)
