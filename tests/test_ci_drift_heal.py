@@ -2436,13 +2436,53 @@ class TestHealSubprocessTimeoutResolver:
         with patch.dict(os.environ, {"PDD_HEAL_SUBPROCESS_TIMEOUT": "3000"}, clear=False):
             assert _heal_subprocess_timeout() == 3000
 
-    @pytest.mark.parametrize("bad_value", ["abc", "-1", "0", "", "  ", "1.5", "12.0"])
+    @pytest.mark.parametrize("bad_value", [
+        "abc", "-1", "0", "", "  ", "1.5", "12.0",
+        # Hardening (Codex round 1, P2 #2): reject non-ASCII-decimal inputs that
+        # `int()` would otherwise accept, and reject huge values that would
+        # effectively disable the local timeout.
+        "+3000",         # explicit-positive sign
+        "12",  # ASCII "12" — actually fine; sanity-check below
+        "１２",  # full-width unicode digits "１２" — int() accepts, regex doesn't
+        "٣",        # arabic-indic "٣" — int() accepts, regex doesn't
+        "0x12",          # hex notation
+        "1 2",           # embedded whitespace
+        "1\t",           # embedded tab (NB: leading/trailing whitespace stripped via .strip())
+        "10000000000",   # > upper bound (3300), capped/rejected
+        "3600",          # exactly the Cloud Build wall — rejected (no headroom)
+        "999999999999",  # > upper bound
+    ])
     def test_invalid_env_falls_back_to_default(self, bad_value):
-        """Invalid values (non-int, non-positive, empty) fall back to 2400 default."""
+        """Invalid values fall back to 2400 default."""
         from pdd.ci_drift_heal import _heal_subprocess_timeout
 
         with patch.dict(os.environ, {"PDD_HEAL_SUBPROCESS_TIMEOUT": bad_value}, clear=False):
-            assert _heal_subprocess_timeout() == 2400
+            # "12" is the one valid case in the list above; it must pass through.
+            if bad_value == "12":
+                assert _heal_subprocess_timeout() == 12
+            else:
+                assert _heal_subprocess_timeout() == 2400
+
+    @pytest.mark.parametrize("ok_value,expected", [
+        ("1", 1),
+        ("60", 60),
+        ("2400", 2400),
+        ("3300", 3300),  # upper bound — accepted
+        (" 3000 ", 3000),  # leading/trailing whitespace stripped
+    ])
+    def test_valid_env_values_accepted(self, ok_value, expected):
+        """Plain ASCII decimal integers in (0, 3300] are accepted; whitespace is stripped."""
+        from pdd.ci_drift_heal import _heal_subprocess_timeout
+
+        with patch.dict(os.environ, {"PDD_HEAL_SUBPROCESS_TIMEOUT": ok_value}, clear=False):
+            assert _heal_subprocess_timeout() == expected
+
+    def test_upper_bound_constant_is_below_cloud_build_wall(self):
+        """Hardened parser caps the override below Cloud Build's 3600s wall."""
+        from pdd.ci_drift_heal import _HEAL_SUBPROCESS_TIMEOUT_UPPER_BOUND
+
+        assert _HEAL_SUBPROCESS_TIMEOUT_UPPER_BOUND < 3600
+        assert _HEAL_SUBPROCESS_TIMEOUT_UPPER_BOUND >= 2400  # at least the default
 
     def test_resolver_reads_env_per_call(self):
         """Resolver reads env on each call (not cached at import time)."""
