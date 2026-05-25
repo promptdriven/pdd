@@ -27,6 +27,19 @@ Dispatch a Claude subagent with `subagent_type: "general-purpose"` and `isolatio
 
 - The bug context (live evidence, reproduction signal).
 - The fix design at a high level (or the choice space if multiple approaches).
+- **Pre-fix investigation (do this BEFORE writing the failing test or the fix):**
+  - **Hunt for related bugs.** The reported bug is often one instance of a class. Grep for the same anti-pattern, function name, error message, or call shape across the repo. Examples:
+    - If the bug is "missing `await` on `foo()`" — grep all callers of `foo` for the same omission.
+    - If the bug is a missing null/empty check before a dict lookup — grep for the same key access pattern elsewhere.
+    - If the bug is a wrong exception class caught — grep for the same `except` clause shape.
+  - Record sibling occurrences in a short list. Decide which to fix in THIS PR (same root cause, low blast radius) vs. file as follow-ups (different module, would balloon scope). Default: if it's the same one-line mistake in ≤3 sibling sites, fix them all here; otherwise note them in the PR description and open issues.
+  - **Mine prior commits for the proper fix shape.** Before designing the fix, look at how the codebase has handled similar bugs before:
+    - `git log --all --oneline --grep="<keyword from bug>"` (try the function name, the error message, the symptom).
+    - `git log -S "<exact code snippet>"` to find when the buggy line was introduced and what surrounded it.
+    - `git log --all --oneline -- <file>` on the touched file(s) — scan for `fix(...)` commits with similar shape.
+    - For any matching prior fix: `git show <sha>` to see the actual approach, test pattern, and any follow-up comments.
+  - Note any established convention (e.g., "this codebase wraps these calls in `try/except RetryableError`, not bare `except`") and follow it. If you diverge from prior practice, justify it in the PR description.
+  - Post the investigation summary as a PR comment when you open the PR (sibling bugs found + decision, prior commits referenced, convention being followed).
 - TDD discipline:
   - Write a failing test FIRST that reproduces the bug.
   - Commit it as a SEPARATE commit with a `test(...)` conventional-commit prefix.
@@ -272,6 +285,18 @@ Bug fix using strict TDD.
 ## Fix
 <design + scope constraints>
 
+## Pre-fix investigation (do this FIRST, before any test or code)
+1. Hunt for sibling bugs: grep for the same anti-pattern / function / call shape across the repo.
+   List occurrences. Decide which to fix in THIS PR vs. file as follow-up issues.
+2. Mine prior commits for the proper fix shape:
+   - `git log --all --oneline --grep="<keyword>"`
+   - `git log -S "<exact buggy snippet>"`
+   - `git log --all --oneline -- <touched-file>` — look for prior `fix(...)` commits
+   - `git show <sha>` on the most relevant prior fix to see approach + test pattern.
+3. Note the established convention. Follow it unless you have a justified reason to diverge.
+4. Post an investigation summary as a PR comment when you open the PR
+   (sibling bugs + decision, prior commits cited, convention followed).
+
 ## TDD process
 1. Failing test first, committed separately.
 2. Push red commit.
@@ -280,6 +305,7 @@ Bug fix using strict TDD.
 5. Commit fix separately.
 6. Open PR. (Unit tests run automatically; no marker needed.)
 7. Post red-output as PR comment.
+8. Post investigation-summary comment (from pre-fix step 4).
 
 ## Constraints
 - Don't touch <other-session-owned files>.
