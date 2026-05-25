@@ -905,16 +905,82 @@ def _get_cli_diagnostic_info(name: str) -> str:
 
 
 def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Resolve the Google provider CLI binary based on PDD_GOOGLE_CLI and availability."""
+    """Resolve the Google provider CLI binary based on PDD_GOOGLE_CLI and availability.
+
+    Selection rules:
+        - ``agy`` / ``gemini``: explicit pin (errors at run time if missing).
+        - ``auto`` (default): prefer the binary whose OAuth credentials are
+          actually present so we don't pick agy and then fail auth at run
+          time when only the legacy Gemini OAuth (``~/.gemini/oauth_creds.json``)
+          exists. API keys (``GOOGLE_API_KEY`` / ``GEMINI_API_KEY`` /
+          ``ANTIGRAVITY_API_KEY``) work with both binaries, so when any key
+          is set we prefer ``agy`` per the migration plan. When neither key
+          nor OAuth is present we still prefer ``agy`` so the user sees the
+          modern interactive login flow.
+    """
     if env is None:
         env = os.environ
     pref = env.get("PDD_GOOGLE_CLI", "auto").strip().lower()
     if pref == "agy":
         return _find_cli_binary("agy")
-    elif pref == "gemini":
+    if pref == "gemini":
         return _find_cli_binary("gemini")
-    else: # auto
-        return _find_cli_binary("agy") or _find_cli_binary("gemini")
+    agy_bin = _find_cli_binary("agy")
+    gemini_bin = _find_cli_binary("gemini")
+    if agy_bin and gemini_bin:
+        # Both installed: only override the agy-first default when API keys
+        # are absent AND only the legacy Gemini OAuth file is present —
+        # otherwise agy is preferred (migration plan).
+        has_api_key = any(
+            env.get(k)
+            for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY")
+        )
+        if not has_api_key and _has_gemini_oauth_only():
+            return gemini_bin
+        return agy_bin
+    return agy_bin or gemini_bin
+
+
+def _has_agy_oauth_credentials() -> bool:
+    """Return True when the Antigravity (``agy``) OAuth file is populated.
+
+    The Antigravity installer / first run stores its OAuth tokens at
+    ``~/.gemini/antigravity-cli/oauth_creds.json`` (a sibling of the legacy
+    Gemini path). Mirrors the shape parse done by
+    ``_has_gemini_oauth_credentials`` but scoped to the Antigravity path.
+    """
+    creds_path = Path.home() / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    try:
+        data = json.loads(creds_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("refresh_token") or data.get("access_token"))
+
+
+def _has_legacy_gemini_oauth_credentials() -> bool:
+    """Return True when ONLY the legacy Gemini OAuth file is populated."""
+    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
+    try:
+        data = json.loads(creds_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("refresh_token") or data.get("access_token"))
+
+
+def _has_gemini_oauth_only() -> bool:
+    """Return True iff legacy Gemini OAuth is present AND agy OAuth is not.
+
+    Used by ``_get_google_cli_binary``'s ``auto`` mode to avoid selecting
+    ``agy`` when the only stored OAuth belongs to the legacy CLI — running
+    ``agy --print`` in that state hangs on the interactive device-code
+    prompt and the new agy plain-text parse branch surfaces it as
+    "Authentication required." instead of silently falling back.
+    """
+    return _has_legacy_gemini_oauth_credentials() and not _has_agy_oauth_credentials()
 
 
 def get_available_agents() -> List[str]:
@@ -2741,19 +2807,24 @@ def _run_with_provider(
         resolved_bin = os.path.basename(cli_path)
         if resolved_bin == "agy":
             # Antigravity CLI args.
-            # `--output-format json` is REQUIRED: without it `agy --print` emits
-            # plain text and the shared JSON parser below fails with
-            # "Invalid JSON output". The flag is documented in `agy --help` and
-            # the official "Using AGY CLI" docs.
+            # Verified empirically against agy 1.0.1: `--output-format` is NOT
+            # a supported flag (`agy --help` lists only --print/--print-timeout
+            # /--continue/--conversation/--dangerously-skip-permissions/-i/
+            # --log-file/--sandbox/--add-dir; an earlier round-1 review fix
+            # that added `--output-format json` made every google run exit 1
+            # with `flags provided but not defined: -output-format` instead of
+            # the pre-fix "Invalid JSON output"). agy emits PLAIN TEXT on
+            # stdout; the agy parse branch further down treats stdout as the
+            # response body and surfaces `cost=0, model=null` to the audit
+            # log because the CLI does not currently expose usage stats.
             cmd = [
                 cli_path,
                 "--print",
                 f"Read the file {prompt_path.name} for your full instructions and execute them.",
-                "--output-format", "json",
             ]
             if timeout:
                 cmd.extend(["--print-timeout", f"{int(timeout)}s"])
-            
+
             if env.get("GEMINI_MODEL") and not quiet:
                 console.print(
                     "[dim]GEMINI_MODEL requested, but Antigravity CLI has no equivalent "
@@ -2951,6 +3022,25 @@ def _run_with_provider(
             f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
             f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
         )
+
+    # Antigravity (`agy`): the CLI emits plain text on stdout (no
+    # --output-format flag is supported as of agy 1.0.1, see cmd-build
+    # comment above). agy ALSO exits 0 in two failure modes that we must
+    # surface as failures instead of treating as a successful response:
+    #   - timeout: stdout is exactly `Error: timed out waiting for response`
+    #   - missing/expired OAuth in headless mode: stdout starts with
+    #     `Authentication required.` followed by the device-code URL.
+    # Anything else with exit 0 is treated as the response body. Cost and
+    # model are unknown — the audit log will show `cost=0, model=null`
+    # until Google ships a structured-output mode.
+    if provider == "google" and os.path.basename(cli_path) == "agy":
+        text = result.stdout.strip()
+        if (
+            text.startswith("Error:")
+            or text.startswith("Authentication required.")
+        ):
+            return False, text[:MAX_ERROR_SNIPPET_LENGTH], 0.0, None
+        return True, text, 0.0, None
 
     # Parse JSON Output
     try:

@@ -106,7 +106,7 @@ CLI_INSTALL_HINT: Dict[str, Optional[str]] = {
     "opencode": "npm install -g opencode-ai",
 }
 
-AGY_MANUAL_INSTALL_HINT = "curl -fsSL https://antigravity.google/cli/install.sh | sh"
+AGY_MANUAL_INSTALL_HINT = "curl -fsSL https://antigravity.google/cli/install.sh | bash"
 
 SHELL_RC_MAP: Dict[str, str] = {
     "bash": ".bashrc",
