@@ -905,18 +905,20 @@ def _get_cli_diagnostic_info(name: str) -> str:
 
 
 def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Resolve the Google provider CLI binary based on PDD_GOOGLE_CLI and availability.
+    """Resolve the Google provider CLI binary path based on PDD_GOOGLE_CLI and availability.
 
-    Selection rules:
-        - ``agy`` / ``gemini``: explicit pin (errors at run time if missing).
-        - ``auto`` (default): prefer the binary whose OAuth credentials are
-          actually present so we don't pick agy and then fail auth at run
-          time when only the legacy Gemini OAuth (``~/.gemini/oauth_creds.json``)
-          exists. API keys (``GOOGLE_API_KEY`` / ``GEMINI_API_KEY`` /
-          ``ANTIGRAVITY_API_KEY``) work with both binaries, so when any key
-          is set we prefer ``agy`` per the migration plan. When neither key
-          nor OAuth is present we still prefer ``agy`` so the user sees the
-          modern interactive login flow.
+    Shares the same selection logic as ``_get_google_cli_name``; returns the
+    filesystem path rather than the logical name.  The two functions MUST stay
+    in sync so that availability detection and subprocess construction always
+    agree on which binary is selected.
+
+    Selection rules (``auto`` mode when both binaries are installed):
+        1. No API key at all AND only legacy Gemini OAuth → ``gemini`` (avoids
+           Antigravity device-code re-prompt for existing Gemini users).
+        2. Only ``GEMINI_API_KEY`` set (no ``GOOGLE_API_KEY`` /
+           ``ANTIGRAVITY_API_KEY`` / agy OAuth) → ``gemini`` (GEMINI_API_KEY
+           is not consumed by agy; routing to agy would fail at runtime).
+        3. Otherwise → ``agy`` (preferred per the migration plan).
     """
     if env is None:
         env = os.environ
@@ -928,14 +930,18 @@ def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str
     agy_bin = _find_cli_binary("agy")
     gemini_bin = _find_cli_binary("gemini")
     if agy_bin and gemini_bin:
-        # Both installed: only override the agy-first default when API keys
-        # are absent AND only the legacy Gemini OAuth file is present —
-        # otherwise agy is preferred (migration plan).
         has_api_key = any(
             env.get(k)
             for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY")
         )
         if not has_api_key and _has_gemini_oauth_only():
+            return gemini_bin
+        has_agy_usable_cred = bool(
+            env.get("ANTIGRAVITY_API_KEY")
+            or env.get("GOOGLE_API_KEY")
+            or _has_agy_oauth_credentials()
+        )
+        if not has_agy_usable_cred and env.get("GEMINI_API_KEY"):
             return gemini_bin
         return agy_bin
     return agy_bin or gemini_bin
