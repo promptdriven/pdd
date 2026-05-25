@@ -3416,6 +3416,63 @@ Additionally:
 - Implement a controlled update process for production systems
 - Review changelogs before manually updating PDD in sensitive environments
 
+## GitHub App Comment Commands
+
+The PDD GitHub App posts a startup comment whenever a `pdd-*` label
+triggers a run. You can control the active run by commenting on the same
+issue or PR with `/pdd ...` directives. Existing `pdd-*` labels continue
+to start runs unchanged.
+
+**Startup comment — single-command runs** (e.g. `pdd-bug`, `pdd-change`,
+`pdd-fix`, `pdd-sync`):
+
+```md
+PDD is starting `pdd bug`.
+
+Budget cap: none
+
+You can add a cap by commenting:
+/pdd budget 30
+
+Other controls:
+/pdd settings
+/pdd stop
+```
+
+**Startup comment — `pdd-issue` (autonomous solving)**:
+
+```md
+PDD is starting autonomous solving.
+
+Budget:
+- node budget: $80 per node
+- max total cap: $400
+- effective cap: min($80 x node count, $400)
+
+You can change this run by commenting:
+/pdd budget node 50
+/pdd budget max 200
+/pdd settings
+/pdd stop
+```
+
+**Commands**
+
+| Command | Effect |
+| --- | --- |
+| `/pdd budget N` | Set total cap (dollars). For `pdd-issue`, alias for `/pdd budget max N`. |
+| `/pdd budget node N` | `pdd-issue` only — set per-node budget. |
+| `/pdd budget max N` | Set max total cap. |
+| `/pdd settings` | Read-only — reply with current settings, spend, and status. |
+| `/pdd stop` | Request graceful stop at next budget-halt check. |
+
+For `pdd-issue`, the effective cap is
+`min(node_budget × node_count, max_total)`. Runs with no default cap show
+`Budget cap: none` until a `/pdd budget N` comment is posted. New
+comments posted during an active run are parsed and applied to the
+active job. Invalid `/pdd` commands receive a helpful reply and do not
+change settings.
+
 ## Workflow Integration
 
 PDD can be integrated into various development workflows. Here are the conceptual models for key workflow patterns:

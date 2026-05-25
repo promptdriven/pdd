@@ -1,0 +1,165 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/budget.py`.
+
+% Role & Scope
+  This module implements the `/pdd` comment-command control surface for
+  GitHub App-triggered PDD runs. It parses comments posted on issues/PRs
+  during an active run, maintains the per-job `BudgetState` (per-node
+  budget, max total cap, accumulated spend, status), formats the startup
+  comment that the App posts when a run begins, formats the `/pdd settings`
+  read-only reply, and provides a `should_halt` predicate that the
+  executor consults after each chunk of work to stop runs whose accumulated
+  spend has reached the active cap. This module owns budget parsing,
+  state, formatting, and the halt predicate — it does NOT own GitHub API
+  calls, executor cost capture, or job lifecycle.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Owns /pdd comment-command parsing, BudgetState, startup/settings formatting, and should_halt predicate for GitHub App runs.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_pdd_command", "signature": "(comment_body: str) -> Optional[PddCommand]", "returns": "Optional[PddCommand]"},
+      {"name": "apply_command", "signature": "(state: BudgetState, command: PddCommand) -> CommandResult", "returns": "CommandResult"},
+      {"name": "format_startup_comment", "signature": "(state: BudgetState) -> str", "returns": "str"},
+      {"name": "format_settings_comment", "signature": "(state: BudgetState) -> str", "returns": "str"},
+      {"name": "should_halt", "signature": "(state: BudgetState, node_count: int = 1) -> bool", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Vocabulary
+  - **Label kind**: the trailing segment of the GitHub label that triggered
+    the run, one of `bug`, `change`, `fix`, `sync`, `issue`, etc.
+  - **Per-node budget**: dollar cap that applies to a single node of the
+    autonomous `pdd-issue` solving tree.
+  - **Max total cap**: dollar cap that applies to the entire run.
+  - **Effective cap**: for `pdd-issue`, `min(node_budget * node_count, max_total)`;
+    for all other label kinds, the max total cap. `None` means no cap.
+  - **BudgetExceededError**: exception raised when `should_halt` would
+    return True at a hard boundary (used by the executor when graceful
+    halt is requested).
+
+% Requirements
+
+  1. **`BudgetState` dataclass** (mutable, in-process per-job):
+     - `label_kind: str` — e.g. `"bug"`, `"issue"`, `"change"`.
+     - `node_budget: Optional[float]` — defaults to `80.0` when
+       `label_kind == "issue"`, otherwise `None`.
+     - `max_total: Optional[float]` — defaults to `400.0` when
+       `label_kind == "issue"`, otherwise `None`.
+     - `spent: float` — accumulated USD spend; starts at `0.0`.
+     - `status: str` — one of `"running"`, `"halted"`, `"stopped"`.
+     - `stop_requested: bool` — set True by `/pdd stop`.
+     - Method `record_spend(amount: float) -> None` clamps negative
+       inputs to zero and adds to `spent`.
+     - Method `effective_cap(node_count: int = 1) -> Optional[float]`
+       returns the active cap. For `label_kind == "issue"` and both
+       `node_budget` and `max_total` set, returns
+       `min(node_budget * max(node_count, 1), max_total)`. For other
+       label kinds, returns `max_total`. Returns `None` if no cap applies.
+
+  2. **`PddCommand` dataclass**:
+     - `kind: str` — one of `"budget"`, `"budget_node"`, `"budget_max"`,
+       `"settings"`, `"stop"`, `"invalid"`.
+     - `amount: Optional[float]` — present when `kind` starts with
+       `"budget"`.
+     - `raw: str` — the original `/pdd ...` line, trimmed.
+     - `error: Optional[str]` — human-readable reason when `kind == "invalid"`.
+
+  3. **`CommandResult` dataclass**:
+     - `applied: bool` — True if the command mutated state.
+     - `reply: str` — Markdown text the App should post in reply.
+     - `state_changed: bool` — True when `applied` was True and a
+       follow-up persistence step should run.
+
+  4. **`parse_pdd_command(comment_body) -> Optional[PddCommand]`**
+     scans the comment body for the **first** line that starts with
+     `/pdd ` (case-insensitive, after stripping leading whitespace and
+     Markdown blockquote markers). It MUST return `None` when no such
+     line exists. Recognized forms:
+       - `/pdd budget N` → `PddCommand("budget", amount=N)`
+       - `/pdd budget node N` → `PddCommand("budget_node", amount=N)`
+       - `/pdd budget max N` → `PddCommand("budget_max", amount=N)`
+       - `/pdd settings` → `PddCommand("settings")`
+       - `/pdd stop` → `PddCommand("stop")`
+     `N` MUST be parsed as a non-negative float; trailing comments after
+     the amount are ignored. Anything else under the `/pdd ` prefix
+     returns `PddCommand("invalid", error=<reason>, raw=<line>)`.
+     The parser MUST NOT raise on malformed input.
+
+  5. **`apply_command(state, command) -> CommandResult`**:
+     - For `"budget"`: if `state.label_kind == "issue"`, alias to
+       `budget_max` (sets `state.max_total = amount`). Otherwise sets
+       `state.max_total = amount` for the active label kind.
+     - For `"budget_node"`: only meaningful for `state.label_kind == "issue"`.
+       For other labels, do not mutate state and reply with a helpful
+       message naming the label kind.
+     - For `"budget_max"`: sets `state.max_total = amount`.
+     - For `"settings"`: do not mutate; reply with
+       `format_settings_comment(state)`.
+     - For `"stop"`: set `state.stop_requested = True` and
+       `state.status = "stopped"`; reply confirms the stop will take
+       effect at the next halt check.
+     - For `"invalid"`: do not mutate; reply with a short usage hint
+       that lists the supported commands. MUST NOT raise.
+     - Negative or non-finite `amount` values are treated as invalid.
+
+  6. **`format_startup_comment(state) -> str`** returns Markdown:
+     - For `state.label_kind == "issue"`, include:
+       `Budget:` followed by `- node budget: $<node_budget> per node`,
+       `- max total cap: $<max_total>`,
+       `- effective cap: min($<node_budget> x node count, $<max_total>)`,
+       and the controls block listing
+       `/pdd budget node N`, `/pdd budget max N`, `/pdd settings`, `/pdd stop`.
+     - For other label kinds, show `Budget cap: none` when
+       `state.max_total is None`, or `Budget cap: $<max_total>` otherwise.
+       Include the controls block: `/pdd budget N`, `/pdd settings`,
+       `/pdd stop`.
+     - The first line MUST be `PDD is starting \`pdd <label_kind>\`.` for
+       single-command runs and `PDD is starting autonomous solving.` when
+       `state.label_kind == "issue"`.
+
+  7. **`format_settings_comment(state) -> str`** returns Markdown listing:
+     - `Command: pdd-<label_kind>`
+     - `Node budget: $<node_budget>` (only when set)
+     - `Max total cap: $<max_total>` (only when set, otherwise `none`)
+     - `Effective cap:` formula for `pdd-issue`, dollar value otherwise,
+       or `none` when no cap applies.
+     - `Spent so far: $<spent>` (two decimals).
+     - `Status: <status>`.
+
+  8. **`should_halt(state, node_count=1) -> bool`** returns True when
+     `state.stop_requested` is True OR `state.effective_cap(node_count)`
+     is not None and `state.spent >= state.effective_cap(node_count)`.
+     MUST NOT mutate state. Side-effect-free, safe to call on every chunk.
+
+  9. **`BudgetExceededError(RuntimeError)`** — exposed for executor
+     integration; carries `spent: float` and `cap: float` attributes.
+
+  10. **Determinism / safety**:
+      - All parsing MUST be deterministic and free of network or
+        filesystem access.
+      - All numeric formatting MUST use two-decimal dollar formatting
+        (e.g., `$80.00`) for spend and `$<int|float>` for caps without
+        trailing zeros (e.g., `$80`, `$80.50`).
+      - The module MUST NOT log or store the full comment body; only
+        the parsed `/pdd ...` line.
+
+% Dependencies
+  None beyond the Python standard library.
+
+% Instructions
+  - Use `re` for the `/pdd ` line detection (anchored, case-insensitive).
+  - Keep all data classes simple; prefer `dataclasses.dataclass`.
+  - Export the public names listed in the interface plus `BudgetState`,
+    `PddCommand`, `CommandResult`, `BudgetExceededError`.
+
+% Deliverables
+  - Code: `pdd/server/budget.py`
+  - Exports: `BudgetState`, `PddCommand`, `CommandResult`,
+    `BudgetExceededError`, `parse_pdd_command`, `apply_command`,
+    `format_startup_comment`, `format_settings_comment`, `should_halt`.

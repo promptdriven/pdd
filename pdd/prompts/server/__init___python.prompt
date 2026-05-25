@@ -6,6 +6,33 @@
 
 <include>context/python_preamble.prompt</include>
 
+<pdd-reason>Package init for `pdd.server`; re-exports server entrypoints, jobs, security, executor, and budget primitives.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "create_app", "signature": "(...)", "returns": "FastAPI"},
+      {"name": "run_server", "signature": "(...)", "returns": "None"},
+      {"name": "execute_pdd_command", "signature": "(command_name, args, options, callback=None, budget_state=None)", "returns": "CapturedOutput"},
+      {"name": "parse_pdd_command", "signature": "(comment_body: str)", "returns": "Optional[PddCommand]"},
+      {"name": "apply_command", "signature": "(state: BudgetState, command: PddCommand) -> CommandResult", "returns": "CommandResult"},
+      {"name": "format_startup_comment", "signature": "(state: BudgetState) -> str", "returns": "str"},
+      {"name": "format_settings_comment", "signature": "(state: BudgetState) -> str", "returns": "str"},
+      {"name": "should_halt", "signature": "(state: BudgetState, node_count: int = 1) -> bool", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>app_python.prompt</pdd-dependency>
+<pdd-dependency>models_python.prompt</pdd-dependency>
+<pdd-dependency>jobs_python.prompt</pdd-dependency>
+<pdd-dependency>security_python.prompt</pdd-dependency>
+<pdd-dependency>executor_python.prompt</pdd-dependency>
+<pdd-dependency>budget_python.prompt</pdd-dependency>
+
 % Requirements
   1. Export main components:
      - `create_app` from `.app`
@@ -15,6 +42,10 @@
      - `PathValidator`, `SecurityError` from `.security`
      - `ConnectionManager` from `.routes.websocket`
      - `execute_pdd_command` from `.executor`
+     - `BudgetState`, `PddCommand`, `CommandResult`, `BudgetExceededError`,
+       `parse_pdd_command`, `apply_command`,
+       `format_startup_comment`, `format_settings_comment`,
+       `should_halt` from `.budget`
 
   2. Define `__all__` with all exports
 
@@ -26,6 +57,7 @@
 <pdd.server.jobs><include>context/server/jobs_example.py</include></pdd.server.jobs>
 <pdd.server.security><include>context/server/security_example.py</include></pdd.server.security>
 <pdd.server.executor><include>context/server/executor_example.py</include></pdd.server.executor>
+<pdd.server.budget><include>context/server/budget_example.py</include></pdd.server.budget>
 
 % Instructions
   - Keep imports minimal at package level
