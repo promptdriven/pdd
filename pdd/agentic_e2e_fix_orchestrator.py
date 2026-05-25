@@ -2051,6 +2051,7 @@ def run_agentic_e2e_fix_orchestrator(
     skip_ci: bool = False,
     skip_cleanup: bool = False,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrator for the 11-step agentic e2e fix workflow.
@@ -2102,7 +2103,7 @@ def run_agentic_e2e_fix_orchestrator(
     cycle_baseline_unverified = False
 
     # Resume Logic
-    if resume:
+    if resume and not clean_restart:
         loaded_state, gh_id = load_workflow_state(
             cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state
         )
@@ -2271,26 +2272,30 @@ def run_agentic_e2e_fix_orchestrator(
         cwd / ".pdd" / "state" / f"bug_state_{issue_number}.json",
         cwd / ".pdd" / "bug-state" / f"bug_state_{issue_number}.json",
     ]
-    for bug_state_file in _bug_state_candidates:
-        if bug_state_file.exists():
-            try:
-                with open(bug_state_file, "r") as f:
-                    bug_state = json.load(f)
-                bug_outputs = bug_state.get("step_outputs", {})
-                # Reuse step 2 and 3 outputs if they completed successfully
-                for s in ("2", "3"):
-                    if s in bug_outputs and not bug_outputs[s].startswith("FAILED:"):
-                        bug_step_outputs[s] = bug_outputs[s]
-                if bug_step_outputs:
-                    console.print(f"[blue]Reusing pdd-bug analysis for steps {', '.join(sorted(bug_step_outputs.keys()))}[/blue]")
-                    # Pre-populate step_outputs so subsequent steps can reference them
-                    for s, output in bug_step_outputs.items():
-                        if s not in step_outputs:
-                            step_outputs[s] = output
-                break
-            except (OSError, json.JSONDecodeError, KeyError) as e:
-                console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
-                continue  # Try next candidate
+    if clean_restart:
+        if not quiet:
+            console.print("[blue]Clean restart: ignoring prior pdd-bug analysis state.[/blue]")
+    else:
+        for bug_state_file in _bug_state_candidates:
+            if bug_state_file.exists():
+                try:
+                    with open(bug_state_file, "r") as f:
+                        bug_state = json.load(f)
+                    bug_outputs = bug_state.get("step_outputs", {})
+                    # Reuse step 2 and 3 outputs if they completed successfully
+                    for s in ("2", "3"):
+                        if s in bug_outputs and not bug_outputs[s].startswith("FAILED:"):
+                            bug_step_outputs[s] = bug_outputs[s]
+                    if bug_step_outputs:
+                        console.print(f"[blue]Reusing pdd-bug analysis for steps {', '.join(sorted(bug_step_outputs.keys()))}[/blue]")
+                        # Pre-populate step_outputs so subsequent steps can reference them
+                        for s, output in bug_step_outputs.items():
+                            if s not in step_outputs:
+                                step_outputs[s] = output
+                    break
+                except (OSError, json.JSONDecodeError, KeyError) as e:
+                    console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
+                    continue  # Try next candidate
 
     # Snapshot file state before workflow (for hash-based commit detection).
     # On resume, prefer the snapshot saved with the workflow state — recapturing

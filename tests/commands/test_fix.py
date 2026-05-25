@@ -185,6 +185,7 @@ def test_agentic_clean_restart_disables_resume(runner: CliRunner, mock_deps) -> 
 
     assert result.exit_code == 0
     assert mock_deps["run_agentic_e2e_fix"].call_args.kwargs["resume"] is False
+    assert mock_deps["run_agentic_e2e_fix"].call_args.kwargs["clean_restart"] is True
 
 
 def test_clean_restart_rejected_outside_agentic_issue_mode(runner: CliRunner, mock_deps) -> None:

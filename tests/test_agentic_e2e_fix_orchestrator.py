@@ -7456,6 +7456,46 @@ class TestNotABugSuppressedOnResume:
             f"step_outputs path. Called labels: {called_labels}"
         )
 
+    def test_clean_restart_ignores_sibling_bug_state(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """clean_restart must not reuse stale pdd-bug diagnosis.
+
+        A wrong-model/stopped `pdd bug` run can leave non-failed Steps 2/3 in
+        bug_state_<issue>.json. `pdd fix --clean-restart` must still run those
+        steps fresh instead of treating them as completed.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["clean_restart"] = True
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        cwd = e2e_fix_default_args["cwd"]
+        bug_state_dir = cwd / ".pdd" / "state"
+        bug_state_dir.mkdir(parents=True, exist_ok=True)
+        bug_state_file = bug_state_dir / f"bug_state_{e2e_fix_default_args['issue_number']}.json"
+        bug_state_file.write_text(json.dumps({
+            "step_outputs": {
+                "2": "Stale bug step 2 output",
+                "3": "Stale root cause: CODE_BUG in old branch",
+            }
+        }))
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Fresh output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        assert any("step2" in label for label in called_labels), called_labels
+        assert any("step3" in label for label in called_labels), called_labels
+
     def test_prompt_documents_not_a_bug_suppressed_on_resume(self):
         """Orchestrator source prompt must document the demotion token.
 

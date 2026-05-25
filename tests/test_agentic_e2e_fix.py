@@ -163,6 +163,7 @@ def test_run_agentic_e2e_fix_forwards_issue_context_and_ci_options(
             timeout_adder=3.0,
             max_cycles=2,
             resume=False,
+            clean_restart=True,
             use_github_state=False,
             protect_tests=True,
             ci_retries=4,
@@ -180,6 +181,7 @@ def test_run_agentic_e2e_fix_forwards_issue_context_and_ci_options(
     assert kwargs["timeout_adder"] == 3.0
     assert kwargs["max_cycles"] == 2
     assert kwargs["resume"] is False
+    assert kwargs["clean_restart"] is True
     assert kwargs["use_github_state"] is False
     assert kwargs["protect_tests"] is True
     assert kwargs["ci_retries"] == 4
