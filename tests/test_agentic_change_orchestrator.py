@@ -5856,6 +5856,110 @@ class TestCleanRestartMode:
             f"last_completed_step 7 + 1); got {body!r}"
         )
 
+    def test_clean_restart_is_persisted_in_workflow_state(self, mock_dependencies, temp_cwd):
+        """When clean_restart=True, the orchestrator must set state['clean_restart'] = True
+        so that a subsequent normal resume (no --clean-restart flag) can still pass
+        clean_restart='true' to Step 13 and use --force-with-lease + the existing-PR
+        update path."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        saved_states: list = []
+
+        def capture_save(cwd, issue_number, wf_type, state, state_dir,
+                         repo_owner, repo_name, use_github_state=True,
+                         github_comment_id=None, **kwargs):
+            saved_states.append(dict(state))
+            return "ghid"
+
+        mocks["save_state"].side_effect = capture_save
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        assert saved_states, "save_workflow_state was never called"
+        first_save = saved_states[0]
+        assert first_save.get("clean_restart") is True, (
+            f"Expected state['clean_restart'] = True persisted on first save; "
+            f"got {first_save.get('clean_restart')!r}"
+        )
+
+    def test_step13_inherits_clean_restart_from_persisted_state(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """When state has clean_restart=True (persisted from a prior clean-restart
+        invocation) and the user resumes normally (clean_restart=False), Step 13
+        must still receive clean_restart='true' so it uses --force-with-lease
+        instead of a plain push that would reject on divergent remote history."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Simulate resumed state: prior clean restart ran through Step 12, failed
+        # at Step 13; clean_restart=True was persisted in the state comment.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 12,
+                "step_outputs": {str(i): f"cached step{i}" for i in range(1, 13)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd),
+                "clean_restart": True,
+            },
+            "ghid",
+        )
+
+        import pdd.agentic_change_orchestrator as _orch
+        real_sub = _orch.substitute_template_variables
+        captured_s13_ctx: list = []
+
+        def capturing_sub(template, ctx):
+            # Step 13 context is the first (and only) one with "clean_restart" key
+            if "clean_restart" in ctx and "sync_order_script" in ctx:
+                captured_s13_ctx.append(dict(ctx))
+            return real_sub(template, ctx)
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_change_orchestrator.substitute_template_variables",
+            side_effect=capturing_sub,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=False,  # normal resume — flag comes from state
+            )
+
+        assert captured_s13_ctx, (
+            "substitute_template_variables was not called with a Step 13 context "
+            "(expected both 'clean_restart' and 'sync_order_script' keys)"
+        )
+        ctx = captured_s13_ctx[0]
+        assert ctx["clean_restart"] == "true", (
+            f"Step 13 context must have clean_restart='true' from persisted state; "
+            f"got {ctx['clean_restart']!r}"
+        )
+
     def test_clean_restart_pre_clear_failure_is_warned_not_fatal(
         self, mock_dependencies, temp_cwd,
     ):
