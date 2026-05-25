@@ -350,3 +350,45 @@ def test_committed_csv_includes_vertex_gemini_flash_ci_default():
     text = csv_path.read_text(encoding="utf-8")
 
     assert "Google Vertex AI,vertex_ai/gemini-3-flash-preview," in text
+
+
+# ==============================================================================
+# Regression tests: adaptive reasoning_type classification for Opus 4.7
+#
+# Anthropic enforced the new adaptive thinking API for Claude Opus 4.7 on
+# 2026-05-23 ~17:25 UTC; the legacy thinking.type.enabled shape now 400s.
+# The generator must classify direct-Anthropic-provider Opus 4.7 rows as
+# adaptive (the consumer ``llm_invoke.py`` gates adaptive serialization on
+# ``provider_lower == 'anthropic'``). Azure AI / Bedrock / Vertex relays
+# stay on budget/effort pending a separate audit.
+# ==============================================================================
+
+
+def test_infer_reasoning_type_returns_adaptive_for_opus_47_anthropic():
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("claude-opus-4-7", "anthropic", entry) == "adaptive"
+
+
+def test_infer_reasoning_type_returns_budget_for_opus_47_azure_ai():
+    """Azure AI relay isn't audited for adaptive shape yet — keep at budget."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-7", "azure_ai", entry) == "budget"
+
+
+def test_infer_reasoning_type_returns_budget_for_other_anthropic_models():
+    """Models not in the adaptive allowlist stay on budget."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("claude-sonnet-4-6", "anthropic", entry) == "budget"
+
+
+def test_infer_max_reasoning_tokens_returns_16000_for_opus_47_anthropic():
+    """Adaptive serialization doesn't read this value, but match the
+    validated pdd_cloud backend CSV (16000)."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_max_reasoning_tokens("claude-opus-4-7", "anthropic", entry) == 16000
+
+
+def test_infer_max_reasoning_tokens_returns_128000_for_other_anthropic_models():
+    """Budget-mode default for non-adaptive Anthropic rows."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_max_reasoning_tokens("claude-sonnet-4-6", "anthropic", entry) == 128000

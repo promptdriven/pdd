@@ -837,11 +837,19 @@ def process_web_tags(text: str, recursive: bool) -> str:
 
             app = Firecrawl(api_key=api_key)
 
-            # Firecrawl SDK has a bug: it passes timeout (ms) to requests.post()
-            # which expects seconds, so timeout=30000 becomes 30000s (~8hrs).
-            # Wrap in a thread with a hard 30s client-side deadline.
+            # firecrawl-py v4 renamed scrape_url() -> scrape(). Fall back to
+            # the legacy name for older SDKs (v2/v3 still ship FirecrawlApp).
+            scrape_fn = getattr(app, 'scrape', None) or getattr(app, 'scrape_url', None)
+            if scrape_fn is None:
+                _dbg("firecrawl client exposes neither scrape() nor scrape_url()")
+                return f"[Error: firecrawl-py client missing scrape API. Cannot scrape {url}]"
+
+            # Firecrawl SDK has historically had a bug where it passed timeout
+            # (ms) to requests.post() which expects seconds, so timeout=30000
+            # becomes 30000s (~8hrs). Wrap in a thread with a hard 30s
+            # client-side deadline regardless of SDK version.
             with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(app.scrape_url, url, formats=['markdown'], timeout=30000)
+                future = executor.submit(scrape_fn, url, formats=['markdown'], timeout=30000)
                 response = future.result(timeout=30)
 
             # Handle both dict response (new API) and object response (legacy)
