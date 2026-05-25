@@ -15,6 +15,7 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 - Files Changed: {files_to_stage}
 - Sync Order Script: {sync_order_script}
 - Sync Order Commands: {sync_order_list}
+- Clean Restart Mode: {clean_restart}
 
 % Issue Content
 <issue_content>
@@ -47,11 +48,33 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
    - Format: `feat: [brief description] (#{issue_number})`
 
 3. **Push branch**
+
+   If `clean_restart` is `true`, the remote branch may have divergent history from the
+   stopped run. Use `--force-with-lease` to overwrite it safely:
+   ```bash
+   git push --force-with-lease -u origin change/issue-{issue_number}
+   ```
+   Otherwise use a standard push:
    ```bash
    git push -u origin change/issue-{issue_number}
    ```
 
 4. **Create pull request**
+
+   If `clean_restart` is `true`, an old PR for this branch may still be open. Check first:
+   ```bash
+   gh pr list --head change/issue-{issue_number} --state open --json number,url
+   ```
+   - If an open PR is found, update it in place (the branch was already force-pushed):
+     ```bash
+     gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
+     ```
+     Record that PR's number and URL as the result; skip `gh pr create`.
+   - If no open PR exists, create one:
+     ```bash
+     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
+     ```
+
    Use `gh pr create` to create a PR that:
    - References the original issue
    - Summarizes the prompt changes made
@@ -64,10 +87,13 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
 
 % Output
 
-Create the PR using the gh CLI:
+Push the branch (use `--force-with-lease` if `clean_restart` is `true`), then create or
+update the PR following the logic in step 4 above:
 
 ```bash
 gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
+# OR, if an open PR already exists under clean restart:
+gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
 ```
 
 Then post a final comment to the issue:

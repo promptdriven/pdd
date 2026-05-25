@@ -3173,14 +3173,16 @@ def _find_state_comment(
         comments = json.loads(result.stdout)
         marker = _build_state_marker(workflow_type, issue_number)
 
+        best: Optional[Tuple[int, Dict]] = None
         for comment in comments:
             body = comment.get("body", "")
             if marker in body:
                 state = _parse_state_from_comment(body, workflow_type, issue_number)
                 if state:
-                    return comment["id"], state
-
-        return None
+                    cid = comment["id"]
+                    if best is None or cid > best[0]:
+                        best = (cid, state)
+        return best
     except Exception:
         return None
 
@@ -3307,9 +3309,18 @@ def github_save_state(
                 res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
                 if res.returncode != 0:
                     return None
-                for stale_id in existing_ids:
-                    if stale_id != keep_id:
-                        _github_delete_comment(repo_owner, repo_name, stale_id, cwd)
+                failed_ids = [
+                    stale_id for stale_id in existing_ids
+                    if stale_id != keep_id
+                    and not _github_delete_comment(repo_owner, repo_name, stale_id, cwd)
+                ]
+                if failed_ids:
+                    print(
+                        f"[pdd] github_save_state: {len(failed_ids)} stale state "
+                        f"comment(s) for issue #{issue_number} could not be deleted: "
+                        f"{failed_ids}",
+                        file=sys.stderr,
+                    )
                 return keep_id
 
             # POST new

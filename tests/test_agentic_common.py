@@ -3005,8 +3005,14 @@ class TestFindStateCommentPagination:
 
     # ---- Test 3: Returns first matching state comment ----
 
-    def test_find_state_comment_returns_first_match(self, tmp_path):
-        """When multiple state comments exist, returns the first one found."""
+    def test_find_state_comment_returns_highest_id_match(self, tmp_path):
+        """When multiple state comments exist, returns the one with the highest id.
+
+        GitHub assigns monotonically increasing comment ids. Under a duplicate-
+        marker hazard (two workers both POST a state comment, or an old run's
+        comment was never cleared) the highest id corresponds to the most recently
+        written state, which is what a normal resume should load.
+        """
         mock_comments = _make_mock_comments(42, state_positions=[10, 35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
@@ -3019,9 +3025,9 @@ class TestFindStateCommentPagination:
 
             assert result is not None
             comment_id, state = result
-            # Should return the first match (position 10), not the later one
-            assert comment_id == 1010
-            assert state["last_completed_step"] == 10
+            # Should return the highest-id match (position 35 → id 1035), not first
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
 
     # ---- Test 4: No state comment exists ----
 
@@ -7639,4 +7645,51 @@ class TestDuplicateStateCommentHandling:
 
         assert listed == [], (
             f"dedupe=False should NOT list comments; saw {len(listed)} list calls"
+        )
+
+    def test_github_save_state_dedupe_logs_warning_on_delete_failure(self, tmp_path):
+        """When ``dedupe=True`` and stale comments cannot be deleted, the
+        function must log a warning to stderr and still return ``keep_id``.
+
+        The PATCH to the highest-id comment succeeded, so the new state is
+        durably written. The warning lets operators diagnose residual stale
+        markers without treating a cleanup hiccup as a save failure.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[3, 6])
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            if verb == "DELETE":
+                m.returncode = 1  # Simulate delete failure
+            return m
+
+        import io
+        stderr_capture = io.StringIO()
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect), \
+             patch("sys.stderr", stderr_capture):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 6, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # PATCH succeeded → keep_id returned even though delete failed
+        assert returned_id == 1006, (
+            f"Expected keep_id=1006 despite delete failure; got {returned_id!r}"
+        )
+        warning_text = stderr_capture.getvalue()
+        assert "could not be deleted" in warning_text, (
+            f"Expected delete-failure warning on stderr; got: {warning_text!r}"
+        )
+        assert "1003" in warning_text, (
+            f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
