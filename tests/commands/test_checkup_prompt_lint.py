@@ -26,6 +26,22 @@ def test_prompt_lint_is_registered_on_public_cli() -> None:
     assert "--stories" in result.output
 
 
+def test_prompt_group_is_registered_on_public_cli() -> None:
+    result = CliRunner().invoke(cli, ["--quiet", "prompt", "--help"])
+
+    assert result.exit_code == 0
+    assert "lint" in result.output
+
+
+def test_checkup_lint_help_delegates_to_prompt_lint() -> None:
+    result = CliRunner().invoke(cli, ["--quiet", "checkup", "lint", "--help"])
+
+    assert result.exit_code == 0
+    assert "Lint prompts and user stories" in result.output
+    assert "--stories" in result.output
+    assert "--ambiguity" in result.output
+
+
 def test_checkup_lint_clean_prompt_json() -> None:
     result = CliRunner().invoke(
         checkup,
@@ -104,6 +120,29 @@ def test_prompt_lint_story_glossary_and_covers_suppress_defined_terms() -> None:
     assert payload["story__covers.md"]["issues"] == []
 
 
+def test_prompt_lint_real_cli_help() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "true",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pdd", "prompt", "lint", "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Lint prompts and user stories" in result.stdout
+    assert "--stories" in result.stdout
+
+
 @pytest.mark.parametrize(
     ("command", "fixture_name", "expected_exit_code"),
     [
@@ -143,3 +182,36 @@ def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
     assert result.returncode == expected_exit_code
     payload = json.loads(result.stdout)
     assert isinstance(payload, list)
+
+
+def test_checkup_lint_stories_alias_matches_prompt_lint() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "true",
+        }
+    )
+    for command in (["prompt", "lint"], ["checkup", "lint"]):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pdd",
+                *command,
+                "--json",
+                "--stories",
+                str(FIXTURES),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 1
+        payload = {Path(item["path"]).name: item for item in json.loads(result.stdout)}
+        assert payload["story__vague_criteria.md"]["warn_count"] > 0
+        assert payload["story__clean.md"]["issues"] == []
+        assert payload["story__covers.md"]["issues"] == []

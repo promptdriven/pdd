@@ -18,6 +18,7 @@ from .prompt import prompt_lint
 @click.command(
     "checkup",
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    add_help_option=False,
 )
 @click.argument("target", required=False, default=None)
 @click.option(
@@ -292,7 +293,7 @@ from .prompt import prompt_lint
 )
 @click.pass_context
 @track_cost
-def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
+def checkup(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,
@@ -342,11 +343,16 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
+    help_requested = set(ctx.args) & {"--help", "-h"}
+    if help_requested and target != "lint":
+        click.echo(ctx.command.get_help(ctx))
+        return None
+
     if target == "lint":
         lint_args = list(ctx.args)
         if strict:
             lint_args.insert(0, "--strict")
-        if not lint_args or set(lint_args) & {"--help", "-h"}:
+        if not lint_args or help_requested:
             click.echo(
                 prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
             )
