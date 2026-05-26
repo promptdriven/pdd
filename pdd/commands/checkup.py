@@ -291,9 +291,18 @@ from .prompt import prompt_lint
         "can co-evolve without breaking signature stability."
     ),
 )
+@click.option(
+    "--help",
+    "-h",
+    "show_help",
+    is_flag=True,
+    is_eager=True,
+    default=False,
+    help="Show this message and exit.",
+)
 @click.pass_context
 @track_cost
-def checkup(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,
@@ -325,6 +334,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-locals,too-many-bran
     no_gates: bool,
     gate_timeout: float,
     gate_allow: Tuple[str, ...],
+    show_help: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -343,8 +353,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-locals,too-many-bran
     """
     ctx.ensure_object(dict)
 
-    help_requested = set(ctx.args) & {"--help", "-h"}
-    if help_requested and target != "lint":
+    if show_help and target != "lint":
         click.echo(ctx.command.get_help(ctx))
         return None
 
@@ -352,7 +361,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-locals,too-many-bran
         lint_args = list(ctx.args)
         if strict:
             lint_args.insert(0, "--strict")
-        if not lint_args or help_requested:
+        if not lint_args or show_help:
             click.echo(
                 prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
             )

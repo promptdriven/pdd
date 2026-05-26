@@ -475,6 +475,7 @@ def cli(
             )
 
     # Perform auto-update check unless disabled
+
     if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:

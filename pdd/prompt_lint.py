@@ -250,7 +250,6 @@ _VOCABULARY_SECTIONS: frozenset[str] = frozenset({
     "vocabulary",
     "glossary",
     "definitions",
-    "covers",
 })
 
 # Sections where we additionally check for observable-outcome verbs
@@ -263,33 +262,16 @@ _OBSERVABLE_CHECK_SECTIONS: frozenset[str] = frozenset({
 
 def _extract_vocabulary_terms(vocab_text: str) -> set[str]:
     """
-    Extract defined term names from a vocabulary/glossary/covers block.
+    Extract defined term names from a vocabulary/glossary/definitions block.
 
     Heuristic: a line whose leading token (after optional bullet) is followed
     by `:` or ` - ` is treated as a definition. Both the full phrase AND each
     individual word in the phrase are added as known terms, so that "valid
     response" in vocabulary suppresses the warning for the word "valid".
-
-    Also handles the cross-module ## Covers format:
-        - prompts/payment_python.prompt#R3: No provider call before validation
-    The descriptive text after the colon is treated as a known term phrase.
     """
     terms: set[str] = set()
     for line in vocab_text.splitlines():
         stripped = line.strip()
-
-        # Cross-module Covers: - prompts/foo.prompt#R3: term phrase
-        cross = re.match(
-            r"^[-*]?\s*[\w./\-]+\.prompt#[A-Za-z0-9\-]+\s*:\s*(.+)$",
-            stripped,
-        )
-        if cross:
-            phrase = cross.group(1).strip().lower()
-            terms.add(phrase)
-            for word in re.split(r"[\s_-]+", phrase):
-                if word:
-                    terms.add(word)
-            continue
 
         # Standard: "term: ..." or "- term: ..." or "* term: ..." or "term - ..."
         term_match = re.match(
@@ -483,8 +465,8 @@ def scan_stories(stories_dir: Path, *, strict: bool = False) -> list[LintResult]
     """
     Scan all story__*.md files under stories_dir for vague acceptance criteria.
 
-    Each story's ## Glossary / ## Definitions / ## Covers section supplies
-    the vocabulary. Missing sections produce zero issues.
+    Each story's ## Glossary / ## Definitions section supplies the vocabulary.
+    ``## Covers`` is coverage metadata rather than a term-definition source.
     """
     if not stories_dir.is_dir():
         return []
@@ -518,8 +500,6 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals,too-many-argument
     """
     try:
         from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
-        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
-
         template_path = Path(__file__).parent / "prompts" / "prompt_lint_LLM.prompt"
         if not template_path.exists():
             logger.warning("prompt_lint_LLM.prompt not found; skipping LLM pass")
@@ -532,7 +512,6 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals,too-many-argument
         filled = template.replace("{prompt_content}", prompt_content).replace(
             "{vague_terms_list}", vague_terms_list
         )
-        filled = preprocess(filled, recursive=False, double_curly_brackets=False)
 
         result = llm_invoke(
             messages=[{"role": "user", "content": filled}],

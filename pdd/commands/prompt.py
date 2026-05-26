@@ -43,20 +43,30 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     "--ambiguity",
     is_flag=True,
     default=False,
-    help="Run an advisory LLM ambiguity review through PDD Cloud.",
+    help="Enable deterministic ambiguity linting; combine with --llm for advisory LLM review.",
+)
+@click.option(
+    "--llm",
+    "use_llm",
+    is_flag=True,
+    default=False,
+    help="With --ambiguity, run an advisory LLM ambiguity review through PDD Cloud.",
 )
 @click.pass_context
-def prompt_lint(  # pylint: disable=too-many-arguments,too-many-branches
+def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches
     ctx: click.Context,
     target: Optional[str],
     stories_dir: Optional[str],
     as_json: bool,
     strict: bool,
     ambiguity: bool,
+    use_llm: bool,
 ) -> None:
     """Lint prompts and user stories for ambiguity findings."""
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")
+    if use_llm and not ambiguity:
+        raise click.UsageError("--llm requires --ambiguity.")
 
     results: list[LintResult] = []
     if target is not None:
@@ -72,7 +82,7 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-branches
         results.extend(scan_stories(Path(stories_dir), strict=strict))
 
     deterministic_exit_code = _exit_code(results, strict=strict)
-    if ambiguity:
+    if ambiguity and use_llm:
         obj = ctx.obj or {}
         use_cloud = not bool(obj.get("local", False))
         for result in results:
