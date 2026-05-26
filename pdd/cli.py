@@ -18,8 +18,7 @@ def _is_structured_json_invocation(arguments: list[str]) -> bool:
     """Return whether this process is running a JSON-reporting checkup command."""
     pairs = set(zip(arguments, arguments[1:]))
     return "--json" in arguments and (
-        ("prompt", "lint") in pairs
-        or ("checkup", "lint") in pairs
+        ("checkup", "lint") in pairs
         or ("checkup", "contract") in pairs
         or ("checkup", "contracts") in pairs
     )

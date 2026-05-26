@@ -8,9 +8,11 @@
 
 % Requirements
 - Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
-- Preserve `pdd checkup lint ...` as a compatibility alias for `pdd prompt lint ...`.
-  The alias may use extra-argument dispatch, but `pdd checkup --help` and
+- Implement `pdd checkup lint ...` as the primary command to lint prompts and stories.
+  The sub-invocation may use extra-argument dispatch, but `pdd checkup --help` and
   `pdd checkup lint --help` must both show the appropriate help output.
+- Dispatch `pdd checkup contract ...` / `pdd checkup contracts ...` to the contract
+  check command group without breaking issue-mode checkup behavior.
 - Params:
   - `target` arg (positional, optional — required for issue mode)
   - `--no-fix` flag

@@ -97,8 +97,7 @@ def _is_structured_json_invocation(arguments: List[str]) -> bool:
     """Return whether this invocation needs machine-readable JSON output."""
     pairs = set(zip(arguments, arguments[1:]))
     return "--json" in arguments and (
-        ("prompt", "lint") in pairs
-        or ("checkup", "lint") in pairs
+        ("checkup", "lint") in pairs
         or ("checkup", "contract") in pairs
         or ("checkup", "contracts") in pairs
     )
@@ -478,6 +477,7 @@ def cli(
             )
 
     # Perform auto-update check unless disabled
+
     if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:

@@ -1,6 +1,7 @@
 """
 Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
+# pylint: disable=unknown-option-value
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -303,7 +304,7 @@ from .prompt import prompt_lint
 )
 @click.pass_context
 @track_cost
-def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,
@@ -349,8 +350,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
-    Prompt lint (alias):
-      pdd checkup lint …  →  same as  pdd prompt lint …
+    Prompt lint:
+      pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
     Contract checks:
       pdd checkup contract check [OPTIONS] TARGET
     """

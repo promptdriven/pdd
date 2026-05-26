@@ -3145,11 +3145,46 @@ def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) 
     except (json.JSONDecodeError, ValueError):
         return None
 
+
+def _flatten_comment_pages(payload: Any) -> List[Dict]:
+    """Flatten GitHub comment payloads from one page or slurped pages."""
+    comments: List[Dict] = []
+    if isinstance(payload, dict):
+        comments.append(payload)
+    elif isinstance(payload, list):
+        for item in payload:
+            comments.extend(_flatten_comment_pages(item))
+    return comments
+
+
+def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
+    """Parse comments emitted by ``gh api --paginate`` with or without slurp."""
+    text = stdout.strip()
+    if not text:
+        return []
+
+    try:
+        return _flatten_comment_pages(json.loads(text))
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    index = 0
+    comments: List[Dict] = []
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        payload, index = decoder.raw_decode(text, index)
+        comments.extend(_flatten_comment_pages(payload))
+    return comments
+
 def _find_state_comment(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
     cwd: Path
 ) -> Optional[Tuple[int, Dict]]:
     """
@@ -3164,43 +3199,121 @@ def _find_state_comment(
             "gh", "api",
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
             "--method", "GET",
-            "--paginate"
+            "--paginate",
+            "--slurp",
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
             return None
-            
-        comments = json.loads(result.stdout)
+
+        comments = _load_gh_paginated_comments(result.stdout)
         marker = _build_state_marker(workflow_type, issue_number)
-        
+
+        best: Optional[Tuple[int, Dict]] = None
         for comment in comments:
             body = comment.get("body", "")
             if marker in body:
                 state = _parse_state_from_comment(body, workflow_type, issue_number)
                 if state:
-                    return comment["id"], state
-                    
-        return None
+                    cid = comment["id"]
+                    if best is None or cid > best[0]:
+                        best = (cid, state)
+        return best
     except Exception:
         return None
 
+
+def _find_all_state_comments(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    cwd: Path,
+) -> List[int]:
+    """Return EVERY GitHub comment id whose body contains this workflow's
+    state marker, in the order GitHub returned them.
+
+    The legacy ``_find_state_comment`` returns only the first match, which
+    is fine for the happy path where there is exactly one state comment.
+    Issue #1149 surfaced a duplicate-marker hazard: if two workers race
+    on first-save and both POST a fresh state comment, or a prior run's
+    state was never fully cleared, two valid-looking comments coexist.
+    A future normal resume's ``_find_state_comment`` will load whichever
+    one GitHub ranks first — usually the OLDER one — silently resuming
+    against stale step outputs. Callers that need to deduplicate (clean
+    restart pre-clear, or save's first-write dedupe path) must use this
+    helper, not the singleton variant.
+    """
+    if not _find_cli_binary("gh"):
+        return []
+
+    try:
+        cmd = [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+            "--method", "GET",
+            "--paginate",
+            "--slurp",
+        ]
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return []
+        comments = _load_gh_paginated_comments(result.stdout)
+        marker = _build_state_marker(workflow_type, issue_number)
+        ids: List[int] = []
+        for comment in comments:
+            body = comment.get("body", "")
+            if marker in body and comment.get("id") is not None:
+                ids.append(int(comment["id"]))
+        return ids
+    except Exception:
+        return []
+
+
+def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd: Path) -> bool:
+    """Delete one issue comment by id via ``gh api``. Best-effort, never raises."""
+    if not _find_cli_binary("gh"):
+        return False
+    try:
+        cmd = [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
+            "-X", "DELETE",
+        ]
+        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def github_save_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    cwd: Path, 
-    comment_id: Optional[int] = None
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    state: Dict,
+    cwd: Path,
+    comment_id: Optional[int] = None,
+    *,
+    dedupe: bool = False,
 ) -> Optional[int]:
     """
     Creates or updates a GitHub comment with the state. Returns new/existing comment_id.
+
+    When ``dedupe=True`` and ``comment_id is None`` (i.e. this is the
+    session's first save and we have no prior id to PATCH), the helper
+    first lists ALL comments carrying this workflow's state marker. If
+    one or more already exist, it PATCHes the most-recent (highest id)
+    in place and DELETEs the rest, returning the PATCHed id. This closes
+    the duplicate-marker hazard described on ``_find_all_state_comments``
+    in cases where a concurrent worker re-created a state comment in the
+    gap between a clean-restart pre-clear and this save.
     """
     if not _find_cli_binary("gh"):
         return None
 
     body = _serialize_state_comment(workflow_type, issue_number, state)
-    
+
     try:
         if comment_id:
             # PATCH existing
@@ -3214,6 +3327,39 @@ def github_save_state(
             if res.returncode == 0:
                 return comment_id
         else:
+            existing_ids: List[int] = []
+            if dedupe:
+                existing_ids = _find_all_state_comments(
+                    repo_owner, repo_name, issue_number, workflow_type, cwd
+                )
+
+            if existing_ids:
+                # Adopt the most recent comment (GitHub assigns monotonically
+                # increasing ids), PATCH it in place, and delete the rest.
+                keep_id = max(existing_ids)
+                cmd = [
+                    "gh", "api",
+                    f"repos/{repo_owner}/{repo_name}/issues/comments/{keep_id}",
+                    "-X", "PATCH",
+                    "-f", f"body={body}",
+                ]
+                res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    return None
+                failed_ids = [
+                    stale_id for stale_id in existing_ids
+                    if stale_id != keep_id
+                    and not _github_delete_comment(repo_owner, repo_name, stale_id, cwd)
+                ]
+                if failed_ids:
+                    print(
+                        f"[pdd] github_save_state: {len(failed_ids)} stale state "
+                        f"comment(s) for issue #{issue_number} could not be deleted: "
+                        f"{failed_ids}",
+                        file=sys.stderr,
+                    )
+                return keep_id
+
             # POST new
             cmd = [
                 "gh", "api",
@@ -3225,7 +3371,7 @@ def github_save_state(
             if res.returncode == 0:
                 data = json.loads(res.stdout)
                 return data.get("id")
-                
+
         return None
     except Exception:
         return None
@@ -3246,30 +3392,32 @@ def github_load_state(
     return None, None
 
 def github_clear_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    cwd: Path
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    cwd: Path,
 ) -> bool:
     """
-    Deletes the state comment if it exists.
+    Deletes EVERY GitHub comment carrying this workflow's state marker.
+
+    Previously this helper deleted only the first matching comment
+    (whichever ``_find_state_comment`` returned). That left any older /
+    duplicate state markers behind, so a subsequent normal resume could
+    load a stale state and silently start from the wrong step. Sweeping
+    all matches is safe because there should never legitimately be more
+    than one state comment per (issue, workflow); when there are, both
+    are equally untrustworthy and the next save will repost a fresh one.
     """
-    result = _find_state_comment(repo_owner, repo_name, issue_number, workflow_type, cwd)
-    if not result:
-        return True # Already clear
-        
-    comment_id = result[0]
-    try:
-        cmd = [
-            "gh", "api",
-            f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
-            "-X", "DELETE"
-        ]
-        subprocess.run(cmd, cwd=cwd, capture_output=True)
-        return True
-    except Exception:
-        return False
+    ids = _find_all_state_comments(repo_owner, repo_name, issue_number, workflow_type, cwd)
+    if not ids:
+        return True  # Already clear
+
+    all_deleted = True
+    for cid in ids:
+        if not _github_delete_comment(repo_owner, repo_name, cid, cwd):
+            all_deleted = False
+    return all_deleted
 
 def _should_use_github_state(use_github_state: bool) -> bool:
     if not use_github_state:
@@ -3389,22 +3537,33 @@ def load_workflow_state(
     return None, None
 
 def save_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
-    use_github_state: bool = True, 
-    github_comment_id: Optional[int] = None
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state: Dict,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
+    github_comment_id: Optional[int] = None,
+    *,
+    dedupe: bool = False,
 ) -> Optional[int]:
     """
     Saves state to local file and GitHub.
     Returns updated github_comment_id.
+
+    Pass ``dedupe=True`` when the caller has reason to suspect duplicate
+    state markers may have appeared (e.g. clean restart, where a
+    concurrent worker could have re-created a state comment between the
+    pre-clear sweep and this save). When set AND ``github_comment_id``
+    is None, the save path finds ALL existing state comments for this
+    (issue, workflow), PATCHes the most-recent in place, and DELETEs the
+    rest — converging to exactly one state comment regardless of prior
+    races.
     """
     local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-    
+
     # 1. Save Local (atomic: write to tmp then rename)
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -3418,7 +3577,8 @@ def save_workflow_state(
     # 2. Save GitHub
     if _should_use_github_state(use_github_state):
         new_id = github_save_state(
-            repo_owner, repo_name, issue_number, workflow_type, state, cwd, github_comment_id
+            repo_owner, repo_name, issue_number, workflow_type, state, cwd,
+            github_comment_id, dedupe=dedupe,
         )
         if new_id:
             return new_id
