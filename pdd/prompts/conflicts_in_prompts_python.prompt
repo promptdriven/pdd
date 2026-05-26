@@ -5,7 +5,7 @@
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs:
+    Inputs: 
         'prompt1' - First prompt in the pair of prompts we are comparing.
         'prompt2' - Second prompt in the pair of prompts we are comparing.
         'strength' - A float that is the strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
@@ -32,7 +32,7 @@
 
 % This function will do the following:
     Step 1. Load the 'conflict_LLM' and 'extract_conflict_LLM' prompt templates.
-    Step 2. Run the prompts through the model using llm_invoke with the provided strength, temperature, and time.
+    Step 2. Run the prompts through the model using llm_invoke with the provided strength, temperature, and time. 
         2a. Pass the following string parameters to the prompt during invoke:
             - 'PROMPT1'
             - 'PROMPT2'

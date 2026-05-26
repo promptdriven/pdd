@@ -66,13 +66,13 @@
 
 % Here are the inputs and outputs of this prompt:
     <input_definitions>
-    Input:
+    Input: 
         'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
         'input_code' - A string that contains the code that was generated from the input_prompt.
         'example_code' - A string that contains an interface defining the specific functionality to extract into the sub_prompt. The sub_prompt will generate code that implements this interface.
     </input_definitions>
     <output_definitions>
-    Output:
+    Output: 
         'sub_prompt' - A string that contains the extracted functionality as defined by the example_code interface that was split from the input_prompt.
         'modified_prompt' - A string that contains the modified original prompt that will import and use the functionality defined in the sub_prompt.
     </output_definitions>
@@ -90,6 +90,6 @@
     2. Write out several paragraphs in detail all the functionality of the sub_prompt by looking at the input_prompt and input_code.
     3. Write out what are the possible difficulties in splitting the prompt according to the input example_code. For each difficulty write several paragraphs
     4. Write out how to overcome the difficulties. Write several paragraphs for each difficulty.
-    5. Write the sub_prompt which would generate the code that could be used by the example_code. This prompt should carefully consider all the prior steps and ensure enough detail is provided to generate the code properly. Internal modules need to be imported using include and other appropriate xml tags in the same style as the input_prompt.
+    5. Write the sub_prompt which would generate the code that could be used by the example_code. This prompt should carefully consider all the prior steps and ensure enough detail is provided to generate the code properly. Internal modules need to be imported using include and other appropriate xml tags in the same style as the input_prompt. 
     6. Write the complete modified_prompt which would incorporate the sub_prompt without any duplications or conflicting functionalities.
 </instructions>

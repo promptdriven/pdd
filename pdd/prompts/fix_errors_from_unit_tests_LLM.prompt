@@ -31,7 +31,7 @@
 <examples>
     <example_1>
     % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/1/test_conflicts_in_prompts.py</include></example_unit_test>
-
+    
     % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts.py</include></example_code_under_test>
 
     % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts_python.prompt</include></example_prompt>

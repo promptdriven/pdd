@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code. 
 
 <include>./context/python_preamble.prompt</include>
 

@@ -4993,7 +4993,7 @@ Import `run_agentic_architecture_orchestrator` from `pdd.agentic_architecture_or
     "functions": [
       {
         "name": "run_agentic_bug_orchestrator",
-        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]",
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
         "returns": "Tuple[bool, str, float, str, List[str]]",
         "sideEffects": [
           "Posts GitHub issue comments via post_step_comment",
@@ -5035,7 +5035,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 ```
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 12 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -5043,7 +5043,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
 7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
-9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment
+9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment. If `clean_restart=True`, call `clear_workflow_state(...)` before any load, start from fresh in-memory state even if the clear fails, save `state["clean_restart"] = True`, post a visible Step 0 startup comment with `Mode: Clean restart`, and pass the effective clean-restart context to worktree/PR creation so old remote branches can be replaced safely. If a later normal resume loads `clean_restart=True` from state, continue using clean worktree and PR semantics.
 10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
 
 % Step Execution
@@ -5135,17 +5135,18 @@ The orchestrator must parse step output to detect stop conditions:
 
 Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
 
-1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False, *, clean_restart: bool = False) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
    - Branch name: `fix/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
    - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
-   - If branch already exists locally, delete with `git branch -D`
+   - If branch already exists locally, delete with `git branch -D` when `clean_restart=True` or `resume_existing=False`; clean restart must not preserve an old local `fix/issue-{issue_number}` branch even on the resume-restoration path.
    - Create worktree: `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 2. In orchestrator loop, before Step 7 (the first step that can write files — Step 7 may auto-fix prompt specifications and emits `PROMPT_FIXED`):
-   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)`
+   - When `clean_restart=True`, fetch `+refs/heads/fix/issue-{issue_number}:refs/remotes/origin/fix/issue-{issue_number}` to refresh Step 12 `--force-with-lease` metadata in the remote-tracking ref, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted. This applies even when resume restoration calls `_setup_worktree(..., resume_existing=True, clean_restart=True)`.
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 7-12
    - Add `worktree_path` to context dict (for Step 12 prompt formatting)
@@ -5220,7 +5221,7 @@ Write the `pdd/agentic_bug.py` module.
 CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 11-step investigation process.
 
 % Requirements
-1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, manual_args: Optional[Tuple[str, str, str, str, str]] = None) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False, manual_args: Optional[Tuple[str, str, str, str, str]] = None) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number
 4. Supported URL formats:
@@ -5231,7 +5232,7 @@ CLI entry point for the agentic bug investigation workflow. Fetches a GitHub iss
 6. Extract from issue: title (as issue_title), body, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` with `--paginate` to get full context; if comments fetch fails, continue with just the issue body
 8. Ensure repo context: if `Path.cwd()` has no `.git`, clone the repo into cwd
-9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, cwd, ..., timeout_adder=timeout_adder, use_github_state=use_github_state)`
+9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, cwd, ..., timeout_adder=timeout_adder, use_github_state=use_github_state, reasoning_time=reasoning_time, clean_restart=clean_restart)`
 10. Return aggregated results from orchestrator
 
 % Manual Mode (legacy)
@@ -5252,6 +5253,7 @@ All error paths return `(False, error_message, 0.0, "", [])`:
 
 % Deliverables
 - Code: `pdd/agentic_bug.py`
+
 
 ===== agentic_bug_step10_verify_LLM.prompt =====
 <pdd-reason>Verifies unit test correctness and classifies whether E2E testing is needed.</pdd-reason>
@@ -5832,6 +5834,7 @@ You are working on step 12 of 12 (final step) in an agentic bug investigation wo
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Clean Restart Mode: {clean_restart}
 
 % Issue Content
 <issue_content>
@@ -5911,8 +5914,14 @@ Do NOT create a new branch - just stage, commit, and push.
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
-   - Push the branch to origin
-   - Create a draft pull request using `gh pr create --draft`
+   - If `clean_restart` is `true`, push with `git push --force-with-lease -u origin fix/issue-{issue_number}` so a stopped run's old remote branch can be replaced safely.
+   - Otherwise, push with `git push -u origin fix/issue-{issue_number}`.
+   - If `clean_restart` is `true`, check for an existing open PR first:
+     ```bash
+     gh pr list --head fix/issue-{issue_number} --state open --json number,url
+     ```
+     If one exists, update that PR with `gh pr edit <number> --title "Add failing tests for #{issue_number}" --body "..."` and record its URL instead of creating a duplicate.
+   - If no open PR exists, create a draft pull request using `gh pr create --draft`
    - Link to the issue using "Fixes #{issue_number}" in the PR body
 
 3. **Post final summary**
@@ -5922,9 +5931,26 @@ Do NOT create a new branch - just stage, commit, and push.
    - Include the agentic `pdd fix` command using the GitHub issue URL
    - The agentic fix command automatically detects prompt files, code files, and test files from the issue context
 
-% PR Creation Command
+% PR Creation Commands
+
+Push first:
 
 ```bash
+# clean_restart == true
+git push --force-with-lease -u origin fix/issue-{issue_number}
+
+# clean_restart != true
+git push -u origin fix/issue-{issue_number}
+```
+
+Then create or update the PR:
+
+```bash
+# clean_restart == true and an open PR already exists
+gh pr list --head fix/issue-{issue_number} --state open --json number,url
+gh pr edit <number> --title "Add failing tests for #{issue_number}" --body "..."
+
+# otherwise
 gh pr create --draft --title "Add failing tests for #{issue_number}" --body "$(cat <<'EOF'
 ## Summary
 Adds failing tests that detect the bug reported in #{issue_number}.
@@ -7496,7 +7522,7 @@ Examples:
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -7512,7 +7538,7 @@ Examples:
 Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
 
 % Requirements
-1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -7539,6 +7565,23 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
 13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
 14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+15. **Clean Restart Mode** (`clean_restart=True`): When set by the caller, the orchestrator MUST perform a clean restart for this issue *before* the normal state-load / PR-guard / step-loop entry path runs:
+    - At entry (before `load_workflow_state`), call `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` to discard any persisted local + GitHub state from a prior run on this issue.
+    - Skip the **Existing PR Guard** (Requirement 12) entirely — a clean restart explicitly wants to ignore the previously generated `change/issue-{N}` branch and PR.
+    - Skip the **Stale State Detection** (Requirement 13) entirely — state has already been cleared, and `issue_updated_at` comparison would be meaningless.
+    - Force `start_step = 1` regardless of any partially recovered state (loaded state, if present, MUST NOT cause step-skipping in this mode).
+    - Force the worktree base ref. Without `clean_restart`, `_setup_worktree` deliberately reuses `origin/change/issue-{N}` as the base when that remote branch already exists, to preserve cross-machine resume (so a second machine inherits the first machine's prior commits). With `clean_restart=True` this reuse is exactly the bug being fixed (prior stopped / wrong-model artifacts on the remote branch leak into the restart), so the orchestrator MUST pass `clean_restart=True` into `_setup_worktree`. The helper then (a) fetches `+refs/heads/change/issue-{N}:refs/remotes/origin/change/issue-{N}` to refresh Step 13 `--force-with-lease` metadata in the remote-tracking ref (not just `FETCH_HEAD`), (b) keeps `remote_exists=False` so the remote branch is never used as the worktree base, (c) forces the base to `_resolve_main_ref(git_root)`, (d) refuses to fall back to the literal `"HEAD"` (the user's current feature branch) — returning a clear error instead — and (e) refuses to fall through to the "reuse existing local branch" path when `git branch -D change/issue-{N}` fails because the branch is checked out in another worktree. The orchestrator MUST also NOT short-circuit worktree setup based on cached `state["worktree_path"]`.
+    - When stale state for a different worktree exists, treat it as fully discarded: do not reuse `state["github_comment_id"]`, `state["step_comments"]`, `state["preflight_drift_healed"]`, or any other resume-only marker.
+    - This mode is idempotent: a second `clean_restart=True` invocation MUST behave identically to the first (state is cleared each time at entry).
+    - **Persist the flag in workflow state**: immediately after initializing the fresh state dict (in the `else` branch), set `state["clean_restart"] = True` when `effective_clean_restart` is True — NOT just when the raw CLI `clean_restart` flag is True. This covers the case where staleness detection triggers a fresh-start during a persisted-clean-restart resume: the new state dict must still carry `clean_restart=True` so the next resume continues to skip the PR guard, use force-push semantics, and skip old-branch reuse. Using the raw CLI flag here would silently drop the flag whenever a stale-detect restart occurs mid-clean-restart chain.
+    - **Compute `effective_clean_restart` early** (immediately after `load_workflow_state`, before the PR guard): `effective_clean_restart = clean_restart or bool((state or {}).get("clean_restart", False))`. This single variable MUST be used in place of the raw `clean_restart` CLI flag for: (a) the Existing PR Guard, (c) both `_setup_worktree` call sites, (d) the Step 13 context, and (e) every `save_workflow_state(..., dedupe=...)` call. **EXCEPTION**: Stale State Detection (Requirement 13) MUST use the raw `clean_restart` CLI flag — NOT `effective_clean_restart`. When the CLI flag is True, the pre-clear already ran so the check is meaningless. When only the persisted flag is True (resume path), the user may have added issue comments between the stopped run and the resume; those would be silently ignored if staleness detection is skipped. The state-initialization branch (`if state is not None and not clean_restart`) also stays on the raw CLI flag — a resume MUST still load the prior step outputs from state, not start fresh.
+    - Duplicate state-comment hazard: forward `dedupe=effective_clean_restart` to every `save_workflow_state` call. The first save (when `github_comment_id` is None) then finds ALL existing state comments for this (issue, workflow), PATCHes the most-recent in place, and DELETEs the rest. This closes the race where a concurrent worker re-creates a state comment in the gap between the pre-clear sweep and the first save, leaving two valid markers that a future normal resume could pick from at random. Once `github_comment_id` is bound (after the first save), the dedupe flag becomes a no-op because saves take the PATCH-by-id path. Note: `github_clear_state` now deletes EVERY matching state comment by default (not just the first), so the pre-clear guarantee holds even without `dedupe=True`. The on-save dedupe still matters because a comment can be re-created BETWEEN clear and save, including when a plain resume inherits `clean_restart=True` from persisted state. Post-first-save concurrent-worker races (where two workers hold valid `github_comment_id`s on different physical comments) are out of scope here.
+16. **Mode-Aware Startup Comment**: Immediately after the worktree is set up and before Step 1 runs, post exactly one trusted startup comment to the issue via `post_step_comment_once` (using a reserved `step_num=0` key so it dedupes correctly on resume). The comment body MUST explicitly state:
+    - **Mode**: `"Clean restart"` when `clean_restart=True`, otherwise `"Resuming from step {start_step}"` if `start_step > 1`, otherwise `"Starting fresh"`.
+    - **Model**: the resolved model name (or `"unknown"` if not yet determined at startup).
+    - **Base branch**: the result of `_resolve_main_ref_name(git_root)` — returns the branch name (e.g. `"origin/main"`) not the commit SHA, so the reader can verify the workflow started from the correct branch. Falls back to `"HEAD"` when no ref resolves.
+    - **Command**: `"pdd-issue (full change → sync flow)"`.
+    Wrap the body as a `## Step 0/13: Workflow Startup` header so it aligns with the existing per-step success comment format. Failure to post (gh CLI missing, network error) MUST be log-and-continue; never raise into the orchestrator loop.
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -7674,7 +7717,7 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits, **associated_documents** (list of doc paths discovered from the include graph + architecture BFS — LLM must emit `ASSOCIATED_DOCS_{MODIFIED,CONFLICTS,UNCHANGED}` markers, one bucket per doc)
 - Step 11 receives: issue_content, step9_output, **step10_output** (so DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers emitted by Step 10.5 reach the review loop), worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
-- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests, **clean_restart** (`"true"` or `"false"`) — Step 13 uses this to decide whether to force-push (`--force-with-lease`) and whether to look for an existing open PR to update in place rather than creating a new one
 
 % Dependency Context (Before Step 6)
 Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
@@ -7849,11 +7892,17 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
 1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
    - Resolve the main branch ref for use as worktree base
    - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
-   - For each, run `git rev-parse --verify <ref>` — return the commit hash on success
+   - For each, run `git rev-parse --verify <ref>` — return the **commit hash** on success
    - If none resolve, return the literal string `"HEAD"` as last resort
    - This prevents worktrees from being based on the user's current feature branch
 
-2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+1b. Helper function: `_resolve_main_ref_name(git_root: Path) -> str`
+   - Same probe order as `_resolve_main_ref` (`origin/main`, `origin/master`, `main`, `master`)
+   - Returns the **ref name** (e.g. `"origin/main"`) instead of the commit hash
+   - Used for human-readable display (e.g. the Req 16 startup comment's "Base branch" field)
+   - Falls back to the literal string `"HEAD"` when no ref resolves
+
+2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, *, clean_restart: bool = False) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/change-issue-{issue_number}/` relative to git root
    - Branch name: `change/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
@@ -7863,11 +7912,12 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
      - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
      - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add --force {path} {branch}` (without `-b` flag, `--force` required because git refuses to checkout a branch already in use by another worktree)
    - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
+   - When `clean_restart=True`, fetch `+refs/heads/change/issue-{issue_number}:refs/remotes/origin/change/issue-{issue_number}` to refresh force-with-lease metadata in the remote-tracking ref for Step 13, but do not reuse it as the worktree base; always create the worktree from `_resolve_main_ref(git_root)` so previous branch artifacts cannot leak into the fresh run
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 3. In orchestrator loop, before Step 9:
    - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
-   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=effective_clean_restart)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 9-13
    - Add `worktree_path` to context dict (for Steps 9-13 prompt formatting)
@@ -7879,10 +7929,12 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
    - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
    - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+   - `_normalize_pr_base_branch(ref_name: str) -> str` - Convert `_resolve_main_ref_name` output into a GitHub PR base branch by stripping a leading `origin/`, returning concrete names like `main` or `master`, and falling back to `main` only when no named ref resolves
    - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain=v1 -z --untracked-files=all`, parsed via `pdd.git_porcelain.parse_porcelain_z` so paths with spaces, embedded quotes, or a literal `" -> "` substring round-trip verbatim (the old text-mode `--porcelain` output is lossy — see issue #1080). Use the new-side path verbatim. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits). Skip temp files matching `.agentic_prompt_*`.
    - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
    - `_check_existing_pr(repo_owner, repo_name, issue_number) -> Optional[str]` - Use `gh pr list` to check for open PR with `head:change/issue-{issue_number}`. Return PR URL if found.
    - `_fetch_issue_updated_at(repo_owner, repo_name, issue_number) -> str` - Fetch current `updated_at` timestamp for the GitHub issue via `gh api`. Used after clarification stops to capture the timestamp AFTER the bot's own comment.
+   - Before Step 13, set context key `base_branch` from `_normalize_pr_base_branch(_resolve_main_ref_name(...))` and require the Step 13 prompt to use `gh pr create --base {base_branch}` rather than hardcoding `main`.
 
 % Console Output
 
@@ -7954,6 +8006,22 @@ Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Tim
 
 
 ===== agentic_change_python.prompt =====
+<pdd-reason>Autonomously implements GitHub feature request issues via 13-step workflow with optional clean restart.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_change", "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_change_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -7963,7 +8031,9 @@ Write the `pdd/agentic_change.py` module.
 CLI entry point for the agentic change workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 13-step change process (steps 1–13, with Step 8.5 pre-flight drift heal and Step 10.5 doc-sync verifier as inline sub-steps). The orchestrator handles state persistence to support resumption after clarification or architectural question pauses, and includes a review loop (steps 11–12) before creating a PR.
 
 % Requirements
-1. Function: `run_agentic_change(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1a. The keyword-only `clean_restart: bool = False` parameter, when `True`, requests a clean restart of the workflow for this issue. It must be forwarded verbatim to the orchestrator (see Requirement 9). Default `False` preserves source compatibility for all existing callers.
+1b. The keyword-only `reasoning_time: Optional[float] = None` parameter MUST be forwarded verbatim to the orchestrator (see Requirement 9). It carries an explicit user-supplied `--time` value through to the agentic provider's reasoning-effort plumbing in `agentic_common._run_with_provider`; commands gate on `ctx.obj["time_explicit"]` before forwarding so the `DEFAULT_TIME` fallback is NOT passed in. Default `None` preserves source compatibility.
 2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number
 4. Supported URL formats:
@@ -7979,7 +8049,7 @@ CLI entry point for the agentic change workflow. Fetches a GitHub issue, extract
 6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` to get full context
 8. Clone/checkout the repository to a temp directory if not already in it
-9. Call orchestrator: `run_agentic_change_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state)`
+9. Call orchestrator: `run_agentic_change_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state, reasoning_time=reasoning_time, clean_restart=clean_restart)`
 10. Return aggregated results from orchestrator
 
 % Dependencies
@@ -8514,9 +8584,11 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 - Issue Title: {issue_title}
 - Worktree Path: {worktree_path}
 - Branch Name: change/issue-{issue_number}
+- Base Branch: {base_branch}
 - Files Changed: {files_to_stage}
 - Sync Order Script: {sync_order_script}
 - Sync Order Commands: {sync_order_list}
+- Clean Restart Mode: {clean_restart}
 
 % Issue Content
 <issue_content>
@@ -8549,16 +8621,38 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
    - Format: `feat: [brief description] (#{issue_number})`
 
 3. **Push branch**
+
+   If `clean_restart` is `true`, the remote branch may have divergent history from the
+   stopped run. Use `--force-with-lease` to overwrite it safely:
+   ```bash
+   git push --force-with-lease -u origin change/issue-{issue_number}
+   ```
+   Otherwise use a standard push:
    ```bash
    git push -u origin change/issue-{issue_number}
    ```
 
 4. **Create pull request**
-   Use `gh pr create` to create a PR that:
-   - References the original issue
-   - Summarizes the prompt changes made
-   - Lists files modified
-   - Includes next steps for reviewer
+
+   If `clean_restart` is `true`, an old PR for this branch may still be open. Check first:
+   ```bash
+   gh pr list --head change/issue-{issue_number} --state open --json number,url
+   ```
+   - If an open PR is found, update it in place (the branch was already force-pushed):
+     ```bash
+     gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
+     ```
+     Record that PR's number and URL as the result; skip `gh pr create`.
+   - If no open PR exists, create one:
+     ```bash
+     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head change/issue-{issue_number}
+     ```
+
+   Whether creating or editing, the PR must:
+   - Reference the original issue
+   - Summarize the prompt changes made
+   - List files modified
+   - Include next steps for reviewer
 
 5. **Link PR to issue**
    - The PR body should include `Closes #{issue_number}` or `Fixes #{issue_number}`
@@ -8566,10 +8660,13 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
 
 % Output
 
-Create the PR using the gh CLI:
+Push the branch (use `--force-with-lease` if `clean_restart` is `true`), then create or
+update the PR following the logic in step 4 above:
 
 ```bash
-gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
+gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head change/issue-{issue_number}
+# OR, if an open PR already exists under clean restart:
+gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
 ```
 
 Then post a final comment to the issue:
@@ -11656,11 +11753,11 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
       {"name": "post_pr_comment", "signature": "(repo_owner, repo_name, pr_number, body, cwd) -> bool", "returns": "bool"},
       {"name": "post_final_comment", "signature": "(repo_owner, repo_name, issue_number, reason, total_cost, steps_completed, total_steps, cwd) -> bool", "returns": "bool"},
       {"name": "validate_cached_state", "signature": "(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]", "returns": "Union[int, float]"},
-      {"name": "github_save_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None) -> Optional[int]", "returns": "Optional[int]"},
+      {"name": "github_save_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]", "returns": "Optional[int]"},
       {"name": "github_load_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Tuple[Optional[Dict], Optional[int]]", "returns": "Tuple[Optional[Dict], Optional[int]]"},
       {"name": "github_clear_state", "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> bool", "returns": "bool"},
       {"name": "load_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]", "returns": "Tuple[Optional[Dict], Optional[int]]"},
-      {"name": "save_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]", "returns": "Optional[int]"},
+      {"name": "save_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]", "returns": "Optional[int]"},
       {"name": "clear_workflow_state", "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None", "returns": "None"}
     ]
   }
@@ -11717,7 +11814,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, O
    - OpenCode: Parse JSONL events and sum `step_finish.part.cost` values first. If OpenCode does not report costs, fall back to the existing pricing/token-estimation path using the resolved OpenCode `provider/model` and matching `llm_model.csv` row.
 7. **False Positives**: Treat empty output, (zero cost + short output < `MIN_VALID_OUTPUT_LENGTH`), or (cost > 0 + stripped output starts with `Error:` + newlines < `MAX_ERROR_RESPONSE_NEWLINES` + length < 4000) as failure. The `Error:` check must require the stripped output to *start* with `Error:` (a leading prefix of a genuine terse provider-error response) — never an unanchored substring match, which would demote substantive findings that merely *describe* error-raising code (Issue #1232). The newline-count gate (`MAX_ERROR_RESPONSE_NEWLINES = 3`) preserves the long-single-line error case from #902 while protecting multi-paragraph findings docs that happen to start with `Error:`. **Multi-provider configs** (`len(candidates) > 1`): `break` and fall through to the next provider — don't burn retries on a known-broken provider. **Single-provider configs** (`len(candidates) == 1`, e.g. cloud anthropic-only): no fallback exists, so retry on the same provider with exponential backoff (`retry_delay * 2 ** (attempt - 1) + random.uniform(0, retry_delay)`, capped at `MAX_RETRY_DELAY`) up to `max_retries`, then break. An immediate `break` in single-provider configs yields zero retries on transient empty responses and surfaces as the blank-provider-error one-session-sync failure.
 8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining < 60s (after 120s reserve).
-9. **GitHub State**: Persistence in issue comments via hidden markers (`<!-- PDD_WORKFLOW_STATE:... -->`). `gh api --paginate`.
+9. **GitHub State**: Persistence in issue comments via hidden markers (`<!-- PDD_WORKFLOW_STATE:... -->`). List comments with `gh api --paginate --slurp`, and flatten the resulting page arrays before scanning markers. Keep a parser fallback for older concatenated paginated JSON output so state loading and clean-restart sweeps still work if `--slurp` is unavailable or omitted by a future call site.
 10. **State Validation**: `validate_cached_state` scans `step_outputs` for "FAILED:" to correct `last_completed_step`.
 11. **PR Comments**: Provide `post_pr_comment(repo_owner, repo_name, pr_number, body, cwd) -> bool` that posts a comment to a PR via `gh pr comment {{pr_number}} --repo {repo_owner}/{repo_name} --body ...`. Handle missing `gh` CLI gracefully (return False). This is used by CI validation to report unresolved failures.
 12. **Control Token Detection** (4-tier system for parsing workflow control tokens from LLM output):
@@ -11776,7 +11873,8 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, O
 `post_final_comment(repo_owner, repo_name, issue_number, reason, total_cost, steps_completed, total_steps, cwd) -> bool`
 `validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
 `load_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]`
-`save_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]` - Must return `None` on GitHub failure (Issue #830).
+`github_save_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]`
+`save_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]` - Must return `None` on GitHub failure (Issue #830). When `dedupe=True` and there is no current GitHub comment id, adopt the newest matching state comment and delete older duplicates before saving.
 `clear_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None`
 
 % Constants
@@ -11813,8 +11911,12 @@ Instruction: `"Read the file {prompt_file.name} for instructions. You have full 
 - Google/OpenAI/OpenCode: Same as standard (no per-tool restrictions).
 
 % GitHub State Persistence
-- `_find_state_comment`: Use `gh api ... --paginate`.
-- `save_workflow_state`: Local first, then GitHub. If `github_save_state` returns `None`, return `None` (detect divergence).
+- `_load_gh_paginated_comments`: Parse GitHub issue comments emitted by `gh api --paginate --slurp` by flattening nested page arrays into one `List[Dict]`; also tolerate concatenated JSON page documents from plain `--paginate`.
+- `_find_state_comment`: Use `gh api ... --paginate --slurp`. Scans ALL comments and returns the one with the HIGHEST id (most recently written) that contains the workflow state marker. Under the duplicate-marker hazard (two workers both POST a state comment, or a prior run's comment was never fully cleared), returning the highest-id marker ensures a normal resume always loads the most recently written state rather than silently loading an older stale one. Callers that need every matching id (e.g. for sweep-delete) must use `_find_all_state_comments` instead.
+- `_find_all_state_comments`: Same paginated/slurped list call, but returns EVERY comment id whose body carries the workflow's state marker (issue #1149). Required for `github_clear_state`'s sweep behavior and for `github_save_state(..., dedupe=True)`. Returns `[]` on any error.
+- `github_clear_state`: MUST delete EVERY matching state comment, not just the first one. The legacy single-comment delete left older duplicate markers behind (a possible artifact of a prior race) so a future normal resume would silently pick the stale one. Iterate `_find_all_state_comments` and best-effort delete each; return `True` only if every delete succeeded.
+- `github_save_state` (`dedupe: bool = False`, keyword-only): when `dedupe=True` AND `comment_id is None`, the helper first lists every existing state comment via `_find_all_state_comments`. If any exist, it PATCHes the highest-id (most-recent) marker in place with the new state and DELETEs the rest, returning the adopted id; if none exist, it falls through to the normal POST. This closes the clean-restart race where a concurrent worker re-created a state comment in the gap between the pre-clear sweep and the first save. `dedupe=False` (default) preserves the original blind-POST behavior so the extra list-comments cost is opt-in. Concurrent-worker races AFTER the first save (both workers holding valid `github_comment_id`s pointing at different physical comments) are out of scope: the orchestrator's whole-life invariant is "exactly one state comment, the one we know about", and the dedupe path closes only the pre-first-save window.
+- `save_workflow_state` (`dedupe: bool = False`, keyword-only): writes local first, then GitHub. If `github_save_state` returns `None`, return `None` (detect divergence). Forwards `dedupe` verbatim to `github_save_state` so caller-side opt-in surfaces all the way down.
 
 % Instructions
 1. Implement `_subprocess_run` using `Popen(..., start_new_session=True)`. Catch `TimeoutExpired` and kill process group (`-proc.pid`).
@@ -12025,7 +12127,7 @@ Uses `agentic_crash_explore_LLM` (loaded via load_prompt_template).
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None, clean_restart=False)", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "push_with_retry", "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True, force_with_lease_on_non_fast_forward: bool = True) -> Tuple[bool, str]", "returns": "Tuple[bool, str]", "sideEffects": ["Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true", "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"]},
       {"name": "_fetch_pr_head_sha", "signature": "(repo_owner: str, repo_name: str, pr_number: int) -> str", "returns": "str", "sideEffects": ["Calls gh api repos/{owner}/{repo}/pulls/{n} via the shared _fetch_pr_metadata helper", "Best-effort: returns empty string on any failure so callers can fail closed"]},
       {"name": "_read_checkup_worktree_head_sha", "signature": "(cwd: Path, pr_number: int) -> str", "returns": "str", "sideEffects": ["Locates .pdd/worktrees/checkup-pr-{N}/ relative to cwd's git root and runs git rev-parse HEAD inside it", "Returns the SHA the checkup last verified or pushed; comparing against the live PR remote SHA is what distinguishes a checkup self-push from an external party advancing the PR during the checkup", "Best-effort: returns empty string when the worktree is missing or the rev-parse fails"]},
@@ -12133,9 +12235,11 @@ If a prior cycle applied a direct edit but the current cycle makes no new meanin
 `E2E_FIX_STEP_TIMEOUTS[8]` MUST be `3600.0` (1 hour base). Step 8 fans out to one full recursive `pdd fix --loop` invocation per failing dev unit, and `run_agentic_task` caps the aggregate retry budget at `2 * effective_timeout`, giving Step 8 a 2-hour ceiling under the 4-hour Cloud Run job limit. The earlier 1000s budget was inherited from the original single-LLM-call step shape and silently kills recursive fix mid-iteration on large dev units (for example, 2000+ line files where regenerating the file once can take tens of minutes). All other entries in `E2E_FIX_STEP_TIMEOUTS` keep their existing values.
 
 % Reuse pdd-bug Analysis (Issue #830)
-On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed.
+On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed. Exception: when the effective clean-restart flag is true, do NOT load or reuse sibling pdd-bug state; the user asked for restart-from-scratch and stale bug diagnosis from a stopped/wrong-model run must not skip Steps 2/3.
 
 % Resume & State
+- `clean_restart=True` forces fresh e2e-fix state even if `resume=True`: skip `load_workflow_state`, call `clear_workflow_state`, post a visible Step 0 startup comment with `Mode: Clean restart`, and start from cycle 1 step 1.
+- Persist `clean_restart` in every e2e-fix workflow-state save. On later normal resumes (`resume=True`, CLI clean_restart flag absent), inherit `state["clean_restart"] == True` into an effective clean-restart flag so sibling pdd-bug state remains suppressed for the rest of the restarted run.
 - `validate_cached_state` rewinds `last_completed_step` past any cached step output prefixed with `FAILED:`.
 - Persist `initial_file_hashes` and `initial_sha` in workflow state and restore them on resume so direct-edit detection and Step 11 full-diff still work after interruption.
 - `_check_staleness` warns if any tracked file's mtime is newer than `last_saved_at`.
@@ -12196,7 +12300,7 @@ This file intentionally contains the literal tokens `_check_e2e_environment` and
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_e2e_fix", "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_e2e_fix", "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None, clean_restart=False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -12213,13 +12317,14 @@ Write `pdd/agentic_e2e_fix.py`, the CLI entry point for the 11-step agentic E2E 
 Orchestrates the E2E fix by fetching GitHub issue data (body + comments), detecting the appropriate working directory (local worktree or branch safety check), and invoking the orchestrator with post-push CI validation options.
 
 % Requirements
-1. **Function**: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, force: bool = False, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False, ci_retries: int = 3, skip_ci: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. **Function**: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, force: bool = False, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False, ci_retries: int = 3, skip_ci: bool = False, skip_cleanup: bool = False, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. **GitHub Integration**: Parse the issue URL and fetch the issue (title, body, author) and all comments via `gh api` (use `--paginate`). Combine title, body, and comments into `issue_content`.
 3. **Working Directory Detection**:
-   - Priority 1: Check `.pdd/worktrees/` for `fix-issue-{N}`, `bug-issue-{N}`, or `change-issue-{N}` containing `.git`.
+   - Priority 1: Check `.pdd/worktrees/` for `fix-issue-{N}`, `bug-issue-{N}`, `test-issue-{N}`, or `change-issue-{N}` containing `.git`.
    - Priority 2: Fallback to current directory.
    - **Branch Safety**: Extract expected branch name from issue comments (e.g., "Switched to branch '...'"). If it mismatches the current branch and `force=False`, abort with a suggestion to `git checkout`.
-4. **Execution**: Invoke `run_agentic_e2e_fix_orchestrator` with collected metadata, content, and parameters including `protect_tests`, `ci_retries`, and `skip_ci`. Return its 5-tuple result.
+   - **Clean Restart**: If `clean_restart=True`, ignore prior worktrees and branch hints. If the caller's current directory is inside `.pdd/worktrees/{fix,bug,test,change}-issue-{N}`, use the containing repo root instead; otherwise use the caller's current directory. This prevents stopped-run artifacts from controlling the fresh fix workflow.
+4. **Execution**: Invoke `run_agentic_e2e_fix_orchestrator` with collected metadata, content, and parameters including `protect_tests`, `ci_retries`, `skip_ci`, `skip_cleanup`, `reasoning_time`, and `clean_restart`. Return its 5-tuple result.
 5. **Output**: Use `rich.console.Console` for status updates (fetching, worktree found, starting workflow) and warnings, unless `quiet`.
 6. **Error Handling**: Handle missing `gh` CLI, invalid URLs, and API errors gracefully. Return `(False, error_msg, 0.0, "", [])`.
 
@@ -16746,6 +16851,7 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
     - Clear state upon successful completion.
 3. **Workspace Isolation**:
     - Automatically create and manage isolated git worktrees for each issue (branch name format: `test/issue-{number}`).
+    - When `clean_restart=True`, fetch `+refs/heads/test/issue-{number}:refs/remotes/origin/test/issue-{number}` for Step 17 `--force-with-lease` safety, create the test worktree from the resolved default branch (`origin/main`, `origin/master`, `main`, then `master`) rather than current `HEAD`, and fail clearly if no default branch ref resolves.
     - Handle cleanup of existing worktrees/branches to ensure a clean state.
 4. **Context Propagation**:
     - Parse tags from LLM outputs (e.g., `FILES_CREATED`, `TEST_TYPE`, `STOP_CONDITION`).
@@ -16791,6 +16897,7 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 
 # Deliverable
 A Python module named `agentic_test_orchestrator.py` containing the primary entry point `run_agentic_test_orchestrator`. The function must return a tuple: `(success: bool, message: str, total_cost: float, model: str, changed_files: List[str])`.
+The entry point must accept `clean_restart: bool = False`; when true, call `clear_workflow_state(...)` before any `load_workflow_state(...)`, start from fresh in-memory state even if the clear fails, save `state["clean_restart"] = True`, post a visible Step 0 startup comment with `Mode: Clean restart`, pass the effective clean-restart flag into `_setup_worktree(...)` so stale generated branches cannot become the worktree base, and include the effective flag in the Step 17 submit-PR context so the prompt uses `git push --force-with-lease` plus existing-PR update handling. If a later normal resume loads `clean_restart=True` from state, keep using clean worktree and PR semantics.
 
 
 ===== agentic_test_python.prompt =====
@@ -16803,7 +16910,7 @@ Write the `pdd/agentic_test.py` module.
 CLI entry point for the agentic test generation workflow. Fetches a GitHub issue, extracts content and metadata describing what needs to be tested, then invokes the orchestrator to run the 9-step test generation process (supports UI, CLI, and API tests).
 
 % Requirements
-1. Function: `run_agentic_test(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_test(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number
 4. Supported URL formats:
@@ -16814,7 +16921,7 @@ CLI entry point for the agentic test generation workflow. Fetches a GitHub issue
 6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` to get full context
 8. Clone/checkout the repository to a temp directory if not already in it
-9. Call orchestrator: `run_agentic_test_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state)`
+9. Call orchestrator: `run_agentic_test_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state, clean_restart=clean_restart)`
 10. Return aggregated results from orchestrator
 
 % Manual Mode (legacy)
@@ -16834,6 +16941,7 @@ When `--manual` flag is used, fall back to the existing `cmd_test_main` function
 
 % Deliverables
 - Code: `pdd/agentic_test.py`
+
 
 ===== agentic_test_step10_validate_LLM.prompt =====
 <pdd-reason>Validates regression tests correctly detect bugs by confirming they fail against current code.</pdd-reason>
@@ -19302,6 +19410,7 @@ You are working on step 17 of 18 (final step) in an agentic test generation work
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Clean Restart Mode: {clean_restart}
 
 % Issue Content
 <issue_content>
@@ -19405,16 +19514,39 @@ Do NOT create a new branch - just stage, commit, and push.
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
-   - Push the branch to origin
-   - Create a draft pull request using `gh pr create --draft`
+   - If `clean_restart` is `true`, push with `git push --force-with-lease -u origin test/issue-{issue_number}` so a stopped run's old remote branch can be replaced safely.
+   - Otherwise, push with `git push -u origin test/issue-{issue_number}`.
+   - If `clean_restart` is `true`, check for an existing open PR first:
+     ```bash
+     gh pr list --head test/issue-{issue_number} --state open --json number,url
+     ```
+     If one exists, update that PR with `gh pr edit <number> --title "Add tests for #{issue_number}" --body "..."` and record its URL instead of creating a duplicate.
+   - If no open PR exists, create a draft pull request using `gh pr create --draft`
    - Link to the issue using "Closes #{issue_number}" in the PR body
 
 3. **Post final summary**
    - Comment on the issue with PR link and next steps
 
-% PR Creation Command
+% PR Creation Commands
+
+Push first:
 
 ```bash
+# clean_restart == true
+git push --force-with-lease -u origin test/issue-{issue_number}
+
+# clean_restart != true
+git push -u origin test/issue-{issue_number}
+```
+
+Then create or update the PR:
+
+```bash
+# clean_restart == true and an open PR already exists
+gh pr list --head test/issue-{issue_number} --state open --json number,url
+gh pr edit <number> --title "Add tests for #{issue_number}" --body "..."
+
+# otherwise
 gh pr create --draft --title "Add tests for #{issue_number}" --body "$(cat <<'EOF'
 ## Summary
 Adds tests based on the requirements in #{issue_number}.

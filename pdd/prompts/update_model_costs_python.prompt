@@ -60,4 +60,4 @@
 % Relevant LiteLLM Documentation:
     - Model Cost Data Structure (illustrative): <litellm_model_cost_example><web>https://docs.litellm.ai/docs/completion/token_usage#8-model_cost</web></litellm_model_cost_example>
     - Check Schema Support: <litellm_supports_schema_example><web>https://docs.litellm.ai/docs/completion/json_mode#2-check-if-model-supports-json_schema</web></litellm_supports_schema_example>
-    - Supported Providers/Models (for identifiers): <litellm_providers_list><web>https://docs.litellm.ai/docs/providers</web></litellm_providers_list>
+    - Supported Providers/Models (for identifiers): <litellm_providers_list><web>https://docs.litellm.ai/docs/providers</web></litellm_providers_list> 

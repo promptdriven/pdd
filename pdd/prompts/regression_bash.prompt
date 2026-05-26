@@ -15,12 +15,12 @@
         - CONTEXT_PATH for context files
         - LOG_FILE for regression logging
         - COST_FILE for tracking command costs
-
+    
     2. Use consistent variables across different commands:
         - EXTENSION_SCRIPT, EXTENSION_PROMPT, EXTENSION_TEST for extension-related files
         - CHANGE_PROMPT, CHANGE_SCRIPT, CHANGE_CONTEXT_PROMPT for change-related files
         - SPLIT_PROMPT, SPLIT_SCRIPT, SPLIT_EXAMPLE_SCRIPT for split-related files
-
+    
     3. Implement a robust logging system:
         - Create a log() function for verbose output (enabled by default)
         - Create a log_timestamped() function for regression.log entries
@@ -28,7 +28,7 @@
             - Executes pdd commands with consistent parameters
             - Logs command execution and results
             - Handles errors and exits on failure
-
+    
     4. For each pdd command, implement the following:
         - generate: Create extension script from prompt
         - example: Generate verification program
@@ -51,19 +51,19 @@
             - Compare Python extension outputs
             - Generate bug-specific tests
         - auto-deps: Handle dependency analysis
-
+    
     5. Configuration settings:
         - Set PDD_AUTO_UPDATE=false
         - Use strength=0.85 and temperature=1.0
         - Enable verbose output by default
         - Track costs in regression_cost.csv
-
+    
     6. Error handling and cleanup:
         - Remove existing regression.log at start
         - Check and handle command failures
         - Verify file existence before operations
         - Calculate and display total cost at completion
-
+    
     7. OS compatibility:
         - Handle sed differences between BSD (macOS) and GNU (Linux)
         - Use appropriate path handling for different systems

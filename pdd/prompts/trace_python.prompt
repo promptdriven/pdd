@@ -3,7 +3,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs:
+    Inputs: 
         'code_file' (str) - A string that contains the text of the code file.
         'code_line' (int) - An integer that represents the line number in the code file that the debugger is on.
         'prompt_file' (str) - A string that contains the text of the .prompt file.

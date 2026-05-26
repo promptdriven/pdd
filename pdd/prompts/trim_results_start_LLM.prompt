@@ -20,7 +20,7 @@
             "Here is how you run the code: ```bash\npython code.py```\n\nHere is the code: ```python\ndef hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef```"
             </llm_output>
         </input>
-        <output>
+        <output>    
         {{
         "explanation": "I identified the main unfinished code block which starts with triple backticks (```) in the text and removed all content before it. The remaining text, excluding the backticks and language tag, was extracted as the code block.",
         "code_block": "def hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef"
@@ -33,7 +33,7 @@
             ""
             </llm_output>
         </input>
-        <output>
+        <output>    
         {{
         "explanation": "There is nothing.",
         "code_block": ""

@@ -3,7 +3,7 @@
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs:
+    Inputs: 
         'current_output' - A string that is the current output of the code.
         'desired_output' - A string that is the desired output of the code.
         'prompt_used_to_generate_the_code' #create a function that adds two numbers in python
@@ -13,7 +13,7 @@
         'temperature' - A float that is the temperature of the LLM model to use.
         'language' - A string that is the language of the unit test to be generated.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
-    Outputs:
+    Outputs: 
         'unit_test'- A string that is the generated unit test code.
         'total_cost' - A float that is the total cost to generate the unit test code.
         'model_name' - A string that is the name of the selected LLM model
@@ -32,7 +32,7 @@
 
 % This program will use llm_invoke to do the following:
     Step 1. Load the 'bug_to_unit_test_LLM' prompt template using load_prompt_template.
-    Step 2. Run the inputs through the model using llm_invoke, ensuring the `time` parameter is passed.
+    Step 2. Run the inputs through the model using llm_invoke, ensuring the `time` parameter is passed. 
         2a. Pass the following string parameters to the prompt during invoke:
             - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
             - 'current_output'
@@ -44,7 +44,7 @@
     Step 3. Pretty print the markdown formatting that is present in the result via the rich Markdown function.
     Step 4. Detect if the generation is incomplete using the unfinished_prompt function (strength .89) by passing in the last 600 characters of the output of Step 2.
         - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant.    
     Step 5. Print out the total_cost including all the costs.
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.

@@ -3,7 +3,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs:
+    Inputs: 
         'code_module' - A string that is the code module to generate a concise example for.
         'prompt' - A string that is the prompt that was used to generate the code_module.
         'language' - A string that is the language of the code module. Default is "python".

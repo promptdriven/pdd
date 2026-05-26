@@ -1,21 +1,16 @@
 #!/bin/bash
+set -euo pipefail
 
-# Output file where all contents will be combined
-output_file="combined_output.txt"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+output_file="$script_dir/combined_output.txt"
 
-# Empty the output file if it already exists
 > "$output_file"
 
-# Loop through all files in the current directory
-for file in *.prompt; do
-  # Check if it's a regular file (not a directory)
+for file in "$script_dir"/*.prompt; do
   if [[ -f "$file" ]]; then
-    # Write the file name as a header
-    echo "===== $file =====" >> "$output_file"
-    # Append the file contents
-    cat "$file" >> "$output_file"
-    # Add a new line after the file contents
-    echo -e "\n" >> "$output_file"
+    echo "===== $(basename "$file") =====" >> "$output_file"
+    sed 's/[[:space:]]*$//' "$file" >> "$output_file"
+    printf '\n\n' >> "$output_file"
   fi
 done
 

@@ -20,7 +20,7 @@
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs:
+    Inputs: 
         'original_prompt' - A string containing the original prompt that was used to generate the existing code.
         'new_prompt' - A string containing the updated prompt that needs to be processed.
         'existing_code' - A string containing the existing code that was generated from the original prompt.
@@ -58,7 +58,7 @@
 
 % This program will use Langchain to do the following:
     Step 1. Load the 'diff_analyzer_LLM' prompt template using load_prompt_template with preprocess double_curly_brackets=True but be sure to exclude the input parameters from getting double curly brackets.
-
+    
     Step 2. Run the diff_analyzer_LLM prompt through llm_invoke:
         - a. Pass the following parameters to llm_invoke:
             * 'ORIGINAL_PROMPT': The original prompt
@@ -68,17 +68,17 @@
             * Pass the provided time parameter
         - b. Extract 'is_big_change', 'change_description', and 'analysis' from the Pydantic output
         - c. If verbose is True, print the analysis and whether the change is considered big or small
-
+    
     Step 3. Determine whether to use incremental patching or full regeneration:
         - a. If force_incremental is True, set should_regenerate to False, regardless of the diff analyzer's result
         - b. Otherwise, set should_regenerate to the value of is_big_change from the diff analyzer
         - c. If verbose is True and force_incremental is True, print a message indicating that incremental patching is being forced
-
+    
     Step 4. Based on the should_regenerate decision:
         - a. If should_regenerate is True (major change detected and not overridden):
             * Return None for updated_code, False for is_incremental, the cost incurred so far, and the model name used
             * The calling function should handle the full regeneration
-
+        
         - b. If should_regenerate is False (minor change detected or force_incremental is True):
             * Load the 'code_patcher_LLM' prompt template using load_prompt_template
             * Run the code_patcher_LLM prompt through llm_invoke:

@@ -3,7 +3,7 @@
 % Inputs:
 	•	Current output: <current_output>{current_output}</current_output>
 	•	Desired output: <desired_output>{desired_output}</desired_output>
-	•	Code under test: <code_under_test>{code_under_test}</code_under_test>
+	•	Code under test: <code_under_test>{code_under_test}</code_under_test> 
 	•	Program used to run the code under test: <program_used_to_run_code_under_test>{program_used_to_run_code_under_test}</program_used_to_run_code_under_test>
 	•	Prompt that generated the code: <prompt_that_generated_code>{prompt_that_generated_code}</prompt_that_generated_code>
 % Output:
