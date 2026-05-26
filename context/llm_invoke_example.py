@@ -1,70 +1,87 @@
 import os
 import sys
 from pydantic import BaseModel
+
+# Import the target module functions
 from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
-# Check for an API key to ensure the example can run non-interactively.
-# Note: llm_invoke abstracts over many providers, but we check for OpenAI here as a common default.
-api_key = os.environ.get("OPENAI_API_KEY")
-if not api_key:
-    print("OPENAI_API_KEY not set. Set it to run this example.")
-    sys.exit(0)
+"""
+Example usage of the pdd.llm_invoke module.
 
-# Enable verbose logging to see model selection and token usage details
-set_verbose_logging(True)
+This module provides a unified interface for calling Large Language Models (LLMs)
+across different providers (OpenAI, Anthropic, Gemini, local models, etc.) with
+built-in support for model selection, cost calculation, and structured outputs.
 
-print("--- Example 1: Basic Text Generation ---")
-# llm_invoke replaces the variables in `prompt` with values from `input_json`.
-# strength=0.5 selects the base model defined in the configuration.
-# time=0.0 disables extra reasoning/thinking overhead.
-response1 = llm_invoke(
-    prompt="Explain {topic} in one short sentence.",
-    input_json={"topic": "machine learning"},
-    strength=0.5,
-    temperature=0.3,
-    time=0.0
-)
+Inputs for llm_invoke:
+    - prompt (str): A string template containing placeholders like {topic}.
+    - input_json (dict or list): Values to format into the prompt.
+    - strength (float): 0.0 to 1.0. 0.0 picks the cheapest model, 0.5 picks the base model, 1.0 picks the highest ELO model.
+    - temperature (float): Randomness of the model (e.g., 0.1 for deterministic, 0.8 for creative).
+    - verbose (bool): Whether to print debug and token usage logs.
+    - output_pydantic (BaseModel): A Pydantic class to enforce structured JSON output.
+    - time (float): 0.0 to 1.0 indicating reasoning effort or budget for models that support it.
 
-print(f"Result: {response1['result']}")
-print(f"Model Used: {response1['model_name']}")
-print(f"Cost: ${response1['cost']:.6f}\n")
+Outputs of llm_invoke (Dict):
+    - result (str or BaseModel): The raw text or parsed structured object returned by the model.
+    - cost (float): The estimated cost of the API call in USD ($).
+    - model_name (str): The exact name of the model that was successfully used.
+    - thinking_output (str | None): Internal reasoning text if the model provides it.
+    - finish_reason (str): Why the model stopped generating (e.g., 'stop').
+    - attempted_models (list): Chronological list of models attempted during fallback.
+"""
 
-print("--- Example 2: Structured Output using Pydantic ---")
-# Define the expected structure of the output
-class ElementInfo(BaseModel):
-    name: str
-    symbol: str
-    atomic_number: int
+def main() -> None:
+    # Check for a required environment variable (API key)
+    # The exact key depends on the models configured in your project's llm_model.csv
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("OPENAI_API_KEY not set. Set it to run this example.")
+        sys.exit(0)
 
-# Pass the Pydantic class to output_pydantic to guarantee structured JSON output.
-response2 = llm_invoke(
-    prompt="Provide the details for the element {element}.",
-    input_json={"element": "Helium"},
-    strength=0.5,
-    temperature=0.0,
-    output_pydantic=ElementInfo
-)
+    # Optionally enable verbose Python logging for the module
+    set_verbose_logging(True)
 
-# The result will be automatically parsed into the Pydantic model instance
-element = response2['result']
-print(f"Parsed Pydantic Object - Name: {element.name}, Symbol: {element.symbol}, Atomic Number: {element.atomic_number}")
-print(f"Model Used: {response2['model_name']}\n")
+    print("--- Example 1: Simple Text Generation ---")
+    # Call the LLM with a simple prompt and dictionary input
+    response = llm_invoke(
+        prompt="Tell me a one sentence interesting fact about {topic}.",
+        input_json={"topic": "space"},
+        strength=0.5,       # Use the default base model
+        temperature=0.7,    # Slightly creative
+        verbose=True,
+        time=0.0            # No extra reasoning time required
+    )
+    
+    print(f"Raw Result: {response['result']}")
+    print(f"Model used: {response['model_name']}")
+    print(f"Estimated Cost (USD): ${response['cost']:.6f}")
+    print(f"Attempted Models: {response['attempted_models']}")
 
-print("--- Example 3: Using Direct Messages Format ---")
-# If you already have a conversational message history, you can bypass `prompt` and `input_json`
-# and directly provide the `messages` array.
-messages = [
-    {"role": "system", "content": "You are a sarcastic calculator."},
-    {"role": "user", "content": "What is 5 + 7?"}
-]
 
-# strength=0.1 attempts to select a cheaper, faster model (downwards interpolation from base)
-response3 = llm_invoke(
-    messages=messages,
-    strength=0.1,
-    temperature=0.5
-)
+    print("\n--- Example 2: Structured Output with Pydantic ---")
+    # Define a Pydantic model to enforce the shape of the LLM's response
+    class FactStructure(BaseModel):
+        fact: str
+        category: str
+        confidence: float
 
-print(f"Result: {response3['result']}")
-print(f"Model Used: {response3['model_name']}")
-print(f"Attempted Models Chain: {response3['attempted_models']}")
+    # Call the LLM requesting the output to match the Pydantic schema
+    response_structured = llm_invoke(
+        prompt="Provide a fact about {topic} and categorize it. Output JSON only.",
+        input_json={"topic": "the ocean"},
+        strength=0.8,       # Prefer a higher-capability model for structured tasks
+        temperature=0.1,    # Low temperature for strict compliance
+        output_pydantic=FactStructure,
+        verbose=True
+    )
+
+    # The 'result' is automatically parsed into a FactStructure instance
+    result_obj = response_structured['result']
+    
+    print(f"Parsed Fact: {result_obj.fact}")
+    print(f"Parsed Category: {result_obj.category}")
+    print(f"Parsed Confidence: {result_obj.confidence}")
+    print(f"Estimated Cost (USD): ${response_structured['cost']:.6f}")
+
+if __name__ == "__main__":
+    main()
