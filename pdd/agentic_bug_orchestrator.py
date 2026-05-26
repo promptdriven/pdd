@@ -2482,24 +2482,28 @@ def run_agentic_bug_orchestrator(
                         )
                         context["step6_expansion_items"] = expansion_after_retry
 
-                    # If Step 6 originally emitted SIBLING_PATTERN but had zero
-                    # NEEDS_FIX (auto-downgraded to LOCALIZED in
-                    # _apply_step6_scope_markers), the retry has now produced
-                    # evidence — promote scope back so Step 8 does not get the
-                    # contradictory "LOCALIZED + expansion items" pair.
+                    # If retry produced sibling evidence but scope is still
+                    # LOCALIZED, promote to SIBLING_PATTERN — Step 8 must not
+                    # receive the contradictory "LOCALIZED + non-empty expansion
+                    # items" pair. The trigger covers three Step 6 outputs:
+                    #   - explicit SIBLING_PATTERN with zero NEEDS_FIX (the
+                    #     auto-downgrade case)
+                    #   - explicit LOCALIZED that also emitted PATTERN_SEARCH
+                    #   - missing/invalid SCOPE_CLASSIFICATION (defaults to
+                    #     LOCALIZED) with PATTERN_SEARCH emitted
+                    # Sibling evidence IS the classification signal; the
+                    # original LLM marker is not load-bearing here.
+                    # CROSS_CUTTING is left alone — it represents a strictly
+                    # broader scope and should not be narrowed by promotion.
                     promoted_scope: Optional[str] = None
                     if sibling_evidence:
-                        raw_initial_scope = _parse_scope_classification(step_output)
                         current_scope = context.get("scope_classification", "LOCALIZED")
-                        if (
-                            raw_initial_scope == "SIBLING_PATTERN"
-                            and current_scope == "LOCALIZED"
-                        ):
+                        if current_scope == "LOCALIZED":
                             promoted_scope = "SIBLING_PATTERN"
                             context["scope_classification"] = "SIBLING_PATTERN"
                             if not quiet:
                                 console.print(
-                                    "[cyan]  → Restoring SCOPE_CLASSIFICATION to "
+                                    "[cyan]  → Promoting SCOPE_CLASSIFICATION to "
                                     "SIBLING_PATTERN: retry produced sibling evidence "
                                     "(issue #1208 follow-up)[/cyan]"
                                 )

@@ -7537,23 +7537,25 @@ class TestStep6ScopeOrchestratorWiring:
         assert _parse_scope_classification(step6_output) == "SIBLING_PATTERN"
 
     def test_pattern_retry_promotes_scope_when_siblings_found(self):
-        """Regression for PR #1210 round 2: when Step 6 emits SIBLING_PATTERN
-        with zero initial NEEDS_FIX (auto-downgraded to LOCALIZED) and the
-        PATTERN_SEARCH retry produces sibling evidence, the orchestrator must
-        promote scope back to SIBLING_PATTERN and append a
-        SCOPE_CLASSIFICATION marker so resume re-derives the promoted value.
-        Verified via source inspection because the retry block lives deep
-        inside the orchestrator main loop.
+        """Regression for PR #1210 rounds 2 & 3: when the PATTERN_SEARCH retry
+        produces sibling evidence and scope is still LOCALIZED, the
+        orchestrator must promote scope to SIBLING_PATTERN regardless of what
+        the original Step 6 marker said. This covers (a) explicit
+        SIBLING_PATTERN auto-downgraded to LOCALIZED, (b) explicit LOCALIZED
+        paired with PATTERN_SEARCH, and (c) missing/invalid scope (default
+        LOCALIZED) paired with PATTERN_SEARCH. A stale LOCALIZED + non-empty
+        expansion_items pair is contradictory for Step 8.
         """
         source = self._read_orchestrator_source()
-        # Promotion check must look at the raw original scope.
-        assert 'raw_initial_scope = _parse_scope_classification(step_output)' in source, (
-            "Retry block must compare against the raw original scope to detect "
-            "an auto-downgrade that should be restored after sibling evidence."
+        # Promotion is gated on the current (downgraded) scope being LOCALIZED.
+        assert 'if current_scope == "LOCALIZED":' in source, (
+            "Retry block must promote scope whenever sibling_evidence is "
+            "non-empty and current scope is LOCALIZED — not only when the "
+            "original Step 6 marker was SIBLING_PATTERN."
         )
         # Promotion must write to context.
         assert 'context["scope_classification"] = "SIBLING_PATTERN"' in source, (
-            "Retry block must promote context['scope_classification'] back to "
+            "Retry block must promote context['scope_classification'] to "
             "SIBLING_PATTERN when retry produces sibling evidence."
         )
         # Promotion must append a SCOPE_CLASSIFICATION marker to step6_output.
