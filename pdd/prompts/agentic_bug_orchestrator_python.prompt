@@ -113,6 +113,7 @@ After Step 6 completes, the orchestrator MUST parse three additional markers fro
    - Parse ALL matching lines (one sibling per line).
    - For each line, capture the item token (before the first `|`) and the full reason text. The item may be a source path or a stable value-level sibling ID such as `extension:.htm`, `command:resume`, `button:save`, `status:archived`, or `model:gpt-x`.
    - Treat each parsed line as a confirmed sibling that must be added to the EXPANSION_ITEMS list passed to Steps 8 and 9 via `context["step6_expansion_items"]`.
+   - Only source/worktree path items may be merged into `FIX_LOCATIONS`. Value-level sibling IDs must stay out of `FIX_LOCATIONS` while still flowing into `EXPANSION_ITEMS`.
    - Fold `NEEDS_FIX` items into the existing EXPANSION_ITEMS string using comma separation, deduplicating against entries already present from the `EXPANSION_ITEMS:` marker.
 
 3. `SAFE_EVIDENCE: <item> | <evidence location> | <reason>`

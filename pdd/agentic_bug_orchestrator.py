@@ -865,13 +865,32 @@ def _is_llm_classified(
     return False
 
 
+def _is_fix_location_path(item: str) -> bool:
+    """Return True when a NEEDS_FIX item is a source/worktree path.
+
+    Step 6 can now emit value-level siblings such as ``extension:.htm``. Those
+    must flow into EXPANSION_ITEMS for test coverage, but they are not files and
+    must not pollute FIX_LOCATIONS.
+    """
+    cleaned = item.strip().strip("`")
+    if not cleaned:
+        return False
+    # Domain IDs use "domain:value" and have no path separator before the colon.
+    if re.match(r"^[A-Za-z][A-Za-z0-9_-]*:", cleaned):
+        return False
+    return True
+
+
 def _parse_classification_evidence(
     retry_output: str,
 ) -> Tuple[List[str], List[str]]:
     """Parse NEEDS_FIX / SAFE_EVIDENCE markers from retry LLM output.
 
     Returns:
-        (needs_fix_files, safe_files) — deduplicated lists of file paths.
+        (needs_fix_files, safe_files) — deduplicated lists of source paths or
+        value-level item IDs. Non-path NEEDS_FIX items are filtered before
+        merging into FIX_LOCATIONS but still flow into EXPANSION_ITEMS via
+        _parse_needs_fix.
     """
     needs_fix: List[str] = []
     safe: List[str] = []
@@ -961,8 +980,12 @@ def _merge_fix_locations(
             # is more specific and should be added alongside or instead.
         return False
 
-    # Add NEEDS_FIX files that aren't already in merged.
+    # Add NEEDS_FIX files that aren't already in merged. Value-level sibling
+    # IDs (extension:.htm, command:resume, etc.) are test-coverage expansion
+    # items, not source locations.
     for f in needs_fix:
+        if not _is_fix_location_path(f):
+            continue
         if not _in_merged(f):
             merged.append(f)
             merged_set.add(f)
