@@ -2976,6 +2976,11 @@ class TestFindStateCommentPagination:
                 f"Without it, GitHub API only returns first 30 comments. "
                 f"Command was: {args}"
             )
+            assert "--slurp" in args, (
+                f"gh api command missing --slurp flag. "
+                f"Without it, paginated REST pages may be emitted as multiple JSON documents. "
+                f"Command was: {args}"
+            )
 
     # ---- Test 2: Behavioral — state comment beyond 30 is found ----
 
@@ -3003,10 +3008,34 @@ class TestFindStateCommentPagination:
             assert comment_id == 1035  # 1000 + 35
             assert state["last_completed_step"] == 35
 
+    def test_find_state_comment_flattens_slurped_pages(self, tmp_path):
+        """``gh api --paginate --slurp`` wraps REST pages in an outer list."""
+        mock_comments = _make_mock_comments(42, state_positions=[35])
+        pages = [mock_comments[:30], mock_comments[30:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(pages),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            assert result is not None
+            comment_id, state = result
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
+
     # ---- Test 3: Returns first matching state comment ----
 
-    def test_find_state_comment_returns_first_match(self, tmp_path):
-        """When multiple state comments exist, returns the first one found."""
+    def test_find_state_comment_returns_highest_id_match(self, tmp_path):
+        """When multiple state comments exist, returns the one with the highest id.
+
+        GitHub assigns monotonically increasing comment ids. Under a duplicate-
+        marker hazard (two workers both POST a state comment, or an old run's
+        comment was never cleared) the highest id corresponds to the most recently
+        written state, which is what a normal resume should load.
+        """
         mock_comments = _make_mock_comments(42, state_positions=[10, 35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
@@ -3019,9 +3048,9 @@ class TestFindStateCommentPagination:
 
             assert result is not None
             comment_id, state = result
-            # Should return the first match (position 10), not the later one
-            assert comment_id == 1010
-            assert state["last_completed_step"] == 10
+            # Should return the highest-id match (position 35 → id 1035), not first
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
 
     # ---- Test 4: No state comment exists ----
 
@@ -7492,3 +7521,210 @@ class TestPostStepCommentOnce:
             )
             assert result is False
             assert posted == set()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate state-marker hazard — issue #1149 round 2
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    _find_all_state_comments,
+    github_clear_state,
+    github_save_state,
+)
+
+
+class TestDuplicateStateCommentHandling:
+    """Verify that the dedupe path closes the race window where two
+    valid state comments coexist (e.g. a concurrent worker re-created
+    one in the gap between a clean-restart pre-clear and our first
+    save). The legacy ``_find_state_comment`` returns only the first
+    match; a future normal resume picking it can silently load stale
+    step outputs from the older marker."""
+
+    def test_find_all_returns_every_matching_marker_id(self, tmp_path):
+        """``_find_all_state_comments`` MUST return every comment id
+        whose body carries the workflow's state marker, not just the
+        first. This is what makes the dedupe sweep / clear-all possible.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(mock_comments))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007], (
+            f"Expected every matching id [1002, 1005, 1007]; got {ids!r}"
+        )
+
+    def test_find_all_flattens_slurped_pages(self, tmp_path):
+        """The duplicate-marker sweep must see matches on every slurped page."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+        pages = [mock_comments[:4], mock_comments[4:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(pages))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007]
+
+    def test_github_clear_state_deletes_all_matching_markers(self, tmp_path):
+        """``github_clear_state`` must DELETE every comment carrying
+        the marker — leaving any one behind reintroduces the silent
+        stale-state hazard."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        deletes: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0)
+            if cmd[:2] == ["gh", "api"] and "-X" in cmd and cmd[cmd.index("-X") + 1] == "DELETE":
+                deletes.append(cmd[2])  # capture the issues/comments/<id> path
+                return m
+            # The LIST call (no -X DELETE) — return the mock comments
+            m.stdout = json.dumps(mock_comments)
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            ok = github_clear_state("owner", "repo", 481, "bug", tmp_path)
+
+        assert ok is True
+        deleted_ids = sorted(
+            int(p.rsplit("/", 1)[-1]) for p in deletes
+        )
+        assert deleted_ids == [1002, 1005, 1007], (
+            f"Expected DELETE for all three marker comments; "
+            f"saw {deleted_ids!r} from {deletes!r}"
+        )
+
+    def test_github_save_state_dedupe_adopts_newest_and_deletes_rest(self, tmp_path):
+        """When ``dedupe=True`` and ``comment_id is None`` and multiple
+        existing state markers are found, ``github_save_state`` must
+        (1) PATCH the highest-id marker in place with the new state and
+        (2) DELETE the older markers — converging to exactly one state
+        comment regardless of prior races."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        actions: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            # LIST call: no -X PATCH/DELETE/POST → return comments
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            # Capture the comment-id from the URL when present
+            target = next((p for p in cmd if "/comments/" in p), None)
+            cid = int(target.rsplit("/", 1)[-1]) if target else None
+            actions.append((verb, cid))
+            if verb == "POST":
+                # POST shouldn't happen in this scenario — flag it loudly
+                m.stdout = json.dumps({"id": 9999})
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 7, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # Adopted the highest-id existing marker (1007).
+        assert returned_id == 1007, (
+            f"Expected dedupe to adopt the most-recent marker (1007); got {returned_id!r}"
+        )
+        verbs = [v for v, _ in actions]
+        assert "POST" not in verbs, (
+            f"Expected dedupe to adopt-and-PATCH, not POST a new marker; saw verbs={verbs!r}"
+        )
+        patched = [cid for v, cid in actions if v == "PATCH"]
+        deleted = [cid for v, cid in actions if v == "DELETE"]
+        assert patched == [1007], f"PATCH should hit 1007 only; got {patched!r}"
+        assert sorted(deleted) == [1002, 1005], (
+            f"DELETE should hit the two older markers (1002, 1005); got {sorted(deleted)!r}"
+        )
+
+    def test_github_save_state_dedupe_false_skips_find_all(self, tmp_path):
+        """``dedupe=False`` (the default) MUST preserve the original
+        behavior: blind POST with no list-comments side effect. We pay
+        the find-all cost only when the caller opts in."""
+        listed: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout=json.dumps({"id": 5000}))
+            # The LIST call has no -X (it's a GET to /comments)
+            if "-X" not in cmd and "/issues/" in " ".join(cmd) and "/comments" in " ".join(cmd):
+                listed.append(cmd)
+                m.stdout = json.dumps([])
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 1, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=False,
+            )
+
+        assert listed == [], (
+            f"dedupe=False should NOT list comments; saw {len(listed)} list calls"
+        )
+
+    def test_github_save_state_dedupe_logs_warning_on_delete_failure(self, tmp_path):
+        """When ``dedupe=True`` and stale comments cannot be deleted, the
+        function must log a warning to stderr and still return ``keep_id``.
+
+        The PATCH to the highest-id comment succeeded, so the new state is
+        durably written. The warning lets operators diagnose residual stale
+        markers without treating a cleanup hiccup as a save failure.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[3, 6])
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            if verb == "DELETE":
+                m.returncode = 1  # Simulate delete failure
+            return m
+
+        import io
+        stderr_capture = io.StringIO()
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect), \
+             patch("sys.stderr", stderr_capture):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 6, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # PATCH succeeded → keep_id returned even though delete failed
+        assert returned_id == 1006, (
+            f"Expected keep_id=1006 despite delete failure; got {returned_id!r}"
+        )
+        warning_text = stderr_capture.getvalue()
+        assert "could not be deleted" in warning_text, (
+            f"Expected delete-failure warning on stderr; got: {warning_text!r}"
+        )
+        assert "1003" in warning_text, (
+            f"Expected stale id 1003 named in warning; got: {warning_text!r}"
+        )
