@@ -7,13 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from importlib.resources import as_file
-
-try:
-    from importlib.resources import files as pkg_files
-except ImportError:  # pragma: no cover
-    # Fallback for Python < 3.11 if needed.
-    from importlib_resources import files as pkg_files  # type: ignore[attr-defined]
+from importlib.resources import as_file, files as pkg_files
 
 
 _FRONT_MATTER_PATTERN = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)

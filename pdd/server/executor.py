@@ -265,21 +265,25 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
     Returns:
         The Click command object or None if not found.
     """
-    # Lazy imports to avoid circular dependencies with the main CLI module
+    # Lazy imports to avoid circular dependencies with the main CLI module.
+    # Import from pdd.commands' package exports instead of non-existent
+    # per-command modules such as pdd.commands.sync.
     try:
-        from ..commands.sync import sync
-        from ..commands.update import update
-        from ..commands.bug import bug
-        from ..commands.generate import generate
-        from ..commands.test import test
-        from ..commands.fix import fix
-        from ..commands.example import example
-        from ..commands.preprocess import preprocess
-        from ..commands.split import split
-        from ..commands.change import change
-        from ..commands.detect import detect
-        from ..commands.conflicts import conflicts
-        from ..commands.crash import crash
+        from ..commands import (
+            bug,
+            change,
+            conflicts,
+            crash,
+            detect_change,
+            example,
+            fix,
+            generate,
+            preprocess,
+            split,
+            sync,
+            test,
+            update,
+        )
     except ImportError:
         # Fallback for testing or incomplete environments
         return None
@@ -295,7 +299,7 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
         "preprocess": preprocess,
         "split": split,
         "change": change,
-        "detect": detect,
+        "detect": detect_change,
         "conflicts": conflicts,
         "crash": crash,
     }

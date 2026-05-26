@@ -32,6 +32,11 @@ atexit.register(shutil.rmtree, _PYTEST_FAKE_HOME, ignore_errors=True)
 os.environ["HOME"] = _PYTEST_FAKE_HOME
 os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
 
+# Prevent outer agentic/checkup controls from changing test behavior. Tests that
+# cover these knobs set them explicitly with monkeypatch or patch.dict.
+for _PDD_ENV_VAR in ("PDD_AGENTIC_PROVIDER", "PDD_GOOGLE_CLI", "PDD_AUTO_UPDATE"):
+    os.environ.pop(_PDD_ENV_VAR, None)
+
 import pytest
 from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError

@@ -9,11 +9,19 @@ filelock>=3.12
 firebase_admin==7.4.0
 firecrawl_py==4.28.0
 google-cloud-aiplatform>=1.3
+httpx==0.28.1
 jsonschema==4.26.0
 keyring==25.7.0
+langchain>=0.3.25,<0.4
+langchain-anthropic>=0.3.14,<0.4
+langchain-community>=0.3.25,<0.4
+langchain-core>=0.3.56,<0.4
+langchain-mcp-adapters>=0.1.0,<0.2
+langgraph>=0.3.0,<0.4
 litellm[caching]>=1.80.0
 lxml>=5.0.0
 nest_asyncio==1.6.0
+numpy>=1.26.0
 openai>=1.99.5
 pandas==3.0.3
 pillow-heif==1.3.0
@@ -26,6 +34,7 @@ python-dotenv==1.2.2
 rich==15.0.0
 semver==3.0.4
 setuptools
+starlette>=0.37.2
 textual
 z3_solver==4.16.0.0
 
@@ -38,7 +47,6 @@ tiktoken>=0.7.0
 
 # Dev dependencies
 build
-httpx==0.28.1
 pytest-asyncio
 pytest-mock
 pytest-testmon
