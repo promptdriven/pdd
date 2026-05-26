@@ -51,10 +51,9 @@ def test_get_language_empty_extension(mock_environment, mock_csv_file):
     assert get_language('') == ''
 
 def test_get_language_missing_environment_variable(monkeypatch):
-    """Tests get_language when the PDD_PATH environment variable is not set."""
+    """Without PDD_PATH, get_language falls back to the packaged language_format.csv."""
     monkeypatch.delenv("PDD_PATH", raising=False)
-    with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-        get_language('.py')
+    assert get_language('.py') == 'Python'
 
 def test_get_language_file_not_found(mock_environment, tmp_path):
     """Tests get_language when the CSV file is not found."""

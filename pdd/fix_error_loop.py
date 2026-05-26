@@ -654,7 +654,16 @@ def fix_error_loop(unit_test_file: str,
         unit_test_ext = os.path.splitext(unit_test_name)[1]
         code_ext = os.path.splitext(code_name)[1]
 
-        backup_dir = Path.cwd() / '.pdd' / 'backups' / code_basename / timestamp
+        # Prefer project-root backups when code lives under cwd; otherwise anchor
+        # beside the module (monorepo subprojects invoked from repo root).
+        code_path = Path(code_file).resolve()
+        cwd = Path.cwd().resolve()
+        try:
+            code_path.relative_to(cwd)
+            backup_root = cwd
+        except ValueError:
+            backup_root = code_path.parent
+        backup_dir = backup_root / '.pdd' / 'backups' / code_basename / timestamp
         backup_dir.mkdir(parents=True, exist_ok=True)
 
         unit_test_backup = str(backup_dir / f"test_{iteration}_{errors}_{fails}_{warnings}{unit_test_ext}")

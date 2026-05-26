@@ -19,12 +19,10 @@ def get_run_command(extension: str) -> str:
     Raises:
         ValueError: If the PDD_PATH environment variable is not set.
     """
-    # Step 1: Resolve CSV path from PDD_PATH
-    resolver = get_default_resolver()
-    try:
-        csv_path = resolver.resolve_data_file("data/language_format.csv")
-    except ValueError as exc:
-        raise ValueError("PDD_PATH environment variable is not set") from exc
+    # Step 1: Resolve CSV path (PDD_PATH, packaged wheel data, or repo checkout)
+    from pdd.get_language import _language_format_csv_path
+
+    csv_path = _language_format_csv_path()
 
     # Step 2: Ensure the extension starts with a dot and convert to lowercase
     if not extension.startswith('.'):
