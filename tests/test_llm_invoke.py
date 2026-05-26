@@ -7288,3 +7288,79 @@ def test_anthropic_config_opus_patch_covers_vertex_subclass():
         pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
     cfg = VertexAIAnthropicConfig()
     assert cfg._is_claude_opus_4_5("vertex_ai/claude-opus-4-7") is True
+
+
+# ------------------------------------------------------------------------------
+# Transform-level shape assertions
+#
+# Predicate alone isn't enough: LiteLLM's map_openai_params also unconditionally
+# overwrites optional_params["thinking"] with the legacy enabled shape when
+# `reasoning_effort` is passed — even when _is_claude_opus_4_5 matches. The
+# wrap fixes the final shape Vertex sees. These tests pin the actual
+# transformed kwargs, not just the predicate result.
+# ------------------------------------------------------------------------------
+
+
+def _map_thinking_kwargs(non_default, model):
+    """Run AnthropicConfig.map_openai_params with the pdd.llm_invoke patch
+    applied. Returns (thinking, output_config) from the result."""
+    import pdd.llm_invoke  # noqa: F401 — ensures the wrap is installed
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    cfg = AnthropicConfig()
+    result = cfg.map_openai_params(
+        non_default_params=non_default,
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    return result.get("thinking"), result.get("output_config")
+
+
+def test_map_openai_params_vertex_opus_47_effort_only_emits_adaptive_shape():
+    """The vertex_ai/claude-opus-4-7 CSV row carries reasoning_type=effort,
+    so pdd hands LiteLLM only `reasoning_effort`. Pre-patch, LiteLLM
+    produced thinking.type.enabled (rejected by Vertex). Post-patch, the
+    final shape must be thinking.type.adaptive + output_config.effort."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "vertex_ai/claude-opus-4-7"
+    )
+    assert thinking == {"type": "adaptive"}, thinking
+    assert output_config == {"effort": "high"}, output_config
+
+
+def test_map_openai_params_bedrock_opus_47_effort_only_emits_adaptive_shape():
+    """Bedrock anthropic.claude-opus-4-7 row is also reasoning_type=effort
+    in the CSV — same code path, must produce the same adaptive shape."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "anthropic.claude-opus-4-7"
+    )
+    assert thinking == {"type": "adaptive"}, thinking
+    assert output_config == {"effort": "high"}, output_config
+
+
+def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
+    """The Anthropic,claude-opus-4-7 row is reasoning_type=adaptive — pdd
+    sends both thinking={adaptive, display=summarized} and
+    reasoning_effort. The wrap must preserve the caller's richer adaptive
+    payload (display field) instead of stripping it back to bare
+    {type: adaptive}."""
+    thinking, output_config = _map_thinking_kwargs(
+        {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "reasoning_effort": "medium",
+        },
+        "claude-opus-4-7",
+    )
+    assert thinking == {"type": "adaptive", "display": "summarized"}, thinking
+    assert output_config == {"effort": "medium"}, output_config
+
+
+def test_map_openai_params_unrelated_model_unchanged():
+    """The wrap is opt-in via _is_claude_opus_4_5 — sonnet-4-6 and other
+    non-Opus models must retain LiteLLM's legacy enabled shape so we don't
+    regress callers that haven't migrated to adaptive thinking."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "claude-sonnet-4-6"
+    )
+    assert thinking == {"type": "enabled", "budget_tokens": 4096}, thinking
+    assert output_config is None, output_config
