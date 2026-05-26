@@ -787,25 +787,6 @@ def _validate_jsonschema_with_unwrap(
     """
     import jsonschema
     eligible = _jsonschema_eligible_for_envelope_unwrap(schema)
-    # Refuse to silently handle envelope-shaped input against a composed/flexible
-    # schema: we can't safely decide whether to unwrap, and silently accepting
-    # the wrapped form could reshape a legitimate payload. Surface this as a
-    # ValidationError so callers see the ambiguity.
-    if (
-        not eligible
-        and isinstance(instance, dict)
-        and len(instance) == 1
-        and "parameter" in instance
-        and isinstance(instance.get("parameter"), dict)
-    ):
-        try:
-            jsonschema.validate(instance=instance, schema=schema)
-        except jsonschema.ValidationError:
-            raise
-        raise jsonschema.ValidationError(
-            "Refusing to silently unwrap '{\"parameter\": ...}' envelope "
-            "against composed/flexible schema; unwrap gate skipped."
-        )
     try:
         jsonschema.validate(instance=instance, schema=schema)
         return instance
@@ -2981,15 +2962,15 @@ def _repair_python_syntax(code: str) -> str:
 
 def _smart_unescape_code(code: str) -> str:
     """
-    Unescape literal \n sequences in code while preserving them inside string literals.
+    Unescape literal \\n sequences in code while preserving them inside string literals.
 
     When LLMs return code as JSON, newlines get double-escaped. After JSON parsing,
     we have literal backslash-n (2 chars) that should be actual newlines for code
-    structure, BUT escape sequences inside Python strings (like print("\n")) should
+    structure, BUT escape sequences inside Python strings (like print("\\n")) should
     remain as escape sequences.
 
     Args:
-        code: Python code that may have literal \n sequences
+        code: Python code that may have literal \\n sequences
 
     Returns:
         Code with structural newlines unescaped but string literals preserved
