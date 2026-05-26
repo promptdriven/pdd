@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -1036,10 +1037,56 @@ def _verify_fix_location_coverage(
             if module_path in content or path_no_ext in content or basename_re.search(content):
                 found = True
                 break
+            if _cli_test_covers_command_module(fix_loc, content, work_dir):
+                found = True
+                break
         if not found:
             uncovered.append(fix_loc)
 
     return uncovered
+
+
+def _extract_click_command_names(command_module: Path) -> List[str]:
+    """Extract Click command names declared in a command module."""
+    try:
+        content = command_module.read_text()
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    names: List[str] = []
+    for match in re.finditer(r"@click\.command\(([^)]*)\)", content):
+        args = match.group(1)
+        name_match = re.search(r"\bname\s*=\s*['\"]([^'\"]+)['\"]", args)
+        positional_match = re.match(r"\s*['\"]([^'\"]+)['\"]", args)
+        if name_match:
+            names.append(name_match.group(1))
+        elif positional_match:
+            names.append(positional_match.group(1))
+    return list(dict.fromkeys(names))
+
+
+def _cli_test_covers_command_module(
+    fix_location: str,
+    test_content: str,
+    work_dir: Path,
+) -> bool:
+    """Return True when a CliRunner test exercises a command module via pdd.cli."""
+    if not fix_location.startswith("pdd/commands/") or not fix_location.endswith(".py"):
+        return False
+    if "CliRunner" not in test_content or ".invoke(" not in test_content:
+        return False
+    if not (
+        "from pdd import cli" in test_content
+        or "import pdd.cli" in test_content
+        or "from pdd.cli import" in test_content
+    ):
+        return False
+
+    command_names = _extract_click_command_names(work_dir / fix_location)
+    return any(
+        re.search(rf"['\"]{re.escape(command_name)}['\"]", test_content)
+        for command_name in command_names
+    )
 
 
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
@@ -1529,8 +1576,10 @@ def _scan_step9_file_for_new_patterns(
         - pre-snapshot is a strict line-prefix of current -> pure append,
           scan only appended lines (preserves issue #990 optimisation).
         - any other change (rewrite shorter, rewrite same length, or a
-          rewrite that happens to extend the file) -> full scan, so real
-          violations introduced by the rewrite are still caught.
+          rewrite that happens to extend the file) -> full scan, then subtract
+          violation identities that already existed in the snapshot. This
+          catches real new violations without retrying just because the model
+          rewrote a file that already had a structural test.
     """
     path = Path(file_path)
 
@@ -1555,7 +1604,71 @@ def _scan_step9_file_for_new_patterns(
             str(path), start_line=len(pre_lines) + 1
         )
 
-    return detect_structural_test_patterns(str(path))
+    current_violations = detect_structural_test_patterns(str(path))
+    return _filter_preexisting_structural_violations(
+        current_violations,
+        cur_lines,
+        pre_snapshot,
+    )
+
+
+def _detect_structural_test_patterns_in_text(content: str) -> List[str]:
+    """Run the structural detector against an in-memory snapshot."""
+    if not content.strip():
+        return []
+
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        return detect_structural_test_patterns(str(tmp_path))
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def _structural_violation_identity(
+    violation: str,
+    lines: List[str],
+) -> Tuple[str, str]:
+    """Return a stable identity for a structural violation independent of line number."""
+    match = re.match(r"Line\s+(\d+):\s*(.*)", violation)
+    if not match:
+        return violation, ""
+
+    line_index = int(match.group(1)) - 1
+    source_line = lines[line_index].strip() if 0 <= line_index < len(lines) else ""
+    description = match.group(2).strip()
+    return description, source_line
+
+
+def _filter_preexisting_structural_violations(
+    current_violations: List[str],
+    current_lines: List[str],
+    pre_snapshot: str,
+) -> List[str]:
+    """Remove structural violations that were already present pre-Step 9."""
+    if not current_violations:
+        return []
+
+    pre_lines = pre_snapshot.splitlines()
+    pre_violations = _detect_structural_test_patterns_in_text(pre_snapshot)
+    preexisting = {
+        _structural_violation_identity(violation, pre_lines)
+        for violation in pre_violations
+    }
+    if not preexisting:
+        return current_violations
+
+    return [
+        violation
+        for violation in current_violations
+        if _structural_violation_identity(violation, current_lines) not in preexisting
+    ]
 
 
 def _extract_violation_snippets(
@@ -1747,6 +1860,7 @@ def run_agentic_bug_orchestrator(
         "step6_expansion_items": "none",
         "scope_classification": "LOCALIZED",
         "step9_test_verification": "",
+        "planned_test_count": "all",
     }
 
     if clean_restart:
@@ -1807,6 +1921,11 @@ def run_agentic_bug_orchestrator(
         created = _parse_changed_files(s7_out, "FILES_CREATED")
         modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
         changed_files.extend(prompt_fixed + created + modified)
+
+    # Step 8
+    if "step8_output" in context:
+        planned = _count_planned_tests(context["step8_output"])
+        context["planned_test_count"] = str(planned) if planned > 0 else "all"
 
     # Step 9
     if "step9_output" in context:

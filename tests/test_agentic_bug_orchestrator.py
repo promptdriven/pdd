@@ -4059,6 +4059,66 @@ def test_no_retry_when_test_counts_match(mock_dependencies, default_args, tmp_pa
     )
 
 
+def test_resume_after_step8_rehydrates_planned_test_count(
+    mock_dependencies, default_args, tmp_path
+):
+    """Resuming directly into Step 9 must not render {planned_test_count} literally."""
+    mock_run, mock_load, _ = mock_dependencies
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    state = {
+        "step_outputs": {
+            str(i): f"Output for step {i}" for i in range(1, 8)
+        },
+        "last_completed_step": 8,
+        "worktree_path": str(worktree_path),
+        "step_comments": {},
+    }
+    state["step_outputs"]["8"] = (
+        "## Test Plan\n"
+        "#### Test 1: Alpha\n"
+        "#### Test 2: Beta\n"
+        "PLANNED_TEST_COUNT: 2"
+    )
+    captured = {}
+
+    mock_load.return_value = "Step {issue_number}: planned={planned_test_count}"
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            captured["step9_instruction"] = kwargs.get("instruction", "")
+            test_file = worktree_path / "tests" / "test_resume.py"
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text(
+                "def test_alpha():\n    assert True\n\n"
+                "def test_beta():\n    assert True\n"
+            )
+            return (
+                True,
+                "Generated tests\nFILES_CREATED: tests/test_resume.py",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step10":
+            return (True, "FAIL: Test does not work as expected", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(state, None),
+    ), patch(
+        "pdd.agentic_bug_orchestrator._verify_e2e_tests",
+        return_value=(True, "verification ok"),
+    ):
+        run_agentic_bug_orchestrator(**default_args)
+
+    assert captured["step9_instruction"] == "Step 1: planned=2"
+
+
 def test_marker_absent_falls_back_to_headers(mock_dependencies, default_args, tmp_path):
     """
     Test that cross-validation still works when PLANNED_TEST_COUNT marker
@@ -6387,6 +6447,68 @@ class TestVerifyFixLocationCoverage:
             tmp_path,
         )
         assert result == ["pdd/cmd_test_main.py"]
+
+    def test_cli_runner_command_invocation_covers_command_module(self, tmp_path):
+        """A pdd.cli CliRunner test covers the command module that owns the command."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+
+        command_file = tmp_path / "pdd" / "commands" / "generate.py"
+        command_file.parent.mkdir(parents=True)
+        command_file.write_text(
+            "import click\n\n"
+            "@click.command('example')\n"
+            "def example():\n"
+            "    pass\n"
+        )
+        test_file = tmp_path / "tests" / "test_cli.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from click.testing import CliRunner\n"
+            "from pdd import cli as _cli\n"
+            "import pdd.context_generator_main\n\n"
+            "def test_example_cli():\n"
+            "    result = CliRunner().invoke(_cli.cli, ['example'])\n"
+            "    assert result.exit_code == 0\n"
+        )
+
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/context_generator_main.py"],
+            ["tests/test_cli.py"],
+            tmp_path,
+        )
+
+        assert result == []
+
+    def test_cli_runner_without_command_name_does_not_cover_command_module(self, tmp_path):
+        """Importing pdd.cli alone is not enough to cover a command module."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+
+        command_file = tmp_path / "pdd" / "commands" / "generate.py"
+        command_file.parent.mkdir(parents=True)
+        command_file.write_text(
+            "import click\n\n"
+            "@click.command('example')\n"
+            "def example():\n"
+            "    pass\n"
+        )
+        test_file = tmp_path / "tests" / "test_cli.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from click.testing import CliRunner\n"
+            "from pdd import cli as _cli\n"
+            "import pdd.context_generator_main\n\n"
+            "def test_other_cli():\n"
+            "    result = CliRunner().invoke(_cli.cli, ['other'])\n"
+            "    assert result.exit_code == 0\n"
+        )
+
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/context_generator_main.py"],
+            ["tests/test_cli.py"],
+            tmp_path,
+        )
+
+        assert result == ["pdd/commands/generate.py"]
 
     def test_matches_via_patch_target(self, tmp_path):
         """Coverage detected via patch('module.path') string."""
