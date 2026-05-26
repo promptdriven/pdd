@@ -331,6 +331,9 @@ def run_agentic_checkup(
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
     fallback_reviewer_on_failure: bool = False,
+    enable_gates: bool = True,
+    gate_timeout: float = 60.0,
+    gate_allow: Tuple[str, ...] = (),
     start_step_override: Optional[Union[int, float]] = None,
     cwd: Optional[Path] = None,
 ) -> Tuple[bool, str, float, str]:
@@ -476,6 +479,9 @@ def run_agentic_checkup(
             blocking_severities=parse_severity_list(blocking_severities),
             clean_reviewer_states=parse_state_list(clean_reviewer_states),
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,
+            enable_gates=enable_gates,
+            gate_timeout=gate_timeout,
+            gate_allow=tuple(gate_allow),
         )
         return run_checkup_review_loop(
             context=loop_context,
