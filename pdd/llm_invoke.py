@@ -262,6 +262,49 @@ except Exception as _converse_patch_err:  # pylint: disable=broad-except
         _converse_patch_err,
     )
 
+# Vertex AI Anthropic transform_request unconditionally strips `output_config`
+# from the request body (litellm/llms/vertex_ai/.../transformation.py
+# line ~74 in 1.82.6, comment: "VertexAI doesn't support output_config").
+# That comment is wrong for Opus 4.7: the Vertex API explicitly REQUIRES
+# `output_config.effort` alongside `thinking.type.adaptive` (the error
+# message itself instructs callers to use both).
+#
+# Wrap transform_request: after the original runs (and strips output_config),
+# if model name contains opus-4-7 and the caller's optional_params had an
+# output_config, re-add it to the request body so Vertex receives both
+# `thinking={"type":"adaptive"}` and `output_config={"effort":X}`.
+#
+# Remove this patch when LiteLLM drops the output_config strip for
+# Opus 4.7+ (or learns to gate the strip per model).
+try:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig as _VertexAIAnthropicConfigOpus47,
+    )
+    _existing_vertex_transform = _VertexAIAnthropicConfigOpus47.transform_request
+    if not getattr(_existing_vertex_transform, "_pdd_opus_4_7_vertex_patched", False):
+        _orig_vertex_transform = _existing_vertex_transform
+        _VERTEX_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        def _patched_vertex_transform(self, model, messages, optional_params, litellm_params, headers):  # pylint: disable=function-redefined
+            data = _orig_vertex_transform(self, model, messages, optional_params, litellm_params, headers)
+            m = model.lower() if isinstance(model, str) else ""
+            if not any(a in m for a in _VERTEX_OPUS_47_ALIASES):
+                return data
+            # The original transform_request popped output_config from `data`;
+            # restore it from optional_params so Vertex receives the
+            # thinking.type.adaptive + output_config.effort pair Opus 4.7
+            # actually requires.
+            oc = optional_params.get("output_config") if isinstance(optional_params, dict) else None
+            if isinstance(oc, dict) and "output_config" not in data:
+                data["output_config"] = oc
+            return data
+        _patched_vertex_transform._pdd_opus_4_7_vertex_patched = True
+        _VertexAIAnthropicConfigOpus47.transform_request = _patched_vertex_transform
+except Exception as _vertex_transform_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch VertexAIAnthropicConfig.transform_request: %s",
+        _vertex_transform_patch_err,
+    )
+
 # Add a console handler if none exists
 if not logger.handlers:
     console_handler = logging.StreamHandler()

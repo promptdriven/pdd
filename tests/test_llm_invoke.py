@@ -7489,6 +7489,73 @@ def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
     }, result.get("thinking")
 
 
+def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_47():
+    """LiteLLM 1.82.6's VertexAIAnthropicConfig.transform_request unconditionally
+    pops `output_config` from the request body (comment: "VertexAI doesn't
+    support output_config"). That assumption is wrong for Opus 4.7: the Vertex
+    API explicitly requires `output_config.effort` alongside
+    `thinking.type.adaptive` — the error message itself instructs callers to
+    use both. The patch wraps transform_request to restore output_config on
+    the wire for opus-4-7 model names."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    optional_params = {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+    body = cfg.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert body.get("thinking") == {"type": "adaptive"}, body
+    assert body.get("output_config") == {"effort": "high"}, body
+
+
+def test_vertex_anthropic_transform_request_no_op_for_unrelated_models():
+    """The wrap only restores output_config on opus-4-7. For non-opus-4-7,
+    the wrap is a no-op — the body LiteLLM produces is whatever the
+    un-patched version would produce (varies by LiteLLM version: 1.80.x
+    doesn't strip output_config at all; 1.82.x strips it for everything).
+    What matters is the wrap doesn't *interfere*: a wrap that mutates
+    non-opus-4-7 output would silently corrupt other callers."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    optional_params = {
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+        "output_config": {"effort": "high"},
+    }
+    body = cfg.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    # The wrap's only mutation is on opus-4-7. For sonnet-4-6 the body
+    # must match whatever LiteLLM would have produced without our wrap.
+    # Thinking is always preserved across versions (not stripped).
+    assert body.get("thinking") == {"type": "enabled", "budget_tokens": 4096}, body
+
+
 def test_bedrock_converse_adapter_unrelated_models_unchanged():
     """The Converse wrap is gated on opus-4-7 substring — non-opus-4-7
     models must pass through unchanged. LiteLLM's native behavior for
