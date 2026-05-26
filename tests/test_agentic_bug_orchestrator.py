@@ -7499,6 +7499,81 @@ class TestStep6ScopeOrchestratorWiring:
             "NEEDS_FIX siblings are parsed for non-resumed runs (issue #1208)."
         )
 
+    def test_expansion_items_resume_reads_last_marker(self):
+        """Regression for PR #1210 round 2: when the PATTERN_SEARCH retry
+        appends an updated EXPANSION_ITEMS line, the resume-side parser must
+        return the LAST marker so retry-discovered siblings reach Step 8/9.
+        Reading the first marker (often `EXPANSION_ITEMS: none`) silently
+        drops them.
+        """
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+
+        step6_output = (
+            "<step_report>...</step_report>\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "FIX_LOCATIONS: pdd/a.py\n"
+            "EXPANSION_ITEMS: none\n"
+            "\n"
+            "% Updated after grep verification\n"
+            "FIX_LOCATIONS: pdd/a.py, pdd/b.py\n"
+            "EXPANSION_ITEMS: pdd/b.py: shares helper\n"
+        )
+        assert _parse_expansion_items(step6_output) == "pdd/b.py: shares helper"
+
+    def test_scope_classification_resume_reads_last_marker(self):
+        """Regression for PR #1210 round 2: when the PATTERN_SEARCH retry
+        promotes scope back to SIBLING_PATTERN, the appended
+        SCOPE_CLASSIFICATION marker must win on resume — reading the original
+        (pre-promotion) marker leaves Step 8 with the wrong instructions.
+        """
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        step6_output = (
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "% (auto-downgraded internally to LOCALIZED in initial parse)\n"
+            "% Updated after grep verification\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+        )
+        assert _parse_scope_classification(step6_output) == "SIBLING_PATTERN"
+
+    def test_pattern_retry_promotes_scope_when_siblings_found(self):
+        """Regression for PR #1210 round 2: when Step 6 emits SIBLING_PATTERN
+        with zero initial NEEDS_FIX (auto-downgraded to LOCALIZED) and the
+        PATTERN_SEARCH retry produces sibling evidence, the orchestrator must
+        promote scope back to SIBLING_PATTERN and append a
+        SCOPE_CLASSIFICATION marker so resume re-derives the promoted value.
+        Verified via source inspection because the retry block lives deep
+        inside the orchestrator main loop.
+        """
+        source = self._read_orchestrator_source()
+        # Promotion check must look at the raw original scope.
+        assert 'raw_initial_scope = _parse_scope_classification(step_output)' in source, (
+            "Retry block must compare against the raw original scope to detect "
+            "an auto-downgrade that should be restored after sibling evidence."
+        )
+        # Promotion must write to context.
+        assert 'context["scope_classification"] = "SIBLING_PATTERN"' in source, (
+            "Retry block must promote context['scope_classification'] back to "
+            "SIBLING_PATTERN when retry produces sibling evidence."
+        )
+        # Promotion must append a SCOPE_CLASSIFICATION marker to step6_output.
+        assert 'SCOPE_CLASSIFICATION: {promoted_scope}' in source, (
+            "Promoted scope must be appended to step6_output so resume re-derives "
+            "the promoted value via the last-marker parser."
+        )
+
+    def test_pattern_retry_appends_needs_fix_lines_for_resume(self):
+        """Regression for PR #1210 round 2: retry must append NEEDS_FIX lines
+        for every confirmed sibling so the resume-side
+        _apply_step6_scope_markers sees them and does not re-downgrade
+        SIBLING_PATTERN back to LOCALIZED on resume.
+        """
+        source = self._read_orchestrator_source()
+        assert 'NEEDS_FIX: {sib_path} | {reason_text}' in source, (
+            "Retry must append a NEEDS_FIX line for each sibling so resume's "
+            "_apply_step6_scope_markers does not auto-downgrade scope."
+        )
+
     def test_pattern_retry_path_folds_siblings_into_expansion_items(self):
         """Regression for PR #1210: when Step 6's PATTERN_SEARCH retry classifies
         a grep-discovered file as NEEDS_FIX, the orchestrator must update
