@@ -216,8 +216,11 @@ class TestExpansionItemsPlaceholderInPrompts:
         """Step 6 must find sibling bugs that are values/cases, not only files."""
         assert "Siblings are not limited to source files." in step6_content
         assert "file extension, content type, language row" in step6_content
-        assert "For extension/format bugs, inspect language/format maps" in step6_content
+        assert "If the root cause rewrites, normalizes, canonicalizes" in step6_content
         assert "extension:.htm" in step6_content
+        assert "Extension/format canonicalization rule" in step6_content
+        for alias in (".mjs", ".cjs", ".pyi", ".bash", ".zsh", ".cpp"):
+            assert alias in step6_content
 
     def test_orchestrator_prompt_accepts_value_level_needs_fix_items(self):
         """Generated orchestrator spec must preserve non-path NEEDS_FIX support."""
