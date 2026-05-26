@@ -71,6 +71,16 @@
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
         * Otherwise, write to the explicit `output` path provided by the user.
+        * Extension preservation (issue #1205): when `output` is an explicit file path the user-supplied
+          suffix MUST be honored verbatim. Only synthesize/replace the suffix when the user supplied a path
+          with no extension. Specifically:
+            - When `--format md` is in effect, ensure the resolved output ends in `.md` (replacing any other
+              suffix), since the user explicitly opted into Markdown.
+            - When `--format code` (the Click default), if the user-supplied output already has a non-empty
+              suffix (`Path(output).suffix`), use that path verbatim. Do NOT call `with_suffix` to rewrite
+              `.yml` → `.yaml`, `.md` → `.markdown`, `.m` → `.matlab`, etc. Only when the user-supplied
+              output has no suffix should you fall back to the language-derived extension from
+              `BUILTIN_EXT_MAP` (with the `f".{{lang_key}}"` fallback for unmapped languages).
         * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
     - Python syntax validation (for Python language only):
         * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.
