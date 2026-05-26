@@ -7607,3 +7607,139 @@ def test_bedrock_converse_adapter_unrelated_models_unchanged():
         # The pdd patch's effort-injection is the only modification it makes
         # to the Converse output; for non-opus-4-7 models it must not fire.
         assert not (isinstance(thinking, dict) and "effort" in thinking), (model, thinking)
+
+
+# --- Additional tests appended ---
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_set_quiet_logging_raises_levels_to_error():
+    import logging as _logging
+    from pdd.llm_invoke import set_quiet_logging, set_verbose_logging
+    try:
+        set_quiet_logging()
+        assert _logging.getLogger("pdd.llm_invoke").level == _logging.ERROR
+        assert _logging.getLogger("litellm").level == _logging.ERROR
+        if hasattr(litellm, "set_verbose"):
+            assert litellm.set_verbose is False
+        if hasattr(litellm, "suppress_debug_info"):
+            assert litellm.suppress_debug_info is True
+    finally:
+        set_verbose_logging(False)
+
+
+def test_is_malformed_json_response_valid_complete_object():
+    from pdd.llm_invoke import _is_malformed_json_response
+    assert _is_malformed_json_response('{"a": 1, "b": "ok"}') is False
+
+
+def test_is_malformed_json_response_not_starting_with_brace():
+    from pdd.llm_invoke import _is_malformed_json_response
+    assert _is_malformed_json_response('text without json') is False
+    assert _is_malformed_json_response('[1, 2, 3]') is False
+
+
+def test_is_malformed_json_response_actual_trailing_newlines():
+    from pdd.llm_invoke import _is_malformed_json_response
+    content = '{"key": "value"' + '\n' * 150
+    assert _is_malformed_json_response(content) is True
+
+
+def test_save_key_to_env_file_handles_no_trailing_newline(tmp_path):
+    from pdd.llm_invoke import _save_key_to_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text('EXISTING="value"')  # no trailing newline
+    _save_key_to_env_file("NEW_KEY", "new_value", env_path)
+    content = env_path.read_text()
+    assert 'EXISTING="value"' in content
+    assert 'NEW_KEY="new_value"' in content
+
+
+def test_save_key_to_env_file_handles_key_with_spaces_around_equals(tmp_path):
+    from pdd.llm_invoke import _save_key_to_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text('MY_KEY ="old"\n')
+    _save_key_to_env_file("MY_KEY", "updated", env_path)
+    content = env_path.read_text()
+    assert "old" not in content
+    assert 'MY_KEY="updated"' in content
+
+
+def test_sanitize_api_key_preserves_normal_characters():
+    from pdd.llm_invoke import _sanitize_api_key
+    key = "sk-abc_DEF-123.xyz~+/"
+    assert _sanitize_api_key(key) == key
+
+
+def test_format_messages_batch_with_non_dict_item_raises():
+    from pdd.llm_invoke import _format_messages
+    with pytest.raises(ValueError):
+        _format_messages("Hi {x}", ["not_a_dict"], True)
+
+
+def test_extract_balanced_json_objects_handles_escaped_quotes_in_strings():
+    from pdd.llm_invoke import _extract_balanced_json_objects
+    text = r'{"msg": "he said \"hi\" then { left"}'
+    results = _extract_balanced_json_objects(text)
+    assert len(results) == 1
+    parsed = json.loads(results[0])
+    assert parsed["msg"] == 'he said "hi" then { left'
+
+
+def test_unwrap_parameter_envelope_only_unwraps_single_key_dict():
+    # Test through validator: schema that does not accept parameter key
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "value": {"type": "integer"}},
+        "required": ["name", "value"],
+    }
+    wrapped = {"parameter": {"name": "test", "value": 42}}
+    result = _validate_jsonschema_with_unwrap(wrapped, schema)
+    assert result == {"name": "test", "value": 42}
+
+
+def test_validate_jsonschema_with_unwrap_returns_instance_when_valid():
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+    schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+    instance = {"x": 5}
+    result = _validate_jsonschema_with_unwrap(instance, schema)
+    assert result is instance
+
+
+def test_validate_jsonschema_with_unwrap_skips_unwrap_for_composed_schema():
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+    import jsonschema
+    schema = {"anyOf": [{"type": "object", "properties": {"x": {"type": "integer"}}}]}
+    wrapped = {"parameter": {"x": 5}}
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(wrapped, schema)
+
+
+def test_validate_pydantic_with_unwrap_skips_when_schema_uses_parameter_field():
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class HasParameter(BaseModel):
+        parameter: str
+
+    # Should validate directly, not unwrap
+    result = _validate_pydantic_with_unwrap({"parameter": "hello"}, HasParameter)
+    assert result.parameter == "hello"
+
+
+def test_pydantic_to_json_schema_no_additional_properties_false_by_default():
+    """The helper only ensures required, not additionalProperties."""
+    from pdd.llm_invoke import _pydantic_to_json_schema
+
+    class M(BaseModel):
+        a: str
+
+    schema = _pydantic_to_json_schema(M)
+    assert "a" in schema["required"]
