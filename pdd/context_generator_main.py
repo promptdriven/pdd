@@ -114,12 +114,28 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                 format_lower = format.lower()
                 if format_lower == "md":
                     # Replace extension with .md to match format constraint
-                    resolved_output = str(output_path.with_suffix(".md"))
+                    if output_path.suffix.lower() != ".md":
+                        resolved_output = str(output_path.with_suffix(".md"))
+                    else:
+                        resolved_output = output
                 elif format_lower == "code":
                     # For code format, determine the correct language extension based on language
                     lang_key = language.lower() if language else ''
                     lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
-                    resolved_output = str(output_path.with_suffix(lang_ext))
+                    current_ext = output_path.suffix.lower()
+                    is_valid_ext = False
+                    if current_ext:
+                        ext_stripped = current_ext.lstrip('.')
+                        if ext_stripped == lang_key or current_ext == lang_ext:
+                            is_valid_ext = True
+                        elif lang_key == "yaml" and ext_stripped in ("yml", "yaml"):
+                            is_valid_ext = True
+                        elif lang_key == "markdown" and ext_stripped in ("md", "markdown"):
+                            is_valid_ext = True
+                    if not is_valid_ext:
+                        resolved_output = str(output_path.with_suffix(lang_ext))
+                    else:
+                        resolved_output = output
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
                     resolved_output = output
