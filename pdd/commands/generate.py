@@ -332,7 +332,11 @@ def generate(
     type=click.Choice(["code", "md"], case_sensitive=False),
     default="code",
     show_default=True,
-    help="Output format: 'code' (default, uses language extension) or 'md' (markdown).",
+    help=(
+        "Output format. 'code' (default) honors any suffix supplied on --output verbatim "
+        "and only synthesizes the language extension when --output has no suffix. 'md' forces "
+        "a .md suffix on the resolved output path."
+    ),
 )
 @click.pass_context
 @log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)

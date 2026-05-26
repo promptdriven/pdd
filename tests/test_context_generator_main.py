@@ -644,6 +644,106 @@ def test_matlab_m_output_not_rewritten_to_matlab(mock_ctx, mock_construct_paths,
     )
 
 
+def test_bare_name_rewrite_to_existing_py_prompts_for_overwrite(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
+    """Bug #1205 follow-up: bare --output name that rewrites to an existing language-extension file must prompt for overwrite.
+
+    construct_paths checks `auth_example` (no suffix, does not exist), so no confirmation is
+    raised there. The wrapper then rewrites the path to `auth_example.py`, which DOES exist
+    on disk. Without a re-confirmation, the pre-existing file is silently clobbered.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    prompt_file = tmp_path / "auth_python.prompt"
+    code_file = tmp_path / "auth.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def auth(): pass")
+    pre_existing = tmp_path / "auth_example.py"
+    pre_existing.write_text("ORIGINAL CONTENT")
+    bare_output = tmp_path / "auth_example"  # no suffix → wrapper rewrites to .py
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def auth(): pass"},
+        {"output": str(bare_output)},
+        "python",
+    )
+    mock_context_generator.return_value = ("def auth_example(): pass", 0.0, "local-model")
+
+    # User declines the overwrite confirmation
+    monkeypatch.setattr("pdd.context_generator_main.click.confirm", lambda *a, **k: False)
+
+    with pytest.raises(click.Abort):
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(bare_output), format="code")
+
+    # Pre-existing file must be untouched
+    assert pre_existing.read_text() == "ORIGINAL CONTENT", (
+        "Pre-existing auth_example.py was clobbered without confirmation when the wrapper "
+        "rewrote a bare-name --output to .py."
+    )
+
+
+def test_format_md_rewrite_to_existing_md_prompts_for_overwrite(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
+    """Bug #1205 follow-up: --format md with a non-.md --output must re-confirm before clobbering an existing .md.
+
+    User passes `--format md --output custom_example.py`. construct_paths sees `custom_example.py`
+    (does not exist), no confirmation. Wrapper rewrites to `custom_example.md` which DOES exist
+    on disk. Must prompt.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def f(): pass")
+    pre_existing = tmp_path / "custom_example.md"
+    pre_existing.write_text("ORIGINAL MARKDOWN")
+    user_output = tmp_path / "custom_example.py"  # wrapper rewrites to .md under --format md
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def f(): pass"},
+        {"output": str(user_output)},
+        "python",
+    )
+    mock_context_generator.return_value = ("# Markdown Example", 0.0, "local-model")
+
+    monkeypatch.setattr("pdd.context_generator_main.click.confirm", lambda *a, **k: False)
+
+    with pytest.raises(click.Abort):
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(user_output), format="md")
+
+    assert pre_existing.read_text() == "ORIGINAL MARKDOWN", (
+        "Pre-existing custom_example.md was clobbered without confirmation when --format md "
+        "rewrote a .py --output to .md."
+    )
+
+
+def test_force_skips_rewrite_overwrite_prompt(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
+    """--force must skip the rewrite overwrite-confirmation prompt."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = True
+    prompt_file = tmp_path / "auth_python.prompt"
+    code_file = tmp_path / "auth.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def auth(): pass")
+    pre_existing = tmp_path / "auth_example.py"
+    pre_existing.write_text("ORIGINAL CONTENT")
+    bare_output = tmp_path / "auth_example"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def auth(): pass"},
+        {"output": str(bare_output)},
+        "python",
+    )
+    mock_context_generator.return_value = ("def auth_example(): pass", 0.0, "local-model")
+
+    # confirm would refuse, but --force must bypass it
+    monkeypatch.setattr("pdd.context_generator_main.click.confirm", lambda *a, **k: False)
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(bare_output), format="code")
+
+    expected_output = tmp_path / "auth_example.py"
+    assert expected_output.exists() and expected_output.read_text() == "def auth_example(): pass"
+
+
 def test_code_format_no_suffix_uses_language_extension(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Regression guard: when --output has no suffix, the language extension is still applied.
 

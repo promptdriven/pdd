@@ -136,6 +136,49 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                 resolved_output = output
         else:
             resolved_output = output_file_paths.get("output")
+        # Issue #1205 follow-up: when the wrapper rewrites the path after construct_paths
+        # has done its overwrite confirmation (bare-name → language extension, or
+        # --format md replacing a non-.md suffix), the rewritten target was never checked.
+        # Re-confirm here so a pre-existing file at the rewritten path cannot be clobbered
+        # without consent.
+        force = ctx.obj.get('force', False)
+        quiet_flag = ctx.obj.get('quiet', False)
+        if (
+            resolved_output
+            and not force
+            and output
+            and str(Path(resolved_output)) != str(Path(output))
+            and Path(resolved_output).exists()
+        ):
+            confirm_callback = ctx.obj.get('confirm_callback')
+            rewrite_message = (
+                f"The output path was rewritten from '{output}' to '{resolved_output}' "
+                f"and that file already exists. Overwrite?"
+            )
+            if confirm_callback is not None:
+                if not confirm_callback(rewrite_message, "Overwrite Confirmation"):
+                    raise click.Abort()
+            else:
+                if not quiet_flag:
+                    console.print(f"[yellow]Warning: output rewritten to existing file {resolved_output}[/yellow]")
+                try:
+                    if not click.confirm(
+                        click.style(rewrite_message, fg="yellow"), default=True, show_default=True
+                    ):
+                        click.secho("Operation cancelled.", fg="red", err=True)
+                        raise click.Abort()
+                except click.Abort:
+                    raise
+                except Exception as e:
+                    if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                        click.secho(
+                            "Non-interactive environment detected. Use --force to overwrite existing files.",
+                            fg="yellow",
+                            err=True,
+                        )
+                        raise click.Abort()
+                    click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+                    raise click.Abort()
         is_local = ctx.obj.get("local", False)
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
