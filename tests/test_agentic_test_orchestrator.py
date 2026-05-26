@@ -23,6 +23,7 @@ from pathlib import Path
 from pdd.agentic_test_orchestrator import (
     run_agentic_test_orchestrator,
     TEST_STEP_TIMEOUTS,
+    _setup_worktree,
 )
 
 
@@ -293,6 +294,7 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
     assert mocks["clear"].call_count >= 1
     mocks["load"].assert_not_called()
     assert "step1" in [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
 
 
 def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
@@ -376,6 +378,42 @@ def test_worktree_creation_failure(mock_deps, default_args):
 
     assert success is False
     assert "Failed to create worktree" in msg
+
+
+def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
+    """clean_restart must not base the test worktree on current HEAD."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        cmd = list(args)
+        calls.append(cmd)
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+            if "origin/main" in cmd:
+                result.stdout = "abc123\n"
+                return result
+            result.returncode = 128
+            return result
+        return result
+
+    with patch("pdd.agentic_test_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_test_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator._branch_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt_path, err = _setup_worktree(
+            tmp_path,
+            1,
+            quiet=True,
+            console=MagicMock(),
+            clean_restart=True,
+        )
+
+    assert err is None
+    assert wt_path == tmp_path / ".pdd" / "worktrees" / "test-issue-1"
+    adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+    assert adds, "expected git worktree add"
+    assert adds[-1][-1] == "abc123"
+    assert adds[-1][-1] != "HEAD"
 
 
 # ---------------------------------------------------------------------------
