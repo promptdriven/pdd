@@ -212,6 +212,20 @@ class TestExpansionItemsPlaceholderInPrompts:
             "this is what the orchestrator parses to populate {step6_expansion_items}."
         )
 
+    def test_step8_expansion_items_are_scope_conditional(self, step8_content: str):
+        """Step 8 must not force per-item tests for CROSS_CUTTING scope."""
+        assert "Use this list according to the final scope classification:" in step8_content
+        assert "not a per-item test checklist" in step8_content
+        assert "one or two representative integration tests" in step8_content
+        assert "If this value is not `none`, your test plan MUST include" not in step8_content
+
+    def test_step9_expansion_items_are_scope_conditional(self, step9_content: str):
+        """Step 9 must not force per-item tests for CROSS_CUTTING scope."""
+        assert "Use this list according to the final scope classification:" in step9_content
+        assert "not a per-item test checklist" in step9_content
+        assert "one or two representative integration tests" in step9_content
+        assert "If this value is not `none`, you MUST generate" not in step9_content
+
 
 # ---------------------------------------------------------------------------
 # Unit tests: Step 10 uses WARNING not FAIL for scope gaps

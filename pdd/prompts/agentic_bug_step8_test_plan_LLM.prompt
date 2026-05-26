@@ -145,7 +145,10 @@ Step 6's independent analysis identified these items beyond what the issue propo
 {step6_expansion_items}
 ```
 
-If this value is not `none`, your test plan MUST include at least one test for each listed item. These were found by Step 6's root cause analysis independently of the issue body — the issue author identified only a subset of the problem.
+Use this list according to the final scope classification:
+- **LOCALIZED**: Include tests for listed items only when they are part of the single localized fix site or proposed-fix gap. Do NOT broaden into sibling coverage from this list alone.
+- **SIBLING_PATTERN**: Your test plan MUST include at least one test for each listed item. These were found by Step 6's root cause analysis independently of the issue body — the issue author identified only a subset of the problem.
+- **CROSS_CUTTING**: Treat listed items as affected call-site evidence, not a per-item test checklist. Plan the centralized mechanism test plus one or two representative integration tests through distinct listed entry points.
 
 % Cross-Step Consistency Check
 

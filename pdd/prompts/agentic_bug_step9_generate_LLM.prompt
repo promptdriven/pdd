@@ -172,7 +172,10 @@ Step 6's independent analysis identified these items beyond what the issue propo
 {step6_expansion_items}
 ```
 
-If this value is not `none`, you MUST generate at least one test for each listed item. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
+Use this list according to the final scope classification:
+- **LOCALIZED**: Generate tests for listed items only when they are part of the single localized fix site or proposed-fix gap. Do NOT broaden into sibling coverage from this list alone.
+- **SIBLING_PATTERN**: You MUST generate at least one test for each listed item. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
+- **CROSS_CUTTING**: Treat listed items as affected call-site evidence, not a per-item test checklist. Generate the centralized mechanism tests plus one or two representative integration tests through distinct listed entry points.
 
 % Worktree Setup
 
