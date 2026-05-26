@@ -1530,6 +1530,12 @@ def run_agentic_bug_orchestrator(
             cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
         )
 
+    persisted_clean_restart = (state or {}).get("clean_restart", False)
+    effective_clean_restart = clean_restart or persisted_clean_restart is True or (
+        isinstance(persisted_clean_restart, str)
+        and persisted_clean_restart.lower() == "true"
+    )
+
     # Initialize variables from state or defaults
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
@@ -1553,6 +1559,9 @@ def run_agentic_bug_orchestrator(
         github_comment_id = None
         worktree_path = None
 
+    if effective_clean_restart:
+        state["clean_restart"] = True
+
     context = {
         "issue_url": issue_url,
         "issue_content": issue_content,
@@ -1561,7 +1570,7 @@ def run_agentic_bug_orchestrator(
         "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
-        "clean_restart": "true" if clean_restart else "false",
+        "clean_restart": "true" if effective_clean_restart else "false",
         "step5_reproduction_tests": "",
         "fix_locations": "none",
         "step6_expansion_items": "none",
@@ -1799,7 +1808,13 @@ def run_agentic_bug_orchestrator(
             current_work_dir = worktree_path
             context["worktree_path"] = str(worktree_path)
         else:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
+            wt_path, err = _setup_worktree(
+                cwd,
+                issue_number,
+                quiet,
+                resume_existing=True,
+                clean_restart=effective_clean_restart,
+            )
             if not wt_path:
                 return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
             worktree_path = wt_path
@@ -1838,7 +1853,7 @@ def run_agentic_bug_orchestrator(
                         text=True,
                         check=True
                     ).stdout.strip()
-                    if not clean_restart and current_branch not in ["main", "master"] and not quiet:
+                    if not effective_clean_restart and current_branch not in ["main", "master"] and not quiet:
                         console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
@@ -1848,7 +1863,7 @@ def run_agentic_bug_orchestrator(
                     issue_number,
                     quiet,
                     resume_existing=False,
-                    clean_restart=clean_restart,
+                    clean_restart=effective_clean_restart,
                 )
                 if not wt_path:
                     return False, f"Failed to create worktree: {err}", total_cost, model_used, []

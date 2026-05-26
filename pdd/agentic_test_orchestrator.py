@@ -377,6 +377,12 @@ def run_agentic_test_orchestrator(
             cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
         )
 
+    persisted_clean_restart = (state or {}).get("clean_restart", False)
+    effective_clean_restart = clean_restart or persisted_clean_restart is True or (
+        isinstance(persisted_clean_restart, str)
+        and persisted_clean_restart.lower() == "true"
+    )
+
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
@@ -395,6 +401,9 @@ def run_agentic_test_orchestrator(
         github_comment_id = None
         worktree_path = None
 
+    if effective_clean_restart:
+        state["clean_restart"] = True
+
     step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
 
@@ -406,7 +415,7 @@ def run_agentic_test_orchestrator(
         "issue_number": issue_number,
         "issue_author": issue_author,
         "issue_title": issue_title,
-        "clean_restart": "true" if clean_restart else "false",
+        "clean_restart": "true" if effective_clean_restart else "false",
     }
 
     if clean_restart:
@@ -843,14 +852,20 @@ def run_agentic_test_orchestrator(
                 text=True,
                 check=True,
             ).stdout.strip()
-            if not clean_restart and current_branch not in ["main", "master"] and not quiet:
+            if not effective_clean_restart and current_branch not in ["main", "master"] and not quiet:
                 console.print(
                     f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]"
                 )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-        wt_path, err = _setup_worktree(cwd, issue_number, quiet, console, clean_restart=clean_restart)
+        wt_path, err = _setup_worktree(
+            cwd,
+            issue_number,
+            quiet,
+            console,
+            clean_restart=effective_clean_restart,
+        )
         if not wt_path:
             return False, f"Failed to create worktree: {err}", total_cost, model_used, []
         worktree_path = wt_path

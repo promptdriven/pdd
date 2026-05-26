@@ -896,6 +896,7 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
     """--clean-restart must not resume from cached workflow state."""
     mock_run, _, _ = mock_dependencies
     default_args["clean_restart"] = True
+    saved_states = []
 
     def side_effect_run(*args, **kwargs):
         label = kwargs.get("label", "")
@@ -903,11 +904,16 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
             return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
+    def capture_state(*args, **kwargs):
+        saved_states.append(args[3].copy())
+        return None
+
     mock_run.side_effect = side_effect_run
 
     with (
         patch("pdd.agentic_bug_orchestrator.clear_workflow_state") as mock_clear,
         patch("pdd.agentic_bug_orchestrator.load_workflow_state") as mock_load,
+        patch("pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_state),
         patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True) as mock_post,
     ):
         success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
@@ -917,6 +923,56 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
     mock_load.assert_not_called()
     assert "step1" in [call.kwargs["label"] for call in mock_run.call_args_list]
     assert any(c.kwargs.get("step_num") == 0 for c in mock_post.call_args_list)
+    assert any(state.get("clean_restart") is True for state in saved_states)
+
+
+def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
+    mock_dependencies, default_args, tmp_path
+):
+    """A normal resume after clean restart keeps clean worktree and PR behavior."""
+    mock_run, mock_template, _ = mock_dependencies
+    worktree_path = tmp_path / "persisted-clean-worktree"
+    worktree_path.mkdir()
+    state = {
+        "last_completed_step": 6,
+        "step_outputs": {str(step): f"cached step {step}" for step in range(1, 7)},
+        "total_cost": 0.6,
+        "model_used": "gpt-4",
+        "clean_restart": True,
+    }
+
+    mock_template.side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_bug_step12_pr_LLM"
+        else "Prompt for {issue_number}"
+    )
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        if label == "step12":
+            return (True, "PR Created: https://github.com/o/r/pull/10", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with (
+        patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)),
+        patch(
+            "pdd.agentic_bug_orchestrator._setup_worktree",
+            return_value=(worktree_path, None),
+        ) as mock_worktree,
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert mock_worktree.call_args.kwargs.get("clean_restart") is True
+    step12_calls = [
+        call for call in mock_run.call_args_list if call.kwargs.get("label") == "step12"
+    ]
+    assert step12_calls
+    assert "clean=true" in step12_calls[0].kwargs["instruction"]
 
 
 def test_setup_worktree_clean_restart_fetches_remote_and_uses_main_ref(tmp_path):

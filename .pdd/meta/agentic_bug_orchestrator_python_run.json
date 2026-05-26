@@ -4,9 +4,9 @@
   "tests_passed": 3,
   "tests_failed": 0,
   "coverage": 100.0,
-  "test_hash": "83387218a0424b6ed45b5297819ce27257b5e6a376d5dc34e38d9c6552d5f9e4",
+  "test_hash": "751ff93063592d1f53bbf86cc2d6b2d46e3c314e4e3910b4ff5865b4878be8e2",
   "test_files": {
-    "test_agentic_bug_orchestrator.py": "83387218a0424b6ed45b5297819ce27257b5e6a376d5dc34e38d9c6552d5f9e4",
+    "test_agentic_bug_orchestrator.py": "751ff93063592d1f53bbf86cc2d6b2d46e3c314e4e3910b4ff5865b4878be8e2",
     "test_agentic_bug_orchestrator_1.py": "8085e2041355e53aef1709eeba3591fa0f7c512a637038b8c48d633e4cd07aa2",
     "test_agentic_bug_orchestrator_step_comments.py": "693e1c1b571a1daee1013fb48bc8390f263a6544c163e3f55bcb60dafa1bb679"
   }
