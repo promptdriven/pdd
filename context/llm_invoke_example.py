@@ -1,90 +1,106 @@
-"""
-Example usage of the pdd.llm_invoke module.
-
-This script demonstrates how to use the llm_invoke function for simple text generation,
-structured output parsing via Pydantic, and direct message handling.
-"""
-
 import os
 import sys
-import json
-from typing import Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel
 
-# Import the target function from the module
+# Import the target module
 from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
+# ===========================================================================
+# llm_invoke Example
+# ===========================================================================
+# The llm_invoke function is the central unified interface for interacting
+# with LLM providers in PDD. It handles model selection (based on ELO/cost),
+# fallback logic, structured output validation, token context window checks,
+# and LiteLLM integration.
+#
+# Key Inputs:
+#   prompt (str): Template string with {variable} placeholders.
+#   input_json (Dict | List[Dict]): Variables for the template.
+#   strength (float): 0.0 = cheapest, 0.5 = base model, 1.0 = highest ELO.
+#   temperature (float): standard LLM temperature.
+#   verbose (bool): Prints detailed internal steps if True.
+#   output_pydantic (Type[BaseModel]): Enforces structured JSON output.
+#   time (float): 0.0 to 1.0; dictates reasoning effort or budget.
+#
+# Key Outputs (Dict[str, Any]):
+#   result: The generated text or validated Pydantic object.
+#   cost (float): Estimated API cost in USD.
+#   model_name (str): The actual model used after fallbacks.
+#   attempted_models (List[str]): Audit trail of models tried.
+# ===========================================================================
 
-# Define a Pydantic model for structured output demonstration
-class JokeStructure(BaseModel):
-    setup: str
-    punchline: str
-    rating: Optional[int] = None
-
-
-def main():
-    # Prevent llm_invoke from falling back to interactive input() for missing API keys
-    os.environ["PDD_FORCE"] = "1"
-
-    # Require an API key to run this headless example to avoid runtime errors
+def main() -> None:
+    """
+    Main execution function to demonstrate the usage of llm_invoke
+    with basic text generation and structured Pydantic output.
+    """
+    # Ensure we have an API key to avoid interactive prompts in the example
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         print("OPENAI_API_KEY not set. Set it to run this example.")
         sys.exit(0)
 
-    # Turn on verbose logging to see the internal operations
-    set_verbose_logging(True)
+    # Prevent interactive prompts for missing multi-provider keys during the demo
+    os.environ["PDD_FORCE"] = "1"
 
-    print("\n--- Example 1: Simple Text Generation ---")
-    # Uses prompt templates and input_json variables
-    result1 = llm_invoke(
-        prompt="Tell me a very short joke about {topic}.",
-        input_json={"topic": "programmers"},
-        strength=0.5,       # 0.5 requests the base model defined in your CSV
-        temperature=0.7,
-        verbose=True
-    )
-    print("\nResult Dictionary:")
-    print(json.dumps({
-        "cost_usd": result1.get("cost"),
-        "model_name": result1.get("model_name"),
-        "result": result1.get("result")
-    }, indent=2))
+    # Optionally enable verbose logging
+    set_verbose_logging(False)
 
+    # Ensure output directory exists
+    os.makedirs("./output", exist_ok=True)
 
-    print("\n--- Example 2: Structured Output (Pydantic) ---")
-    # Enforces the LLM to return JSON matching the JokeStructure Pydantic model
-    result2 = llm_invoke(
-        prompt="Create a joke about {topic}. Output ONLY a valid JSON object with 'setup' and 'punchline' keys.",
-        input_json={"topic": "cloud computing"},
-        strength=0.5,
-        temperature=0.3,
-        output_pydantic=JokeStructure,
-        verbose=True
-    )
-    
-    structured_result = result2.get("result")
-    print("\nParsed Pydantic Object:")
-    if isinstance(structured_result, JokeStructure):
-        print(f"Setup: {structured_result.setup}")
-        print(f"Punchline: {structured_result.punchline}")
+    print("--- Example 1: Basic Text Generation ---")
+    try:
+        # We use strength=0.5 to target the base model configured in PDD
+        response = llm_invoke(
+            prompt="Explain the concept of {concept} in one short sentence.",
+            input_json={"concept": "dependency injection"},
+            strength=0.5,
+            temperature=0.3,
+            verbose=False
+        )
+        
+        print(f"Result: {response.get('result')}")
+        print(f"Model used: {response.get('model_name')}")
+        print(f"Estimated cost: ${response.get('cost', 0):.6f}")
+        print(f"Attempt trail: {response.get('attempted_models')}\n")
+    except Exception as e:
+        print(f"Error in Example 1: {e}")
 
 
-    print("\n--- Example 3: Direct Messages Array ---")
-    # Bypass prompt/input_json and send raw LiteLLM/OpenAI format messages
-    custom_messages = [
-        {"role": "system", "content": "You are a sarcastic AI."},
-        {"role": "user", "content": "What is 2 + 2?"}
-    ]
-    result3 = llm_invoke(
-        messages=custom_messages,
-        strength=0.5,
-        temperature=0.5,
-        verbose=True
-    )
-    print("\nDirect Message Result:")
-    print(result3.get("result"))
+    print("--- Example 2: Structured Output via Pydantic ---")
+    # Define a Pydantic model for our expected output
+    class CodeReview(BaseModel):
+        issue_found: bool
+        severity: str
+        suggested_fix: str
 
+    try:
+        # Run the invocation requiring the output to match the Pydantic schema
+        structured_response = llm_invoke(
+            prompt="Review the following code: {code}",
+            input_json={"code": "def add(a, b): return a - b"},
+            strength=0.8,  # Request a smarter model (closer to 1.0 max ELO)
+            temperature=0.0,
+            output_pydantic=CodeReview,
+            time=0.25,     # Allocate a moderate reasoning budget/effort
+            verbose=False
+        )
+
+        result_obj = structured_response.get("result")
+        print(f"Model used: {structured_response.get('model_name')}")
+        print(f"Cost: ${structured_response.get('cost', 0):.6f}")
+        
+        if isinstance(result_obj, CodeReview):
+            print("Successfully parsed structured output:")
+            print(f"  Issue Found: {result_obj.issue_found}")
+            print(f"  Severity: {result_obj.severity}")
+            print(f"  Fix: {result_obj.suggested_fix}")
+        else:
+            print("Failed to extract structured data.")
+    except Exception as e:
+        print(f"Error in Example 2: {e}")
 
 if __name__ == "__main__":
     main()
