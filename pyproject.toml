@@ -41,6 +41,7 @@ dependencies = [
     "firebase_admin==7.4.0",
     "httpx==0.28.1",
     "keyring==25.7.0",
+    "keyrings.alt==5.0.2",
     "langchain>=0.3.25,<0.4",
     "langchain-anthropic>=0.3.14,<0.4",
     "langchain-community>=0.3.25,<0.4",
