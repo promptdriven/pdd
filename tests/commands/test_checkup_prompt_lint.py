@@ -19,26 +19,18 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "prompt_lint"
 REPO_ROOT = Path(__file__).parents[2]
 
 
-def test_prompt_lint_is_registered_on_public_cli() -> None:
-    result = CliRunner().invoke(cli, ["--quiet", "prompt", "lint", "--help"])
-
-    assert result.exit_code == 0
-    assert "Lint prompts and user stories" in result.output
-    assert "--stories" in result.output
-
-
-def test_prompt_group_is_registered_on_public_cli() -> None:
+def test_prompt_group_is_not_registered_on_public_cli() -> None:
+    """We avoid another top-level command to keep the CLI surface smaller."""
     result = CliRunner().invoke(cli, ["--quiet", "prompt", "--help"])
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
-    assert result.exit_code == 0
-    assert "lint" in result.output
 
-
-def test_checkup_lint_help_delegates_to_prompt_lint() -> None:
+def test_checkup_lint_help_exposes_methodology() -> None:
     result = CliRunner().invoke(cli, ["--quiet", "checkup", "lint", "--help"])
 
     assert result.exit_code == 0
-    assert "Lint prompts and user stories" in result.output
+    assert "Lint prompts and user stories for quality and ambiguity" in result.output
     assert "--stories" in result.output
     assert "--ambiguity" in result.output
     assert "--llm" in result.output
@@ -105,25 +97,27 @@ def test_checkup_lint_ambiguity_never_writes_without_explicit_apply(
     assert prompt.read_bytes() == before
 
 
-def test_prompt_lint_ambiguity_alone_does_not_run_llm() -> None:
+def test_checkup_lint_ambiguity_alone_does_not_run_llm() -> None:
     with patch("pdd.commands.prompt.run_llm_ambiguity_pass") as llm_pass:
         result = CliRunner().invoke(
             cli,
-            ["--quiet", "prompt", "lint", "--ambiguity", str(FIXTURES / "clean.prompt")],
+            ["--quiet", "checkup", "lint", "--ambiguity", str(FIXTURES / "clean.prompt")],
         )
 
     assert result.exit_code == 0
     llm_pass.assert_not_called()
 
 
-def test_prompt_lint_llm_requires_ambiguity() -> None:
-    result = CliRunner().invoke(
-        cli,
-        ["--quiet", "prompt", "lint", "--llm", str(FIXTURES / "clean.prompt")],
-    )
+def test_checkup_lint_llm_works_without_explicit_ambiguity_flag() -> None:
+    """The --llm flag is decoupled and automatically enables ambiguity checks."""
+    with patch("pdd.commands.prompt.run_llm_ambiguity_pass", return_value=[]) as llm_pass:
+        result = CliRunner().invoke(
+            cli,
+            ["--quiet", "checkup", "lint", "--llm", str(FIXTURES / "clean.prompt")],
+        )
 
-    assert result.exit_code == 2
-    assert "--llm requires --ambiguity" in result.output
+    assert result.exit_code == 0
+    llm_pass.assert_called_once()
 
 
 def test_llm_ambiguity_pass_treats_directives_as_inert_text(tmp_path: Path) -> None:
@@ -144,10 +138,10 @@ def test_llm_ambiguity_pass_treats_directives_as_inert_text(tmp_path: Path) -> N
     assert "<shell>printf SIDE_EFFECT</shell>" in invoke.call_args.kwargs["messages"][0]["content"]
 
 
-def test_prompt_lint_stories_reports_vague_acceptance_criteria() -> None:
+def test_checkup_lint_stories_reports_vague_acceptance_criteria() -> None:
     result = CliRunner().invoke(
         cli,
-        ["--quiet", "prompt", "lint", "--stories", str(FIXTURES), "--json"],
+        ["--quiet", "checkup", "lint", "--stories", str(FIXTURES), "--json"],
     )
 
     assert result.exit_code == 1
@@ -158,10 +152,10 @@ def test_prompt_lint_stories_reports_vague_acceptance_criteria() -> None:
     assert {"authorized", "valid", "duplicate", "gracefully", "complete", "successful"} <= vague_terms
 
 
-def test_prompt_lint_story_glossary_suppresses_defined_terms_but_covers_does_not() -> None:
+def test_checkup_lint_story_glossary_suppresses_defined_terms_but_covers_does_not() -> None:
     result = CliRunner().invoke(
         cli,
-        ["--quiet", "prompt", "lint", "--stories", str(FIXTURES), "--json"],
+        ["--quiet", "checkup", "lint", "--stories", str(FIXTURES), "--json"],
     )
 
     payload = {Path(item["path"]).name: item for item in json.loads(result.output)}
@@ -170,7 +164,7 @@ def test_prompt_lint_story_glossary_suppresses_defined_terms_but_covers_does_not
     assert {"authorized", "valid", "duplicate", "active"} <= covers_terms
 
 
-def test_prompt_lint_real_cli_help() -> None:
+def test_checkup_lint_real_cli_help() -> None:
     env = os.environ.copy()
     env.update(
         {
@@ -180,7 +174,7 @@ def test_prompt_lint_real_cli_help() -> None:
         }
     )
     result = subprocess.run(
-        [sys.executable, "-m", "pdd", "prompt", "lint", "--help"],
+        [sys.executable, "-m", "pdd", "checkup", "lint", "--help"],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -194,16 +188,14 @@ def test_prompt_lint_real_cli_help() -> None:
 
 
 @pytest.mark.parametrize(
-    ("command", "fixture_name", "expected_exit_code"),
+    ("fixture_name", "expected_exit_code"),
     [
-        (("prompt", "lint"), "clean.prompt", 0),
-        (("prompt", "lint"), "vague_undefined.prompt", 1),
-        (("checkup", "lint"), "clean.prompt", 0),
-        (("checkup", "lint"), "vague_undefined.prompt", 1),
+        ("clean.prompt", 0),
+        ("vague_undefined.prompt", 1),
     ],
 )
 def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
-    command: tuple[str, str], fixture_name: str, expected_exit_code: int
+    fixture_name: str, expected_exit_code: int
 ) -> None:
     env = os.environ.copy()
     env.update(
@@ -218,7 +210,8 @@ def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
             sys.executable,
             "-m",
             "pdd",
-            *command,
+            "checkup",
+            "lint",
             "--json",
             str(FIXTURES / fixture_name),
         ],
@@ -234,7 +227,7 @@ def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
     assert isinstance(payload, list)
 
 
-def test_checkup_lint_stories_alias_matches_prompt_lint() -> None:
+def test_checkup_lint_stories_matches_linter_rules() -> None:
     env = os.environ.copy()
     env.update(
         {
@@ -243,25 +236,25 @@ def test_checkup_lint_stories_alias_matches_prompt_lint() -> None:
             "PDD_AUTO_UPDATE": "true",
         }
     )
-    for command in (["prompt", "lint"], ["checkup", "lint"]):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pdd",
-                *command,
-                "--json",
-                "--stories",
-                str(FIXTURES),
-            ],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 1
-        payload = {Path(item["path"]).name: item for item in json.loads(result.stdout)}
-        assert payload["story__vague_criteria.md"]["warn_count"] > 0
-        assert payload["story__clean.md"]["issues"] == []
-        assert payload["story__covers.md"]["warn_count"] > 0
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pdd",
+            "checkup",
+            "lint",
+            "--json",
+            "--stories",
+            str(FIXTURES),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    payload = {Path(item["path"]).name: item for item in json.loads(result.stdout)}
+    assert payload["story__vague_criteria.md"]["warn_count"] > 0
+    assert payload["story__clean.md"]["issues"] == []
+    assert payload["story__covers.md"]["warn_count"] > 0

@@ -44,14 +44,14 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     "--ambiguity",
     is_flag=True,
     default=False,
-    help="Enable deterministic ambiguity linting; combine with --llm for advisory LLM review.",
+    help="Enable deterministic ambiguity and observation checks on prompt and story text.",
 )
 @click.option(
     "--llm",
     "use_llm",
     is_flag=True,
     default=False,
-    help="With --ambiguity, run an advisory LLM ambiguity review through PDD Cloud.",
+    help="Enable advisory LLM-assisted ambiguity review on top of deterministic checks.",
 )
 @click.pass_context
 def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,unknown-option-value
@@ -63,11 +63,16 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
     ambiguity: bool,
     use_llm: bool,
 ) -> None:
-    """Lint prompts and user stories for ambiguity findings."""
+    """Lint prompts and user stories for quality and ambiguity in a read-only, advisory capacity.
+
+    This command performs fast, deterministic heuristic scanning. Use --llm to activate
+    advisory, LLM-assisted deep ambiguity reviews (requires PDD Cloud or
+    configured API credentials).
+    """
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")
-    if use_llm and not ambiguity:
-        raise click.UsageError("--llm requires --ambiguity.")
+    if use_llm:
+        ambiguity = True
 
     results: list[LintResult] = []
     if target is not None:

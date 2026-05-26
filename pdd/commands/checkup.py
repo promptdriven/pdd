@@ -349,8 +349,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
-    Prompt lint (alias):
-      pdd checkup lint …  →  same as  pdd prompt lint …
+    Prompt lint:
+      pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
     """
     ctx.ensure_object(dict)
 

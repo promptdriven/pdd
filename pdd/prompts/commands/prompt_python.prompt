@@ -9,10 +9,9 @@
 - Accept an optional prompt TARGET and optional `--stories <directory>`; require at least one.
 - Run `scan_prompt` and `scan_stories` deterministically without network access.
 - Support `--json` machine-readable output and `--strict` warning escalation.
-- Accept `--ambiguity` for the deterministic ambiguity contract.
-- Accept `--llm` only together with `--ambiguity`; without `--llm`, never invoke
-  LLM or cloud-backed work. With both flags, append advisory results returned by
-  `run_llm_ambiguity_pass`.
+- Accept `--ambiguity` for the deterministic ambiguity and observation checks.
+- Accept `--llm` to enable advisory LLM-assisted ambiguity review on top of deterministic checks. Specifying `--llm` automatically enables `--ambiguity` checks. Without `--llm`, never invoke LLM or cloud-backed work.
+- Explicitly document the read-only, advisory nature of the linter in the docstring and help texts.
 - Preserve exit codes: 0 for clean, 1 for warnings, 2 for errors or strict warnings.
 
 % Deliverables
