@@ -1,10 +1,10 @@
 {
-  "pdd_version": "0.0.250",
-  "timestamp": "2026-05-26T07:25:25.605027+00:00",
-  "command": "example",
-  "prompt_hash": "b409c7b353bbce6bbe8c0d2e6badaf35acdc80b33eb22846844903caf9bf6b53",
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-26T16:58:02.809705+00:00",
+  "command": "fix",
+  "prompt_hash": "7856c6b03cdb9537774ce995014f89e6fb38da9d3e9deb0eafe1451d5960d766",
   "code_hash": "645840f41232e02bee8ab97959bccfda335ce962b07873365cac712228e746c0",
-  "example_hash": "675909d758ad7b5e49a7700f30eaa46fcff91981fe518e8c9b9c97b4831f5251",
+  "example_hash": "bfb1aa828dfda83eab359bba700624981b50a8cf2cb2b52bf8f96289e62c9dda",
   "test_hash": "cfddf7abd6c630e26764efe03d1c4d62c75973b1f60d7c04e87264fb86d0ca7a",
   "test_files": {
     "test_llm_invoke.py": "cfddf7abd6c630e26764efe03d1c4d62c75973b1f60d7c04e87264fb86d0ca7a",
@@ -15,10 +15,7 @@
     "test_llm_invoke_vertex_retry.py": "eafe91ba9376dc7e2da36faf3cd2de3cef50f70cf1c4fc5655e373deb7f50c26"
   },
   "include_deps": {
-    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/path_resolution_example.py": "15ba84fd11c61af8fa12dcb19d63d42f0cb09b747542bf20e69650b8ff4ac137",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
-    "pdd/server/token_counter.py": "3391a7c708713e3d370bf9e981a837f1f7ade08af75d69f402301dbf65a79c9a"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }
