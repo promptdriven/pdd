@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple, Any
@@ -19,6 +20,15 @@ from ..core.utils import echo_model_line
 from ..operation_log import log_operation
 
 console = Console()
+
+_GITHUB_ISSUE_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
+)
+
+
+def _is_github_issue_url(value: str) -> bool:
+    """Return True when value is a GitHub issue URL."""
+    return bool(_GITHUB_ISSUE_RE.match(value.strip()))
 
 @click.command()
 @click.argument("args", nargs=-1)
@@ -279,9 +289,13 @@ def change(
             # Agentic Mode Validation and Execution
             if len(args) != 1:
                 raise click.UsageError("Agentic mode requires exactly 1 argument: ISSUE_URL")
-            
+
             issue_url = args[0]
-            
+            if clean_restart and not _is_github_issue_url(issue_url):
+                raise click.UsageError(
+                    "--clean-restart can only be used with an agentic GitHub issue URL."
+                )
+
             # Call run_agentic_change
             success, message, cost, model, changed_files = run_agentic_change(
                 issue_url=issue_url,
@@ -291,7 +305,6 @@ def change(
                 use_github_state=not no_github_state,
                 clean_restart=clean_restart,
                 reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
-                clean_restart=clean_restart,
             )
 
             # Display results using click.echo as requested

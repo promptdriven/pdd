@@ -28,7 +28,7 @@ Orchestrates the E2E fix by fetching GitHub issue data (body + comments), detect
    - Priority 1: Check `.pdd/worktrees/` for `fix-issue-{N}`, `bug-issue-{N}`, or `change-issue-{N}` containing `.git`.
    - Priority 2: Fallback to current directory.
    - **Branch Safety**: Extract expected branch name from issue comments (e.g., "Switched to branch '...'"). If it mismatches the current branch and `force=False`, abort with a suggestion to `git checkout`.
-   - **Clean Restart**: If `clean_restart=True`, ignore prior worktrees and branch hints and use the caller's current directory so stopped-run artifacts cannot control the fresh fix workflow.
+   - **Clean Restart**: If `clean_restart=True`, ignore prior worktrees and branch hints. If the caller's current directory is inside `.pdd/worktrees/{fix,bug,change}-issue-{N}`, use the containing repo root instead; otherwise use the caller's current directory. This prevents stopped-run artifacts from controlling the fresh fix workflow.
 4. **Execution**: Invoke `run_agentic_e2e_fix_orchestrator` with collected metadata, content, and parameters including `protect_tests`, `ci_retries`, `skip_ci`, `skip_cleanup`, `reasoning_time`, and `clean_restart`. Return its 5-tuple result.
 5. **Output**: Use `rich.console.Console` for status updates (fetching, worktree found, starting workflow) and warnings, unless `quiet`.
 6. **Error Handling**: Handle missing `gh` CLI, invalid URLs, and API errors gracefully. Return `(False, error_msg, 0.0, "", [])`.

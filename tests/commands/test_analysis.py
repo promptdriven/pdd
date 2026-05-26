@@ -181,6 +181,20 @@ def test_bug_agentic_wrong_args(runner, mock_context_obj):
     assert result.exit_code != 0
     assert "Agentic mode requires exactly one argument" in result.output
 
+
+def test_bug_clean_restart_rejects_non_issue_url(runner, mock_context_obj):
+    """--clean-restart should only run with a GitHub issue URL."""
+    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
+        result = runner.invoke(
+            bug,
+            ["--clean-restart", "not-a-url"],
+            obj=mock_context_obj,
+        )
+
+    assert result.exit_code == 2
+    assert "--clean-restart can only be used" in result.output
+    mock_agentic.assert_not_called()
+
 def test_bug_manual_success(runner, mock_context_obj):
     """Test 'bug' command in manual mode."""
     with patch('pdd.commands.analysis.bug_main') as mock_main:

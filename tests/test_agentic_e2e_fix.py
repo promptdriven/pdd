@@ -119,9 +119,12 @@ def test_find_working_directory_aborts_on_branch_mismatch(tmp_path: Path) -> Non
 
 def test_find_working_directory_clean_restart_ignores_stale_hints(tmp_path: Path) -> None:
     """clean_restart should not reuse old worktrees or comment branch hints."""
-    stale_worktree = tmp_path / ".pdd" / "worktrees" / "change-issue-99"
+    repo_root = tmp_path / "repo"
+    stale_worktree = repo_root / ".pdd" / "worktrees" / "change-issue-99"
+    nested_cwd = stale_worktree / "src"
+    nested_cwd.mkdir(parents=True)
     with patch("pdd.agentic_e2e_fix._find_worktree_for_issue", return_value=stale_worktree) as mock_find, \
-        patch("pdd.agentic_e2e_fix.Path.cwd", return_value=tmp_path), \
+        patch("pdd.agentic_e2e_fix.Path.cwd", return_value=nested_cwd), \
         patch("pdd.agentic_e2e_fix._get_current_branch", return_value="main"):
         cwd, warning, should_abort = agentic_e2e_fix._find_working_directory(
             99,
@@ -131,7 +134,7 @@ def test_find_working_directory_clean_restart_ignores_stale_hints(tmp_path: Path
             clean_restart=True,
         )
 
-    assert cwd == tmp_path
+    assert cwd == repo_root.resolve()
     assert warning is None
     assert should_abort is False
     mock_find.assert_not_called()
