@@ -156,11 +156,19 @@ try:
             current = result.get("thinking")
             if not (isinstance(current, dict) and current.get("type") == "enabled"):
                 return result
+            # AWS Bedrock Converse for Claude flattens adaptive thinking into a
+            # single key (no output_config sibling like the direct Anthropic
+            # API). Preserve the caller's adaptive payload if present; otherwise
+            # rebuild it carrying over the effort hint from reasoning_effort
+            # so time_to_effort_level() isn't silently dropped on the floor.
+            new_thinking = {"type": "adaptive"}
             user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
             if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
-                result["thinking"] = user_thinking
-            else:
-                result["thinking"] = {"type": "adaptive"}
+                new_thinking = dict(user_thinking)
+            effort = non_default_params.get("reasoning_effort") if isinstance(non_default_params, dict) else None
+            if isinstance(effort, str) and "effort" not in new_thinking:
+                new_thinking["effort"] = effort
+            result["thinking"] = new_thinking
             return result
         _patched_converse_map._pdd_opus_4_7_converse_patched = True
         _AmazonConverseConfigOpus47.map_openai_params = _patched_converse_map

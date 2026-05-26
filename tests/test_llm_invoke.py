@@ -7405,7 +7405,9 @@ def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
     AnthropicConfig — needs its own wrap. The Converse map_openai_params
     builds thinking={type:enabled} via AnthropicConfig._map_reasoning_effort
     with no Opus 4.5/4.7 branch. The wrap rewrites it to adaptive for
-    opus-4-7 model names so the AWS API doesn't 400."""
+    opus-4-7 model names so the AWS API doesn't 400, and carries the
+    reasoning_effort hint into the flattened thinking dict (Converse
+    doesn't expose an output_config sibling like the direct Anthropic API)."""
     import pdd.llm_invoke  # noqa: F401
     try:
         from litellm.llms.bedrock.chat.converse_transformation import (
@@ -7425,7 +7427,37 @@ def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
             model=model,
             drop_params=True,
         )
-        assert result.get("thinking") == {"type": "adaptive"}, (model, result)
+        assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
+
+
+def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
+    """When the caller already supplied thinking={type: adaptive, ...}, the
+    wrap must preserve their richer payload (e.g. display=summarized) and
+    only fill in effort if they didn't set it themselves."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    result = cfg.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive", "display": "summarized", "effort": "low"},
+            "reasoning_effort": "high",
+        },
+        optional_params={},
+        model="bedrock/anthropic.claude-opus-4-7",
+        drop_params=True,
+    )
+    # Caller's explicit effort wins over the reasoning_effort hint.
+    assert result.get("thinking") == {
+        "type": "adaptive",
+        "display": "summarized",
+        "effort": "low",
+    }, result.get("thinking")
 
 
 def test_bedrock_converse_adapter_unrelated_models_unchanged():
