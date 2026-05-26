@@ -227,6 +227,7 @@ The caller should use `k=5` to match the callee's signature.
     "step5_reproduction_tests": "",
     "fix_locations": "example/recommendations.py, example/search.py",
     "step6_expansion_items": "none",
+    "scope_classification": "LOCALIZED",
     "planned_test_count": "2",
     "step8_output": """
 ### Test Location
