@@ -14,7 +14,7 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
     - Clear state upon successful completion.
 3. **Workspace Isolation**:
     - Automatically create and manage isolated git worktrees for each issue (branch name format: `test/issue-{number}`).
-    - When `clean_restart=True`, fetch `origin/test/issue-{number}` for Step 17 `--force-with-lease` safety, create the test worktree from the resolved default branch (`origin/main`, `origin/master`, `main`, then `master`) rather than current `HEAD`, and fail clearly if no default branch ref resolves.
+    - When `clean_restart=True`, fetch `+refs/heads/test/issue-{number}:refs/remotes/origin/test/issue-{number}` for Step 17 `--force-with-lease` safety, create the test worktree from the resolved default branch (`origin/main`, `origin/master`, `main`, then `master`) rather than current `HEAD`, and fail clearly if no default branch ref resolves.
     - Handle cleanup of existing worktrees/branches to ensure a clean state.
 4. **Context Propagation**:
     - Parse tags from LLM outputs (e.g., `FILES_CREATED`, `TEST_TYPE`, `STOP_CONDITION`).

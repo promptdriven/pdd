@@ -117,6 +117,26 @@ def test_find_working_directory_aborts_on_branch_mismatch(tmp_path: Path) -> Non
     assert "git checkout change-issue-99" in warning
 
 
+def test_find_working_directory_clean_restart_ignores_stale_hints(tmp_path: Path) -> None:
+    """clean_restart should not reuse old worktrees or comment branch hints."""
+    stale_worktree = tmp_path / ".pdd" / "worktrees" / "change-issue-99"
+    with patch("pdd.agentic_e2e_fix._find_worktree_for_issue", return_value=stale_worktree) as mock_find, \
+        patch("pdd.agentic_e2e_fix.Path.cwd", return_value=tmp_path), \
+        patch("pdd.agentic_e2e_fix._get_current_branch", return_value="main"):
+        cwd, warning, should_abort = agentic_e2e_fix._find_working_directory(
+            99,
+            "Switched to branch 'change-issue-99'",
+            quiet=True,
+            force=False,
+            clean_restart=True,
+        )
+
+    assert cwd == tmp_path
+    assert warning is None
+    assert should_abort is False
+    mock_find.assert_not_called()
+
+
 def test_run_agentic_e2e_fix_returns_error_when_gh_is_missing() -> None:
     """The entry point should fail fast when the GitHub CLI is unavailable."""
     with patch("pdd.agentic_e2e_fix._check_gh_cli", return_value=False):
@@ -152,7 +172,7 @@ def test_run_agentic_e2e_fix_forwards_issue_context_and_ci_options(
         patch(
             "pdd.agentic_e2e_fix._find_working_directory",
             return_value=(tmp_path, None, False),
-        ), \
+        ) as mock_find_working_directory, \
         patch(
             "pdd.agentic_e2e_fix.run_agentic_e2e_fix_orchestrator",
             return_value=(True, "ok", 1.5, "gpt-4.1", ["src/login.py"]),
@@ -178,6 +198,7 @@ def test_run_agentic_e2e_fix_forwards_issue_context_and_ci_options(
     assert "retry logic fails" in kwargs["issue_content"]
     assert "Switched to branch 'change-issue-1'" in kwargs["issue_content"]
     assert kwargs["cwd"] == tmp_path
+    assert mock_find_working_directory.call_args.kwargs["clean_restart"] is True
     assert kwargs["timeout_adder"] == 3.0
     assert kwargs["max_cycles"] == 2
     assert kwargs["resume"] is False

@@ -159,7 +159,7 @@ Before Step 7, create an isolated git worktree for test generation and PR creati
 
 2. In orchestrator loop, before Step 7 (the first step that can write files — Step 7 may auto-fix prompt specifications and emits `PROMPT_FIXED`):
    - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)`
-   - When `clean_restart=True`, fetch `origin/fix/issue-{issue_number}` only to refresh Step 12 `--force-with-lease` metadata, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted.
+   - When `clean_restart=True`, fetch `+refs/heads/fix/issue-{issue_number}:refs/remotes/origin/fix/issue-{issue_number}` to refresh Step 12 `--force-with-lease` metadata in the remote-tracking ref, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted.
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 7-12
    - Add `worktree_path` to context dict (for Step 12 prompt formatting)
