@@ -88,7 +88,7 @@ def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
         List of (key_name, source_label) tuples. Only includes keys whose
         VALUE is non-empty after .strip() (Issue #813 round-10).
     """
-    from pdd.provider_manager import parse_api_key_vars, _read_csv
+    from pdd.provider_manager import expand_api_key_vars, _read_csv
     from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
 
     ref_csv = _ref_csv_path()
@@ -100,7 +100,7 @@ def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
     for r in rows:
         api_key_field = r.get("api_key", "")
         if api_key_field:
-            candidates.update(parse_api_key_vars(api_key_field))
+            candidates.update(expand_api_key_vars(api_key_field))
 
     shell = _detect_shell() or "bash"
     api_env_path = Path.home() / ".pdd" / f"api-env.{shell}"
@@ -153,7 +153,11 @@ def _prompt_for_api_key() -> List[Tuple[str, str]]:
     Returns:
         List of (key_name, source_label) for newly added keys.
     """
-    from pdd.provider_manager import _read_csv, _save_key_to_api_env
+    from pdd.provider_manager import (
+        _read_csv,
+        _save_key_to_api_env,
+        preferred_api_key_name,
+    )
 
     print("To continue setup, add at least one API key.")
     ref_csv = _ref_csv_path()
@@ -167,7 +171,7 @@ def _prompt_for_api_key() -> List[Tuple[str, str]]:
         api_key = (r.get("api_key") or "").strip()
         # Only single-var providers via this quick-add flow
         if provider and api_key and "|" not in api_key:
-            pairs[(provider, api_key)] = None
+            pairs[(provider, preferred_api_key_name(api_key))] = None
 
     prov_list = sorted(pairs.keys(), key=lambda x: x[0].lower())
     added: List[Tuple[str, str]] = []
@@ -220,7 +224,7 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
     pdd_dir = Path.home() / ".pdd"
     pdd_dir.mkdir(parents=True, exist_ok=True)
 
-    from pdd.provider_manager import parse_api_key_vars, _read_csv
+    from pdd.provider_manager import expand_api_key_vars, _read_csv
     from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
 
     shell = _detect_shell() or "bash"
@@ -239,7 +243,7 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
         api_field = (r.get("api_key") or "").strip()
         if not api_field:
             continue
-        vars_ = parse_api_key_vars(api_field)
+        vars_ = expand_api_key_vars(api_field)
         if not vars_:
             continue
         provider_vars.setdefault(provider, [])
@@ -347,6 +351,20 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
 # Step 2 — Configure Models + .pddrc
 # ---------------------------------------------------------------------------
 
+def _normalize_row_for_configured_keys(
+    row: Dict[str, str],
+    found_key_names: List[str],
+) -> Dict[str, str]:
+    """Return a row whose api_key field matches the configured Google alias."""
+    normalized = dict(row)
+    if (
+        (normalized.get("api_key") or "").strip() == "GEMINI_API_KEY"
+        and "GOOGLE_API_KEY" in set(found_key_names)
+    ):
+        normalized["api_key"] = "GOOGLE_API_KEY"
+    return normalized
+
+
 def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, int]:
     """Filter reference CSV → user CSV; offer to create .pddrc."""
     _print_step_banner("Step 2: Configuring models and .pddrc")
@@ -355,7 +373,7 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
         _read_csv,
         _write_csv_atomic,
         _get_user_csv_path,
-        parse_api_key_vars,
+        api_key_requirements_satisfied,
     )
     from pdd.pddrc_initializer import _detect_language, _build_pddrc_content
 
@@ -376,15 +394,19 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
                 # Device flow — always include
                 configured_models.append(r)
             else:
-                vars_needed = parse_api_key_vars(api_key)
-                if vars_needed and all(v in found_key_names for v in vars_needed):
-                    configured_models.append(r)
+                if api_key_requirements_satisfied(api_key, found_key_names):
+                    configured_models.append(
+                        _normalize_row_for_configured_keys(r, found_key_names)
+                    )
 
     user_csv = _get_user_csv_path()
     existing: List[Dict[str, str]] = []
     if user_csv.exists():
         try:
-            existing = _read_csv(user_csv)
+                existing = [
+                    _normalize_row_for_configured_keys(row, found_key_names)
+                    for row in _read_csv(user_csv)
+                ]
         except Exception:
             existing = []
 
@@ -454,7 +476,7 @@ def _step3_test_and_summary(found_key_names: List[str],
     from pdd.provider_manager import (
         _read_csv,
         _get_user_csv_path,
-        parse_api_key_vars,
+        api_key_requirements_satisfied,
     )
 
     user_csv = _get_user_csv_path()
@@ -471,8 +493,7 @@ def _step3_test_and_summary(found_key_names: List[str],
             if not api_key:
                 test_row = r
                 break
-            vars_needed = parse_api_key_vars(api_key)
-            if vars_needed and all(v in found_key_names for v in vars_needed):
+            if api_key_requirements_satisfied(api_key, found_key_names):
                 test_row = r
                 break
 

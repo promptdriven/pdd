@@ -90,6 +90,14 @@ SIMPLE_REF_CSV = [
      "max_reasoning_tokens": "", "structured_output": "", "reasoning_type": "", "location": ""},
 ]
 
+GOOGLE_GEMINI_REF_CSV = [
+    {"provider": "Google Gemini", "model": "gemini/gemini-3-flash-preview",
+     "api_key": "GEMINI_API_KEY", "base_url": "", "input": "0.5",
+     "output": "3", "coding_arena_elo": "1437",
+     "max_reasoning_tokens": "", "structured_output": "True",
+     "reasoning_type": "effort", "location": ""},
+]
+
 BEDROCK_REF_CSV = [
     {"provider": "AWS Bedrock", "model": "bedrock/anthropic.claude-v1",
      "api_key": "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME",
@@ -127,6 +135,7 @@ TEST_FAILURE_RESULT = {
 # Env vars to clean to prevent leakage from real environment
 _ENV_VARS_TO_CLEAN = [
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
     "DEEPSEEK_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
     "AWS_REGION_NAME", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT",
     "VERTEXAI_LOCATION", "AZURE_API_KEY", "AZURE_API_BASE",
@@ -619,6 +628,43 @@ def test_models_added_from_reference_csv(tmp_path, monkeypatch):
     assert "claude-sonnet" in content
     # OpenAI should NOT be present (no key set)
     assert "gpt-4o" not in content
+
+
+def test_google_api_key_configures_gemini_catalog_rows(tmp_path, monkeypatch):
+    """GOOGLE_API_KEY satisfies Gemini catalog rows that still name GEMINI_API_KEY."""
+    output, mocks = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=GOOGLE_GEMINI_REF_CSV,
+        env_keys={"GOOGLE_API_KEY": "google-test-key"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    content = user_csv.read_text()
+    assert "gemini/gemini-3-flash-preview" in content
+    assert "GOOGLE_API_KEY" in content
+    assert "GEMINI_API_KEY" not in content
+    assert "No matching cloud models" not in output
+    mocks["run_test"].assert_called_once()
+    assert mocks["run_test"].call_args[0][0]["api_key"] == "GOOGLE_API_KEY"
+
+
+def test_google_api_key_normalizes_existing_gemini_user_rows(tmp_path, monkeypatch):
+    """Rerunning setup updates existing Gemini rows to the configured Google alias."""
+    _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=GOOGLE_GEMINI_REF_CSV,
+        user_csv_rows=GOOGLE_GEMINI_REF_CSV,
+        env_keys={"GOOGLE_API_KEY": "google-test-key"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    content = user_csv.read_text()
+    assert "GOOGLE_API_KEY" in content
+    assert "GEMINI_API_KEY" not in content
 
 
 def test_models_deduplicated(tmp_path, monkeypatch):

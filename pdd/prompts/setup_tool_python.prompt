@@ -41,7 +41,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 
 2. Step 1 — Scan for API Keys (`_step1_scan_keys(cli_results=None)`):
    - Ensure ~/.pdd directory exists.
-   - Get unique API key env var names from the `api_key` column of the reference CSV at `pdd/data/llm_model.csv`. Use `parse_api_key_vars()` from provider_manager to handle pipe-delimited fields.
+   - Get unique API key env var names from the `api_key` column of the reference CSV at `pdd/data/llm_model.csv`. Use `expand_api_key_vars()` from provider_manager to handle pipe-delimited fields and aliases. `GOOGLE_API_KEY` must satisfy catalog rows that still name `GEMINI_API_KEY`, otherwise a user who configured the universal Google key during Antigravity/Gemini CLI setup finishes setup with no direct Gemini models.
    - Check each var against: os.environ, ~/.pdd/api-env.{shell} (via `api_key_scanner._parse_api_env_file`), and .env files (via python-dotenv `dotenv_values`). **Issue #813 round-10**: in EVERY source, count a key as found only when its VALUE is non-empty after `.strip()`. A bare `ANTHROPIC_API_KEY=` (empty value) or a blank line in `.env` passes name-only membership checks (`var in os.environ`, `var in dotenv_vals`) but is unusable to litellm — counting such entries as "found" defeats the OAuth-only quick-start branch and leaves the user with the standard `pdd generate` recommendation that fails at runtime. Both `_step1_scan_keys` and `_scan_for_api_keys_quiet` (used by the post-menu refresh in step 6e) MUST apply this filter consistently.
    - Multi-var providers (pipe-delimited api_key): display grouped per provider, e.g. `✓ provider: 3/3 vars set` or `! provider: 1/3 vars set (missing 2)`. Skip providers with 0 found. Do not print raw API-key environment variable names in the scan summary; CodeQL treats the model-catalog `api_key` field as sensitive data, and provider/count/source is enough user-facing signal.
    - Single-var providers: display provider names as aligned individual lines with source labels, not raw API-key environment variable names.
@@ -50,7 +50,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
    - Return: `List[Tuple[str, str]]` of (key_name, source_label). The caller (`_run_auto_phase`) MUST pass its `cli_results` argument so the OAuth-skip branch can consult the bootstrapped CLI list.
 
    **`_prompt_for_api_key()`:**
-   - Build provider list from reference CSV: unique `(provider, api_key)` pairs sorted by provider.
+   - Build provider list from reference CSV: unique `(provider, api_key)` pairs sorted by provider. When a row names `GEMINI_API_KEY`, prompt/save `GOOGLE_API_KEY` via `preferred_api_key_name()` rather than asking for the legacy name.
    - Show numbered list plus "Skip" option.
    - User selects provider, pastes key (masked via `getpass.getpass()`).
    - Save via `provider_manager._save_key_to_api_env()`.
@@ -59,14 +59,14 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 
 3. Step 2 — Configure Models + .pddrc (`_step2_configure_models_and_pddrc`):
    - Read reference CSV via `provider_manager._read_csv()`.
-   - Filter to rows whose `api_key` env vars are ALL in found_key_names. Empty api_key = device flow (always include). Skip local models (provider=lm_studio/ollama, localhost/127.0.0.1 base_url).
+   - Filter to rows whose `api_key` requirements are satisfied by found_key_names using `api_key_requirements_satisfied()`. Empty api_key = device flow (always include). Skip local models (provider=lm_studio/ollama, localhost/127.0.0.1 base_url). This matcher must accept `GOOGLE_API_KEY` for `GEMINI_API_KEY` rows. Before writing the user CSV, normalize a copied Gemini row from `api_key=GEMINI_API_KEY` to `api_key=GOOGLE_API_KEY` when `GOOGLE_API_KEY` is the configured key, so later direct litellm-backed commands read the key name that setup actually saved. Apply the same normalization to existing user CSV rows on rerun.
    - Read existing user CSV (create if missing). Deduplicate by `model` column. Add new matching rows. Write via `_write_csv_atomic()`.
    - Print model count summary and per-provider breakdown.
    - Check `.pddrc` in cwd: if exists, print confirmed. If not, explain what .pddrc does, ask user "Create .pddrc in this project? [y/Enter to skip]". If yes, detect language via `_detect_language()`, create via `_build_pddrc_content()`.
    - Return: `Dict[str, int]` of {provider: count}.
 
 4. Step 3 — Test + Summary (`_step3_test_and_summary`):
-   - Pick first cloud model with all api_key env vars set. Empty api_key = device flow (eligible).
+   - Pick first cloud model whose api_key requirements are satisfied with the same alias-aware matcher used in Step 2. Empty api_key = device flow (eligible).
    - Run test in a background thread with dot animation (print dots every second). Timeout after 8 seconds.
    - If litellm importable: test via `model_tester._run_test(row)`. If not: skip with message.
    - Print summary with green ✓ / red ✗ / yellow indicators:
@@ -96,7 +96,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 8. Import strategy (all deferred/lazy inside functions):
    - From `pdd.cli_detector`: `detect_and_bootstrap_cli`, `CliBootstrapResult`
    - From `pdd.api_key_scanner`: `_parse_api_env_file`, `_detect_shell`
-   - From `pdd.provider_manager`: `_read_csv`, `_write_csv_atomic`, `_get_user_csv_path`, `_save_key_to_api_env`, `_get_shell_rc_path`, `parse_api_key_vars`, `add_provider_from_registry`
+   - From `pdd.provider_manager`: `_read_csv`, `_write_csv_atomic`, `_get_user_csv_path`, `_save_key_to_api_env`, `_get_shell_rc_path`, `expand_api_key_vars`, `api_key_requirements_satisfied`, `preferred_api_key_name`, `add_provider_from_registry`
    - From `pdd.pddrc_initializer`: `_detect_language`, `_build_pddrc_content`
    - From `pdd.model_tester`: `_run_test`, `test_model_interactive`
    - Top-level: `getpass`, `os`, `sys`, `pathlib.Path`, `threading`, `PDD_FULL_TAGLINE`, `PDD_POSITIONING` from `pdd.cli_branding`
@@ -126,11 +126,14 @@ The reference CSV at pdd/data/llm_model.csv contains known models for all major 
 </llm_model_csv_schema>
 
 <provider_manager_csv_api>
-from pdd.provider_manager import _read_csv, _write_csv_atomic, _get_user_csv_path, parse_api_key_vars
+from pdd.provider_manager import _read_csv, _write_csv_atomic, _get_user_csv_path, expand_api_key_vars, api_key_requirements_satisfied, preferred_api_key_name
 # _read_csv(path: Path) -> List[Dict[str, str]]  — reads CSV to list of row dicts
 # _write_csv_atomic(path: Path, rows: List[Dict[str, str]])  — atomic write via temp file + rename
 # _get_user_csv_path() -> Path  — returns ~/.pdd/llm_model.csv
-# parse_api_key_vars(api_key_field: str) -> List[str]  — split pipe-delimited api_key into individual var names
+# expand_api_key_vars(api_key_field: str) -> List[str]  — split pipe-delimited api_key into individual var names plus aliases
+# api_key_requirements_satisfied(api_key_field: str, found_key_names: Iterable[str]) -> bool — alias-aware requirement matcher
+# preferred_api_key_name(key_name: str) -> str — prompt/save GOOGLE_API_KEY for Gemini catalog rows
+def _normalize_row_for_configured_keys(row: Dict[str, str], found_key_names: List[str]) -> Dict[str, str]: ...
 </provider_manager_csv_api>
 
 <api_key_scanner_api>

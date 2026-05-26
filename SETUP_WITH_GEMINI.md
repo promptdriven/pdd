@@ -69,9 +69,9 @@ The setup wizard runs these steps:
   6. Prints a structured summary (CLIs, keys, models, test result)
 
 When adding your Gemini API key:
-- Select Gemini CLI as one of the agentic CLI tools
-- The wizard will detect that `GEMINI_API_KEY` is missing
-- Paste your API key when prompted (you can create it in the next step if you haven't already)
+- Select Antigravity `agy` or legacy Gemini `gemini` as one of the Google agentic CLI tools
+- The wizard prompts/saves `GOOGLE_API_KEY` for Google CLIs; existing `GEMINI_API_KEY` still works as a compatibility alias
+- Paste your Google/Gemini API key when prompted (you can create it in the next step if you haven't already)
 - The wizard tests it immediately and confirms it works
 
 The wizard writes your credentials to `~/.pdd/api-env.zsh` (or `.bash`) and updates `llm_model.csv` with your selected models.
