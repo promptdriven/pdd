@@ -117,7 +117,7 @@ If a prior cycle applied a direct edit but the current cycle makes no new meanin
 On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed. Exception: when `clean_restart=True`, do NOT load or reuse sibling pdd-bug state; the user asked for restart-from-scratch and stale bug diagnosis from a stopped/wrong-model run must not skip Steps 2/3.
 
 % Resume & State
-- `clean_restart=True` forces fresh e2e-fix state even if `resume=True`: skip `load_workflow_state`, call `clear_workflow_state`, and start from cycle 1 step 1.
+- `clean_restart=True` forces fresh e2e-fix state even if `resume=True`: skip `load_workflow_state`, call `clear_workflow_state`, post a visible Step 0 startup comment with `Mode: Clean restart`, and start from cycle 1 step 1.
 - `validate_cached_state` rewinds `last_completed_step` past any cached step output prefixed with `FAILED:`.
 - Persist `initial_file_hashes` and `initial_sha` in workflow state and restore them on resume so direct-edit detection and Step 11 full-diff still work after interruption.
 - `_check_staleness` warns if any tracked file's mtime is newer than `last_saved_at`.
