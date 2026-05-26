@@ -160,6 +160,31 @@ def test_extract_module_non_language_suffixes_return_none():
     assert sync_order.extract_module_from_include("prompts/data_processor_python.prompt") == "data_processor"
 
 
+def test_extract_module_known_languages_comprehensive():
+    """
+    Test that known programming language suffixes are recognized.
+
+    Languages come from data/language_format.csv and the built-in fallback set
+    in construct_paths._is_known_language(). Note that the CSV uses display names
+    like 'C++', 'C#', 'F#' but the fallback uses common suffixes like 'cpp', 'csharp'.
+    """
+    # Languages from the built-in fallback that are commonly used as file suffixes
+    # (These work even when PDD_PATH is not set or CSV lookup fails)
+    known_languages = [
+        'python', 'java', 'go', 'rust', 'typescript', 'javascript',
+        'cpp', 'csharp', 'ruby', 'swift', 'kotlin', 'scala', 'php',
+        'c', 'lua', 'perl', 'r', 'bash', 'shell', 'sql',
+        # Languages from CSV that match case-insensitively
+        'haskell', 'elixir', 'clojure', 'dart', 'julia', 'nim', 'ocaml',
+        'groovy', 'fortran', 'erlang', 'lisp', 'scheme', 'ada'
+    ]
+
+    for lang in known_languages:
+        path = f"prompts/my_module_{lang}.prompt"
+        result = sync_order.extract_module_from_include(path)
+        assert result == "my_module", f"Expected 'my_module' for {lang}, got {result}"
+
+
 def test_extract_module_preserves_underscores_in_module_names():
     """
     Test that underscores in module names are preserved correctly.

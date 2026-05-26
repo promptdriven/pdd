@@ -10,8 +10,6 @@ PromptProfile = Literal["pdd_path_then_repo_then_cwd"]
 DataProfile = Literal["pdd_path_only"]
 ProjectRootProfile = Literal["pdd_path_then_marker_then_cwd"]
 
-PDD_STRICT_PATH: Optional[str] = None
-
 
 @dataclass(frozen=True)
 class PathResolver:
@@ -68,29 +66,9 @@ class PathResolver:
     def resolve_data_file(self, rel: str, profile: DataProfile = "pdd_path_only") -> Path:
         if profile != "pdd_path_only":
             raise ValueError(f"Unsupported data profile: {profile}")
-
-        strict_mode = PDD_STRICT_PATH
-        if strict_mode in ("true", "extension"):
-            if self.pdd_path_env is None:
-                if strict_mode == "extension":
-                    raise ValueError("Environment variable PDD_PATH is not set.")
-                else:
-                    raise ValueError("PDD_PATH environment variable is not set.")
-            return self.pdd_path_env / rel
-
-        if self.pdd_path_env is not None:
-            pdd_path = self.pdd_path_env / rel
-            if pdd_path.exists():
-                return pdd_path
-        # Packaged/repo data for wheel installs and pytest without PDD_PATH.
-        pkg_path = self.package_root / rel
-        if pkg_path.exists():
-            return pkg_path
-        if self.repo_root is not None:
-            repo_path = self.repo_root / rel
-            if repo_path.exists():
-                return repo_path
-        raise ValueError("PDD_PATH environment variable is not set.")
+        if self.pdd_path_env is None:
+            raise ValueError("PDD_PATH environment variable is not set.")
+        return self.pdd_path_env / rel
 
     def resolve_project_root(
         self,

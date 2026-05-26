@@ -1,4 +1,5 @@
 """Commands for inspecting prompt and story assets."""
+# pylint: disable=unknown-option-value
 from __future__ import annotations
 
 import json
@@ -53,7 +54,7 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     help="With --ambiguity, run an advisory LLM ambiguity review through PDD Cloud.",
 )
 @click.pass_context
-def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches
+def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
     stories_dir: Optional[str],

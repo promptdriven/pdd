@@ -454,6 +454,157 @@ class TestUpdateMainRepoModeChangeDetection:
         )
         assert result is None
 
+    @patch("pdd.update_main.is_code_changed", return_value=(False, "matches"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
+        ("/repo/prompts/mod_python.prompt", "/repo/mod.py"),
+    ])
+    @patch("pdd.update_main.git.Repo")
+    def test_no_changed_files(self, mock_repo_cls, mock_find, mock_git, mock_changed):
+        """Returns None when no code files have changed."""
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = "/repo"
+        mock_repo_cls.return_value = mock_repo
+
+        ctx = self._make_ctx()
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
+        assert result is None
+
+    @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.update_main.update_file_pair")
+    @patch("pdd.update_main.is_code_changed")
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
+        ("/repo/prompts/a_python.prompt", "/repo/a.py"),
+        ("/repo/prompts/b_python.prompt", "/repo/b.py"),
+    ])
+    @patch("pdd.update_main.git.Repo")
+    def test_processes_changed_pairs_only(
+        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update, mock_arch
+    ):
+        """Only changed files are passed to update_file_pair."""
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = "/repo"
+        mock_repo_cls.return_value = mock_repo
+
+        # Only a.py is changed
+        mock_changed.side_effect = [
+            (True, "differs"),
+            (False, "matches"),
+        ]
+        mock_update.return_value = {
+            "prompt_file": "/repo/prompts/a_python.prompt",
+            "status": "success",
+            "cost": 0.01,
+            "model": "test-model",
+            "error": "",
+        }
+
+        ctx = self._make_ctx(quiet=True)
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
+
+        assert result is not None
+        msg, cost, model = result
+        assert cost == pytest.approx(0.01)
+        mock_update.assert_called_once()
+
+    @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.update_main.update_file_pair")
+    @patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
+        ("/repo/prompts/a_python.prompt", "/repo/a.py"),
+    ])
+    @patch("pdd.update_main.git.Repo")
+    def test_passes_simple_flag(
+        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update, mock_arch
+    ):
+        """The simple flag is forwarded to update_file_pair."""
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = "/repo"
+        mock_repo_cls.return_value = mock_repo
+
+        mock_update.return_value = {
+            "prompt_file": "/repo/prompts/a_python.prompt",
+            "status": "success",
+            "cost": 0.0,
+            "model": "",
+            "error": "",
+        }
+
+        ctx = self._make_ctx(quiet=True)
+        update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True, simple=True,
+        )
+
+        _, kwargs = mock_update.call_args
+        assert kwargs.get("simple") is True or mock_update.call_args[0][4] is True
+
+    @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+    @patch("pdd.update_main.update_file_pair")
+    @patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
+        ("/repo/prompts/a_python.prompt", "/repo/a.py"),
+        ("/repo/prompts/b_python.prompt", "/repo/b.py"),
+    ])
+    @patch("pdd.update_main.git.Repo")
+    def test_accumulates_cost(
+        self, mock_repo_cls, mock_find, mock_git, mock_changed, mock_update, mock_arch
+    ):
+        """Total cost accumulates across all processed pairs."""
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = "/repo"
+        mock_repo_cls.return_value = mock_repo
+
+        mock_update.side_effect = [
+            {"prompt_file": "/repo/prompts/a_python.prompt", "status": "ok", "cost": 0.05, "model": "m1", "error": ""},
+            {"prompt_file": "/repo/prompts/b_python.prompt", "status": "ok", "cost": 0.03, "model": "m2", "error": ""},
+        ]
+
+        ctx = self._make_ctx(quiet=True)
+        result = update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+        )
+
+        assert result is not None
+        _, cost, models = result
+        assert cost == pytest.approx(0.08)
+        assert "m1" in models
+        assert "m2" in models
+
+    @patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[
+        ("/repo/prompts/a_python.prompt", "/repo/src/a.py"),
+    ])
+    @patch("pdd.update_main.git.Repo")
+    @patch("pdd.update_main.is_code_changed", return_value=(False, "no change"))
+    @patch("pdd.update_main.get_git_changed_files", return_value=set())
+    def test_directory_passed_to_find_pairs(
+        self, mock_git, mock_changed, mock_repo_cls, mock_find
+    ):
+        """When directory is specified, it is used as the scan root."""
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = "/repo"
+        mock_repo_cls.return_value = mock_repo
+
+        ctx = self._make_ctx(quiet=True)
+        update_main(
+            ctx, input_prompt_file=None, modified_code_file=None,
+            input_code_file=None, output=None, repo=True,
+            directory="/repo/src",
+        )
+
+        mock_find.assert_called_once_with("/repo/src", True, None, None)
+
+
 # ---------------------------------------------------------------------------
 # CLI integration — pdd update with --base-branch
 # ---------------------------------------------------------------------------

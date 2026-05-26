@@ -1,17 +1,5 @@
 import csv
-from pathlib import Path
-
 from pdd.path_resolution import get_default_resolver
-
-
-def _language_format_csv_path() -> Path:
-    """Resolve language_format.csv from PDD_PATH, package, or repo."""
-    resolver = get_default_resolver()
-    try:
-        return resolver.resolve_data_file("data/language_format.csv")
-    except ValueError as exc:
-        raise ValueError(str(exc)) from exc
-
 
 def get_language(extension: str) -> str:
     """
@@ -26,8 +14,12 @@ def get_language(extension: str) -> str:
     Raises:
         ValueError: If PDD_PATH environment variable is not set.
     """
-    # Step 1: Resolve CSV path (PDD_PATH, packaged wheel data, or repo checkout)
-    csv_path = _language_format_csv_path()
+    # Step 1: Resolve CSV path from PDD_PATH
+    resolver = get_default_resolver()
+    try:
+        csv_path = resolver.resolve_data_file("data/language_format.csv")
+    except ValueError as exc:
+        raise ValueError("PDD_PATH environment variable is not set") from exc
 
     # Step 2: Ensure the extension starts with a dot and convert to lowercase
     if not extension.startswith('.'):

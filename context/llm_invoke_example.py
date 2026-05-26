@@ -8,7 +8,7 @@ from pdd.llm_invoke import llm_invoke, set_quiet_logging
 
 def main():
     """
-    Demonstrate the usage of llm_invoke for basic generation, 
+    Demonstrate the usage of llm_invoke for basic generation,
     structured output, and batch processing.
     """
     # Check for required API key before attempting LLM calls.
@@ -68,7 +68,7 @@ def main():
         {"word": "sad"},
         {"word": "angry"}
     ]
-    
+
     response_batch = llm_invoke(
         prompt="What is a common synonym for {word}? Reply with just one word.",
         input_json=batch_inputs,

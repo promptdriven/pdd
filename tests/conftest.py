@@ -87,17 +87,6 @@ def _normalize_cli_test_env(monkeypatch, request):
     """
     monkeypatch.setenv("PDD_AUTO_UPDATE", "true")
 
-    import pdd.path_resolution
-    module_name = request.module.__name__
-    if "test_get_language_missing_environment_variable" in request.node.name:
-        pdd.path_resolution.PDD_STRICT_PATH = None
-    elif "test_get_extension" in module_name:
-        pdd.path_resolution.PDD_STRICT_PATH = "extension"
-    elif any(t in module_name for t in ("test_get_comment", "test_get_language", "test_get_run_command")):
-        pdd.path_resolution.PDD_STRICT_PATH = "true"
-    else:
-        pdd.path_resolution.PDD_STRICT_PATH = None
-
 
 @pytest.fixture(autouse=True)
 def _enforce_isolated_home(monkeypatch):
