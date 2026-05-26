@@ -1,89 +1,70 @@
 import os
 import sys
-from typing import Dict, Any
 from pydantic import BaseModel
+from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
-# Import the llm_invoke function from the module
-from pdd.llm_invoke import llm_invoke
+# Check for an API key to ensure the example can run non-interactively.
+# Note: llm_invoke abstracts over many providers, but we check for OpenAI here as a common default.
+api_key = os.environ.get("OPENAI_API_KEY")
+if not api_key:
+    print("OPENAI_API_KEY not set. Set it to run this example.")
+    sys.exit(0)
 
+# Enable verbose logging to see model selection and token usage details
+set_verbose_logging(True)
 
-def main() -> None:
-    """
-    Example script demonstrating how to use the llm_invoke function.
-    
-    llm_invoke provides a unified interface to call LLMs via LiteLLM, handling:
-    - Model selection (based on cost/ELO strength from a CSV)
-    - Context window validation
-    - Structured outputs (Pydantic / JSON Schema)
-    - Cost calculation and attribution tracking
-    """
-    # Ensure we have an API key to run without interactive prompts.
-    # For this example, we assume we want to use an OpenAI model.
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("OPENAI_API_KEY not set. Set it to run this example.")
-        sys.exit(0)
+print("--- Example 1: Basic Text Generation ---")
+# llm_invoke replaces the variables in `prompt` with values from `input_json`.
+# strength=0.5 selects the base model defined in the configuration.
+# time=0.0 disables extra reasoning/thinking overhead.
+response1 = llm_invoke(
+    prompt="Explain {topic} in one short sentence.",
+    input_json={"topic": "machine learning"},
+    strength=0.5,
+    temperature=0.3,
+    time=0.0
+)
 
-    # Set environment variables to control behavior in a headless environment
-    # PDD_FORCE=1 disables interactive prompts for missing API keys
-    os.environ["PDD_FORCE"] = "1"
-    # Set a default model that uses the checked API key
-    os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
+print(f"Result: {response1['result']}")
+print(f"Model Used: {response1['model_name']}")
+print(f"Cost: ${response1['cost']:.6f}\n")
 
-    print("--- Example 1: Basic Text Generation ---")
-    # llm_invoke automatically formats the prompt string with input_json
-    basic_response = llm_invoke(
-        prompt="Write a one-sentence greeting for {name}.",
-        input_json={"name": "Alice"},
-        temperature=0.7,
-        strength=0.5,  # 0.5 uses the base model
-        verbose=False
-    )
-    
-    print(f"Model Used: {basic_response.get('model_name')}")
-    print(f"Result: {basic_response.get('result')}")
-    print(f"Estimated Cost: ${basic_response.get('cost'):.6f}")
-    print(f"Finish Reason: {basic_response.get('finish_reason')}")
+print("--- Example 2: Structured Output using Pydantic ---")
+# Define the expected structure of the output
+class ElementInfo(BaseModel):
+    name: str
+    symbol: str
+    atomic_number: int
 
+# Pass the Pydantic class to output_pydantic to guarantee structured JSON output.
+response2 = llm_invoke(
+    prompt="Provide the details for the element {element}.",
+    input_json={"element": "Helium"},
+    strength=0.5,
+    temperature=0.0,
+    output_pydantic=ElementInfo
+)
 
-    print("\n--- Example 2: Structured Output (Pydantic) ---")
-    # Define a Pydantic model for the desired output structure
-    class CharacterInfo(BaseModel):
-        name: str
-        role: str
-        level: int
+# The result will be automatically parsed into the Pydantic model instance
+element = response2['result']
+print(f"Parsed Pydantic Object - Name: {element.name}, Symbol: {element.symbol}, Atomic Number: {element.atomic_number}")
+print(f"Model Used: {response2['model_name']}\n")
 
-    # Pass the Pydantic class to output_pydantic to enforce JSON schema validation
-    structured_response = llm_invoke(
-        prompt="Generate a random fantasy RPG character.",
-        input_json={},
-        output_pydantic=CharacterInfo,
-        temperature=0.8,
-        verbose=False
-    )
-    
-    result_obj = structured_response.get('result')
-    # result_obj will be an instantiated CharacterInfo object
-    if hasattr(result_obj, "model_dump"):
-        print(f"Structured Result: {result_obj.model_dump()}")
-    else:
-        print(f"Fallback/Raw Result: {result_obj}")
+print("--- Example 3: Using Direct Messages Format ---")
+# If you already have a conversational message history, you can bypass `prompt` and `input_json`
+# and directly provide the `messages` array.
+messages = [
+    {"role": "system", "content": "You are a sarcastic calculator."},
+    {"role": "user", "content": "What is 5 + 7?"}
+]
 
+# strength=0.1 attempts to select a cheaper, faster model (downwards interpolation from base)
+response3 = llm_invoke(
+    messages=messages,
+    strength=0.1,
+    temperature=0.5
+)
 
-    print("\n--- Example 3: Using Direct Messages API ---")
-    # You can bypass the prompt/input_json template system and provide messages directly
-    messages = [
-        {"role": "system", "content": "You are a calculator. Return ONLY the integer result."},
-        {"role": "user", "content": "What is 15 + 27?"}
-    ]
-    
-    msg_response = llm_invoke(
-        messages=messages,
-        temperature=0.0,
-        time=0.0  # Disable reasoning effort for simple tasks
-    )
-    print(f"Calculation Result: {msg_response.get('result')}")
-
-
-if __name__ == "__main__":
-    main()
+print(f"Result: {response3['result']}")
+print(f"Model Used: {response3['model_name']}")
+print(f"Attempted Models Chain: {response3['attempted_models']}")
