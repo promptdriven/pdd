@@ -104,7 +104,7 @@ After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list t
 After Step 6 completes, the orchestrator MUST parse three additional markers from raw output (outside the `<step_report>` block) in addition to the existing `FIX_LOCATIONS`, `EXPANSION_ITEMS`, and `PATTERN_SEARCH` markers:
 
 1. `SCOPE_CLASSIFICATION: LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING`
-   - Parse the first matching marker line.
+   - Parse the LAST matching marker line so a post-retry promotion (see the PATTERN_SEARCH retry-path section below) wins over the original Step 6 emission on resume. The orchestrator appends an updated `SCOPE_CLASSIFICATION:` line whenever the retry promotes scope back to `SIBLING_PATTERN`, and this must remain the source of truth across resumes.
    - Normalize to upper-case and validate against the three allowed values.
    - If missing or unrecognized, default to `LOCALIZED` (backward compatible with older Step 6 runs).
    - Expose via `context["scope_classification"]` so Steps 8 and 9 can render `{scope_classification}` in their templates.

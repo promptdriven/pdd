@@ -132,11 +132,11 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
 11. **Proposed Fix Validation**
     If the issue body proposes a specific fix (code snippets, file paths, or a described approach), independently validate its scope against your own findings:
     - Compare the set of affected locations/cases identified by the issue's proposed fix against the full set you found in steps 4-10 above
-    - Classify the result:
-      - `SCOPE_MATCH` — the issue's proposed fix covers the same scope as your independent analysis
-      - `SCOPE_EXPANSION` — your independent analysis found additional affected locations, cases, or files beyond what the issue proposes
+    - Classify the result (this is a SEPARATE concept from the `SCOPE_CLASSIFICATION` enum below — it describes how the *issue's proposed fix* compares to your analysis, not how the fix maps onto the codebase):
+      - `PROPOSED_FIX_MATCH` — the issue's proposed fix covers the same scope as your independent analysis
+      - `PROPOSED_FIX_EXPANSION` — your independent analysis found additional affected locations, cases, or files beyond what the issue proposes
       - `NO_PROPOSED_FIX` — the issue does not propose a specific fix
-    - If `SCOPE_EXPANSION`: list every affected item your analysis found that the issue's proposed fix does NOT cover. These are the items downstream steps (8, 9, 10) must include in their test plans and verification — not just the subset the issue mentions.
+    - If `PROPOSED_FIX_EXPANSION`: list every affected item your analysis found that the issue's proposed fix does NOT cover. These are the items downstream steps (8, 9, 10) must include in their test plans and verification — not just the subset the issue mentions.
     - **This step exists because issue authors may propose partial fixes.** Downstream steps must use YOUR full scope, not the issue's proposed scope.
 
 
@@ -192,10 +192,10 @@ problematic_code_snippet()
 
 ### Proposed Fix Validation
 - **Issue proposes a fix:** [Yes | No]
-- **Scope classification:** [SCOPE_MATCH | SCOPE_EXPANSION | NO_PROPOSED_FIX]
+- **Proposed fix coverage:** [PROPOSED_FIX_MATCH | PROPOSED_FIX_EXPANSION | NO_PROPOSED_FIX]
 - **Issue-proposed scope:** [List locations/cases the issue's fix covers, or "N/A"]
 - **Step 6 full scope:** [List ALL locations/cases your independent analysis found]
-- **Expansion items (if SCOPE_EXPANSION):** [List items found by your analysis but NOT covered by the issue's proposed fix. These MUST be included in downstream test plans and verification]
+- **Expansion items (if PROPOSED_FIX_EXPANSION):** [List items found by your analysis but NOT covered by the issue's proposed fix. These MUST be included in downstream test plans and verification]
 
 ### Fix Location
 - **File(s) to modify:** `path/to/root_cause_file.py`
@@ -220,7 +220,7 @@ SAFE_EVIDENCE: path/to/looked_at.py | 42 | reason it is safe despite looking sim
 
 - `SCOPE_CLASSIFICATION`: REQUIRED. Exactly one of `LOCALIZED`, `SIBLING_PATTERN`, or `CROSS_CUTTING`. Missing or unrecognized values default to `LOCALIZED` (backward compatible).
 - `FIX_LOCATIONS`: ALL files from "File(s) to modify" above, comma-separated on one line.
-- `EXPANSION_ITEMS`: If scope classification is `SCOPE_EXPANSION`, list every item your analysis found that the issue's proposed fix does NOT cover, comma-separated on one line. If `SCOPE_MATCH` or `NO_PROPOSED_FIX`, output: `EXPANSION_ITEMS: none`. NEEDS_FIX siblings (below) are folded into `EXPANSION_ITEMS` by the orchestrator — you do NOT need to duplicate them here.
+- `EXPANSION_ITEMS`: If "Proposed fix coverage" is `PROPOSED_FIX_EXPANSION`, list every item your analysis found that the issue's proposed fix does NOT cover, comma-separated on one line. If `PROPOSED_FIX_MATCH` or `NO_PROPOSED_FIX`, output: `EXPANSION_ITEMS: none`. NEEDS_FIX siblings (below) are folded into `EXPANSION_ITEMS` by the orchestrator — you do NOT need to duplicate them here. Note: "Proposed fix coverage" is independent of the `SCOPE_CLASSIFICATION:` enum (LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING) — they describe different things and never collide.
 - `NEEDS_FIX`: Emit ONE line per confirmed sibling. Format: `NEEDS_FIX: <path> | <reason>`. Required when `SCOPE_CLASSIFICATION` is `SIBLING_PATTERN`; the orchestrator will auto-downgrade `SIBLING_PATTERN` to `LOCALIZED` if zero `NEEDS_FIX` lines are emitted (so partial searches do not silently inflate scope).
 - `SAFE_EVIDENCE`: Emit ONE line per candidate sibling that turned out safe. Format: `SAFE_EVIDENCE: <path> | <line> | <reason>`. These are informational — they document the search but are not added to `EXPANSION_ITEMS` or `FIX_LOCATIONS`.
 
