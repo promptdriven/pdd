@@ -201,7 +201,7 @@ def _setup_worktree(
     # Clean up branch if it exists
     reset_after_attach = False
     branch_exists = _branch_exists(cwd, branch_name)
-    if branch_exists and not resume_existing:
+    if branch_exists and (clean_restart or not resume_existing):
         success, _err = _delete_branch(cwd, branch_name)
         if success:
             branch_exists = False

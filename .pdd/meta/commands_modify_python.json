@@ -1,8 +1,8 @@
 {
   "pdd_version": "0.0.233",
-  "timestamp": "2026-05-23T19:10:56.040966+00:00",
+  "timestamp": "2026-05-26T00:00:00.000000+00:00",
   "command": "fix",
-  "prompt_hash": "89370ddd01e2e4ebe7b1048ed75ebe843419d78b133019cde0b8bde480a0a145",
+  "prompt_hash": "fe1b5bb35af67e03327d83b877d8eff14be1ee1ab5379bf3190ddaf2d49001cc",
   "code_hash": "35c29832636deb8dd6be2f637b3ccdc6e965e044b6554fb1befca967790b0ca1",
   "example_hash": "84edd899e3202fe13dc2e9437505a85552ec870b325e5628727d7202371d8134",
   "test_hash": "8915daf33703cfcd6e2561795faf0b400534c24a49d2ef5e971edd51efde3106",
@@ -11,8 +11,14 @@
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
+    "context/agentic_split_example.py": "25283e3976254717458001e7bcd058ae7d62af3c867a78e6206a9135091dadf4",
+    "context/change_main_example.py": "990b2dfc2b9ef2f1871cb4fe1b7a01d5d6f4f4f54f9a6a95fc3661c679802d42",
+    "context/core/errors_example.py": "b50dbf08aec028bd57a8fe74762bf92aee9a1fe953fb3d7db50cc686c72bfee3",
+    "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
+    "context/operation_log_example.py": "2660def7012d9b79bad3db33cf399ac603cc1c35dff0b064cbdd2638a013de1d",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/split_main_example.py": "ced192fcbfbfda15b35bd2dad5bbf4b4888acb091084cf58326832d224a77661",
-    "context/track_cost_example.py": "bd60efaa7d6274b0e4d1743ac05785461af65ec785b254730288d08774f72ed6"
+    "context/track_cost_example.py": "bd60efaa7d6274b0e4d1743ac05785461af65ec785b254730288d08774f72ed6",
+    "context/update_main_example.py": "b318834c648f25e6141d81f3ecac1d9da592a6bb4740500983f2b07b8a10d902"
   }
 }

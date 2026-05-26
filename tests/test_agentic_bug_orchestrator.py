@@ -1016,6 +1016,45 @@ def test_setup_worktree_clean_restart_fetches_remote_and_uses_main_ref(tmp_path)
     assert adds[-1][-1] != "HEAD"
 
 
+def test_setup_worktree_clean_restart_deletes_branch_during_resume(tmp_path):
+    """clean_restart must not preserve a stale branch when restoring worktree."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        cmd = list(args)
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_bug_orchestrator._branch_exists", return_value=True), \
+         patch("pdd.agentic_bug_orchestrator._delete_branch", return_value=(True, "")) as mock_delete, \
+         patch("pdd.agentic_bug_orchestrator._resolve_main_ref", return_value="origin/main"), \
+         patch("pdd.agentic_bug_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt_path, err = _setup_worktree(
+            tmp_path,
+            1,
+            quiet=True,
+            resume_existing=True,
+            clean_restart=True,
+        )
+
+    assert err is None
+    assert wt_path == tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_delete.assert_called_once_with(tmp_path, "fix/issue-1")
+    adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+    assert adds
+    assert adds[-1] == [
+        "git",
+        "worktree",
+        "add",
+        "-b",
+        "fix/issue-1",
+        str(tmp_path / ".pdd" / "worktrees" / "fix-issue-1"),
+        "origin/main",
+    ]
+
+
 def test_step12_prompt_uses_clean_restart_push_and_pr_update():
     """Step 12 must handle old remote bug branches during clean restart."""
     prompt = Path("pdd/prompts/agentic_bug_step12_pr_LLM.prompt").read_text(
