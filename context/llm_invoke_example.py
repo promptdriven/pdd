@@ -1,87 +1,89 @@
-"""
-Example usage of the pdd.llm_invoke module.
-
-This script demonstrates how to invoke Large Language Models using the PDD standard interface,
-including basic generation, structured Pydantic outputs, and batch processing.
-"""
 import os
 import sys
+from typing import Dict, Any
 from pydantic import BaseModel
 
-# Import the main invocation function and logging utility
-from pdd.llm_invoke import llm_invoke, set_verbose_logging
+# Import the llm_invoke function from the module
+from pdd.llm_invoke import llm_invoke
 
-def main():
-    # Prevent interactive API key prompts in this headless example
-    os.environ["PDD_FORCE"] = "1"
+
+def main() -> None:
+    """
+    Example script demonstrating how to use the llm_invoke function.
     
-    # Require an API key to proceed with the example
-    if not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")):
-        print("No standard LLM API key found in the environment.")
-        print("Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to run this example.")
+    llm_invoke provides a unified interface to call LLMs via LiteLLM, handling:
+    - Model selection (based on cost/ELO strength from a CSV)
+    - Context window validation
+    - Structured outputs (Pydantic / JSON Schema)
+    - Cost calculation and attribution tracking
+    """
+    # Ensure we have an API key to run without interactive prompts.
+    # For this example, we assume we want to use an OpenAI model.
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("OPENAI_API_KEY not set. Set it to run this example.")
         sys.exit(0)
 
-    # Optional: Enable detailed internal logging for the module
-    # set_verbose_logging(True)
+    # Set environment variables to control behavior in a headless environment
+    # PDD_FORCE=1 disables interactive prompts for missing API keys
+    os.environ["PDD_FORCE"] = "1"
+    # Set a default model that uses the checked API key
+    os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
 
-    print("=== Example 1: Basic LLM Invocation ===")
-    # Invoke an LLM using a prompt template and JSON input variables
-    # 'strength' controls the model selection (0.0 = cheapest, 0.5 = base, 1.0 = most capable)
-    response = llm_invoke(
-        prompt="Tell me a very short joke about {topic}.",
-        input_json={"topic": "programmers"},
-        strength=0.5, 
+    print("--- Example 1: Basic Text Generation ---")
+    # llm_invoke automatically formats the prompt string with input_json
+    basic_response = llm_invoke(
+        prompt="Write a one-sentence greeting for {name}.",
+        input_json={"name": "Alice"},
         temperature=0.7,
+        strength=0.5,  # 0.5 uses the base model
         verbose=False
     )
-    print(f"Result: {response['result']}")
-    print(f"Model used: {response['model_name']}")
-    print(f"Estimated Cost: ${response['cost']:.6f}\n")
+    
+    print(f"Model Used: {basic_response.get('model_name')}")
+    print(f"Result: {basic_response.get('result')}")
+    print(f"Estimated Cost: ${basic_response.get('cost'):.6f}")
+    print(f"Finish Reason: {basic_response.get('finish_reason')}")
 
-    print("=== Example 2: Structured Output with Pydantic ===")
-    # Define the desired output schema
-    class JokeStructure(BaseModel):
-        setup: str
-        punchline: str
-        rating: int
 
-    # By passing output_pydantic, the module forces the LLM to return valid JSON matching the schema
-    response_structured = llm_invoke(
-        prompt="Create a joke about {topic}.",
-        input_json={"topic": "data science"},
-        strength=0.5,
-        temperature=0.7,
-        output_pydantic=JokeStructure
+    print("\n--- Example 2: Structured Output (Pydantic) ---")
+    # Define a Pydantic model for the desired output structure
+    class CharacterInfo(BaseModel):
+        name: str
+        role: str
+        level: int
+
+    # Pass the Pydantic class to output_pydantic to enforce JSON schema validation
+    structured_response = llm_invoke(
+        prompt="Generate a random fantasy RPG character.",
+        input_json={},
+        output_pydantic=CharacterInfo,
+        temperature=0.8,
+        verbose=False
     )
     
-    # The result is automatically parsed into the requested Pydantic model
-    result_obj = response_structured['result']
-    if isinstance(result_obj, JokeStructure):
-        print(f"Setup: {result_obj.setup}")
-        print(f"Punchline: {result_obj.punchline}")
-        print(f"Rating: {result_obj.rating}/10\n")
+    result_obj = structured_response.get('result')
+    # result_obj will be an instantiated CharacterInfo object
+    if hasattr(result_obj, "model_dump"):
+        print(f"Structured Result: {result_obj.model_dump()}")
     else:
-        # Fallback string representation if parsing completely fails
-        print(f"Result: {result_obj}\n")
+        print(f"Fallback/Raw Result: {result_obj}")
 
-    print("=== Example 3: Batch Mode ===")
-    # Pass a list of dictionaries to process multiple inputs efficiently
-    batch_input = [
-        {"topic": "cats"},
-        {"topic": "dogs"},
+
+    print("\n--- Example 3: Using Direct Messages API ---")
+    # You can bypass the prompt/input_json template system and provide messages directly
+    messages = [
+        {"role": "system", "content": "You are a calculator. Return ONLY the integer result."},
+        {"role": "user", "content": "What is 15 + 27?"}
     ]
-    response_batch = llm_invoke(
-        prompt="Write a one-sentence fact about {topic}.",
-        input_json=batch_input,
-        strength=0.0, # Use cheapest model for batching
-        temperature=0.1,
-        use_batch_mode=True
-    )
     
-    # Result is a list of strings corresponding to the inputs
-    results_list = response_batch['result']
-    for i, res in enumerate(results_list):
-        print(f"Input {i+1}: {res}")
+    msg_response = llm_invoke(
+        messages=messages,
+        temperature=0.0,
+        time=0.0  # Disable reasoning effort for simple tasks
+    )
+    print(f"Calculation Result: {msg_response.get('result')}")
+
 
 if __name__ == "__main__":
     main()
