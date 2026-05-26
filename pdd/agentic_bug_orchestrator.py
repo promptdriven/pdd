@@ -2327,9 +2327,11 @@ def run_agentic_bug_orchestrator(
                         context_files = context_files[:_MAX_GREP_RESULTS]
                         if not quiet:
                             console.print(
-                                f"[yellow]  → Capping context extraction to "
-                                f"{_MAX_GREP_RESULTS} files ({len(overflow_files)} "
-                                f"overflow file(s) will be logged but not added)[/yellow]"
+                                f"[yellow]  → Capping LLM classification to "
+                                f"{_MAX_GREP_RESULTS} files; the remaining "
+                                f"{len(overflow_files)} overflow file(s) will "
+                                f"default to NEEDS_FIX as PATTERN_SEARCH-overflow "
+                                f"siblings (not LLM-reviewed)[/yellow]"
                             )
                             for of in overflow_files[:5]:
                                 console.print(f"[yellow]    (overflow) {of}[/yellow]")
@@ -2338,12 +2340,19 @@ def run_agentic_bug_orchestrator(
                                     f"[yellow]    ... and {len(overflow_files) - 5} more[/yellow]"
                                 )
                     context_file_set = set(context_files)
-                    # Only files within the cap are sent for classification.
-                    # Overflow files are NOT added to unclassified_filenames —
-                    # they bypass classification entirely, so applying the
-                    # conservative NEEDS_FIX default would poison Step 9's
-                    # coverage check with unreviewed files.
+                    # Files within the cap go to the LLM for classification.
+                    # Overflow files cannot fit into the retry's context window,
+                    # but PR #1210's scope-completeness contract requires they
+                    # still flow into FIX_LOCATIONS and step6_expansion_items
+                    # as conservative NEEDS_FIX defaults — same treatment as
+                    # a retry failure. Silently dropping them lets Step 8/9
+                    # miss real same-root-cause siblings on broad repeating-
+                    # pattern bugs (the >50-match case). Each overflow file is
+                    # labeled "PATTERN_SEARCH overflow — not LLM-reviewed" so
+                    # downstream steps know these were defaulted, not vetted.
                     unclassified_filenames = context_files
+                    overflow_unclassified: List[str] = list(overflow_files)
+                    all_grep_unclassified = list(unclassified_filenames) + overflow_unclassified
                     context_matches = [m for m in unclassified if m[0] in context_file_set]
 
                     # Extract surrounding code context for each match
@@ -2406,15 +2415,25 @@ def run_agentic_bug_orchestrator(
                     # step6_expansion_items so Step 8/9 plan tests for them.
                     sibling_evidence: List[Tuple[str, str]] = []
 
+                    # Tag for overflow-defaulted entries so Step 8/9 see they
+                    # were NOT LLM-reviewed (the cap means they bypassed the
+                    # retry context window). Defaulted-but-vetted entries (the
+                    # cap-fitted set with no explicit SAFE_EVIDENCE) carry an
+                    # empty reason.
+                    _OVERFLOW_REASON = "PATTERN_SEARCH overflow — not LLM-reviewed"
+
                     if retry_success:
                         needs_fix, safe = _parse_classification_evidence(retry_output)
 
                         # MERGE semantics: original UNION new_needs_fix UNION defaults
                         # Uses _merge_fix_locations for basename normalization so
                         # "agentic_update.py" (LLM) and "pdd/agentic_update.py" (grep)
-                        # are treated as the same file.
+                        # are treated as the same file. Pass the full grep set
+                        # (cap + overflow) so overflow files also default to
+                        # NEEDS_FIX in FIX_LOCATIONS — PR #1210 scope-completeness
+                        # contract.
                         merged = _merge_fix_locations(
-                            fix_locs, needs_fix, safe, unclassified_filenames
+                            fix_locs, needs_fix, safe, all_grep_unclassified
                         )
 
                         # Capture (path, reason) for sibling expansion. Reuse the
@@ -2436,37 +2455,62 @@ def run_agentic_bug_orchestrator(
                             if fname in sibling_keys:
                                 continue
                             if _is_llm_classified(
-                                fname, needs_fix, safe, unclassified_filenames
+                                fname, needs_fix, safe, all_grep_unclassified
                             ):
                                 # SAFE means skip; explicit NEEDS_FIX is
                                 # already in sibling_evidence above.
                                 continue
                             sibling_evidence.append((fname, ""))
 
+                        # Overflow files were never sent to the LLM. They must
+                        # still flow into step6_expansion_items because the
+                        # grep already classified them as candidate siblings —
+                        # silently dropping them would let Step 8/9 miss real
+                        # same-root-cause siblings on broad (>50-match) bugs.
+                        for fname in overflow_unclassified:
+                            if fname in sibling_keys:
+                                continue
+                            sibling_evidence.append((fname, _OVERFLOW_REASON))
+
                         # Log which unclassified files were defaulted to NEEDS_FIX
                         if not quiet:
                             for fname in unclassified_filenames:
                                 if not _is_llm_classified(
-                                    fname, needs_fix, safe, unclassified_filenames
+                                    fname, needs_fix, safe, all_grep_unclassified
                                 ):
                                     console.print(
                                         f"[yellow]    → {fname} has no classification "
                                         f"evidence, defaulting to NEEDS_FIX[/yellow]"
                                     )
+                            for fname in overflow_unclassified:
+                                console.print(
+                                    f"[yellow]    → {fname} overflowed retry cap, "
+                                    f"defaulting to NEEDS_FIX (not LLM-reviewed)[/yellow]"
+                                )
 
                     else:
                         # Retry failed (rate limit, network error, LLM failure).
                         # Apply conservative default: all grep-discovered files
                         # are added to FIX_LOCATIONS since we can't classify them.
                         merged = _merge_fix_locations(
-                            fix_locs, [], [], unclassified_filenames
+                            fix_locs, [], [], all_grep_unclassified
                         )
-                        sibling_evidence = [(f, "") for f in unclassified_filenames]
+                        sibling_evidence = [
+                            (f, "") for f in unclassified_filenames
+                        ] + [
+                            (f, _OVERFLOW_REASON) for f in overflow_unclassified
+                        ]
                         if not quiet:
                             for fname in unclassified_filenames:
                                 console.print(
                                     f"[yellow]    → {fname} unclassified (retry failed), "
                                     f"defaulting to NEEDS_FIX[/yellow]"
+                                )
+                            for fname in overflow_unclassified:
+                                console.print(
+                                    f"[yellow]    → {fname} overflowed retry cap "
+                                    f"(retry failed), defaulting to NEEDS_FIX "
+                                    f"(not LLM-reviewed)[/yellow]"
                                 )
 
                     context["fix_locations"] = ", ".join(merged)
