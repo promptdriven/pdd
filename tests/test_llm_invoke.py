@@ -7364,3 +7364,91 @@ def test_map_openai_params_unrelated_model_unchanged():
     )
     assert thinking == {"type": "enabled", "budget_tokens": 4096}, thinking
     assert output_config is None, output_config
+
+
+# ------------------------------------------------------------------------------
+# Bedrock-adapter coverage: invoke (AmazonAnthropicClaudeConfig) inherits from
+# AnthropicConfig and is reached by the AnthropicConfig wrap above. Converse
+# (AmazonConverseConfig) does NOT inherit and needs its own wrap. These tests
+# exercise the actual LiteLLM Bedrock classes — not the AnthropicConfig stand-
+# in used above — so a regression that breaks the Converse code path can't
+# slip through.
+# ------------------------------------------------------------------------------
+
+
+def test_bedrock_invoke_adapter_opus_47_adaptive_via_inheritance():
+    """AmazonAnthropicClaudeConfig inherits map_openai_params + the
+    _is_claude_opus_4_5 predicate from AnthropicConfig. With the
+    pdd.llm_invoke wrap in place, Bedrock invoke-style Opus 4.7 must
+    produce the adaptive shape + output_config."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonAnthropicClaudeConfig in this env")
+    cfg = AmazonAnthropicClaudeConfig()
+    result = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="bedrock/anthropic.claude-opus-4-7",
+        drop_params=True,
+    )
+    assert result.get("thinking") == {"type": "adaptive"}, result.get("thinking")
+    assert result.get("output_config") == {"effort": "high"}, result.get("output_config")
+
+
+def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
+    """AmazonConverseConfig is a separate class that doesn't inherit from
+    AnthropicConfig — needs its own wrap. The Converse map_openai_params
+    builds thinking={type:enabled} via AnthropicConfig._map_reasoning_effort
+    with no Opus 4.5/4.7 branch. The wrap rewrites it to adaptive for
+    opus-4-7 model names so the AWS API doesn't 400."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-opus-4-7",
+        "bedrock/converse/anthropic.claude-opus-4-7",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert result.get("thinking") == {"type": "adaptive"}, (model, result)
+
+
+def test_bedrock_converse_adapter_unrelated_models_unchanged():
+    """The Converse wrap is gated on opus-4-7 substring. Sonnet 4.6 and
+    Opus 4.5 must keep LiteLLM's existing behavior so we don't disturb
+    other Converse callers."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-opus-4-5",
+        "bedrock/anthropic.claude-sonnet-4-6",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert result.get("thinking") == {"type": "enabled", "budget_tokens": 4096}, (model, result)

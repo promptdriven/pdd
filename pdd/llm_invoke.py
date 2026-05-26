@@ -134,6 +134,42 @@ except Exception as _opus_4_7_patch_err:  # pylint: disable=broad-except
         _opus_4_7_patch_err,
     )
 
+# Bedrock Converse uses AmazonConverseConfig — a separate class that does
+# NOT inherit from AnthropicConfig — so neither patch above reaches it.
+# Its `map_openai_params` builds `thinking={"type":"enabled","budget_tokens":N}`
+# via `AnthropicConfig._map_reasoning_effort(...)` directly, with no
+# Opus 4.5/4.7 branch at all. Wrap it to convert the legacy enabled
+# shape into adaptive for any opus-4-7 model name, mirroring the
+# direct/Vertex fix above. Sentinel-guarded for reload safety.
+try:
+    from litellm.llms.bedrock.chat.converse_transformation import (
+        AmazonConverseConfig as _AmazonConverseConfigOpus47,
+    )
+    _existing_converse_map = _AmazonConverseConfigOpus47.map_openai_params
+    if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
+        _orig_converse_map = _existing_converse_map
+        def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
+            result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
+            m = model.lower() if isinstance(model, str) else ""
+            if "opus-4-7" not in m and "opus_4_7" not in m:
+                return result
+            current = result.get("thinking")
+            if not (isinstance(current, dict) and current.get("type") == "enabled"):
+                return result
+            user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
+            if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                result["thinking"] = user_thinking
+            else:
+                result["thinking"] = {"type": "adaptive"}
+            return result
+        _patched_converse_map._pdd_opus_4_7_converse_patched = True
+        _AmazonConverseConfigOpus47.map_openai_params = _patched_converse_map
+except Exception as _converse_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch AmazonConverseConfig for opus-4-7: %s",
+        _converse_patch_err,
+    )
+
 # Add a console handler if none exists
 if not logger.handlers:
     console_handler = logging.StreamHandler()
