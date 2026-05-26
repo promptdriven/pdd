@@ -1,4 +1,4 @@
-% You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands. 
+% You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands.
 
 % Here is the instructions for the current CLI program `pdd`:
     <cli_command_readme><include query="bug command usage, options, and subcommands">./README.md</include></cli_command_readme>

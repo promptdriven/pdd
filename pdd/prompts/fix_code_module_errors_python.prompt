@@ -36,7 +36,7 @@
 
 % This program will do the following:
     Step 1. Load the 'fix_code_module_errors_LLM' and 'extract_program_code_fix_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time. 
+    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'program'
             - 'prompt'
@@ -44,7 +44,7 @@
             - 'errors'
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
     Step 3. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function. Also pretty print the number of tokens in the result and the cost.
-    Step 4. Run a second llm_invoke with the EXTRACTION_STRENGTH constant, the provided temperature, and time to extract the fixes. 
+    Step 4. Run a second llm_invoke with the EXTRACTION_STRENGTH constant, the provided temperature, and time to extract the fixes.
         4a. Pass the following string parameters to the prompt during invoke:
             - 'program_code_fix': This is the result of the first llm_invoke
             - 'program'

@@ -55,9 +55,9 @@
 
 % This program will do the following:
     Step 1. Load the 'fix_errors_from_unit_tests_LLM' prompt template.
-    
+
     Step 2. Note: The 'error' input parameter contains the current error message and potentially relevant history (like previous test results or fix attempts from the current session) formatted by the calling function (e.g., fix_error_loop.py). This function uses the 'error_log_file' path *only* for writing its own analysis output (see Step 3e), not for reading input history. Handle file I/O errors gracefully when *writing* the log.
-    
+
     Step 3. Run the LLM prompt from Step 1 through llm_invoke:
         3a. Preprocess the input 'prompt' string using preprocess(recursive=False, double_curly_brackets=True).
         3b. Preprocess the loaded 'fix_errors_from_unit_tests_LLM' template string using preprocess(recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'errors', 'prompt']).
@@ -76,12 +76,12 @@
             - 'language' (the input language, to ensure correct post-processing validation)
         3d. Store the full LLM response as analysis_results
         3e. Append the output to error_file with a clear separator and timestamp to distinguish it from previous content
-    
+
     Step 4. Pretty print the analysis results with markdown formatting via the rich Markdown function to both:
         - Console (when verbose is True)
         - error_file (always)
         Also print the number of output tokens and cost.
-    
+
     Step 5. Run a second LLM prompt to extract the fixed code/test:
         5a. Load the 'extract_unit_code_fix_LLM' prompt template.
         5b. Preprocess this second prompt template.
@@ -97,7 +97,7 @@
             - 'fixed_unit_test' (string)
             - 'fixed_code' (string)
         5e. Note: This function does *not* use the 'edit_file' tool or write the fixed code/test to files itself. It returns the fixes for the caller to handle.
-    
+
     Step 6. Clean up temporary files and return the tuple containing:
             - update_unit_test (from Step 5d)
             - update_code (from Step 5d)

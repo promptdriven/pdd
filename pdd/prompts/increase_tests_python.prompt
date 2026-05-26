@@ -3,7 +3,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'existing_unit_tests' - A string that is the existing unit tests for the code under test.
         'coverage_report' - A string that is the coverage report for the code under test.
         'code' - A string that is the code under test.
@@ -38,7 +38,7 @@
 
 % This function will do the following:
     Step 1. Load the 'increase_tests_LLM' prompt template.
-    Step 2. Run the prompt through the model using llm_invoke, passing the input strength and the time parameter. 
+    Step 2. Run the prompt through the model using llm_invoke, passing the input strength and the time parameter.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'existing_unit_tests'
             - 'coverage_report'

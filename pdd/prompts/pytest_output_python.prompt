@@ -3,7 +3,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the CLI:
-    Command Line Interface Input arguments: 
+    Command Line Interface Input arguments:
         'test_file' - A string containing the path to the test file.
         '--json-only' - An optional boolean flag. If present, output *only* the JSON to standard output.  Do not print any other messages.
     Command Line Interface Outputs:

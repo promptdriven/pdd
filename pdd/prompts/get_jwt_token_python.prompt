@@ -18,15 +18,15 @@
     ) -> str:
         """
         Get a Firebase ID token using GitHub's Device Flow authentication.
-        
+
         Args:
             firebase_api_key: Firebase Web API key
             github_client_id: OAuth client ID for GitHub app
             app_name: Unique name for your CLI application (default: "my-cli-app")
-            
+
         Returns:
             str: A valid Firebase ID token
-            
+
         Raises:
             AuthError: If authentication fails
             NetworkError: If there are connectivity issues
@@ -131,14 +131,14 @@
                 github_client_id=GITHUB_CLIENT_ID
             )
             # Use token for API calls...
-            
+
         except AuthError as e:
             print(f"Authentication failed: {e}")
         except NetworkError as e:
             print(f"Network error: {e}")
         except TokenError as e:
             print(f"Token error: {e}")
-``` 
+```
 
 % End User Experience:
     - User runs CLI command

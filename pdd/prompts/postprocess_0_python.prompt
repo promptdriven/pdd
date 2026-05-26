@@ -1,8 +1,8 @@
-% You are an expert Python engineer. Your goal is to write a python function called 'postprocess_0' that will post-process the string output of a LLM so that the code can be run. 
+% You are an expert Python engineer. Your goal is to write a python function called 'postprocess_0' that will post-process the string output of a LLM so that the code can be run.
 
 % Here are the inputs and outputs of the function:
-    Input: 
-        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
+    Input:
+        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks.
         'language' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
     Output: returns a string that is the processed string that contains a properly commented out comments so that code can be run
 
@@ -51,8 +51,8 @@ context_generator('your_python_file.py', 'output_example.py', force=False)
 ```
 
 Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
-To implement the context_generator function as described, we will follow the steps outlined in   
-your request. Below is the complete implementation of the function, which includes reading a     
+To implement the context_generator function as described, we will follow the steps outlined in
+your request. Below is the complete implementation of the function, which includes reading a
 Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
 the output to a specified file.'''
 
@@ -95,8 +95,8 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
 #```
 #
 #Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
-#To implement the context_generator function as described, we will follow the steps outlined in   
-#your request. Below is the complete implementation of the function, which includes reading a     
+#To implement the context_generator function as described, we will follow the steps outlined in
+#your request. Below is the complete implementation of the function, which includes reading a
 #Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
 #the output to a specified file.'''
 
