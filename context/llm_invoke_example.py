@@ -1,119 +1,89 @@
 import os
 import sys
-import json
-from typing import Optional
+from typing import Dict, Any
 from pydantic import BaseModel
 
-# Import the llm_invoke function
-from pdd.llm_invoke import llm_invoke, set_verbose_logging
+# Import the llm_invoke function from the module
+from pdd.llm_invoke import llm_invoke
 
-# Enable verbose logging for the example to see token counts and costs
-set_verbose_logging(True)
 
-# Check for an API key to ensure the example can run
-# We'll check for a common one, but llm_invoke handles missing keys interactively or via fallback
-# For this non-interactive example, we require one to be set to avoid the prompt.
-if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY") and not os.environ.get("GEMINI_API_KEY"):
-    print("No common API keys found (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY).")
-    print("Please set at least one to run this example successfully.")
-    sys.exit(0)
-
-# Also force local execution for the example to avoid cloud auth requirements
-os.environ["PDD_FORCE_LOCAL"] = "1"
-
-def basic_text_generation():
+def main() -> None:
     """
-    Example 1: Basic text generation using a simple prompt and input data.
-    Uses strength=0.5 (defaults to base model in CSV).
+    Example script demonstrating how to use the llm_invoke function.
+    
+    llm_invoke provides a unified interface to call LLMs via LiteLLM, handling:
+    - Model selection (based on cost/ELO strength from a CSV)
+    - Context window validation
+    - Structured outputs (Pydantic / JSON Schema)
+    - Cost calculation and attribution tracking
     """
-    print("\n--- Example 1: Basic Text Generation ---")
-    
-    prompt_template = "Explain the concept of {concept} in one short sentence."
-    input_data = {"concept": "recursion"}
-    
-    response = llm_invoke(
-        prompt=prompt_template,
-        input_json=input_data,
-        strength=0.5,       # 0.5 targets the base model
+    # Ensure we have an API key to run without interactive prompts.
+    # For this example, we assume we want to use an OpenAI model.
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("OPENAI_API_KEY not set. Set it to run this example.")
+        sys.exit(0)
+
+    # Set environment variables to control behavior in a headless environment
+    # PDD_FORCE=1 disables interactive prompts for missing API keys
+    os.environ["PDD_FORCE"] = "1"
+    # Set a default model that uses the checked API key
+    os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
+
+    print("--- Example 1: Basic Text Generation ---")
+    # llm_invoke automatically formats the prompt string with input_json
+    basic_response = llm_invoke(
+        prompt="Write a one-sentence greeting for {name}.",
+        input_json={"name": "Alice"},
         temperature=0.7,
-        verbose=True
+        strength=0.5,  # 0.5 uses the base model
+        verbose=False
     )
     
-    print(f"\nResult:\n{response['result']}")
-    print(f"Cost: ${response['cost']:.6f}")
-    print(f"Model Used: {response['model_name']}")
+    print(f"Model Used: {basic_response.get('model_name')}")
+    print(f"Result: {basic_response.get('result')}")
+    print(f"Estimated Cost: ${basic_response.get('cost'):.6f}")
+    print(f"Finish Reason: {basic_response.get('finish_reason')}")
 
-def structured_output_generation():
-    """
-    Example 2: Generating structured output enforcing a Pydantic schema.
-    """
+
     print("\n--- Example 2: Structured Output (Pydantic) ---")
-    
-    class PersonInfo(BaseModel):
+    # Define a Pydantic model for the desired output structure
+    class CharacterInfo(BaseModel):
         name: str
-        age: int
-        profession: str
-        hobbies: list[str]
-        
-    prompt_template = "Extract information about {person_name} from this text: {text}"
-    input_data = {
-        "person_name": "Alice",
-        "text": "Alice is a 30 year old software engineer who loves hiking, reading, and painting."
-    }
-    
-    response = llm_invoke(
-        prompt=prompt_template,
-        input_json=input_data,
-        strength=0.8,       # Higher strength targets higher ELO models, better for structured output
-        temperature=0.1,    # Low temperature for deterministic extraction
-        output_pydantic=PersonInfo,
-        verbose=True
+        role: str
+        level: int
+
+    # Pass the Pydantic class to output_pydantic to enforce JSON schema validation
+    structured_response = llm_invoke(
+        prompt="Generate a random fantasy RPG character.",
+        input_json={},
+        output_pydantic=CharacterInfo,
+        temperature=0.8,
+        verbose=False
     )
     
-    print("\nResult (Pydantic Object):")
-    if isinstance(response['result'], PersonInfo):
-        print(json.dumps(response['result'].model_dump(), indent=2))
+    result_obj = structured_response.get('result')
+    # result_obj will be an instantiated CharacterInfo object
+    if hasattr(result_obj, "model_dump"):
+        print(f"Structured Result: {result_obj.model_dump()}")
     else:
-        print("Failed to parse into Pydantic object:", response['result'])
-        
-    print(f"Cost: ${response['cost']:.6f}")
+        print(f"Fallback/Raw Result: {result_obj}")
 
 
-def batch_processing():
-    """
-    Example 3: Processing multiple inputs in a single batch.
-    Requires a list of dictionaries for input_json.
-    """
-    print("\n--- Example 3: Batch Processing ---")
-    
-    prompt_template = "Translate '{phrase}' to {language}."
-    batch_inputs = [
-        {"phrase": "Hello world", "language": "Spanish"},
-        {"phrase": "Good morning", "language": "French"},
-        {"phrase": "Thank you", "language": "German"}
+    print("\n--- Example 3: Using Direct Messages API ---")
+    # You can bypass the prompt/input_json template system and provide messages directly
+    messages = [
+        {"role": "system", "content": "You are a calculator. Return ONLY the integer result."},
+        {"role": "user", "content": "What is 15 + 27?"}
     ]
     
-    response = llm_invoke(
-        prompt=prompt_template,
-        input_json=batch_inputs,
-        strength=0.2,       # Lower strength targets cheaper models for bulk tasks
-        use_batch_mode=True,
-        verbose=True
+    msg_response = llm_invoke(
+        messages=messages,
+        temperature=0.0,
+        time=0.0  # Disable reasoning effort for simple tasks
     )
-    
-    print("\nResults (List):")
-    for i, res in enumerate(response['result']):
-        print(f"Item {i+1}: {res}")
-        
-    print(f"Total Batch Cost: ${response['cost']:.6f}")
+    print(f"Calculation Result: {msg_response.get('result')}")
 
-
-def main():
-    print("Running llm_invoke examples...")
-    basic_text_generation()
-    structured_output_generation()
-    batch_processing()
-    print("\nExamples complete.")
 
 if __name__ == "__main__":
     main()
