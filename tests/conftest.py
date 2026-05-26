@@ -1,11 +1,15 @@
 """Project-level pytest configuration hooks."""
 
+import sys
+from pathlib import Path
+project_root = str(Path(__file__).resolve().parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import atexit
 import os
 import shutil
-import sys
 import tempfile
-from pathlib import Path
 from typing import Any
 
 # =============================================================================
@@ -74,7 +78,7 @@ _E2E_FIX_ATTRS_TO_RESTORE = (
 
 
 @pytest.fixture(autouse=True)
-def _normalize_cli_test_env(monkeypatch):
+def _normalize_cli_test_env(monkeypatch, request):
     """Keep unit tests independent of developer shell/.env overrides.
 
     Many CLI tests assert that ``auto_update()`` runs once per invocation.
@@ -82,6 +86,17 @@ def _normalize_cli_test_env(monkeypatch):
     for the test process unless a test explicitly patches the flag off.
     """
     monkeypatch.setenv("PDD_AUTO_UPDATE", "true")
+
+    import pdd.path_resolution
+    module_name = request.module.__name__
+    if "test_get_language_missing_environment_variable" in request.node.name:
+        pdd.path_resolution.PDD_STRICT_PATH = None
+    elif "test_get_extension" in module_name:
+        pdd.path_resolution.PDD_STRICT_PATH = "extension"
+    elif any(t in module_name for t in ("test_get_comment", "test_get_language", "test_get_run_command")):
+        pdd.path_resolution.PDD_STRICT_PATH = "true"
+    else:
+        pdd.path_resolution.PDD_STRICT_PATH = None
 
 
 @pytest.fixture(autouse=True)

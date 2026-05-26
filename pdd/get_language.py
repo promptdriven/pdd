@@ -10,7 +10,7 @@ def _language_format_csv_path() -> Path:
     try:
         return resolver.resolve_data_file("data/language_format.csv")
     except ValueError as exc:
-        raise ValueError("PDD_PATH environment variable is not set") from exc
+        raise ValueError(str(exc)) from exc
 
 
 def get_language(extension: str) -> str:
