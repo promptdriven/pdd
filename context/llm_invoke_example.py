@@ -12,6 +12,10 @@ model CSV to a temporary file and points ``pdd.llm_invoke`` at it before
 calling into the wrapper, then mocks the underlying LiteLLM calls. No real
 API keys or network access are required.
 
+Importing this module has no side effects: all environment mutation, temp
+file creation, ``pdd.llm_invoke`` import, and monkey-patching is performed
+inside ``main()`` and restored on exit.
+
 Return dictionary keys produced by ``llm_invoke``:
   - ``result``: str (or Pydantic instance, or list in batch mode)
   - ``cost``: float (US dollars, accumulated across attempts)
@@ -25,29 +29,14 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-# Ensure 'pdd' is importable regardless of cwd.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from pydantic import BaseModel
 
-# Set non-interactive defaults BEFORE importing llm_invoke. PDD_FORCE turns
-# off the interactive API-key prompt, PDD_FORCE_LOCAL keeps the call path
-# offline, and a single placeholder OPENAI_API_KEY satisfies the api_key
-# bookkeeping for the demo CSV below.
-os.environ.setdefault("PDD_FORCE_LOCAL", "1")
-os.environ.setdefault("PDD_FORCE", "1")
-os.environ.setdefault("PDD_QUIET", "1")
-os.environ.setdefault("LITELLM_CACHE_DISABLE", "1")
-os.environ["OPENAI_API_KEY"] = "sk-example-placeholder-value"
 
-# Write a tiny, deterministic model CSV that uses only OPENAI_API_KEY. We
-# point llm_invoke at this file (overriding any ~/.pdd/llm_model.csv or
-# project CSV that happens to be present on the host) so the example is
-# reproducible and never depends on the user's real model registry.
 _DEMO_CSV = (
     "provider,model,input,output,coding_arena_elo,base_url,api_key,"
     "max_reasoning_tokens,structured_output,reasoning_type,location\n"
@@ -55,24 +44,19 @@ _DEMO_CSV = (
     "OpenAI,gpt-example-base,1.0,3.0,1300,,OPENAI_API_KEY,0,True,none,\n"
     "OpenAI,gpt-example-cheap,0.1,0.3,1100,,OPENAI_API_KEY,0,True,none,\n"
 )
-_csv_tmp = tempfile.NamedTemporaryFile(
-    mode="w", suffix=".csv", prefix="pdd_llm_invoke_demo_", delete=False
-)
-_csv_tmp.write(_DEMO_CSV)
-_csv_tmp.flush()
-_csv_tmp.close()
-_DEMO_CSV_PATH = Path(_csv_tmp.name)
 
-# Pin the base model so candidate ordering is deterministic.
-os.environ["PDD_MODEL_DEFAULT"] = "gpt-example-base"
-
-import pdd.llm_invoke as _llm_invoke_mod
-from pdd.llm_invoke import llm_invoke, set_quiet_logging
-
-# Redirect llm_invoke to our demo CSV (the module's value was resolved at
-# import time from the host filesystem).
-_llm_invoke_mod.LLM_MODEL_CSV_PATH = _DEMO_CSV_PATH
-_llm_invoke_mod.DEFAULT_BASE_MODEL = "gpt-example-base"
+# Env vars the demo needs in place before importing pdd.llm_invoke (and for
+# the duration of the run). PDD_FORCE turns off the interactive API-key
+# prompt, PDD_FORCE_LOCAL keeps the call path offline, and a placeholder
+# OPENAI_API_KEY satisfies the api_key bookkeeping for the demo CSV.
+_DEMO_ENV = {
+    "PDD_FORCE_LOCAL": "1",
+    "PDD_FORCE": "1",
+    "PDD_QUIET": "1",
+    "LITELLM_CACHE_DISABLE": "1",
+    "OPENAI_API_KEY": "sk-example-placeholder-value",
+    "PDD_MODEL_DEFAULT": "gpt-example-base",
+}
 
 
 class AnimalFact(BaseModel):
@@ -125,77 +109,141 @@ def _mock_batch_completion(*args, **kwargs):
     return [_mock_completion(messages=m) for m in messages_list]
 
 
+@contextmanager
+def _patched_env(overrides: dict[str, str]):
+    """Temporarily apply env var overrides; restore prior values on exit."""
+    sentinel = object()
+    prior: dict[str, object] = {k: os.environ.get(k, sentinel) for k in overrides}
+    os.environ.update(overrides)
+    try:
+        yield
+    finally:
+        for key, original in prior.items():
+            if original is sentinel:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original  # type: ignore[assignment]
+
+
+@contextmanager
+def _demo_csv_file():
+    """Write the deterministic demo CSV to a temp file; remove on exit."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".csv", prefix="pdd_llm_invoke_demo_", delete=False
+    )
+    try:
+        tmp.write(_DEMO_CSV)
+        tmp.flush()
+        tmp.close()
+        yield Path(tmp.name)
+    finally:
+        try:
+            Path(tmp.name).unlink()
+        except OSError:
+            pass
+
+
+@contextmanager
+def _sys_path_prefix(path: str):
+    """Prepend ``path`` to ``sys.path`` for the duration of the block."""
+    sys.path.insert(0, path)
+    try:
+        yield
+    finally:
+        try:
+            sys.path.remove(path)
+        except ValueError:
+            pass
+
+
 def run_examples() -> None:
-    """Run the three demonstration scenarios."""
-    set_quiet_logging()
+    """Run the three demonstration scenarios.
 
-    with patch("litellm.completion", side_effect=_mock_completion), \
-         patch("litellm.batch_completion", side_effect=_mock_batch_completion), \
-         patch("litellm.completion_cost", return_value=0.0001), \
-         patch("litellm.token_counter", return_value=42), \
-         patch("pdd.llm_invoke.get_context_limit", return_value=1_000_000):
+    Performs all environment mutation, the deferred ``pdd.llm_invoke``
+    import, and monkey-patching inside this function so importing the
+    module has no side effects.
+    """
+    repo_root = os.path.join(os.path.dirname(__file__), "..")
+    with _patched_env(_DEMO_ENV), _demo_csv_file() as demo_csv_path, \
+         _sys_path_prefix(repo_root):
+        import pdd.llm_invoke as _llm_invoke_mod
+        from pdd.llm_invoke import llm_invoke, set_quiet_logging
 
-        print("--- Example 1: Basic Text Generation ---")
-        response = llm_invoke(
-            prompt="Write a one-sentence fun fact about {topic}.",
-            input_json={"topic": "space"},
-            strength=0.5,
-            temperature=0.7,
-            verbose=False,
-        )
-        print("Result:", response.get("result"))
-        print("Model :", response.get("model_name"))
-        print("Cost  : $%.6f" % float(response.get("cost") or 0.0))
-        print("Attempts:", response.get("attempted_models"))
-        print("")
+        # Redirect llm_invoke to our demo CSV (the module's value was
+        # resolved at import time from the host filesystem). Restore the
+        # original values on exit so reruns/imports stay deterministic.
+        original_csv = _llm_invoke_mod.LLM_MODEL_CSV_PATH
+        original_default = _llm_invoke_mod.DEFAULT_BASE_MODEL
+        _llm_invoke_mod.LLM_MODEL_CSV_PATH = demo_csv_path
+        _llm_invoke_mod.DEFAULT_BASE_MODEL = "gpt-example-base"
 
-        print("--- Example 2: Structured Output (Pydantic) ---")
-        response_structured = llm_invoke(
-            prompt="Give me a fact about a {animal}.",
-            input_json={"animal": "kangaroo"},
-            strength=0.5,
-            temperature=0.1,
-            output_pydantic=AnimalFact,
-        )
-        result_obj = response_structured.get("result")
-        if isinstance(result_obj, AnimalFact):
-            print("Name    :", result_obj.animal_name)
-            print("Lifespan:", result_obj.lifespan_years, "years")
-            print("Mammal  :", result_obj.is_mammal)
-        else:
-            print("Raw structured result:", result_obj)
-        print("")
+        set_quiet_logging()
 
-        print("--- Example 3: Batch Processing ---")
-        batch_inputs = [
-            {"word": "happy"},
-            {"word": "sad"},
-            {"word": "angry"},
-        ]
-        response_batch = llm_invoke(
-            prompt="What is a common synonym for {word}? Reply with just one word.",
-            input_json=batch_inputs,
-            use_batch_mode=True,
-            strength=0.1,
-            temperature=0.3,
-        )
-        results = response_batch.get("result") or []
-        if isinstance(results, list):
-            for inp, res in zip(batch_inputs, results):
-                line = res.strip() if isinstance(res, str) else res
-                print("  %-6s -> %s" % (inp["word"], line))
-        else:
-            print("Batch result (non-list):", results)
+        try:
+            with patch("litellm.completion", side_effect=_mock_completion), \
+                 patch("litellm.batch_completion", side_effect=_mock_batch_completion), \
+                 patch("litellm.completion_cost", return_value=0.0001), \
+                 patch("litellm.token_counter", return_value=42), \
+                 patch("pdd.llm_invoke.get_context_limit", return_value=1_000_000):
+
+                print("--- Example 1: Basic Text Generation ---")
+                response = llm_invoke(
+                    prompt="Write a one-sentence fun fact about {topic}.",
+                    input_json={"topic": "space"},
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=False,
+                )
+                print("Result:", response.get("result"))
+                print("Model :", response.get("model_name"))
+                print("Cost  : $%.6f" % float(response.get("cost") or 0.0))
+                print("Attempts:", response.get("attempted_models"))
+                print("")
+
+                print("--- Example 2: Structured Output (Pydantic) ---")
+                response_structured = llm_invoke(
+                    prompt="Give me a fact about a {animal}.",
+                    input_json={"animal": "kangaroo"},
+                    strength=0.5,
+                    temperature=0.1,
+                    output_pydantic=AnimalFact,
+                )
+                result_obj = response_structured.get("result")
+                if isinstance(result_obj, AnimalFact):
+                    print("Name    :", result_obj.animal_name)
+                    print("Lifespan:", result_obj.lifespan_years, "years")
+                    print("Mammal  :", result_obj.is_mammal)
+                else:
+                    print("Raw structured result:", result_obj)
+                print("")
+
+                print("--- Example 3: Batch Processing ---")
+                batch_inputs = [
+                    {"word": "happy"},
+                    {"word": "sad"},
+                    {"word": "angry"},
+                ]
+                response_batch = llm_invoke(
+                    prompt="What is a common synonym for {word}? Reply with just one word.",
+                    input_json=batch_inputs,
+                    use_batch_mode=True,
+                    strength=0.1,
+                    temperature=0.3,
+                )
+                results = response_batch.get("result") or []
+                if isinstance(results, list):
+                    for inp, res in zip(batch_inputs, results):
+                        line = res.strip() if isinstance(res, str) else res
+                        print("  %-6s -> %s" % (inp["word"], line))
+                else:
+                    print("Batch result (non-list):", results)
+        finally:
+            _llm_invoke_mod.LLM_MODEL_CSV_PATH = original_csv
+            _llm_invoke_mod.DEFAULT_BASE_MODEL = original_default
 
 
 def main() -> None:
-    try:
-        run_examples()
-    finally:
-        try:
-            _DEMO_CSV_PATH.unlink()
-        except OSError:
-            pass
+    run_examples()
 
 
 if __name__ == "__main__":

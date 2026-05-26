@@ -7,7 +7,7 @@
     Function 1: detect_host_python_executable()
         Inputs: None
         Outputs: A string containing the path to the Python executable that should be used for subprocess calls.
-        
+
         This function should:
         Step 1. Check for virtual environment (venv, virtualenv, poetry, pipenv) using the VIRTUAL_ENV environment variable.
         Step 2. If VIRTUAL_ENV is set, try to find Python executable in common locations within the virtual environment:
@@ -24,7 +24,7 @@
     Function 2: get_environment_info()
         Inputs: None
         Outputs: A dictionary containing detailed environment information for debugging.
-        
+
         This function should return a dictionary with the following keys:
         - 'sys_executable': The current sys.executable path
         - 'detected_executable': The result of detect_host_python_executable()
@@ -40,7 +40,7 @@
     Function 3: is_in_virtual_environment()
         Inputs: None
         Outputs: A boolean indicating whether we're currently running in any kind of virtual environment.
-        
+
         This function should return True if any of the following environment variables are set:
         - VIRTUAL_ENV
         - CONDA_PREFIX
@@ -50,7 +50,7 @@
     Function 4: get_environment_type()
         Inputs: None
         Outputs: A string indicating the type of environment ('conda', 'venv', 'poetry', 'pipenv', 'system', 'unknown').
-        
+
         This function should:
         Step 1. Check environment variables in order of precedence:
             - If CONDA_PREFIX is set, return 'conda'

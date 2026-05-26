@@ -18,7 +18,7 @@
 % Here is how to use the internal modules:
     <internal_modules>
         % Here is an example how to preprocess the prompt from a file: <preprocess_example><include select="def:preprocess">pdd/preprocess.py</include></preprocess_example>
-        
+
         % For loading prompt templates:
         <load_prompt_template_example>
             <include>context/load_prompt_template_example.py</include>
