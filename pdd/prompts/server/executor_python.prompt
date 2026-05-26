@@ -7,6 +7,25 @@
 
 <include>context/python_preamble.prompt</include>
 
+<pdd-reason>Programmatic execution of PDD Click commands with output capture, streaming, and optional budget halt enforcement.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "create_isolated_context", "signature": "(command, obj, color)", "returns": "click.Context"},
+      {"name": "ClickCommandExecutor", "signature": "(base_context_obj, output_callback=None, budget_state=None)", "returns": "ClickCommandExecutor"},
+      {"name": "ClickCommandExecutor.execute", "signature": "(command, params, context_obj) -> CapturedOutput", "returns": "CapturedOutput"},
+      {"name": "get_pdd_command", "signature": "(command_name: str) -> Optional[click.Command]", "returns": "Optional[click.Command]"},
+      {"name": "execute_pdd_command", "signature": "(command_name, args, options, callback=None, budget_state=None) -> CapturedOutput", "returns": "CapturedOutput"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>budget_python.prompt</pdd-dependency>
+
 % Documentation References
   - Click: https://click.palletsprojects.com/en/8.1.x/
   - Click Testing: https://click.palletsprojects.com/en/8.1.x/testing/
@@ -43,10 +62,19 @@
      - Mocks get_parameter_source to return DEFAULT
 
   5. **ClickCommandExecutor class**:
-     - __init__(base_context_obj, output_callback)
+     - __init__(base_context_obj, output_callback, budget_state=None)
      - execute(command, params, context_obj) -> CapturedOutput
      - Handles click.Abort, click.ClickException, general Exception
      - Extracts cost from result if available
+     - When `budget_state` is provided, consult `should_halt(budget_state)`
+       after each captured-output chunk. On halt, abort the execution
+       gracefully, set `exit_code` non-zero, attach a
+       `BudgetExceededError` (from `pdd.server.budget`) to
+       `CapturedOutput.exception`, and stop further work. The default
+       `budget_state=None` preserves the current zero-budget behavior so
+       existing callers and tests are unaffected.
+     - After execution, forward `CapturedOutput.cost` to
+       `budget_state.record_spend(cost)` when `budget_state` is provided.
 
   6. **get_pdd_command(command_name) -> click.Command**:
      - Maps command name to Click command object
@@ -54,10 +82,12 @@
      - Supported: sync, update, bug, generate, test, fix
      - Returns None for unknown commands
 
-  7. **execute_pdd_command(command_name, args, options, callback) -> CapturedOutput**:
+  7. **execute_pdd_command(command_name, args, options, callback, budget_state=None) -> CapturedOutput**:
      - High-level function for job execution
-     - Creates executor with callback
+     - Creates executor with callback and optional `budget_state`
      - Gets command, executes, returns result
+     - `budget_state` default is None to preserve the existing signature
+       and behavior for all current callers.
 
 % Dependencies
   <click_executor_example>
@@ -72,6 +102,10 @@
   - Use sys.stdout/stderr redirection for capture
   - Thread-safe output capture
   - Lazy import of pdd.commands to avoid circular imports
+  - Lazy import of `BudgetExceededError` and `should_halt` from
+    `pdd.server.budget` only when `budget_state` is not None, to avoid
+    a hard dependency on the budget module for callers that don't use
+    it.
   - Handle both sync and async commands
   - Return cost from track_cost decorator result
 

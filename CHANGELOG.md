@@ -4,6 +4,8 @@
 
 ### Feat
 
+- **server**: add `/pdd` comment-command control surface for GitHub App-triggered runs. The App now posts a startup comment when a `pdd-*` label fires (showing `Budget cap: none` for single-command runs and the per-node / max-total / effective-cap block for `pdd-issue`), and parses follow-up comments for `/pdd budget N`, `/pdd budget node N`, `/pdd budget max N`, `/pdd settings`, and `/pdd stop`. New `pdd/server/budget.py` owns parsing, `BudgetState`, startup/settings formatting, and a `should_halt` predicate; the executor consults `should_halt` after each chunk and forwards captured cost to `record_spend` (#1181, closes #1120, #1128).
+
 - **sync**: add public-surface and test-churn gates to `pdd sync` to stop silent over-regeneration of mature modules and tests; gates honor anchored `BREAKING-CHANGE:` opt-outs and route failures through the existing `PDD_REPAIR_DIRECTIVE` retry plumbing across the in-process generate, per-op orchestration (`crash`/`verify`/`fix`), `cmd_test_main`, and one-session agentic paths. Configurable via `PDD_TEST_CHURN_THRESHOLD` (default `0.40`, trailing `%` accepted), `PDD_SKIP_PUBLIC_SURFACE_GATE`, `PDD_SKIP_TEST_CHURN_GATE`, `PDD_ALLOW_EMPTY_GENERATION` (escape hatch for the empty-output safety guard that refuses to truncate non-empty existing files with empty LLM responses), or the umbrella `PDD_SKIP_CONFORMANCE` (#1015, closes #1012, #1030).
 
 ### Fix

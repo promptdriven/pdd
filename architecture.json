@@ -9272,5 +9272,159 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Owns /pdd comment-command parsing, BudgetState, startup/settings formatting, and should_halt predicate for GitHub App runs.",
+    "description": "Implements the /pdd comment-command control surface for GitHub App runs: parses /pdd budget, /pdd budget node N, /pdd budget max N, /pdd settings, /pdd stop comments; maintains per-job BudgetState (per-node budget, max total cap, accumulated spend, status); formats the startup comment and the /pdd settings reply; exposes the should_halt predicate the executor consults to stop runs at the active cap. Closes #1120, #1128; tracked under #1181.",
+    "dependencies": [],
+    "priority": 221,
+    "filename": "server/budget_python.prompt",
+    "filepath": "pdd/server/budget.py",
+    "tags": [
+      "module",
+      "python",
+      "server"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_pdd_command",
+            "signature": "(comment_body: str) -> Optional[PddCommand]",
+            "returns": "Optional[PddCommand]"
+          },
+          {
+            "name": "apply_command",
+            "signature": "(state: BudgetState, command: PddCommand) -> CommandResult",
+            "returns": "CommandResult"
+          },
+          {
+            "name": "format_startup_comment",
+            "signature": "(state: BudgetState) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "format_settings_comment",
+            "signature": "(state: BudgetState) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "should_halt",
+            "signature": "(state: BudgetState, node_count: int = 1) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Programmatic execution of PDD Click commands with output capture, streaming, and optional budget halt enforcement.",
+    "description": "Provides programmatic execution of PDD Click commands: isolated Click contexts, stdout/stderr capture with optional real-time streaming, error handling, cost extraction from track_cost, and optional budget halt enforcement via BudgetState/should_halt with BudgetExceededError when an active cap is reached.",
+    "dependencies": [
+      "server/budget_python.prompt"
+    ],
+    "priority": 222,
+    "filename": "server/executor_python.prompt",
+    "filepath": "pdd/server/executor.py",
+    "tags": [
+      "module",
+      "python",
+      "server"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "create_isolated_context",
+            "signature": "(command, obj, color)",
+            "returns": "click.Context"
+          },
+          {
+            "name": "ClickCommandExecutor",
+            "signature": "(base_context_obj, output_callback=None, budget_state=None)",
+            "returns": "ClickCommandExecutor"
+          },
+          {
+            "name": "ClickCommandExecutor.execute",
+            "signature": "(command, params, context_obj) -> CapturedOutput",
+            "returns": "CapturedOutput"
+          },
+          {
+            "name": "get_pdd_command",
+            "signature": "(command_name: str) -> Optional[click.Command]",
+            "returns": "Optional[click.Command]"
+          },
+          {
+            "name": "execute_pdd_command",
+            "signature": "(command_name, args, options, callback=None, budget_state=None) -> CapturedOutput",
+            "returns": "CapturedOutput"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Package init for `pdd.server`; re-exports server entrypoints, jobs, security, executor, and budget primitives.",
+    "description": "Package init for pdd.server. Re-exports create_app/run_server, ServerConfig/ServerStatus, JobManager/Job, PathValidator/SecurityError, ConnectionManager, execute_pdd_command, and the new budget primitives (BudgetState, parse_pdd_command, format_startup_comment, format_settings_comment, should_halt).",
+    "dependencies": [
+      "server/app_python.prompt",
+      "server/models_python.prompt",
+      "server/jobs_python.prompt",
+      "server/security_python.prompt",
+      "server/executor_python.prompt",
+      "server/budget_python.prompt"
+    ],
+    "priority": 219,
+    "filename": "server/__init___python.prompt",
+    "filepath": "pdd/server/__init__.py",
+    "tags": [
+      "module",
+      "python",
+      "server"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "create_app",
+            "signature": "(...)",
+            "returns": "FastAPI"
+          },
+          {
+            "name": "run_server",
+            "signature": "(...)",
+            "returns": "None"
+          },
+          {
+            "name": "execute_pdd_command",
+            "signature": "(command_name, args, options, callback=None, budget_state=None)",
+            "returns": "CapturedOutput"
+          },
+          {
+            "name": "parse_pdd_command",
+            "signature": "(comment_body: str)",
+            "returns": "Optional[PddCommand]"
+          },
+          {
+            "name": "format_startup_comment",
+            "signature": "(state: BudgetState) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "format_settings_comment",
+            "signature": "(state: BudgetState) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "should_halt",
+            "signature": "(state: BudgetState, node_count: int = 1) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
   }
 ]
