@@ -1,11 +1,11 @@
 <pdd-reason>Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.</pdd-reason>
 
-% Write `pdd/commands/prompt.py`, implementing the `pdd prompt lint` command group.
+% Write `pdd/commands/prompt.py`, implementing the shared `prompt_lint` command used by `pdd checkup lint`.
 
 <include>context/python_preamble.prompt</include>
 
 % Requirements
-- Register a `prompt` Click group with a `lint` subcommand.
+- Implement a `prompt_lint` Click command (not a top-level `pdd prompt` group).
 - Accept an optional prompt TARGET and optional `--stories <directory>`; require at least one.
 - Run `scan_prompt` and `scan_stories` deterministically without network access.
 - Support `--json` machine-readable output and `--strict` warning escalation.

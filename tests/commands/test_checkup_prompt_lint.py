@@ -32,7 +32,6 @@ def test_checkup_lint_help_exposes_methodology() -> None:
     assert result.exit_code == 0
     assert "Lint prompts and user stories for quality and ambiguity" in result.output
     assert "--stories" in result.output
-    assert "--ambiguity" in result.output
     assert "--llm" in result.output
 
 

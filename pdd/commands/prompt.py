@@ -44,6 +44,7 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     "--ambiguity",
     is_flag=True,
     default=False,
+    hidden=True,
     help="Enable deterministic ambiguity and observation checks on prompt and story text.",
 )
 @click.option(
@@ -51,7 +52,10 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     "use_llm",
     is_flag=True,
     default=False,
-    help="Enable advisory LLM-assisted ambiguity review on top of deterministic checks.",
+    help=(
+        "Add advisory LLM review of ambiguous prompt/story prose (recommended for authoring; "
+        "requires PDD Cloud or configured API credentials)."
+    ),
 )
 @click.pass_context
 def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,unknown-option-value
@@ -63,11 +67,11 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
     ambiguity: bool,
     use_llm: bool,
 ) -> None:
-    """Lint prompts and user stories for quality and ambiguity in a read-only, advisory capacity.
+    """Lint prompts and user stories for quality and ambiguity (read-only, advisory).
 
-    This command performs fast, deterministic heuristic scanning. Use --llm to activate
-    advisory, LLM-assisted deep ambiguity reviews (requires PDD Cloud or
-    configured API credentials).
+    By default, runs a fast local heuristic scan suitable for CI. For prompt authoring,
+    pass --llm to add an advisory LLM review of ambiguous prose (requires PDD Cloud
+    or configured API credentials). Results are never written back to your files.
     """
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")

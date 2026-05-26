@@ -1,6 +1,6 @@
 # PDD Prompt and Story Linter
 
-Prompt-Driven Development (PDD) treats `.prompt` files as the source of truth for your software. The quality, precision, and clarity of your prompt contracts directly determine the correctness of the generated code and test suites. 
+Prompt-Driven Development (PDD) treats `.prompt` files as the source of truth for your software. The quality, precision, and clarity of your prompt contracts directly determine the correctness of the generated code and test suites.
 
 The PDD Prompt Linter analyzes prompt files (`*.prompt`) and user stories (`story__*.md`) to flag vague, ambiguous language and help you build precise, testable contract vocabularies.
 
@@ -8,16 +8,20 @@ The PDD Prompt Linter analyzes prompt files (`*.prompt`) and user stories (`stor
 
 ## Commands
 
-- **`pdd checkup lint TARGET`** — Scans the specified prompt file or a directory of prompts for quality issues.
-- **`pdd checkup lint --stories DIRECTORY`** — Scans user-story markdown files (`story__*.md`) in the specified directory.
-- **`pdd checkup lint TARGET --llm`** — Performs an advisory, deep LLM-assisted ambiguity review in addition to the deterministic scan.
-- **`pdd checkup lint TARGET --strict`** — Runs in strict mode (all warnings are promoted to hard errors).
+| Command | Purpose |
+|---------|---------|
+| `pdd checkup lint TARGET` | Fast local heuristic scan (default; suitable for CI) |
+| `pdd checkup lint --stories DIRECTORY` | Scan user-story markdown files (`story__*.md`) |
+| `pdd checkup lint TARGET --llm` | Add advisory LLM review for prompt authoring |
+| `pdd checkup lint TARGET --strict` | Promote all warnings to errors |
+
+For day-to-day prompt authoring, use `--llm`. The default scan is deterministic and needs no network access.
 
 ---
 
-## Advisory Scoping
+## Out of Scope (Follow-up)
 
-The PDD Prompt Linter operates in a **read-only, advisory capacity**. It does not automatically edit, write back, or rewrite your prompts. Instead, it acts as an assistant to guide you in authoring high-quality prompt specifications, suggesting additions to your `<vocabulary>` blocks that you can review, adapt, and incorporate manually.
+Interactive apply/writeback (accept suggested vocabulary, `--apply`, accept-all) is intentionally deferred. The linter is read-only advisory only; incorporate suggestions manually in your prompt editor.
 
 ---
 
