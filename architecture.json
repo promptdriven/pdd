@@ -727,7 +727,7 @@
         "functions": [
           {
             "name": "run_agentic_bug",
-            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False, manual_args: Optional[Tuple[str, str, str, str, str]] = None) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
               "None"
@@ -1540,7 +1540,7 @@
         "functions": [
           {
             "name": "run_agentic_bug_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
               "Posts GitHub issue comments via post_step_comment",
@@ -6254,7 +6254,7 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None, clean_restart=False)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -6322,7 +6322,7 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix",
-            "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False)",
+            "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None, clean_restart=False)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
@@ -6677,7 +6677,7 @@
         "functions": [
           {
             "name": "run_agentic_test_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose, quiet, timeout_adder, use_github_state)",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
@@ -6706,7 +6706,7 @@
         "functions": [
           {
             "name": "run_agentic_test",
-            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
               "None"
