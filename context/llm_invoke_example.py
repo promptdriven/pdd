@@ -7,9 +7,10 @@ common use cases:
   2. Structured (Pydantic) output
   3. Batch processing of a list of inputs
 
-The example mocks the underlying LiteLLM calls so it runs offline and
-without any real API keys, while still showing how the wrapper is called
-and what its return shape looks like.
+The example is fully self-contained: it writes a deterministic, minimal
+model CSV to a temporary file and points ``pdd.llm_invoke`` at it before
+calling into the wrapper, then mocks the underlying LiteLLM calls. No real
+API keys or network access are required.
 
 Return dictionary keys produced by ``llm_invoke``:
   - ``result``: str (or Pydantic instance, or list in batch mode)
@@ -23,25 +24,55 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Ensure 'pdd' is importable regardless of cwd.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pydantic import BaseModel
 
-# Force-local + no interactive prompts BEFORE importing llm_invoke.
+# Set non-interactive defaults BEFORE importing llm_invoke. PDD_FORCE turns
+# off the interactive API-key prompt, PDD_FORCE_LOCAL keeps the call path
+# offline, and a single placeholder OPENAI_API_KEY satisfies the api_key
+# bookkeeping for the demo CSV below.
 os.environ.setdefault("PDD_FORCE_LOCAL", "1")
 os.environ.setdefault("PDD_FORCE", "1")
 os.environ.setdefault("PDD_QUIET", "1")
 os.environ.setdefault("LITELLM_CACHE_DISABLE", "1")
-# Provide a placeholder for any required API keys so the api_key
-# bookkeeping inside llm_invoke does not block the mocked path.
-os.environ.setdefault("OPENAI_API_KEY", "sk-example-placeholder")
-os.environ.setdefault("ANTHROPIC_API_KEY", "anthropic-placeholder")
+os.environ["OPENAI_API_KEY"] = "sk-example-placeholder-value"
 
+# Write a tiny, deterministic model CSV that uses only OPENAI_API_KEY. We
+# point llm_invoke at this file (overriding any ~/.pdd/llm_model.csv or
+# project CSV that happens to be present on the host) so the example is
+# reproducible and never depends on the user's real model registry.
+_DEMO_CSV = (
+    "provider,model,input,output,coding_arena_elo,base_url,api_key,"
+    "max_reasoning_tokens,structured_output,reasoning_type,location\n"
+    "OpenAI,gpt-example-strong,5.0,15.0,1500,,OPENAI_API_KEY,0,True,none,\n"
+    "OpenAI,gpt-example-base,1.0,3.0,1300,,OPENAI_API_KEY,0,True,none,\n"
+    "OpenAI,gpt-example-cheap,0.1,0.3,1100,,OPENAI_API_KEY,0,True,none,\n"
+)
+_csv_tmp = tempfile.NamedTemporaryFile(
+    mode="w", suffix=".csv", prefix="pdd_llm_invoke_demo_", delete=False
+)
+_csv_tmp.write(_DEMO_CSV)
+_csv_tmp.flush()
+_csv_tmp.close()
+_DEMO_CSV_PATH = Path(_csv_tmp.name)
+
+# Pin the base model so candidate ordering is deterministic.
+os.environ["PDD_MODEL_DEFAULT"] = "gpt-example-base"
+
+import pdd.llm_invoke as _llm_invoke_mod
 from pdd.llm_invoke import llm_invoke, set_quiet_logging
+
+# Redirect llm_invoke to our demo CSV (the module's value was resolved at
+# import time from the host filesystem).
+_llm_invoke_mod.LLM_MODEL_CSV_PATH = _DEMO_CSV_PATH
+_llm_invoke_mod.DEFAULT_BASE_MODEL = "gpt-example-base"
 
 
 class AnimalFact(BaseModel):
@@ -61,7 +92,6 @@ def _mock_completion(*args, **kwargs):
                 user_content = str(m.get("content", ""))
                 break
 
-    # Default reply
     content = "Space is mostly empty: atoms are separated by enormous distances."
 
     if "animal" in user_content.lower() or "kangaroo" in user_content.lower():
@@ -161,9 +191,11 @@ def run_examples() -> None:
 def main() -> None:
     try:
         run_examples()
-    except Exception as exc:
-        # Never let optional-feature errors abort the demo.
-        print("Example encountered an error (continuing): %r" % (exc,))
+    finally:
+        try:
+            _DEMO_CSV_PATH.unlink()
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
