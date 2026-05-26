@@ -907,11 +907,18 @@ def test_provider_primary_key_google_is_google_api_key():
 
 def test_has_provider_oauth_google_rejects_missing_file(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # _has_provider_oauth("google") returns True via _has_google_vertex_auth
+    # before the file-shape check ever runs. Cloud Batch nodes run on GCP with
+    # ambient Vertex env vars (GOOGLE_APPLICATION_CREDENTIALS / project /
+    # use-vertex), so clearing them is required for the file-shape branch to
+    # be the deciding signal.
+    _clear_google_vertex_env(monkeypatch)
     assert cli_detector._has_provider_oauth("google") is False
 
 
 def test_has_provider_oauth_google_rejects_empty_file(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     creds = tmp_path / ".gemini" / "oauth_creds.json"
     creds.parent.mkdir(parents=True)
     creds.write_text("", encoding="utf-8")
@@ -923,6 +930,7 @@ def test_has_provider_oauth_google_rejects_token_less_json(monkeypatch, tmp_path
     NOT count as configured OAuth — that's how a logged-out file looks.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     creds = tmp_path / ".gemini" / "antigravity-cli" / "oauth_creds.json"
     creds.parent.mkdir(parents=True)
     creds.write_text('{"misc": "noise"}', encoding="utf-8")
@@ -931,6 +939,7 @@ def test_has_provider_oauth_google_rejects_token_less_json(monkeypatch, tmp_path
 
 def test_has_provider_oauth_google_accepts_populated_legacy(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     creds = tmp_path / ".gemini" / "oauth_creds.json"
     creds.parent.mkdir(parents=True)
     creds.write_text('{"refresh_token": "abc"}', encoding="utf-8")
@@ -939,6 +948,7 @@ def test_has_provider_oauth_google_accepts_populated_legacy(monkeypatch, tmp_pat
 
 def test_has_provider_oauth_google_accepts_populated_antigravity(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     creds = tmp_path / ".gemini" / "antigravity-cli" / "oauth_creds.json"
     creds.parent.mkdir(parents=True)
     creds.write_text('{"access_token": "xyz"}', encoding="utf-8")
@@ -947,6 +957,7 @@ def test_has_provider_oauth_google_accepts_populated_antigravity(monkeypatch, tm
 
 def test_has_provider_oauth_google_rejects_corrupt_json(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _clear_google_vertex_env(monkeypatch)
     creds = tmp_path / ".gemini" / "antigravity-cli" / "oauth_creds.json"
     creds.parent.mkdir(parents=True)
     creds.write_text("{not valid json", encoding="utf-8")
@@ -1052,12 +1063,18 @@ def test_get_google_cli_name_auto_prefers_agy_with_agy_oauth(monkeypatch):
 
 
 def test_get_google_cli_name_auto_uses_gemini_when_only_legacy_oauth(monkeypatch):
-    """In auto mode, use ``gemini`` when the only auth is legacy OAuth."""
+    """In auto mode, use ``gemini`` when the only auth is legacy OAuth.
+
+    Cloud Batch nodes run on GCP with ambient Vertex env vars; without clearing
+    them, ``_has_google_vertex_auth(env)`` returns True before the legacy-OAuth
+    branch runs and the resolver picks ``agy`` instead of ``gemini``.
+    """
     from pdd import agentic_common
 
     monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
     for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY"):
         monkeypatch.delenv(k, raising=False)
+    _clear_google_vertex_env(monkeypatch)
 
     with (
         patch.object(agentic_common, "_find_cli_binary", lambda name: f"/usr/local/bin/{name}"),
