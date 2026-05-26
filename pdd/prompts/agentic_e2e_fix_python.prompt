@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_e2e_fix", "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, clean_restart=False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_e2e_fix", "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None, clean_restart=False)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -22,13 +22,13 @@ Write `pdd/agentic_e2e_fix.py`, the CLI entry point for the 11-step agentic E2E 
 Orchestrates the E2E fix by fetching GitHub issue data (body + comments), detecting the appropriate working directory (local worktree or branch safety check), and invoking the orchestrator with post-push CI validation options.
 
 % Requirements
-1. **Function**: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, force: bool = False, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False, ci_retries: int = 3, skip_ci: bool = False, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. **Function**: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, force: bool = False, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False, ci_retries: int = 3, skip_ci: bool = False, skip_cleanup: bool = False, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. **GitHub Integration**: Parse the issue URL and fetch the issue (title, body, author) and all comments via `gh api` (use `--paginate`). Combine title, body, and comments into `issue_content`.
 3. **Working Directory Detection**:
    - Priority 1: Check `.pdd/worktrees/` for `fix-issue-{N}`, `bug-issue-{N}`, or `change-issue-{N}` containing `.git`.
    - Priority 2: Fallback to current directory.
    - **Branch Safety**: Extract expected branch name from issue comments (e.g., "Switched to branch '...'"). If it mismatches the current branch and `force=False`, abort with a suggestion to `git checkout`.
-4. **Execution**: Invoke `run_agentic_e2e_fix_orchestrator` with collected metadata, content, and parameters including `protect_tests`, `ci_retries`, `skip_ci`, and `clean_restart`. Return its 5-tuple result.
+4. **Execution**: Invoke `run_agentic_e2e_fix_orchestrator` with collected metadata, content, and parameters including `protect_tests`, `ci_retries`, `skip_ci`, `skip_cleanup`, `reasoning_time`, and `clean_restart`. Return its 5-tuple result.
 5. **Output**: Use `rich.console.Console` for status updates (fetching, worktree found, starting workflow) and warnings, unless `quiet`.
 6. **Error Handling**: Handle missing `gh` CLI, invalid URLs, and API errors gracefully. Return `(False, error_msg, 0.0, "", [])`.
 

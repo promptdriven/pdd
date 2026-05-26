@@ -1790,13 +1790,14 @@ pdd [GLOBAL OPTIONS] test <github-issue-url>
 **Agentic Options:**
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--clean-restart`: Discard saved agentic test state and start the 18-step workflow fresh
 - `--manual`: Use legacy prompt-based mode instead of agentic mode
 
 **Environment Variables:**
 - `PDD_CLOUD_RUN=true`: Enable parallel execution mode for manual testing (Steps 6-11)
 - `PDD_NO_GITHUB_STATE=1`: Disable GitHub state persistence
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature.
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning.
 
 **Example (Agentic Mode):**
 ```bash
@@ -1805,6 +1806,9 @@ pdd test https://github.com/myorg/myrepo/issues/789
 
 # Resume after answering clarifying questions
 pdd test https://github.com/myorg/myrepo/issues/789
+
+# Start fresh and ignore saved workflow state
+pdd test --clean-restart https://github.com/myorg/myrepo/issues/789
 ```
 
 **Next Step - Fixing Test Issues:**
@@ -2037,6 +2041,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
+- `--clean-restart`: Discard saved agentic E2E fix state and sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
 - `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
@@ -2142,7 +2147,7 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 
 **Resumable Operations:**
 
-State is automatically persisted, allowing you to resume interrupted workflows. Use `--no-resume` to start fresh.
+State is automatically persisted, allowing you to resume interrupted workflows. Use `--clean-restart` to discard saved workflow state and sibling `pdd bug` analysis before starting fresh. Use `--no-resume` only when you want to ignore the E2E fix checkpoint while still allowing reusable bug-analysis context.
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd fix` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
@@ -2160,8 +2165,8 @@ pdd fix --ci-retries 5 https://github.com/myorg/myrepo/issues/42
 # Skip post-push CI validation entirely
 pdd fix --skip-ci https://github.com/myorg/myrepo/issues/42
 
-# Start fresh (ignore saved state)
-pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
+# Start fresh (ignore saved state and sibling bug analysis)
+pdd fix --clean-restart https://github.com/myorg/myrepo/issues/42
 
 # Disable GitHub state persistence (local-only)
 pdd fix --no-github-state https://github.com/myorg/myrepo/issues/42
@@ -2306,7 +2311,7 @@ The 13-step workflow:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
-**Clean Restart** (`--clean-restart`, issue #1149): Discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. Cannot be combined with `--manual`.
+**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. Cannot be combined with `--manual`.
 
 **Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
@@ -2619,13 +2624,17 @@ Options:
 - `--language LANG`: Specify the programming language for the unit test (default is "Python").
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--clean-restart`: Discard saved agentic bug state and start the investigation workflow fresh
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
 Example:
 ```bash
 # Agentic mode (recommended)
 pdd bug https://github.com/myorg/myrepo/issues/42
+
+# Start fresh and ignore saved workflow state
+pdd bug --clean-restart https://github.com/myorg/myrepo/issues/42
 
 # Manual mode (legacy)
 pdd bug --manual prompt.prompt code.py main.py current.txt desired.txt
