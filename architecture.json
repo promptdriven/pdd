@@ -5902,7 +5902,7 @@
         "functions": [
           {
             "name": "run_agentic_change",
-            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
               "None"

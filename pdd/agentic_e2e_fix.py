@@ -24,7 +24,7 @@ _BRANCH_PATTERNS = (
     re.compile(r"Created branch ['\"`]([^'\"`\n]+)['\"`]"),
     re.compile(r"Branch:\s*([A-Za-z0-9._/\-]+)"),
 )
-_WORKTREE_PREFIXES = ("fix", "bug", "change")
+_WORKTREE_PREFIXES = ("fix", "bug", "test", "change")
 
 
 def _check_gh_cli() -> bool:

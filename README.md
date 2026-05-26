@@ -2041,7 +2041,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
-- `--clean-restart`: Discard saved agentic E2E fix state and sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
+- `--clean-restart`: Discard saved agentic E2E fix state and ignore sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
 - `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
