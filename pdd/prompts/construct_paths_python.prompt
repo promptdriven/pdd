@@ -51,7 +51,7 @@
      Known keys by level — Root: `version`, `contexts`. Context: `paths`, `defaults`.
      Defaults: `generate_output_path`, `test_output_path`, `example_output_path`, `prompts_dir`,
      `prompt_path`, `default_language`, `target_coverage`, `strength`, `temperature`, `budget`,
-     `max_attempts`, `outputs`, `auto_deps_csv_path`.
+     `max_attempts`, `outputs`.
 2. Context Detection and Pattern Matching:
    - `_match_path_to_contexts(path_str, contexts, use_specificity, is_absolute)`:
      Core matching logic. Skips 'default' context. For absolute paths uses "*/" prefix matching.

@@ -142,7 +142,6 @@ _PDDRC_DEFAULTS_KEYS = {
     "budget",
     "max_attempts",
     "outputs",
-    "auto_deps_csv_path",
 }
 
 
@@ -203,7 +202,7 @@ def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
         if 'contexts' not in config:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
 
-        _validate_pddrc_keys(config)        
+        _validate_pddrc_keys(config)
         return config
     except yaml.YAMLError as e:
         raise ValueError(f"YAML syntax error in .pddrc: {e}")

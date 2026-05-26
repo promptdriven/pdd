@@ -60,7 +60,6 @@ contexts:
       temperature: 0.0                          # LLM temperature (0-1)
       budget: 10.0                              # Cost budget per operation ($)
       max_attempts: 3                           # Max retry attempts
-      auto_deps_csv_path: "project_dependencies.csv" # Path to dependency cache CSV
   
   backend:
     # Matches modules with "backend" or "api" in their names
@@ -104,7 +103,6 @@ INSTRUCTIONS:
      * Frontend/UI: 80-85% (UI components)
      * Utils/Shared: 85-90% (reusable code)
      * CLI: 85% (user-facing interfaces)
-   - **auto_deps_csv_path**: "project_dependencies.csv" (ALWAYS include this)
    - **strength**: 0.818 (starter scaffold default tuned for Gemini 3.1 Pro)
    - **temperature**: 0.0 (deterministic - can be omitted, PDD will use default)
    - **budget**: 10.0 (standard - can be omitted, PDD will use default)
@@ -117,7 +115,7 @@ INSTRUCTIONS:
 
 6. **Keep it simple**:
    - Only include settings that differ from PDD defaults
-   - Always include: generate_output_path, test_output_path, example_output_path, default_language, target_coverage, auto_deps_csv_path
+   - Always include: generate_output_path, test_output_path, example_output_path, default_language, target_coverage
    - Omit optional LLM parameters (strength, temperature, budget, max_attempts) unless project has specific requirements
 
 7. **Add helpful comments**:
@@ -135,7 +133,7 @@ OUTPUT REQUIREMENTS:
 6. Use wildcard patterns that match MODULE NAMES: "*models*", "*cli*", "*backend*"
 7. Extract module names from `filename` field (remove language suffix and .prompt)
 8. Make sure the "default" context comes last (no `paths` field)
-9. ALWAYS include these essential settings in every context: generate_output_path, test_output_path, example_output_path, default_language, target_coverage, auto_deps_csv_path
+9. ALWAYS include these essential settings in every context: generate_output_path, test_output_path, example_output_path, default_language, target_coverage
 10. Group related modules together in the same context based on tags and output paths
 
 EXAMPLE OUTPUT STRUCTURE (adapt to your actual architecture):
@@ -157,7 +155,6 @@ contexts:
       temperature: 0.0                          # Optional: LLM temperature
       budget: 10.0                              # Optional: Cost budget per operation
       max_attempts: 3                           # Optional: Max retry attempts
-      auto_deps_csv_path: "project_dependencies.csv"  # Optional: Dependency cache
 
   # Command-line interface (minimal configuration)
   cli:
@@ -168,7 +165,6 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 85.0
-      auto_deps_csv_path: "project_dependencies.csv"
 
   # Backend API and services
   backend:
@@ -179,7 +175,6 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 90.0
-      auto_deps_csv_path: "project_dependencies.csv"
 
   # Frontend UI components
   frontend:
@@ -190,7 +185,6 @@ contexts:
       example_output_path: "examples/"
       default_language: "typescript"
       target_coverage: 80.0
-      auto_deps_csv_path: "project_dependencies.csv"
 
   # Default fallback for unmatched modules
   default:
@@ -200,7 +194,6 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 80.0
-      auto_deps_csv_path: "project_dependencies.csv"
 ```
 
 CRITICAL REMINDERS:
