@@ -142,6 +142,7 @@ _PDDRC_DEFAULTS_KEYS = {
     "budget",
     "max_attempts",
     "outputs",
+    "auto_deps_csv_path",
 }
 
 
