@@ -2231,6 +2231,12 @@ class TestFindPrdFile:
         assert result is not None
         assert result.name == "PRD.md"
 
+    def test_finds_lowercase_prd(self, tmp_path):
+        (tmp_path / "prd.md").write_text("# prd")
+        result = _find_prd_file(tmp_path)
+        assert result is not None
+        assert result.name == "prd.md"
+
     def test_finds_prefixed_prd(self, tmp_path):
         (tmp_path / "myproject_prd.md").write_text("# PRD")
         result = _find_prd_file(tmp_path)

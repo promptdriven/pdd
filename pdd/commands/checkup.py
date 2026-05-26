@@ -293,7 +293,7 @@ from .prompt import prompt_lint
 )
 @click.pass_context
 @track_cost
-def checkup(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,

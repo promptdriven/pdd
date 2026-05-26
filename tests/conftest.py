@@ -74,17 +74,6 @@ _E2E_FIX_ATTRS_TO_RESTORE = (
 
 
 @pytest.fixture(autouse=True)
-def _normalize_cli_test_env(monkeypatch):
-    """Keep unit tests independent of developer shell/.env overrides.
-
-    Many CLI tests assert that ``auto_update()`` runs once per invocation.
-    Developers often export ``PDD_AUTO_UPDATE=false`` locally; force it on
-    for the test process unless a test explicitly patches the flag off.
-    """
-    monkeypatch.setenv("PDD_AUTO_UPDATE", "true")
-
-
-@pytest.fixture(autouse=True)
 def _enforce_isolated_home(monkeypatch):
     """Per-test re-assertion of HOME/CODEX_HOME isolation.
 

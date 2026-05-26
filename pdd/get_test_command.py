@@ -95,29 +95,25 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     test_path = Path(test_file)
     ext = test_path.suffix
 
-    # 1. For TypeScript/TSX: detect Jest/Vitest/Playwright from config files on disk.
-    # This runs before get_language() so monorepo E2E verification works without PDD_PATH.
-    if ext in ('.ts', '.tsx'):
+    resolved_language = language
+    if resolved_language is None:
+        resolved_language = get_language(ext)
+
+    # 1. For TypeScript/TSX: detect Jest or Vitest config and use appropriate runner
+    if ext in ('.ts', '.tsx') and resolved_language and resolved_language.lower() in ('typescript', 'typescriptreact'):
         runner_result = _detect_ts_test_runner(test_path)
         if runner_result:
             runner_cmd, config_dir = runner_result
             return TestCommand(command=f"{runner_cmd} {test_path.resolve()}", cwd=config_dir)
 
-    # 2. Check CSV for run_test_command (package-relative paths; no PDD_PATH required)
+    # 2. Check CSV for run_test_command
     lang_formats = _load_language_format()
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
             return TestCommand(command=csv_cmd.replace('{file}', str(test_file)))
 
-    # 3. Smart detection (may need language lookup from CSV via PDD_PATH)
-    resolved_language = language
-    if resolved_language is None:
-        try:
-            resolved_language = get_language(ext)
-        except ValueError:
-            resolved_language = ''
-
+    # 3. Smart detection
     if resolved_language:
         smart_cmd = default_verify_cmd_for(resolved_language.lower(), str(test_file))
         if smart_cmd:

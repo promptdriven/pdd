@@ -18,10 +18,12 @@ def get_extension(language: str) -> str:
         ValueError: If the PDD_PATH environment variable is not set.
         FileNotFoundError: If the language_format.csv file is not found.
     """
-    # Step 1: Resolve CSV path (PDD_PATH, packaged wheel data, or repo checkout)
-    from pdd.get_language import _language_format_csv_path
-
-    csv_file_path = _language_format_csv_path()
+    # Step 1: Resolve CSV path from PDD_PATH
+    resolver = get_default_resolver()
+    try:
+        csv_file_path = resolver.resolve_data_file("data/language_format.csv")
+    except ValueError as exc:
+        raise ValueError("Environment variable PDD_PATH is not set.") from exc
     
     # Step 2: Lower case the language string
     language_lower = language.lower()

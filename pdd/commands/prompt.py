@@ -46,7 +46,7 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     help="Run an advisory LLM ambiguity review through PDD Cloud.",
 )
 @click.pass_context
-def prompt_lint(  # pylint: disable=too-many-arguments,too-many-branches
+def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches
     ctx: click.Context,
     target: Optional[str],
     stories_dir: Optional[str],

@@ -3,7 +3,12 @@
 import re
 import subprocess
 from pathlib import Path
+from importlib.metadata import version as metadata_version
+
+from click.testing import CliRunner
+
 import pdd
+from pdd.core.cli import cli as cli_command
 
 _PEP440_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:\.(?:dev|rc|a|b|post)\d+)?$")
 _SCM_FALLBACKS = {"0.0.0", "0.0.0+unknown"}
@@ -19,6 +24,14 @@ def test_package_version_is_well_formed_and_not_a_fallback():
         "git tags likely not visible to the build (check actions/checkout fetch-depth)."
     )
     assert _PEP440_VERSION.match(v), f"pdd.__version__ {v!r} is not valid PEP 440."
+
+
+def test_cli_version_reports_distribution_metadata():
+    """`pdd --version` reports the installed pdd-cli version."""
+    expected = metadata_version("pdd-cli")
+    result = CliRunner().invoke(cli_command, ["--version"])
+    assert result.exit_code == 0
+    assert f"version {expected}" in result.output
 
 
 def test_version_matches_expected_for_current_state():
