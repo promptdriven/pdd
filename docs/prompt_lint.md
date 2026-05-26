@@ -50,7 +50,8 @@ graph TD
     D --> E["4. Verify Code ('make test')"]
     E -->|Test Failures| F["Run 'pdd fix' or 'pdd crash'"]
     F --> E
-    E -->|Tests Pass| G["5. Final Verification ('pdd checkup')"]
+    E -->|Tests Pass| H["5. Contract / coverage gates"]
+    H --> G["6. Final Verification ('pdd checkup')"]
 ```
 
 ### Step 1: Write Draft Prompt
@@ -76,7 +77,15 @@ make test
 ```
 If the tests fail, let the agentic loop fix it (`make fix MODULE=my_feature` or `make crash MODULE=my_feature`).
 
-### Step 5: Final Verification
+### Step 5: Contract and Coverage Checkup (when applicable)
+After tests pass for the module, run any project-specific contract or coverage gates before the full agentic checkup:
+
+- **Contract / architecture alignment**: use `pdd checkup --validate-arch-includes` (and your project's contract-compile workflow, if configured) to confirm `architecture.json`, prompt `<include>` tags, and generated artifacts stay aligned.
+- **Coverage**: use `pdd test` / `make test` with coverage targets from `.pddrc` or `pdd generate --coverage-report` where your project defines them; treat coverage gaps as prompt or test debt, not something lint replaces.
+
+Lint catches vague prose early; contract and coverage gates catch structural and behavioral completeness later.
+
+### Step 6: Final Verification
 Before opening a Pull Request, run the complete agentic checkup to verify whole-project, cross-module, and architecture-wide integrity:
 ```bash
 pdd checkup TARGET_ISSUE_URL

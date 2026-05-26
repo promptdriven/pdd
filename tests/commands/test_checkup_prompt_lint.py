@@ -78,13 +78,13 @@ def test_checkup_lint_strict_promotes_warning_to_error() -> None:
 
 
 @pytest.mark.parametrize("as_json", [False, True])
-def test_checkup_lint_ambiguity_never_writes_without_explicit_apply(
+def test_checkup_lint_llm_never_writes_without_explicit_apply(
     tmp_path: Path, as_json: bool
 ) -> None:
     prompt = tmp_path / "vague_undefined.prompt"
     prompt.write_bytes((FIXTURES / "vague_undefined.prompt").read_bytes())
     before = prompt.read_bytes()
-    args = ["lint", "--ambiguity", "--llm"]
+    args = ["lint", "--llm"]
     if as_json:
         args.append("--json")
     args.append(str(prompt))
@@ -96,19 +96,19 @@ def test_checkup_lint_ambiguity_never_writes_without_explicit_apply(
     assert prompt.read_bytes() == before
 
 
-def test_checkup_lint_ambiguity_alone_does_not_run_llm() -> None:
+def test_checkup_lint_default_does_not_run_llm() -> None:
     with patch("pdd.commands.prompt.run_llm_ambiguity_pass") as llm_pass:
         result = CliRunner().invoke(
             cli,
-            ["--quiet", "checkup", "lint", "--ambiguity", str(FIXTURES / "clean.prompt")],
+            ["--quiet", "checkup", "lint", str(FIXTURES / "clean.prompt")],
         )
 
     assert result.exit_code == 0
     llm_pass.assert_not_called()
 
 
-def test_checkup_lint_llm_works_without_explicit_ambiguity_flag() -> None:
-    """The --llm flag is decoupled and automatically enables ambiguity checks."""
+def test_checkup_lint_llm_runs_advisory_pass() -> None:
+    """The --llm flag enables the advisory cloud/local ambiguity review."""
     with patch("pdd.commands.prompt.run_llm_ambiguity_pass", return_value=[]) as llm_pass:
         result = CliRunner().invoke(
             cli,

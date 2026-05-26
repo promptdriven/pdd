@@ -96,9 +96,7 @@ def _restore_captured_streams(ctx: click.Context) -> None:
 def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
     """Return whether this invocation needs prompt-lint machine output."""
     pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("prompt", "lint") in pairs or ("checkup", "lint") in pairs
-    )
+    return "--json" in arguments and ("checkup", "lint") in pairs
 
 
 class PDDCLI(click.Group):

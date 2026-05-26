@@ -17,9 +17,7 @@ import sys
 def _is_prompt_lint_json_invocation(arguments: list[str]) -> bool:
     """Return whether this process is running prompt lint JSON output."""
     pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("prompt", "lint") in pairs or ("checkup", "lint") in pairs
-    )
+    return "--json" in arguments and ("checkup", "lint") in pairs
 
 
 if '--quiet' in sys.argv or _is_prompt_lint_json_invocation(sys.argv):

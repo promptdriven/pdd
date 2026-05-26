@@ -41,13 +41,6 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     help="Treat all warnings as errors.",
 )
 @click.option(
-    "--ambiguity",
-    is_flag=True,
-    default=False,
-    hidden=True,
-    help="Enable deterministic ambiguity and observation checks on prompt and story text.",
-)
-@click.option(
     "--llm",
     "use_llm",
     is_flag=True,
@@ -64,7 +57,6 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
     stories_dir: Optional[str],
     as_json: bool,
     strict: bool,
-    ambiguity: bool,
     use_llm: bool,
 ) -> None:
     """Lint prompts and user stories for quality and ambiguity (read-only, advisory).
@@ -75,8 +67,6 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
     """
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")
-    if use_llm:
-        ambiguity = True
 
     results: list[LintResult] = []
     if target is not None:
@@ -92,7 +82,7 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
         results.extend(scan_stories(Path(stories_dir), strict=strict))
 
     deterministic_exit_code = _exit_code(results, strict=strict)
-    if ambiguity and use_llm:
+    if use_llm:
         obj = ctx.obj or {}
         use_cloud = not bool(obj.get("local", False))
         for result in results:
