@@ -10,7 +10,7 @@
     "test_summarize_directory.py": "049ed6ddc2cd8bd3915eeb79f0b87524eef136157f684cfd7453d35d0f799425"
   },
   "include_deps": {
-    "context/llm_invoke_example.py": "e33fbad9db3cee256472e59df46d9d7240713c3a8dd1c078fcaf69b404ae0e04",
+    "context/llm_invoke_example.py": "48c5aece0ddd153f95ec8a53802d2173d4da12a920b398c5feebb307b9958417",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }

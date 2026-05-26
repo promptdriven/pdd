@@ -14,7 +14,7 @@
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
     "context/get_run_command_example.py": "4d187e844adb255c2738274556f4828728d0d73d84ebf8bda885d51d4be9414f",
-    "context/llm_invoke_example.py": "e33fbad9db3cee256472e59df46d9d7240713c3a8dd1c078fcaf69b404ae0e04",
+    "context/llm_invoke_example.py": "d749aa00a35c88c254c4aaa9e1280d85342d71214710e2f3f7a2bd9388a92168",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f"
   }
 }

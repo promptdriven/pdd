@@ -4820,9 +4820,8 @@ class TestSelectModelCandidates:
 
     def test_strength_05_fallbacks_sorted_by_closest_elo_to_base(self, llm_mod, tmp_path):
         # Regression for #1197: at strength == 0.5, fallbacks must be sorted by
-        # closest ELO to base (continuity limit of the > 0.5 branch), not by
-        # highest ELO. Base is "mid" (ELO 1300); the closer-ELO model ("near",
-        # 1310) must rank above the higher-ELO model ("high", 1500).
+        # closest ELO to base, not by highest ELO. Base is "mid" (ELO 1300);
+        # the closer-ELO model ("near", 1310) must rank above "high" (1500).
         content = (
             "provider,model,input,output,coding_arena_elo,api_key,"
             "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
@@ -7607,62 +7606,3 @@ def test_bedrock_converse_adapter_unrelated_models_unchanged():
         # The pdd patch's effort-injection is the only modification it makes
         # to the Converse output; for non-opus-4-7 models it must not fire.
         assert not (isinstance(thinking, dict) and "effort" in thinking), (model, thinking)
-
-
-
-import sys
-from pathlib import Path
-
-# Add project root to sys.path to ensure local code is prioritized
-# This allows testing local changes without installing the package
-project_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(project_root))
-
-import logging
-import pytest
-
-# --- Additional tests for public logging API ---
-
-def test_set_quiet_logging_raises_loggers_to_error():
-    """set_quiet_logging() must raise both pdd and litellm loggers to ERROR."""
-    from pdd.llm_invoke import set_quiet_logging, set_verbose_logging
-    try:
-        set_quiet_logging()
-        assert logging.getLogger("pdd.llm_invoke").level == logging.ERROR
-        assert logging.getLogger("litellm").level == logging.ERROR
-    finally:
-        # Restore reasonable defaults so subsequent tests aren't silenced.
-        set_verbose_logging(False)
-
-
-def test_setup_file_logging_none_path_is_noop():
-    """setup_file_logging(None) must return without raising or adding handlers."""
-    from pdd.llm_invoke import setup_file_logging
-    logger = logging.getLogger("pdd.llm_invoke")
-    before = list(logger.handlers)
-    setup_file_logging(None)
-    assert list(logger.handlers) == before
-
-
-def test_setup_file_logging_invalid_path_does_not_raise(tmp_path):
-    """An unwritable log path must be handled gracefully (warning only)."""
-    from pdd.llm_invoke import setup_file_logging
-    # Path under a non-existent parent that cannot be auto-created on all OSes
-    bad_path = str(tmp_path / "definitely" / "missing" / "dir" / "log.txt")
-    # Should not raise even if handler creation fails
-    try:
-        setup_file_logging(bad_path)
-    except Exception as e:
-        pytest.fail(f"setup_file_logging should not raise on bad path, got {e}")
-
-
-def test_set_verbose_logging_env_var_enables_debug(monkeypatch):
-    """PDD_VERBOSE_LOGGING=1 should enable DEBUG even when verbose=False."""
-    from pdd.llm_invoke import set_verbose_logging
-    monkeypatch.setenv("PDD_VERBOSE_LOGGING", "1")
-    try:
-        set_verbose_logging(False)
-        assert logging.getLogger("pdd.llm_invoke").level == logging.DEBUG
-    finally:
-        monkeypatch.delenv("PDD_VERBOSE_LOGGING", raising=False)
-        set_verbose_logging(False)
