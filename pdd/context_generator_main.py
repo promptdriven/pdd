@@ -107,15 +107,19 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
         prompt_content = input_strings.get("prompt_file", "")
         code_content = input_strings.get("code_file", "")
+        wrapper_rewrote_path = False
         if output and not output.endswith("/") and not Path(output).is_dir():
             # When format is specified, ensure the output path uses the correct extension
             if format is not None:
                 output_path = Path(output)
                 format_lower = format.lower()
                 if format_lower == "md":
-                    # Replace extension with .md to match format constraint
-                    if output_path.suffix.lower() != ".md":
+                    # --format md forces a lowercase .md suffix on the resolved output
+                    # path regardless of what the user supplied (issue #1205 follow-up:
+                    # README/help promise .md, so an explicit .MD must be normalized too).
+                    if output_path.suffix != ".md":
                         resolved_output = str(output_path.with_suffix(".md"))
+                        wrapper_rewrote_path = True
                     else:
                         resolved_output = output
                 elif format_lower == "code":
@@ -129,25 +133,26 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                         lang_key = language.lower() if language else ''
                         lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
                         resolved_output = str(output_path.with_suffix(lang_ext))
+                        wrapper_rewrote_path = True
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
                     resolved_output = output
             else:
                 resolved_output = output
         else:
+            # Directory --output or no --output: construct_paths already resolved the
+            # final path and ran its own overwrite confirmation. Do NOT re-prompt.
             resolved_output = output_file_paths.get("output")
-        # Issue #1205 follow-up: when the wrapper rewrites the path after construct_paths
-        # has done its overwrite confirmation (bare-name → language extension, or
-        # --format md replacing a non-.md suffix), the rewritten target was never checked.
-        # Re-confirm here so a pre-existing file at the rewritten path cannot be clobbered
-        # without consent.
+        # Issue #1205 follow-up: re-confirm overwrite ONLY when the wrapper itself
+        # rewrote the path after construct_paths confirmed (bare name → language
+        # extension under --format code, or non-.md suffix → .md under --format md).
+        # Directory outputs and no-output cases are already covered by construct_paths.
         force = ctx.obj.get('force', False)
         quiet_flag = ctx.obj.get('quiet', False)
         if (
-            resolved_output
+            wrapper_rewrote_path
+            and resolved_output
             and not force
-            and output
-            and str(Path(resolved_output)) != str(Path(output))
             and Path(resolved_output).exists()
         ):
             confirm_callback = ctx.obj.get('confirm_callback')

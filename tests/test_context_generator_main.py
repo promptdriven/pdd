@@ -716,6 +716,79 @@ def test_format_md_rewrite_to_existing_md_prompts_for_overwrite(mock_ctx, mock_c
     )
 
 
+def test_directory_output_does_not_double_prompt(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
+    """Bug #1205 follow-up: --output examples/ must not trigger the wrapper's re-confirmation.
+
+    When --output is a directory (or path ending in '/'), construct_paths already resolves the
+    final filename and runs its own overwrite confirmation. The wrapper's new re-confirmation
+    step must not fire a second time for the same target.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    examples_dir = tmp_path / "examples"
+    examples_dir.mkdir()
+    prompt_file = tmp_path / "auth_python.prompt"
+    code_file = tmp_path / "auth.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def auth(): pass")
+    pre_existing = examples_dir / "auth_example.py"
+    pre_existing.write_text("ORIGINAL CONTENT")  # construct_paths would prompt for THIS
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def auth(): pass"},
+        {"output": str(pre_existing)},  # construct_paths already resolved & confirmed
+        "python",
+    )
+    mock_context_generator.return_value = ("def auth_example(): pass", 0.0, "local-model")
+
+    confirm_calls = []
+
+    def tracking_confirm(*args, **kwargs):
+        confirm_calls.append(args)
+        return True
+
+    monkeypatch.setattr("pdd.context_generator_main.click.confirm", tracking_confirm)
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(examples_dir) + "/", format="code")
+
+    assert confirm_calls == [], (
+        f"Wrapper should not re-prompt for directory --output (construct_paths already did). "
+        f"Got {len(confirm_calls)} unexpected click.confirm call(s)."
+    )
+    assert pre_existing.read_text() == "def auth_example(): pass"
+
+
+def test_format_md_uppercase_suffix_normalized_to_lowercase(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Bug #1205 follow-up: --format md must rewrite .MD → .md so the resolved path uses lowercase.
+
+    Docs promise .md is forced. We can't always observe a separate .MD vs .md on case-insensitive
+    filesystems (macOS APFS default), so this test verifies the *stored* filename on disk is
+    lowercase by listing the directory — the contract README/help describes.
+    """
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def f(): pass")
+    user_output = tmp_path / "example.MD"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def f(): pass"},
+        {"output": str(user_output)},
+        "python",
+    )
+    mock_context_generator.return_value = ("# Markdown Example", 0.0, "local-model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(user_output), format="md")
+
+    # The file on disk must be stored with the lowercase .md suffix regardless of FS case-sensitivity.
+    on_disk = [p.name for p in tmp_path.iterdir() if p.is_file() and p.stem == "example"]
+    assert on_disk == ["example.md"], (
+        f"Expected exactly one file 'example.md' (lowercase), found {on_disk}. "
+        f"--format md must normalize the suffix to lowercase .md."
+    )
+
+
 def test_force_skips_rewrite_overwrite_prompt(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
     """--force must skip the rewrite overwrite-confirmation prompt."""
     mock_ctx.obj['local'] = True
