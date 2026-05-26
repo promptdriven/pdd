@@ -3145,6 +3145,41 @@ def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) 
     except (json.JSONDecodeError, ValueError):
         return None
 
+
+def _flatten_comment_pages(payload: Any) -> List[Dict]:
+    """Flatten GitHub comment payloads from one page or slurped pages."""
+    comments: List[Dict] = []
+    if isinstance(payload, dict):
+        comments.append(payload)
+    elif isinstance(payload, list):
+        for item in payload:
+            comments.extend(_flatten_comment_pages(item))
+    return comments
+
+
+def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
+    """Parse comments emitted by ``gh api --paginate`` with or without slurp."""
+    text = stdout.strip()
+    if not text:
+        return []
+
+    try:
+        return _flatten_comment_pages(json.loads(text))
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    index = 0
+    comments: List[Dict] = []
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        payload, index = decoder.raw_decode(text, index)
+        comments.extend(_flatten_comment_pages(payload))
+    return comments
+
 def _find_state_comment(
     repo_owner: str,
     repo_name: str,
@@ -3164,13 +3199,14 @@ def _find_state_comment(
             "gh", "api",
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
             "--method", "GET",
-            "--paginate"
+            "--paginate",
+            "--slurp",
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
             return None
 
-        comments = json.loads(result.stdout)
+        comments = _load_gh_paginated_comments(result.stdout)
         marker = _build_state_marker(workflow_type, issue_number)
 
         best: Optional[Tuple[int, Dict]] = None
@@ -3217,11 +3253,12 @@ def _find_all_state_comments(
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
             "--method", "GET",
             "--paginate",
+            "--slurp",
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
             return []
-        comments = json.loads(result.stdout)
+        comments = _load_gh_paginated_comments(result.stdout)
         marker = _build_state_marker(workflow_type, issue_number)
         ids: List[int] = []
         for comment in comments:
