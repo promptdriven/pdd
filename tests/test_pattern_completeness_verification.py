@@ -481,6 +481,20 @@ class TestVerifyPatternCompleteness:
         assert "real.py" in unclassified_files
         assert not any(".pdd" in f for f in unclassified_files)
 
+    def test_excludes_context_directory(self, tmp_path):
+        """Generated context/ examples are excluded from pattern completeness."""
+        context_dir = tmp_path / "context" / "change" / "7"
+        context_dir.mkdir(parents=True)
+        (context_dir / "initial_fix_errors.py").write_text("x = thing.glob(pattern)\n")
+        (tmp_path / "real.py").write_text("x = thing.glob(pattern)\n")
+
+        unclassified, _ = _verify_pattern_completeness(
+            "\\.glob\\(", [], tmp_path
+        )
+        unclassified_files = {m[0] for m in unclassified}
+        assert "real.py" in unclassified_files
+        assert not any(f.startswith("context/") for f in unclassified_files)
+
 
 # ---------------------------------------------------------------------------
 # _parse_classification_evidence

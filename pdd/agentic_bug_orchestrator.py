@@ -569,7 +569,7 @@ _MAX_GREP_RESULTS = 50
 
 # Directories to exclude from grep searches.
 _GREP_EXCLUDE_DIRS = (
-    ".git", ".pdd", "node_modules", "__pycache__", ".venv", "venv",
+    ".git", ".pdd", "context", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
 )
 

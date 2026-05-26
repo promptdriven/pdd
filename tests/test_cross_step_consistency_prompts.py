@@ -219,8 +219,10 @@ class TestExpansionItemsPlaceholderInPrompts:
         assert "If the root cause rewrites, normalizes, canonicalizes" in step6_content
         assert "extension:.htm" in step6_content
         assert "Extension/format canonicalization rule" in step6_content
-        for alias in (".mjs", ".cjs", ".pyi", ".bash", ".zsh", ".cpp"):
+        for alias in (".mjs", ".cjs", ".pyi", ".bash", ".zsh", ".tsx", ".cpp"):
             assert alias in step6_content
+        assert "C++" in step6_content
+        assert "language.lower()" in step6_content
 
     def test_orchestrator_prompt_accepts_value_level_needs_fix_items(self):
         """Generated orchestrator spec must preserve non-path NEEDS_FIX support."""
