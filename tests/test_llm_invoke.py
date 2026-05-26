@@ -7242,3 +7242,49 @@ def test_llm_invoke_fast_fails_on_permanent_invalid_request_error(
                 f"fast-fail did not trigger: litellm.completion was called "
                 f"{mock_completion.call_count} times, expected 1"
             )
+
+
+# ==============================================================================
+# Regression test: LiteLLM AnthropicConfig._is_claude_opus_4_5 monkey-patch
+#
+# Importing pdd.llm_invoke must extend LiteLLM's "is this an adaptive-thinking
+# Opus" predicate to match opus-4-7. Without this, Vertex AI / Azure / Bedrock
+# Anthropic adapters (all inherit AnthropicConfig) send the legacy
+# thinking.type.enabled shape for Opus 4.7 and the provider 400s with
+# "is not supported for this model".
+# ==============================================================================
+
+
+def test_anthropic_config_is_opus_4_5_matches_opus_4_7():
+    """`import pdd.llm_invoke` must extend LiteLLM's _is_claude_opus_4_5 so
+    Opus 4.7 also routes through the adaptive thinking shape, on every
+    Anthropic-relay provider (direct, Vertex, Bedrock, Azure)."""
+    import pdd.llm_invoke  # noqa: F401 — import is the action under test
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    cfg = AnthropicConfig()
+    # Pre-existing 4.5 match must still work.
+    assert cfg._is_claude_opus_4_5("claude-opus-4-5") is True
+    # New: 4.7 must now match too, including the Vertex-prefixed form.
+    assert cfg._is_claude_opus_4_5("claude-opus-4-7") is True
+    assert cfg._is_claude_opus_4_5("vertex_ai/claude-opus-4-7") is True
+    assert cfg._is_claude_opus_4_5("anthropic.claude-opus-4-7") is True
+    # Unrelated models must still NOT match.
+    assert cfg._is_claude_opus_4_5("claude-sonnet-4-6") is False
+    assert cfg._is_claude_opus_4_5("gpt-5") is False
+
+
+def test_anthropic_config_opus_patch_covers_vertex_subclass():
+    """VertexAIAnthropicConfig inherits _is_claude_opus_4_5 from
+    AnthropicConfig; the patch must propagate to the subclass so the
+    Vertex AI Anthropic adapter also picks the adaptive shape."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+    cfg = VertexAIAnthropicConfig()
+    assert cfg._is_claude_opus_4_5("vertex_ai/claude-opus-4-7") is True

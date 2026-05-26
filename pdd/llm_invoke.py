@@ -61,6 +61,37 @@ except Exception:
     # Be conservative: default to True even if env parsing fails
     litellm.drop_params = True
 
+# Anthropic enforced the adaptive thinking API for Claude Opus 4.7 on
+# 2026-05-23: the legacy `thinking={"type":"enabled","budget_tokens":N}`
+# shape now returns 400 "is not supported for this model" on every
+# Anthropic-relay provider (direct Anthropic + Vertex AI + Bedrock +
+# Azure AI). LiteLLM 1.80+ already emits the adaptive shape, but only
+# when `AnthropicConfig._is_claude_opus_4_5(model)` matches — and that
+# helper hardcodes the "opus-4-5" substring. Patch it to also match
+# "opus-4-7" so every Anthropic-family provider (VertexAIAnthropicConfig
+# inherits from AnthropicConfig) routes Opus 4.7 to the new shape.
+# Remove this patch when LiteLLM ships native opus-4-7 matching.
+try:
+    from litellm.llms.anthropic.chat.transformation import (
+        AnthropicConfig as _AnthropicConfigOpus47,
+    )
+    # Idempotent: importlib.reload(pdd.llm_invoke) re-runs this block, and
+    # without this guard the new closure would wrap the previously patched
+    # function instead of the original — infinite recursion on next call.
+    _existing_is_opus_4_5 = _AnthropicConfigOpus47._is_claude_opus_4_5
+    if not getattr(_existing_is_opus_4_5, "_pdd_opus_4_7_patched", False):
+        _orig_is_opus_4_5 = _existing_is_opus_4_5
+        def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
+            m = model.lower() if isinstance(model, str) else ""
+            return _orig_is_opus_4_5(self, model) or "opus-4-7" in m or "opus_4_7" in m
+        _patched_is_opus_4_5._pdd_opus_4_7_patched = True
+        _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
+except Exception as _opus_4_7_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch AnthropicConfig._is_claude_opus_4_5: %s",
+        _opus_4_7_patch_err,
+    )
+
 # Add a console handler if none exists
 if not logger.handlers:
     console_handler = logging.StreamHandler()
