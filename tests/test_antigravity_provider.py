@@ -1113,3 +1113,165 @@ def test_run_with_provider_agy_uses_agy_cmd_with_symlink_path(tmp_path, monkeypa
     assert "--output-format" not in captured["cmd"], (
         "agy cmd must not include --output-format even via wrapper path"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-6 finding: false-positive gate must exempt agy
+#
+# `agy --print` does not expose usage stats, so successful runs always
+# return `cost=0.0`. `run_agentic_task()`'s false-positive gate at the
+# `_run_with_provider` boundary previously rejected any (cost == 0.0 and
+# output_length < MIN_VALID_OUTPUT_LENGTH) as a heuristic — which turned
+# valid short answers like "4", "Done", or "OK" into
+# `All agent providers failed: google: 4`.
+#
+# The fix: detect `provider == "google" and _get_google_cli_name() == "agy"`
+# at the gate and skip the zero-cost-short-output clause for that combo.
+# Empty stdout still fails (caught by the empty-output clause), and explicit
+# `Error:` / `Authentication required.` exit-0 markers are already converted
+# to `success=False` upstream in `_run_with_provider`'s agy branch.
+# ---------------------------------------------------------------------------
+
+
+def _stub_run_with_provider(success: bool, output: str, cost: float = 0.0):
+    """Return a _run_with_provider stand-in that yields the given tuple."""
+    def _stub(provider, prompt_path, cwd, attempt_timeout, verbose, quiet, **_kwargs):
+        return success, output, cost, None
+    return _stub
+
+
+def test_run_agentic_task_agy_accepts_short_plaintext_answer(monkeypatch, tmp_path):
+    """``run_agentic_task()`` must surface a short successful agy reply such as
+    ``"4"`` instead of rejecting it through the zero-cost-short-output gate.
+    """
+    from pdd import agentic_common
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+
+    with (
+        patch.object(agentic_common, "get_agent_provider_preference", return_value=["google"]),
+        patch.object(agentic_common, "get_available_agents", return_value=["google"]),
+        patch.object(agentic_common, "_get_google_cli_name", return_value="agy"),
+        patch.object(agentic_common, "_run_with_provider", _stub_run_with_provider(True, "4", 0.0)),
+        patch.object(agentic_common, "_log_agentic_interaction"),
+    ):
+        success, output, cost, provider = agentic_common.run_agentic_task(
+            instruction="What is 2+2? Reply with only the number.",
+            cwd=tmp_path,
+            quiet=True,
+            label="agy-short-answer",
+        )
+
+    assert success is True, (
+        f"agy short answer must succeed (cost=0 is expected for agy); "
+        f"got success={success!r} output={output!r}"
+    )
+    assert output.strip() == "4"
+    assert cost == 0.0
+    assert provider == "google"
+
+
+@pytest.mark.parametrize("short_answer", ["4", "Done", "OK", "Yes.", "True"])
+def test_run_agentic_task_agy_accepts_various_short_answers(monkeypatch, tmp_path, short_answer):
+    """Mirror of the previous test across a few realistic short-answer shapes
+    that all sit under MIN_VALID_OUTPUT_LENGTH (50)."""
+    from pdd import agentic_common
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+
+    with (
+        patch.object(agentic_common, "get_agent_provider_preference", return_value=["google"]),
+        patch.object(agentic_common, "get_available_agents", return_value=["google"]),
+        patch.object(agentic_common, "_get_google_cli_name", return_value="agy"),
+        patch.object(agentic_common, "_run_with_provider", _stub_run_with_provider(True, short_answer, 0.0)),
+        patch.object(agentic_common, "_log_agentic_interaction"),
+    ):
+        success, output, _cost, _provider = agentic_common.run_agentic_task(
+            instruction="prompt",
+            cwd=tmp_path,
+            quiet=True,
+            label="agy-short",
+        )
+
+    assert success is True, f"agy reply {short_answer!r} should not be flagged false positive"
+    assert output.strip() == short_answer.strip()
+
+
+def test_run_agentic_task_agy_still_rejects_empty_output(monkeypatch, tmp_path):
+    """Even with the agy exemption, empty stdout is still always a false positive
+    (Greg's review explicitly required this). Should fall through to next provider
+    (or fail overall when google is the only candidate)."""
+    from pdd import agentic_common
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+
+    with (
+        patch.object(agentic_common, "get_agent_provider_preference", return_value=["google"]),
+        patch.object(agentic_common, "get_available_agents", return_value=["google"]),
+        patch.object(agentic_common, "_get_google_cli_name", return_value="agy"),
+        patch.object(agentic_common, "_run_with_provider", _stub_run_with_provider(True, "", 0.0)),
+        patch.object(agentic_common, "_log_agentic_interaction"),
+    ):
+        success, _output, _cost, _provider = agentic_common.run_agentic_task(
+            instruction="prompt",
+            cwd=tmp_path,
+            quiet=True,
+            label="agy-empty",
+        )
+
+    assert success is False, "empty stdout must still be rejected as false positive"
+
+
+def test_run_agentic_task_gemini_still_subject_to_zero_cost_gate(monkeypatch, tmp_path):
+    """The exemption is surgical: when ``PDD_GOOGLE_CLI=gemini`` (legacy CLI
+    that *does* report usage), the zero-cost-short-output false-positive rule
+    must still fire — otherwise the protection against suspicious gemini
+    responses regresses."""
+    from pdd import agentic_common
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "gemini")
+
+    with (
+        patch.object(agentic_common, "get_agent_provider_preference", return_value=["google"]),
+        patch.object(agentic_common, "get_available_agents", return_value=["google"]),
+        patch.object(agentic_common, "_get_google_cli_name", return_value="gemini"),
+        patch.object(agentic_common, "_run_with_provider", _stub_run_with_provider(True, "4", 0.0)),
+        patch.object(agentic_common, "_log_agentic_interaction"),
+    ):
+        success, _output, _cost, _provider = agentic_common.run_agentic_task(
+            instruction="prompt",
+            cwd=tmp_path,
+            quiet=True,
+            label="gemini-short-zero-cost",
+        )
+
+    assert success is False, (
+        "legacy gemini CLI does report cost, so cost=0.0 + short output must still "
+        "be flagged as a false positive (exemption applies only to agy)"
+    )
+
+
+def test_run_agentic_task_non_google_provider_still_subject_to_zero_cost_gate(monkeypatch, tmp_path):
+    """Anthropic / openai paths must keep the zero-cost-short-output guard:
+    those JSON parsers can produce cost=0.0 when usage stats are missing, and
+    that signal is exactly what the guard was designed to catch.
+    """
+    from pdd import agentic_common
+
+    with (
+        patch.object(agentic_common, "get_agent_provider_preference", return_value=["anthropic"]),
+        patch.object(agentic_common, "get_available_agents", return_value=["anthropic"]),
+        patch.object(agentic_common, "_get_google_cli_name", return_value="agy"),  # irrelevant for anthropic
+        patch.object(agentic_common, "_run_with_provider", _stub_run_with_provider(True, "ok", 0.0)),
+        patch.object(agentic_common, "_log_agentic_interaction"),
+    ):
+        success, _output, _cost, _provider = agentic_common.run_agentic_task(
+            instruction="prompt",
+            cwd=tmp_path,
+            quiet=True,
+            label="anthropic-short-zero-cost",
+        )
+
+    assert success is False, (
+        "non-google providers must keep the zero-cost-short-output false-positive guard"
+    )

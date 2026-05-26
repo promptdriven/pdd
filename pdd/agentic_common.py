@@ -2230,9 +2230,23 @@ def run_agentic_task(
                 if success:
                     stripped_output = output.strip()
                     output_length = len(stripped_output)
+                    # Antigravity (`agy --print`) does not expose usage stats, so
+                    # successful responses always return cost=0.0. Short but
+                    # legitimate answers like "4", "Done", or "OK" would otherwise
+                    # be demoted to false positives by the zero-cost gate. Empty
+                    # stdout and the explicit "Error:" / "Authentication required."
+                    # exit-0 failure modes are already converted to success=False
+                    # in _run_with_provider's agy branch, so they never reach here.
+                    provider_lacks_cost_reporting = (
+                        provider == "google" and _get_google_cli_name() == "agy"
+                    )
                     is_false_positive = (
                         output_length == 0 or  # Empty output is always a false positive
-                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH) or  # Zero cost with short output
+                        (
+                            not provider_lacks_cost_reporting
+                            and cost == 0.0
+                            and output_length < MIN_VALID_OUTPUT_LENGTH
+                        ) or  # Zero cost with short output (skipped for agy: no usage reporting)
                         (
                             cost > 0.0
                             and stripped_output.startswith("Error:")
