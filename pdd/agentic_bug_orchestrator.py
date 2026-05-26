@@ -406,11 +406,15 @@ def _parse_expansion_items(step6_output: str) -> str:
 
     Returns a deduplicated comma-separated string of expansion items, or "none"
     if the marker is absent, empty, or explicitly "none" (SCOPE_MATCH / NO_PROPOSED_FIX).
+
+    When the orchestrator's PATTERN_SEARCH retry appends an updated
+    EXPANSION_ITEMS line, the LAST marker wins so resume re-derives the
+    merged set (PR #1210 follow-up).
     """
-    match = re.search(r"EXPANSION_ITEMS:\s*(.+)", step6_output)
-    if not match:
+    matches = list(re.finditer(r"EXPANSION_ITEMS:\s*(.+)", step6_output))
+    if not matches:
         return "none"
-    raw = match.group(1).strip()
+    raw = matches[-1].group(1).strip()
     if not raw or raw.lower() == "none":
         return "none"
     seen: set[str] = set()
@@ -434,10 +438,13 @@ def _parse_scope_classification(step6_output: str) -> str:
     LOCALIZED if the marker is missing, empty, or unrecognized (backward
     compatible with older Step 6 runs).
     """
-    match = re.search(r"SCOPE_CLASSIFICATION:\s*(.+)", step6_output)
-    if not match:
+    # The orchestrator may append an updated SCOPE_CLASSIFICATION line after a
+    # PATTERN_SEARCH retry promotes scope back from the auto-downgrade. The
+    # LAST marker wins so resume sees the post-retry value (PR #1210 follow-up).
+    matches = list(re.finditer(r"SCOPE_CLASSIFICATION:\s*(.+)", step6_output))
+    if not matches:
         return "LOCALIZED"
-    value = match.group(1).strip().upper()
+    value = matches[-1].group(1).strip().upper()
     # Strip trailing punctuation/comment text after the enum token.
     value = re.split(r"[\s|#]", value, 1)[0] if value else value
     if value in _SCOPE_CLASSIFICATIONS:
@@ -821,6 +828,40 @@ def _verify_pattern_completeness(
     return unclassified_all, "".join(summary_parts)
 
 
+def _is_llm_classified(
+    fname: str,
+    needs_fix: List[str],
+    safe: List[str],
+    unclassified_filenames: List[str],
+) -> bool:
+    """Whether ``fname`` was explicitly classified by the LLM (PR #1210).
+
+    Mirrors the inner logic of :func:`_merge_fix_locations` so callers (the
+    PATTERN_SEARCH retry block in particular) can apply the same exclusion
+    semantics when folding siblings into ``step6_expansion_items``.
+
+    A file is classified when it appears in ``needs_fix`` or ``safe`` by exact
+    path, OR when the LLM emitted a *bare* basename (e.g. ``foo.py`` rather
+    than ``pdd/foo.py``) AND there is exactly one grep-discovered file with
+    that basename. Multiple files sharing a bare basename remain unclassified
+    so the conservative NEEDS_FIX default applies — otherwise a SAFE call on
+    ``pdd/foo.py`` would silently sweep ``tests/foo.py`` out of test coverage.
+    """
+    classified_paths: set[str] = set(needs_fix) | set(safe)
+    if fname in classified_paths:
+        return True
+    classified_bare_basenames: set[str] = {
+        p for p in classified_paths if "/" not in p
+    }
+    base = Path(fname).name
+    if base in classified_bare_basenames:
+        matching_unclassified = [
+            f for f in unclassified_filenames if Path(f).name == base
+        ]
+        return len(matching_unclassified) <= 1
+    return False
+
+
 def _parse_classification_evidence(
     retry_output: str,
 ) -> Tuple[List[str], List[str]]:
@@ -923,39 +964,8 @@ def _merge_fix_locations(
             merged.append(f)
             merged_set.add(f)
 
-    # Build a set of basenames the LLM explicitly classified (needs_fix OR safe).
-    # A bare "utils.py" in this set means the LLM looked at some utils.py file,
-    # so any unclassified utils.py should NOT get the conservative default.
-    # But if there are multiple utils.py in different directories, classification
-    # of one doesn't mean the others were examined — so we track which specific
-    # full paths were classified.
-    classified_paths: set[str] = set(needs_fix) | set(safe)
-    classified_basenames: set[str] = set()
-    for p in classified_paths:
-        if "/" not in p:
-            classified_basenames.add(p)
-
-    def _is_classified(fname: str) -> bool:
-        """Check if fname was classified by the LLM."""
-        if fname in classified_paths:
-            return True
-        # If the LLM used a bare name and fname has a directory,
-        # it's a match only if exactly one file shares that basename.
-        # With multiple files sharing a basename, we can't know which
-        # one the LLM meant, so we treat them all as unclassified
-        # (conservative default applies).
-        base = Path(fname).name
-        if base in classified_basenames:
-            matching_unclassified = [
-                f for f in unclassified_filenames if Path(f).name == base
-            ]
-            # If only one file has this basename, the LLM's bare name
-            # unambiguously refers to it.
-            return len(matching_unclassified) <= 1
-        return False
-
     for fname in unclassified_filenames:
-        if not _is_classified(fname) and not _in_merged(fname):
+        if not _is_llm_classified(fname, needs_fix, safe, unclassified_filenames) and not _in_merged(fname):
             merged.append(fname)
             merged_set.add(fname)
 
@@ -2411,23 +2421,33 @@ def run_agentic_bug_orchestrator(
                         # `NEEDS_FIX: <path> | <reason>` format is handled
                         # identically to the original Step 6 output.
                         sibling_evidence = _parse_needs_fix(retry_output)
-                        classified_basenames = {Path(f).name for f in needs_fix} | {Path(f).name for f in safe}
-                        # Files that the LLM did not classify are defaulted to
-                        # NEEDS_FIX by _merge_fix_locations — surface them in
-                        # expansion items too, with no reason since none was
-                        # provided.
                         sibling_keys = {p for p, _ in sibling_evidence}
+
+                        # Use the shared _is_llm_classified helper so the
+                        # exclusion semantics here match _merge_fix_locations.
+                        # Critical: a full-path SAFE_EVIDENCE on "pdd/foo.py"
+                        # MUST NOT mark a different full-path unclassified file
+                        # (e.g. "tests/foo.py") as classified — otherwise the
+                        # unclassified file lands in FIX_LOCATIONS but is
+                        # silently dropped from step6_expansion_items so Step
+                        # 8/9 never test it.
                         for fname in unclassified_filenames:
-                            if Path(fname).name in classified_basenames:
-                                continue
                             if fname in sibling_keys:
+                                continue
+                            if _is_llm_classified(
+                                fname, needs_fix, safe, unclassified_filenames
+                            ):
+                                # SAFE means skip; explicit NEEDS_FIX is
+                                # already in sibling_evidence above.
                                 continue
                             sibling_evidence.append((fname, ""))
 
                         # Log which unclassified files were defaulted to NEEDS_FIX
                         if not quiet:
                             for fname in unclassified_filenames:
-                                if Path(fname).name not in classified_basenames:
+                                if not _is_llm_classified(
+                                    fname, needs_fix, safe, unclassified_filenames
+                                ):
                                     console.print(
                                         f"[yellow]    → {fname} has no classification "
                                         f"evidence, defaulting to NEEDS_FIX[/yellow]"
@@ -2461,16 +2481,46 @@ def run_agentic_bug_orchestrator(
                             sibling_evidence,
                         )
                         context["step6_expansion_items"] = expansion_after_retry
+
+                    # If Step 6 originally emitted SIBLING_PATTERN but had zero
+                    # NEEDS_FIX (auto-downgraded to LOCALIZED in
+                    # _apply_step6_scope_markers), the retry has now produced
+                    # evidence — promote scope back so Step 8 does not get the
+                    # contradictory "LOCALIZED + expansion items" pair.
+                    promoted_scope: Optional[str] = None
+                    if sibling_evidence:
+                        raw_initial_scope = _parse_scope_classification(step_output)
+                        current_scope = context.get("scope_classification", "LOCALIZED")
+                        if (
+                            raw_initial_scope == "SIBLING_PATTERN"
+                            and current_scope == "LOCALIZED"
+                        ):
+                            promoted_scope = "SIBLING_PATTERN"
+                            context["scope_classification"] = "SIBLING_PATTERN"
+                            if not quiet:
+                                console.print(
+                                    "[cyan]  → Restoring SCOPE_CLASSIFICATION to "
+                                    "SIBLING_PATTERN: retry produced sibling evidence "
+                                    "(issue #1208 follow-up)[/cyan]"
+                                )
+
                     # Preserve original root cause analysis for downstream steps (7, 8).
-                    # Append a FIX_LOCATIONS line so _parse_fix_locations picks up
-                    # the verified set on resume. _parse_fix_locations uses finditer
-                    # + dedup, so the second line's superset is handled correctly.
-                    # Also append an updated EXPANSION_ITEMS line when retry-discovered
-                    # siblings were folded in, so resume re-parses the merged set
-                    # instead of reverting to the original Step 6 expansion list.
+                    # Append updated marker lines so a resumed run re-derives the
+                    # same merged set deterministically. The parsers for
+                    # FIX_LOCATIONS, EXPANSION_ITEMS, SCOPE_CLASSIFICATION, and
+                    # NEEDS_FIX all read the LAST matching marker (or all
+                    # NEEDS_FIX lines) so appending here is safe.
                     step_output = step_output + f"\n\n% Updated after grep verification\nFIX_LOCATIONS: {', '.join(merged)}"
                     if sibling_evidence:
                         step_output = step_output + f"\nEXPANSION_ITEMS: {expansion_after_retry}"
+                        # Append NEEDS_FIX lines so the resume-side
+                        # _apply_step6_scope_markers sees siblings and does not
+                        # auto-downgrade SIBLING_PATTERN back to LOCALIZED.
+                        for sib_path, sib_reason in sibling_evidence:
+                            reason_text = sib_reason if sib_reason else "from PATTERN_SEARCH retry"
+                            step_output = step_output + f"\nNEEDS_FIX: {sib_path} | {reason_text}"
+                    if promoted_scope:
+                        step_output = step_output + f"\nSCOPE_CLASSIFICATION: {promoted_scope}"
                     context["step6_output"] = step_output
 
                     if not quiet:
