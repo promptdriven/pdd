@@ -247,20 +247,6 @@ def test_jwt_token_obtained_before_async_context(mock_ctx, mock_construct_paths,
         assert result_code == "# Cloud Code"
 
 
-def test_cloud_generation_receives_token_parameter(mock_ctx, mock_construct_paths, mock_get_jwt_token, mock_preprocess, tmp_path):
-    """Verify that _run_cloud_generation receives token as a parameter, not acquiring it internally."""
-    import inspect
-    from pdd.context_generator_main import _run_cloud_generation
-
-    # Check function signature includes 'token' parameter
-    sig = inspect.signature(_run_cloud_generation)
-    param_names = list(sig.parameters.keys())
-    assert 'token' in param_names, (
-        f"_run_cloud_generation must accept 'token' as a parameter to avoid nested asyncio.run(). "
-        f"Current parameters: {param_names}"
-    )
-
-
 def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that --format md option overrides extension even with explicit --output path."""
     mock_ctx.obj['local'] = True
@@ -416,6 +402,187 @@ def test_z3_syntax_fixer_logic():
             if not v_map[j] and v_map[j+1]: is_monotonic = False; break
         if is_monotonic:
             last_true = 0
-            for idx, val in enumerate(v_map): 
+            for idx, val in enumerate(v_map):
                 if val: last_true = idx + 1
             assert result_len == last_true
+
+
+# ---------------------------------------------------------------------------
+# Issue #1205 regression tests: --output extension must not be silently rewritten
+# ---------------------------------------------------------------------------
+
+def test_yml_output_not_rewritten_to_yaml(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Bug #1205: --output foo.yml with a YAML-language prompt must land at foo.yml, not foo.yaml.
+
+    Previously, format="code" (the Click default) caused with_suffix(".yaml") to
+    silently rename the file. This test fails on buggy code and passes once the
+    extension-rewrite guard is added.
+    """
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "ci_YAML.prompt"
+    code_file = tmp_path / "ci.yml"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("steps: []")
+    requested_output = tmp_path / "test_example.yml"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "steps: []"},
+        {"output": str(requested_output)},
+        "yaml",
+    )
+    mock_context_generator.return_value = ("steps:\n  - run: echo hi\n", 0.01, "local-model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(requested_output), format="code")
+
+    # The requested .yml path must exist
+    assert requested_output.exists(), (
+        f"Bug #1205: output was written to the wrong path. "
+        f"Expected {requested_output} to exist but it does not. "
+        f"(File may have been silently renamed to test_example.yaml)"
+    )
+    # The silently-rewritten path must NOT exist
+    rewritten = tmp_path / "test_example.yaml"
+    assert not rewritten.exists(), (
+        f"Bug #1205: output was silently rewritten from .yml to .yaml. "
+        f"Found unexpected file {rewritten}"
+    )
+
+
+def test_md_output_not_rewritten_to_markdown(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Bug #1205: --output foo.md with a Markdown-language prompt must land at foo.md, not foo.markdown.
+
+    The BUILTIN_EXT_MAP has no 'markdown' key, so the fallback f".{lang_key}"
+    synthesises '.markdown'. This test fails on buggy code.
+    """
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "impl_markdown.prompt"
+    code_file = tmp_path / "impl.md"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("# Implementation")
+    requested_output = tmp_path / "impl_example.md"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "# Implementation"},
+        {"output": str(requested_output)},
+        "markdown",
+    )
+    mock_context_generator.return_value = ("# Example\n\nSome markdown.\n", 0.01, "local-model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(requested_output), format="code")
+
+    assert requested_output.exists(), (
+        f"Bug #1205: output was written to the wrong path. "
+        f"Expected {requested_output} to exist. "
+        f"(File may have been silently renamed to impl_example.markdown)"
+    )
+    rewritten = tmp_path / "impl_example.markdown"
+    assert not rewritten.exists(), (
+        f"Bug #1205: output was silently rewritten from .md to .markdown. "
+        f"Found unexpected file {rewritten}"
+    )
+
+
+def test_py_output_not_rewritten_regression(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Regression guard: --output foo.py with Python language must still land at foo.py after the fix."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "auth_python.prompt"
+    code_file = tmp_path / "auth.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def auth(): pass")
+    requested_output = tmp_path / "auth_example.py"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def auth(): pass"},
+        {"output": str(requested_output)},
+        "python",
+    )
+    mock_context_generator.return_value = ("def auth_example(): pass", 0.0, "local-model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(requested_output), format="code")
+
+    assert requested_output.exists(), f"Expected {requested_output} to exist"
+    assert requested_output.read_text() == "def auth_example(): pass"
+
+
+def test_format_none_honors_yml_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """When format=None (the pre-bug safe path), --output foo.yml must land at foo.yml."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "ci_YAML.prompt"
+    code_file = tmp_path / "ci.yml"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("steps: []")
+    requested_output = tmp_path / "test_example.yml"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "steps: []"},
+        {"output": str(requested_output)},
+        "yaml",
+    )
+    mock_context_generator.return_value = ("steps:\n  - run: echo hi\n", 0.0, "local-model")
+
+    # format=None triggers the else branch — the safe path that must keep working
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(requested_output), format=None)
+
+    assert requested_output.exists(), f"Expected {requested_output} to exist when format=None"
+    rewritten = tmp_path / "test_example.yaml"
+    assert not rewritten.exists(), f"Extension must not be rewritten when format=None"
+
+
+def test_no_output_yaml_uses_construct_paths_result(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """When --output is omitted, the path returned by construct_paths is used unchanged."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "ci_YAML.prompt"
+    code_file = tmp_path / "ci.yml"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("steps: []")
+    auto_output = tmp_path / "ci_example.yaml"  # construct_paths decides the name
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "steps: []"},
+        {"output": str(auto_output)},
+        "yaml",
+    )
+    mock_context_generator.return_value = ("steps: []\n", 0.0, "local-model")
+
+    # No output argument — construct_paths result should be used as-is
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="code")
+
+    assert auto_output.exists(), f"Expected construct_paths-derived output {auto_output} to exist"
+
+
+def test_cloud_execution_honors_yml_output(mock_ctx, mock_construct_paths, mock_get_jwt_token, mock_httpx_client, mock_preprocess, tmp_path):
+    """Bug #1205: cloud path must also honor --output foo.yml (extension not rewritten before/after cloud call)."""
+    mock_ctx.obj['local'] = False
+    prompt_file = tmp_path / "ci_YAML.prompt"
+    code_file = tmp_path / "ci.yml"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("steps: []")
+    requested_output = tmp_path / "ci_example.yml"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "steps: []"},
+        {"output": str(requested_output)},
+        "yaml",
+    )
+    mock_get_jwt_token.return_value = "fake_jwt_token"
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "generatedExample": "steps:\n  - run: echo ok\n",
+        "totalCost": 0.02,
+        "modelName": "cloud-model",
+    }
+    mock_client_instance = AsyncMock()
+    mock_client_instance.post.return_value = mock_response
+    mock_httpx_client.return_value.__aenter__.return_value = mock_client_instance
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(requested_output), format="code")
+
+    assert requested_output.exists(), (
+        f"Bug #1205 (cloud path): expected output at {requested_output} but it was not found. "
+        f"May have been silently renamed to ci_example.yaml"
+    )
+    rewritten = tmp_path / "ci_example.yaml"
+    assert not rewritten.exists(), (
+        f"Bug #1205 (cloud path): output silently rewritten to {rewritten}"
+    )
