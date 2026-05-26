@@ -104,6 +104,16 @@ except Exception as _opus_4_7_import_err:  # pylint: disable=broad-except
     )
 
 if _AnthropicConfigOpus47 is not None:
+    # Aliases the patched predicate must additionally match. Opus 4.5 is
+    # included so the 1.82.x predicate rename doesn't silently regress
+    # callers (LiteLLM 1.82.6 dropped 4.5 from `_is_claude_4_6_model`,
+    # which it now controls). Dot-aliases mirror LiteLLM's own naming
+    # support so we don't miss `claude-opus-4.7` style identifiers.
+    _OPUS_ADDITIONAL_ALIASES = (
+        "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+        "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
+    )
+
     # ---- 1.80.x predicate: _is_claude_opus_4_5 -------------------------------
     try:
         _existing_is_opus_4_5 = getattr(_AnthropicConfigOpus47, "_is_claude_opus_4_5", None)
@@ -113,7 +123,7 @@ if _AnthropicConfigOpus47 is not None:
             _orig_is_opus_4_5 = _existing_is_opus_4_5
             def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
                 m = model.lower() if isinstance(model, str) else ""
-                return _orig_is_opus_4_5(self, model) or "opus-4-7" in m or "opus_4_7" in m
+                return _orig_is_opus_4_5(self, model) or any(a in m for a in _OPUS_ADDITIONAL_ALIASES)
             _patched_is_opus_4_5._pdd_opus_4_7_patched = True
             _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
     except Exception as _err:  # pylint: disable=broad-except
@@ -134,13 +144,13 @@ if _AnthropicConfigOpus47 is not None:
             )
             if getattr(_underlying, "_pdd_opus_4_7_helper_patched", False):
                 continue
-            def _make_patched(orig):
+            def _make_patched(orig, aliases):
                 def _patched(model):
                     m = model.lower() if isinstance(model, str) else ""
-                    return orig(model) or "opus-4-7" in m or "opus_4_7" in m
+                    return orig(model) or any(a in m for a in aliases)
                 _patched._pdd_opus_4_7_helper_patched = True
                 return _patched
-            _new_static = staticmethod(_make_patched(_underlying))
+            _new_static = staticmethod(_make_patched(_underlying, _OPUS_ADDITIONAL_ALIASES))
             setattr(_AnthropicConfigOpus47, _helper_name, _new_static)
         except Exception as _err:  # pylint: disable=broad-except
             logger.error("[opus_4_7_patch] %s patch failed: %s", _helper_name, _err)
@@ -221,10 +231,12 @@ try:
     _existing_converse_map = _AmazonConverseConfigOpus47.map_openai_params
     if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
         _orig_converse_map = _existing_converse_map
+        # Match LiteLLM's own naming convention (hyphen + dot aliases).
+        _CONVERSE_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
         def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
             result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
             m = model.lower() if isinstance(model, str) else ""
-            if "opus-4-7" not in m and "opus_4_7" not in m:
+            if not any(a in m for a in _CONVERSE_OPUS_47_ALIASES):
                 return result
             current = result.get("thinking")
             if not isinstance(current, dict):

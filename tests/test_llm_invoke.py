@@ -7276,12 +7276,20 @@ def test_anthropic_config_is_opus_4_5_matches_opus_4_7():
         "LiteLLM exposes neither _is_claude_opus_4_5 (1.80.x) nor "
         "_is_claude_4_6_model (1.82.x); patch needs a new code path."
     )
-    # The patched predicate must match opus-4-7 across naming variants.
+    # The patched predicate must match opus-4-7 across naming variants —
+    # hyphen + dot aliases — to mirror LiteLLM's own naming convention.
     assert pred("claude-opus-4-7") is True
     assert pred("vertex_ai/claude-opus-4-7") is True
     assert pred("anthropic.claude-opus-4-7") is True
-    # Unrelated models must still NOT match (sonnet-4-6 is special: 1.82.x's
-    # _is_claude_4_6_model matches sonnet-4-6 natively, so we only test gpt-5).
+    assert pred("claude-opus-4.7") is True
+    assert pred("vertex_ai/claude-opus-4.7") is True
+    # Opus 4.5 must continue matching even on 1.82.x — LiteLLM upstream
+    # dropped 4.5 from `_is_claude_4_6_model`, so our extension restores
+    # that path so custom CSV rows pointing at 4.5 don't regress to the
+    # legacy enabled shape.
+    assert pred("claude-opus-4-5") is True
+    assert pred("claude-opus-4.5") is True
+    # Unrelated models must still NOT match.
     assert pred("gpt-5") is False
 
 
@@ -7336,12 +7344,14 @@ def test_map_openai_params_vertex_opus_47_effort_only_emits_adaptive_shape():
     """The vertex_ai/claude-opus-4-7 CSV row carries reasoning_type=effort,
     so pdd hands LiteLLM only `reasoning_effort`. Pre-patch, LiteLLM
     produced thinking.type.enabled (rejected by Vertex). Post-patch, the
-    final shape must be thinking.type.adaptive + output_config.effort."""
-    thinking, output_config = _map_thinking_kwargs(
-        {"reasoning_effort": "high"}, "vertex_ai/claude-opus-4-7"
-    )
-    assert thinking == {"type": "adaptive"}, thinking
-    assert output_config == {"effort": "high"}, output_config
+    final shape must be thinking.type.adaptive + output_config.effort —
+    for both hyphen and dot naming variants."""
+    for model in ("vertex_ai/claude-opus-4-7", "vertex_ai/claude-opus-4.7"):
+        thinking, output_config = _map_thinking_kwargs(
+            {"reasoning_effort": "high"}, model
+        )
+        assert thinking == {"type": "adaptive"}, (model, thinking)
+        assert output_config == {"effort": "high"}, (model, output_config)
 
 
 def test_map_openai_params_bedrock_opus_47_effort_only_emits_adaptive_shape():
