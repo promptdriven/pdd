@@ -345,7 +345,7 @@ class PDDCLI(click.Group):
     default=10,
     help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
-@click.version_option(version=__version__, package_name="pdd-cli")
+@click.version_option(package_name="pdd-cli", prog_name="cli")
 @click.pass_context
 def cli(
     ctx: click.Context,

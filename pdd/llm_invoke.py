@@ -103,6 +103,50 @@ except Exception as _opus_4_7_import_err:  # pylint: disable=broad-except
         _opus_4_7_import_err,
     )
 
+try:
+    from litellm.llms.anthropic.common_utils import (
+        AnthropicModelInfo as _AnthropicModelInfoOpus47,
+    )
+except Exception as _opus_model_info_import_err:  # pylint: disable=broad-except
+    _AnthropicModelInfoOpus47 = None  # type: ignore
+    logger.error(
+        "[opus_4_7_patch] Could not import AnthropicModelInfo: %s",
+        _opus_model_info_import_err,
+    )
+
+
+def _unwrap_class_callable(helper):  # type: ignore[no-untyped-def]
+    if helper is None:
+        return None
+    return helper.__func__ if hasattr(helper, "__func__") else helper
+
+
+def _class_has_patched_predicate(cls, helper_name: str) -> bool:
+    """True when ``cls`` already carries our patched predicate helper."""
+    underlying = _unwrap_class_callable(getattr(cls, helper_name, None))
+    return bool(getattr(underlying, "_pdd_opus_4_7_helper_patched", False))
+
+
+def _patch_static_predicate(cls, helper_name: str, aliases: tuple[str, ...]) -> None:
+    """Extend LiteLLM's static predicate helpers to match Opus 4.5/4.7 aliases."""
+    existing = getattr(cls, helper_name, None)
+    if existing is None or _class_has_patched_predicate(cls, helper_name):
+        return
+    underlying = _unwrap_class_callable(existing)
+    if underlying is None:
+        return
+
+    def _make_patched(orig, alias_list):
+        def _patched(model):
+            m = model.lower() if isinstance(model, str) else ""
+            return orig(model) or any(a in m for a in alias_list)
+
+        _patched._pdd_opus_4_7_helper_patched = True
+        return _patched
+
+    setattr(cls, helper_name, staticmethod(_make_patched(underlying, aliases)))
+
+
 if _AnthropicConfigOpus47 is not None:
     # Aliases the patched predicate must additionally match. Opus 4.5 is
     # included so the 1.82.x predicate rename doesn't silently regress
@@ -130,30 +174,24 @@ if _AnthropicConfigOpus47 is not None:
         logger.error("[opus_4_7_patch] _is_claude_opus_4_5 patch failed: %s", _err)
 
     # ---- 1.82.x predicates: _is_claude_4_6_model + _is_opus_4_6_model --------
-    # These are @staticmethod in 1.82.x. Wrap and reinstall as staticmethod so
-    # internal `AnthropicConfig._is_claude_4_6_model(model)` calls still work.
-    for _helper_name in ("_is_claude_4_6_model", "_is_opus_4_6_model"):
-        try:
-            _existing_helper = getattr(_AnthropicConfigOpus47, _helper_name, None)
-            if _existing_helper is None:
-                continue
-            _underlying = (
-                _existing_helper.__func__
-                if hasattr(_existing_helper, "__func__")
-                else _existing_helper
-            )
-            if getattr(_underlying, "_pdd_opus_4_7_helper_patched", False):
-                continue
-            def _make_patched(orig, aliases):
-                def _patched(model):
-                    m = model.lower() if isinstance(model, str) else ""
-                    return orig(model) or any(a in m for a in aliases)
-                _patched._pdd_opus_4_7_helper_patched = True
-                return _patched
-            _new_static = staticmethod(_make_patched(_underlying, _OPUS_ADDITIONAL_ALIASES))
-            setattr(_AnthropicConfigOpus47, _helper_name, _new_static)
-        except Exception as _err:  # pylint: disable=broad-except
-            logger.error("[opus_4_7_patch] %s patch failed: %s", _helper_name, _err)
+    # In 1.82.x `_is_claude_4_6_model` lives on AnthropicModelInfo; patch that
+    # class as well as AnthropicConfig so reload/reimport cannot leave instances
+    # resolving to an unpatched parent descriptor.
+    for _opus_cls in (
+        _cls
+        for _cls in (_AnthropicModelInfoOpus47, _AnthropicConfigOpus47)
+        if _cls is not None
+    ):
+        for _helper_name in ("_is_claude_4_6_model", "_is_opus_4_6_model"):
+            try:
+                _patch_static_predicate(_opus_cls, _helper_name, _OPUS_ADDITIONAL_ALIASES)
+            except Exception as _err:  # pylint: disable=broad-except
+                logger.error(
+                    "[opus_4_7_patch] %s.%s patch failed: %s",
+                    _opus_cls.__name__,
+                    _helper_name,
+                    _err,
+                )
 
     # ---- map_openai_params post-process wrap (both versions) -----------------
     # 1.80.x: _map_reasoning_effort always returns the legacy enabled shape;
