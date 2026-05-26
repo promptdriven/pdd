@@ -534,6 +534,35 @@ class TestParseClassificationEvidence:
         assert needs_fix == []
         assert safe == []
 
+    def test_needs_fix_with_pipe_reason_extracts_path_only(self):
+        """Regression for PR #1210: NEEDS_FIX retry output follows the Step 6
+        prompt's pipe-delimited format `<path> | <reason>`. The parser must
+        extract just the path token — treating the whole string as a filepath
+        produces a bogus location that breaks downstream FIX_LOCATIONS merge.
+        """
+        output = "NEEDS_FIX: pdd/foo.py | same root cause as bar.py"
+        needs_fix, safe = _parse_classification_evidence(output)
+        assert needs_fix == ["pdd/foo.py"]
+        assert safe == []
+
+    def test_needs_fix_mixed_legacy_and_pipe_formats(self):
+        """The parser accepts both `NEEDS_FIX: file.py` (legacy) and
+        `NEEDS_FIX: file.py | reason` (Step 6 format) in the same output.
+        """
+        output = (
+            "NEEDS_FIX: pdd/a.py | shared helper\n"
+            "NEEDS_FIX: pdd/b.py\n"
+            "SAFE_EVIDENCE: pdd/c.py | 12 | uses literal\n"
+        )
+        needs_fix, safe = _parse_classification_evidence(output)
+        assert set(needs_fix) == {"pdd/a.py", "pdd/b.py"}
+        assert safe == ["pdd/c.py"]
+
+    def test_needs_fix_pipe_format_strips_backticks(self):
+        output = "NEEDS_FIX: `pdd/foo.py` | reason"
+        needs_fix, _ = _parse_classification_evidence(output)
+        assert needs_fix == ["pdd/foo.py"]
+
 
 # ---------------------------------------------------------------------------
 # Merge semantics (integration-level)

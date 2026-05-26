@@ -7499,6 +7499,36 @@ class TestStep6ScopeOrchestratorWiring:
             "NEEDS_FIX siblings are parsed for non-resumed runs (issue #1208)."
         )
 
+    def test_pattern_retry_path_folds_siblings_into_expansion_items(self):
+        """Regression for PR #1210: when Step 6's PATTERN_SEARCH retry classifies
+        a grep-discovered file as NEEDS_FIX, the orchestrator must update
+        context["step6_expansion_items"] (not just FIX_LOCATIONS) so Step 8/9
+        plan tests for it. The wiring is verified by source inspection because
+        the retry block lives deep inside the orchestrator main loop.
+        """
+        source = self._read_orchestrator_source()
+        # The retry success branch must call _parse_needs_fix on retry_output
+        # to recover (path, reason) tuples for the expansion-items merge.
+        assert "_parse_needs_fix(retry_output)" in source, (
+            "Step 6 PATTERN_SEARCH retry path must call _parse_needs_fix on the "
+            "retry output so confirmed siblings (with reasons) can be folded "
+            "into step6_expansion_items for Step 8/9 (PR #1210 regression)."
+        )
+        # The retry path must merge those into step6_expansion_items via the
+        # same helper that the main Step 6 path uses.
+        assert "_merge_needs_fix_into_expansion(" in source, (
+            "Step 6 PATTERN_SEARCH retry path must call "
+            "_merge_needs_fix_into_expansion to fold retry-discovered siblings "
+            "into context['step6_expansion_items']."
+        )
+        # And the merged expansion items must persist on step6_output so a
+        # resumed run does not lose them.
+        assert 'EXPANSION_ITEMS: {expansion_after_retry}' in source, (
+            "Updated EXPANSION_ITEMS line must be appended to step_output after "
+            "a retry-driven sibling merge so resumed runs re-derive the same "
+            "expanded set (PR #1210 regression)."
+        )
+
     def test_apply_step6_scope_markers_is_exported(self):
         """All five helpers added in the fix must remain importable from
         pdd.agentic_bug_orchestrator. A naming/removal regression here would
