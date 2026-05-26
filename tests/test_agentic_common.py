@@ -1424,7 +1424,9 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     _, kwargs = mock_subprocess_run.call_args
     stdin_content = kwargs.get("input", "")
     assert "Instruction" in stdin_content
-    assert ".agentic_prompt_" in stdin_content  # Self-referential instruction is in content
+    assert "You have full file access" in stdin_content
+    assert "Read the file" not in stdin_content
+    assert ".agentic_prompt_" not in stdin_content
 
     # Verify no temp files remain in tmp_path
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))

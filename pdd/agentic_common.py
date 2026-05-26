@@ -929,6 +929,23 @@ def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str
     return _find_cli_binary(cli_name) if cli_name else None
 
 
+def _has_google_api_key_for_cli(cli: str, env: Optional[Dict[str, str]] = None) -> bool:
+    """Return whether *env* has an API key usable by the selected Google CLI."""
+    if env is None:
+        env = os.environ
+    if cli == "agy":
+        return bool(
+            env.get("ANTIGRAVITY_API_KEY")
+            or env.get("GOOGLE_API_KEY")
+            # Compatibility: PDD maps GEMINI_API_KEY to GOOGLE_API_KEY before
+            # launching agy so existing Gemini-key users keep working.
+            or env.get("GEMINI_API_KEY")
+        )
+    if cli == "gemini":
+        return bool(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY"))
+    return False
+
+
 def _has_agy_oauth_credentials() -> bool:
     """Return True when Antigravity (``agy``) appears signed in locally.
 
@@ -1019,6 +1036,18 @@ def _get_google_cli_name(env: Optional[Dict[str, str]] = None) -> Optional[str]:
     agy_bin = _find_cli_binary("agy")
     gemini_bin = _find_cli_binary("gemini")
     if agy_bin and gemini_bin:
+        # Prefer agy for the migration, except when the only configured auth
+        # signal is legacy Gemini OAuth. In that case selecting agy makes
+        # runtime availability drop Google even though setup correctly reports
+        # legacy Gemini as configured.
+        if (
+            _has_google_api_key_for_cli("agy", env)
+            or _has_google_vertex_auth(env)
+            or _has_agy_oauth_credentials()
+        ):
+            return "agy"
+        if _has_legacy_gemini_oauth_credentials():
+            return "gemini"
         return "agy"
     if agy_bin:
         return "agy"
@@ -1058,22 +1087,7 @@ def get_available_agents() -> List[str]:
     # Pair the API-key signal with the active binary: ANTIGRAVITY_API_KEY is
     # consumed by agy but not by legacy gemini. GOOGLE_API_KEY is accepted by
     # both, and PDD bridges GEMINI_API_KEY to GOOGLE_API_KEY for agy.
-    if google_cli_name == "agy":
-        has_google_key = bool(
-            os.environ.get("ANTIGRAVITY_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-            # Compatibility: PDD maps GEMINI_API_KEY to GOOGLE_API_KEY for
-            # the agy subprocess so existing Gemini-key setups keep working
-            # after the default binary moves to Antigravity.
-            or os.environ.get("GEMINI_API_KEY")
-        )
-    elif google_cli_name == "gemini":
-        has_google_key = bool(
-            os.environ.get("GEMINI_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-        )
-    else:
-        has_google_key = False
+    has_google_key = _has_google_api_key_for_cli(google_cli_name or "")
     has_vertex_auth = _has_google_vertex_auth()
     has_matching_oauth = False
     if google_cli_name == "agy":
@@ -2130,7 +2144,6 @@ def run_agentic_task(
 
     full_instruction = (
         f"{instruction}{feedback_section}\n\n"
-        f"Read the file {prompt_filename} for instructions. "
         "You have full file access to explore and modify files as needed."
     )
 
@@ -2888,17 +2901,14 @@ def _run_with_provider(
             # stdout; the agy parse branch further down treats stdout as the
             # response body and surfaces `cost=0, model=null` to the audit
             # log because the CLI does not currently expose usage stats.
-            # Unlike the legacy gemini CLI, agy handles the print prompt text
-            # directly. Asking it to "read the file" in non-interactive mode can
-            # send it searching outside cwd and timeout before it reads the
-            # prompt. Pass the prompt body inline and use agy's non-interactive
-            # permission flag, matching the yolo/skip-permissions posture of
-            # the other agentic CLI branches.
+            # Unlike the legacy gemini CLI, agy can read the print prompt from
+            # stdin. Pipe the prompt body instead of putting it on argv so large
+            # issue prompts cannot hit OS argument limits or leak through
+            # process listings while the subprocess is running.
             cmd = [
                 cli_path,
                 "--dangerously-skip-permissions",
                 "--print",
-                prompt_content,
             ]
             if env.get("GEMINI_API_KEY") and not (
                 env.get("GOOGLE_API_KEY") or env.get("ANTIGRAVITY_API_KEY")
@@ -3022,7 +3032,10 @@ def _run_with_provider(
     # positional argument makes the path string the prompt, not the file body.
     # OpenCode reads the prompt from the file referenced in the trailing
     # message argv, so it does NOT receive the body via stdin.
-    stdin_content = prompt_content if provider in {"anthropic", "openai"} else None
+    stdin_content = prompt_content if (
+        provider in {"anthropic", "openai"}
+        or (provider == "google" and _get_google_cli_name(env) == "agy")
+    ) else None
 
     try:
         result = _subprocess_run(

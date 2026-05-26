@@ -1546,7 +1546,7 @@
               "Posts GitHub issue comments via post_step_comment",
               "Persists workflow state via save_workflow_state (local + optional GitHub state comment)",
               "Creates/removes git worktrees and branches under .pdd/worktrees/fix-issue-{N}/",
-              "Spawns external agentic CLI subprocesses (claude/gemini/codex/opencode)"
+              "Spawns external agentic CLI subprocesses (claude/agy/gemini/codex/opencode)"
             ]
           }
         ]

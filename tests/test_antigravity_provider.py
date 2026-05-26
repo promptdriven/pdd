@@ -129,10 +129,12 @@ def test_run_with_provider_agy_does_not_pass_output_format(tmp_path, monkeypatch
         )
 
     invoked_cmd = run_mock.call_args.args[0]
+    stdin_content = run_mock.call_args.kwargs.get("input")
     assert invoked_cmd[0] == "/usr/local/bin/agy"
     assert "--print" in invoked_cmd
     assert "--dangerously-skip-permissions" in invoked_cmd
-    assert "instructions" in invoked_cmd
+    assert "instructions" not in invoked_cmd
+    assert stdin_content == "instructions"
     assert not any("Read the file" in arg for arg in invoked_cmd)
     assert "--output-format" not in invoked_cmd, (
         "agy 1.0.1 does NOT support --output-format; appending it makes "
@@ -168,6 +170,35 @@ def test_run_with_provider_agy_parses_plain_text_stdout(tmp_path, monkeypatch):
     assert text == "2 + 2 is 4."
     assert cost == 0.0  # agy --print does not surface usage stats
     assert model is None
+
+
+def test_run_with_provider_agy_pipes_large_prompt_instead_of_argv(tmp_path, monkeypatch):
+    """Large/sensitive prompts must go over stdin, not process-list-visible argv."""
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_body = "SECRET_CONTEXT " + ("x" * 10000)
+    prompt_file.write_text(prompt_body, encoding="utf-8")
+
+    fake_proc = MagicMock(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+
+    with (
+        patch(
+            "pdd.agentic_common._get_google_cli_binary",
+            return_value="/usr/local/bin/agy",
+        ),
+        patch("pdd.agentic_common._get_google_cli_name", return_value="agy"),
+        patch("pdd.agentic_common._subprocess_run", return_value=fake_proc) as run_mock,
+    ):
+        _run_with_provider(
+            "google", prompt_file, tmp_path, timeout=10, quiet=True,
+        )
+
+    invoked_cmd = run_mock.call_args.args[0]
+    assert all("SECRET_CONTEXT" not in arg for arg in invoked_cmd)
+    assert all(len(arg) < 1000 for arg in invoked_cmd)
+    assert run_mock.call_args.kwargs.get("input") == prompt_body
 
 
 @pytest.mark.parametrize("stdout, expected_marker", [
@@ -327,10 +358,10 @@ def test_agy_install_hint_in_cli_install_hint_table_is_none():
 # ---------------------------------------------------------------------------
 
 
-def test_get_google_cli_binary_auto_picks_agy_even_when_only_legacy_oauth(monkeypatch):
+def test_get_google_cli_binary_auto_picks_gemini_when_only_legacy_oauth(monkeypatch):
     """When both binaries are installed and only the legacy Gemini OAuth
-    file is populated, `auto` mode still returns agy. Legacy gemini is now
-    an explicit rollback path (`PDD_GOOGLE_CLI=gemini`), not the default.
+    file is populated, `auto` mode returns gemini so runtime matches setup's
+    configured legacy credential.
     """
     monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
@@ -355,8 +386,8 @@ def test_get_google_cli_binary_auto_picks_agy_even_when_only_legacy_oauth(monkey
     ):
         resolved = agentic_common._get_google_cli_binary(env={})
 
-    assert resolved == "/usr/local/bin/agy", (
-        f"Expected agy as the default Google CLI, got {resolved!r}"
+    assert resolved == "/usr/local/bin/gemini", (
+        f"Expected legacy gemini for legacy-only OAuth, got {resolved!r}"
     )
 
 
@@ -822,6 +853,32 @@ def test_get_google_cli_binary_and_name_agree_with_only_gemini_key(monkeypatch):
     )
 
 
+def test_google_auto_uses_legacy_gemini_when_only_legacy_oauth(monkeypatch):
+    """Auto mode must not pick agy when only legacy Gemini OAuth can authenticate."""
+    monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
+    for key in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTIGRAVITY_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    _clear_google_vertex_env(monkeypatch)
+
+    from pdd import agentic_common
+
+    agy_path = "/usr/local/bin/agy"
+    gemini_path = "/usr/local/bin/gemini"
+
+    with (
+        patch.object(
+            agentic_common,
+            "_find_cli_binary",
+            lambda name: agy_path if name == "agy" else (gemini_path if name == "gemini" else None),
+        ),
+        patch.object(agentic_common, "_has_agy_oauth_credentials", lambda: False),
+        patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", lambda: True),
+    ):
+        assert agentic_common._get_google_cli_name() == "gemini"
+        assert agentic_common._get_google_cli_binary() == gemini_path
+        assert get_available_agents() == ["google"]
+
+
 # ---------------------------------------------------------------------------
 # Round-6 finding 2: PROVIDER_PRIMARY_KEY["google"] must be GOOGLE_API_KEY
 # ---------------------------------------------------------------------------
@@ -994,8 +1051,8 @@ def test_get_google_cli_name_auto_prefers_agy_with_agy_oauth(monkeypatch):
     assert name == "agy"
 
 
-def test_get_google_cli_name_auto_uses_agy_even_when_only_legacy_oauth(monkeypatch):
-    """In auto mode, use ``agy`` when installed even if only legacy OAuth exists."""
+def test_get_google_cli_name_auto_uses_gemini_when_only_legacy_oauth(monkeypatch):
+    """In auto mode, use ``gemini`` when the only auth is legacy OAuth."""
     from pdd import agentic_common
 
     monkeypatch.delenv("PDD_GOOGLE_CLI", raising=False)
@@ -1009,7 +1066,7 @@ def test_get_google_cli_name_auto_uses_agy_even_when_only_legacy_oauth(monkeypat
     ):
         name = agentic_common._get_google_cli_name()
 
-    assert name == "agy"
+    assert name == "gemini"
 
 
 def test_run_with_provider_agy_uses_agy_cmd_with_symlink_path(tmp_path, monkeypatch):

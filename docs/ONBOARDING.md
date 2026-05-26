@@ -373,7 +373,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
   ```
 - [ ] **Copilot/automated review comments addressed** - Review and resolve all automated review comments before requesting human review
 
-  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Gemini CLI, etc.) to automatically fix Copilot comments:
+  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Antigravity CLI, etc.) to automatically fix Copilot comments:
 
   ```bash
   # Example with Claude Code
