@@ -4,6 +4,7 @@ from __future__ import annotations
 Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import os
+import re
 import click
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -17,6 +18,16 @@ from ..user_story_tests import run_user_story_tests
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..operation_log import log_operation
+
+_GITHUB_ISSUE_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
+)
+
+
+def _is_github_issue_url(value: str) -> bool:
+    """Return True when value is a GitHub issue URL."""
+    return bool(_GITHUB_ISSUE_RE.match(value.strip()))
+
 
 def get_context_obj(ctx: click.Context) -> Dict[str, Any]:
     """Safely retrieve the context object, defaulting to empty dict if None."""
@@ -244,8 +255,12 @@ def bug(
             # Agentic mode
             if len(args) != 1:
                 raise click.UsageError("Agentic mode requires exactly one argument: the GitHub Issue URL.")
-            
+
             issue_url = args[0]
+            if clean_restart and not _is_github_issue_url(issue_url):
+                raise click.UsageError(
+                    "--clean-restart can only be used with an agentic GitHub issue URL."
+                )
             
             success, message, cost, model, changed_files = run_agentic_bug(
                 issue_url=issue_url,

@@ -168,6 +168,25 @@ def _find_worktree_for_issue(issue_number: int) -> Optional[Path]:
     return None
 
 
+def _clean_restart_working_directory(issue_number: int, quiet: bool) -> Path:
+    """Return a non-generated workspace when clean restart starts inside one."""
+    cwd = Path.cwd().resolve()
+    generated_names = {f"{prefix}-issue-{issue_number}" for prefix in _WORKTREE_PREFIXES}
+    for candidate in (cwd, *cwd.parents):
+        if (
+            candidate.name in generated_names
+            and candidate.parent.name == "worktrees"
+            and candidate.parent.parent.name == ".pdd"
+        ):
+            repo_root = candidate.parent.parent.parent.resolve()
+            if not quiet:
+                console.print(
+                    f"[blue]Clean restart requested; leaving stale worktree {candidate}.[/blue]"
+                )
+            return repo_root
+    return cwd
+
+
 def _get_current_branch(cwd: Path) -> str:
     """Return the current git branch for the provided working directory."""
     try:
@@ -197,6 +216,7 @@ def _find_working_directory(
     """Resolve the working directory and enforce branch-safety checks."""
     cwd = Path.cwd()
     if clean_restart:
+        cwd = _clean_restart_working_directory(issue_number, quiet)
         if not quiet:
             console.print(
                 "[blue]Clean restart requested; ignoring prior worktrees and branch hints.[/blue]"
