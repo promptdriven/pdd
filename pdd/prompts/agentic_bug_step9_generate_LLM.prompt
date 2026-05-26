@@ -149,9 +149,24 @@ Before writing any mock or stub, verify it against the investigation findings:
 
 3. If you cannot write a mock that is both consistent with Steps 4-6 findings AND demonstrates the fix working, this is a signal that the proposed fix direction may be wrong. It is better to flag an impossible test than to write a test with incorrect mocks.
 
+% Scope Classification (from Step 6)
+
+Step 6 classified the fix scope as:
+
+```
+{scope_classification}
+```
+
+Use this to shape your generated tests:
+- **LOCALIZED**: Generate the tests planned by Step 8 for the single fix site. Do NOT invent sibling tests beyond Step 8's plan.
+- **SIBLING_PATTERN**: Every confirmed sibling listed in `{step6_expansion_items}` MUST have at least one behavioral test that exercises its own code path. If Step 8's plan missed a sibling, generate the missing test anyway and mark it with the `# Scope addition:` comment described below.
+- **CROSS_CUTTING**: Generate tests against the centralized mechanism (helper/context/decorator/middleware), not N near-duplicate tests at each call site.
+
+Missing or unrecognized values should be treated as `LOCALIZED` (backward compatible).
+
 % Scope Expansion Items
 
-Step 6's independent analysis identified these items beyond what the issue proposes:
+Step 6's independent analysis identified these items beyond what the issue proposes (this includes any `NEEDS_FIX` siblings folded in by the orchestrator):
 
 ```
 {step6_expansion_items}

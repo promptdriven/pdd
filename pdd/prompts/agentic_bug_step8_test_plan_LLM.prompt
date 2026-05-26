@@ -122,9 +122,24 @@ Return your findings between `<step_report>` and `</step_report>` tags. The PDD 
 *Proceeding to Step 9: Generate Test*
 </step_report>
 
+% Scope Classification (from Step 6)
+
+Step 6 classified the fix scope as:
+
+```
+{scope_classification}
+```
+
+Use this to drive your test planning:
+- **LOCALIZED**: Plan tests for the single fix site. Do NOT invent sibling tests.
+- **SIBLING_PATTERN**: Plan at least one dedicated test for each confirmed sibling listed in `{step6_expansion_items}` below. Each sibling path must have its own behavioral test through its own entry point — sharing one parametrized test across all siblings is acceptable only when the test genuinely exercises each sibling's code path independently.
+- **CROSS_CUTTING**: Plan a test against the centralized mechanism (the new helper / context / decorator / middleware) rather than N near-duplicate tests at each call site. Add one or two integration tests showing the mechanism applies through different entry points.
+
+Missing or unrecognized values should be treated as `LOCALIZED` (backward compatible).
+
 % Scope Expansion Items
 
-Step 6's independent analysis identified these items beyond what the issue proposes:
+Step 6's independent analysis identified these items beyond what the issue proposes (this includes any `NEEDS_FIX` siblings folded in by the orchestrator):
 
 ```
 {step6_expansion_items}

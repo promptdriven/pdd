@@ -99,6 +99,29 @@ After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list t
 - This ensures Step 11 (E2E) and Step 12 (PR) know exactly which files to include
 - Step 12 prompt uses `{files_to_stage}` to display the explicit list of files to stage
 
+% Step 6 Scope Markers (issue #1208)
+
+After Step 6 completes, the orchestrator MUST parse three additional markers from raw output (outside the `<step_report>` block) in addition to the existing `FIX_LOCATIONS`, `EXPANSION_ITEMS`, and `PATTERN_SEARCH` markers:
+
+1. `SCOPE_CLASSIFICATION: LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING`
+   - Parse the first matching marker line.
+   - Normalize to upper-case and validate against the three allowed values.
+   - If missing or unrecognized, default to `LOCALIZED` (backward compatible with older Step 6 runs).
+   - Expose via `context["scope_classification"]` so Steps 8 and 9 can render `{scope_classification}` in their templates.
+
+2. `NEEDS_FIX: <path> | <reason>`
+   - Parse ALL matching lines (one sibling per line).
+   - For each line, capture the path token (before the first `|`) and the full reason text.
+   - Treat each parsed line as a confirmed sibling that must be added to the EXPANSION_ITEMS list passed to Steps 8 and 9 via `context["step6_expansion_items"]`.
+   - Fold `NEEDS_FIX` items into the existing EXPANSION_ITEMS string using comma separation, deduplicating against entries already present from the `EXPANSION_ITEMS:` marker.
+
+3. `SAFE_EVIDENCE: <path> | <line> | <reason>`
+   - Parse ALL matching lines for telemetry/audit purposes. SAFE_EVIDENCE entries are informational — they document the sibling search but are NOT added to `EXPANSION_ITEMS` or `FIX_LOCATIONS`.
+
+**Deterministic auto-downgrade.** If `SCOPE_CLASSIFICATION` is `SIBLING_PATTERN` but ZERO `NEEDS_FIX` lines were emitted, the orchestrator MUST downgrade the classification to `LOCALIZED` before threading it into Steps 8 and 9. This guards against partial sibling searches that would otherwise inflate scope without evidence. Log the downgrade so it appears in step output for debugging.
+
+**Threading.** The orchestrator must thread `scope_classification` into the context dict used to format Step 8 and Step 9 templates. Default to `"LOCALIZED"` in the initial context dict (alongside `fix_locations` and `step6_expansion_items`) so missing/early steps render cleanly.
+
 % Early Exit Conditions (Hard Stops)
 
 The orchestrator must parse step output to detect stop conditions:
