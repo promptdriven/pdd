@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 from rich.markup import escape
@@ -421,6 +421,137 @@ def _parse_expansion_items(step6_output: str) -> str:
             seen.add(cleaned)
             deduped.append(cleaned)
     return ", ".join(deduped) if deduped else "none"
+
+
+# Allowed scope-classification values (issue #1208).
+_SCOPE_CLASSIFICATIONS = {"LOCALIZED", "SIBLING_PATTERN", "CROSS_CUTTING"}
+
+
+def _parse_scope_classification(step6_output: str) -> str:
+    """Extract SCOPE_CLASSIFICATION from Step 6 output.
+
+    Returns one of LOCALIZED, SIBLING_PATTERN, CROSS_CUTTING. Defaults to
+    LOCALIZED if the marker is missing, empty, or unrecognized (backward
+    compatible with older Step 6 runs).
+    """
+    match = re.search(r"SCOPE_CLASSIFICATION:\s*(.+)", step6_output)
+    if not match:
+        return "LOCALIZED"
+    value = match.group(1).strip().upper()
+    # Strip trailing punctuation/comment text after the enum token.
+    value = re.split(r"[\s|#]", value, 1)[0] if value else value
+    if value in _SCOPE_CLASSIFICATIONS:
+        return value
+    return "LOCALIZED"
+
+
+def _parse_needs_fix(step6_output: str) -> List[Tuple[str, str]]:
+    """Parse NEEDS_FIX lines from Step 6 output (issue #1208).
+
+    Each NEEDS_FIX line has the form `NEEDS_FIX: <path> | <reason>`. Returns a
+    list of (path, reason) tuples. Lines missing a `|` separator are treated as
+    `(path, "")`. Empty paths are skipped.
+    """
+    results: List[Tuple[str, str]] = []
+    for match in re.finditer(r"NEEDS_FIX:\s*(.+)", step6_output):
+        raw = match.group(1).strip()
+        if not raw:
+            continue
+        if "|" in raw:
+            path, _, reason = raw.partition("|")
+        else:
+            path, reason = raw, ""
+        path = path.strip().strip("`")
+        reason = reason.strip()
+        if path:
+            results.append((path, reason))
+    return results
+
+
+def _parse_safe_evidence(step6_output: str) -> List[Tuple[str, str, str]]:
+    """Parse SAFE_EVIDENCE lines from Step 6 output (issue #1208).
+
+    Each SAFE_EVIDENCE line has the form
+    `SAFE_EVIDENCE: <path> | <line> | <reason>`. Returns (path, line, reason)
+    tuples. Telemetry-only; not folded into EXPANSION_ITEMS.
+    """
+    results: List[Tuple[str, str, str]] = []
+    for match in re.finditer(r"SAFE_EVIDENCE:\s*(.+)", step6_output):
+        raw = match.group(1).strip()
+        if not raw:
+            continue
+        parts = [p.strip() for p in raw.split("|", 2)]
+        path = parts[0].strip("`") if parts else ""
+        line = parts[1] if len(parts) > 1 else ""
+        reason = parts[2] if len(parts) > 2 else ""
+        if path:
+            results.append((path, line, reason))
+    return results
+
+
+def _merge_needs_fix_into_expansion(
+    expansion: str,
+    needs_fix: List[Tuple[str, str]],
+) -> str:
+    """Fold NEEDS_FIX sibling paths into the EXPANSION_ITEMS string.
+
+    Each sibling is rendered as `<path>: <reason>` (or just `<path>` if no
+    reason was provided) and appended to the existing comma-separated list.
+    Entries already present in `expansion` are not duplicated. Returns "none"
+    only when both inputs are empty.
+    """
+    existing: List[str] = []
+    seen_keys: set[str] = set()
+    if expansion and expansion.lower() != "none":
+        for item in expansion.split(","):
+            cleaned = item.strip()
+            if cleaned:
+                key = cleaned.split(":", 1)[0].strip().strip("`").lower()
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    existing.append(cleaned)
+    for path, reason in needs_fix:
+        key = path.strip().strip("`").lower()
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        existing.append(f"{path}: {reason}" if reason else path)
+    return ", ".join(existing) if existing else "none"
+
+
+def _apply_step6_scope_markers(step6_output: str, context: Dict[str, Any]) -> str:
+    """Parse Step 6 scope markers and update context (issue #1208).
+
+    Parses SCOPE_CLASSIFICATION, NEEDS_FIX, and SAFE_EVIDENCE markers; folds
+    NEEDS_FIX paths into ``context["step6_expansion_items"]``; deterministically
+    downgrades SIBLING_PATTERN with zero NEEDS_FIX to LOCALIZED; and exposes the
+    final value via ``context["scope_classification"]``. Returns the final
+    classification for callers that want to log it. SAFE_EVIDENCE is parsed for
+    telemetry only and never added to EXPANSION_ITEMS or FIX_LOCATIONS.
+    """
+    classification = _parse_scope_classification(step6_output)
+    needs_fix = _parse_needs_fix(step6_output)
+    safe_evidence = _parse_safe_evidence(step6_output)
+
+    if classification == "SIBLING_PATTERN" and not needs_fix:
+        logger.warning(
+            "Step 6 declared SCOPE_CLASSIFICATION: SIBLING_PATTERN but emitted "
+            "zero NEEDS_FIX lines — auto-downgrading to LOCALIZED (issue #1208)"
+        )
+        classification = "LOCALIZED"
+
+    context["scope_classification"] = classification
+    if needs_fix:
+        current = context.get("step6_expansion_items", "none")
+        context["step6_expansion_items"] = _merge_needs_fix_into_expansion(
+            current, needs_fix
+        )
+    if safe_evidence:
+        logger.info(
+            "Step 6 SAFE_EVIDENCE telemetry: %d look-alike path(s) recorded",
+            len(safe_evidence),
+        )
+    return classification
 
 
 # Maximum number of unclassified grep matches to process.
@@ -1575,6 +1706,7 @@ def run_agentic_bug_orchestrator(
         "step5_reproduction_tests": "",
         "fix_locations": "none",
         "step6_expansion_items": "none",
+        "scope_classification": "LOCALIZED",
         "step9_test_verification": "",
     }
 
@@ -1625,6 +1757,9 @@ def run_agentic_bug_orchestrator(
         fix_locs = _parse_fix_locations(context["step6_output"])
         context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
         context["step6_expansion_items"] = _parse_expansion_items(context["step6_output"])
+        # Re-apply Step 6 scope markers (issue #1208) on resume so
+        # scope_classification + folded NEEDS_FIX siblings reach Steps 8/9.
+        _apply_step6_scope_markers(context["step6_output"], context)
 
     # Step 7
     if "step7_output" in context:
@@ -2131,6 +2266,13 @@ def run_agentic_bug_orchestrator(
                     "Step 6 output missing EXPANSION_ITEMS marker — "
                     "scope expansion check will be skipped for downstream steps"
                 )
+
+            # Issue #1208: parse SCOPE_CLASSIFICATION + NEEDS_FIX/SAFE_EVIDENCE
+            # markers, fold confirmed siblings into step6_expansion_items, and
+            # auto-downgrade SIBLING_PATTERN with zero NEEDS_FIX to LOCALIZED.
+            scope_value = _apply_step6_scope_markers(step_output, context)
+            if not quiet:
+                console.print(f"  → Scope classification: {scope_value}")
 
             # Deterministic grep verification for repeating-pattern bugs.
             pattern_search = _parse_pattern_search(step_output)

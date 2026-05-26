@@ -7314,3 +7314,128 @@ def test_step9_rewrite_same_length_with_new_pattern_triggers_retry(
         f"Same-length rewrite with new pattern must trigger at least one retry. "
         f"Got {step9_calls} step9 calls. This is gltanaka's second review case."
     )
+
+
+class TestStep6ScopeClassification:
+    """Issue #1208: parse SCOPE_CLASSIFICATION + NEEDS_FIX / SAFE_EVIDENCE markers."""
+
+    def test_localized_default_when_marker_missing(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("no markers here") == "LOCALIZED"
+
+    def test_parses_three_classifications(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: LOCALIZED") == "LOCALIZED"
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: SIBLING_PATTERN") == "SIBLING_PATTERN"
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: CROSS_CUTTING") == "CROSS_CUTTING"
+
+    def test_unrecognized_classification_defaults_to_localized(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: BOGUS") == "LOCALIZED"
+
+    def test_classification_is_case_insensitive(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: sibling_pattern") == "SIBLING_PATTERN"
+
+    def test_parse_needs_fix_lines(self):
+        from pdd.agentic_bug_orchestrator import _parse_needs_fix
+
+        output = (
+            "NEEDS_FIX: pdd/foo.py | shares the same helper\n"
+            "NEEDS_FIX: pdd/bar.py | state symmetry mismatch\n"
+        )
+        assert _parse_needs_fix(output) == [
+            ("pdd/foo.py", "shares the same helper"),
+            ("pdd/bar.py", "state symmetry mismatch"),
+        ]
+
+    def test_parse_needs_fix_without_reason(self):
+        from pdd.agentic_bug_orchestrator import _parse_needs_fix
+
+        assert _parse_needs_fix("NEEDS_FIX: pdd/foo.py") == [("pdd/foo.py", "")]
+
+    def test_parse_safe_evidence_lines(self):
+        from pdd.agentic_bug_orchestrator import _parse_safe_evidence
+
+        output = "SAFE_EVIDENCE: pdd/baz.py | 42 | guarded by feature flag\n"
+        assert _parse_safe_evidence(output) == [
+            ("pdd/baz.py", "42", "guarded by feature flag"),
+        ]
+
+
+class TestStep6ApplyScopeMarkers:
+    """Issue #1208: orchestrator threading + auto-downgrade logic."""
+
+    def test_localized_no_siblings_no_expansion(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers("SCOPE_CLASSIFICATION: LOCALIZED", ctx)
+        assert result == "LOCALIZED"
+        assert ctx["scope_classification"] == "LOCALIZED"
+        assert ctx["step6_expansion_items"] == "none"
+
+    def test_sibling_pattern_folds_needs_fix_into_expansion(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        output = (
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "NEEDS_FIX: pdd/foo.py | same helper\n"
+            "NEEDS_FIX: pdd/bar.py | same helper\n"
+        )
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers(output, ctx)
+        assert result == "SIBLING_PATTERN"
+        assert ctx["scope_classification"] == "SIBLING_PATTERN"
+        items = ctx["step6_expansion_items"]
+        assert "pdd/foo.py" in items
+        assert "pdd/bar.py" in items
+        assert "same helper" in items
+
+    def test_sibling_pattern_with_zero_needs_fix_auto_downgrades(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers("SCOPE_CLASSIFICATION: SIBLING_PATTERN", ctx)
+        assert result == "LOCALIZED"
+        assert ctx["scope_classification"] == "LOCALIZED"
+
+    def test_cross_cutting_preserved(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers("SCOPE_CLASSIFICATION: CROSS_CUTTING", ctx)
+        assert result == "CROSS_CUTTING"
+        assert ctx["scope_classification"] == "CROSS_CUTTING"
+
+    def test_needs_fix_dedupes_against_existing_expansion_items(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        output = (
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "NEEDS_FIX: pdd/foo.py | additional context\n"
+            "NEEDS_FIX: pdd/bar.py | new sibling\n"
+        )
+        ctx = {"step6_expansion_items": "pdd/foo.py: original reason"}
+        _apply_step6_scope_markers(output, ctx)
+        items = ctx["step6_expansion_items"]
+        # pdd/foo.py appears exactly once (existing entry preserved)
+        assert items.count("pdd/foo.py") == 1
+        assert "original reason" in items
+        assert "pdd/bar.py" in items
+
+    def test_safe_evidence_not_added_to_expansion(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        output = (
+            "SCOPE_CLASSIFICATION: LOCALIZED\n"
+            "SAFE_EVIDENCE: pdd/baz.py | 7 | guarded\n"
+        )
+        ctx = {"step6_expansion_items": "none"}
+        _apply_step6_scope_markers(output, ctx)
+        assert ctx["step6_expansion_items"] == "none"
+        assert ctx["scope_classification"] == "LOCALIZED"
