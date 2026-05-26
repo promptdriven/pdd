@@ -250,7 +250,6 @@ _VOCABULARY_SECTIONS: frozenset[str] = frozenset({
     "vocabulary",
     "glossary",
     "definitions",
-    "covers",
 })
 
 # Sections where we additionally check for observable-outcome verbs
@@ -483,8 +482,8 @@ def scan_stories(stories_dir: Path, *, strict: bool = False) -> list[LintResult]
     """
     Scan all story__*.md files under stories_dir for vague acceptance criteria.
 
-    Each story's ## Glossary / ## Definitions / ## Covers section supplies
-    the vocabulary. Missing sections produce zero issues.
+    Each story's ## Glossary / ## Definitions section supplies the vocabulary.
+    ``## Covers`` is coverage metadata rather than a term-definition source.
     """
     if not stories_dir.is_dir():
         return []
@@ -518,7 +517,6 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals,too-many-argument
     """
     try:
         from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
-        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
 
         template_path = Path(__file__).parent / "prompts" / "prompt_lint_LLM.prompt"
         if not template_path.exists():
@@ -532,7 +530,6 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals,too-many-argument
         filled = template.replace("{prompt_content}", prompt_content).replace(
             "{vague_terms_list}", vague_terms_list
         )
-        filled = preprocess(filled, recursive=False, double_curly_brackets=False)
 
         result = llm_invoke(
             messages=[{"role": "user", "content": filled}],

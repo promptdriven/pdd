@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from pdd.cli import cli
 from pdd.commands.checkup import checkup
+from pdd.prompt_lint import run_llm_ambiguity_pass
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "prompt_lint"
 REPO_ROOT = Path(__file__).parents[2]
@@ -24,6 +25,31 @@ def test_prompt_lint_is_registered_on_public_cli() -> None:
     assert result.exit_code == 0
     assert "Lint prompts and user stories" in result.output
     assert "--stories" in result.output
+
+
+def test_prompt_group_is_registered_on_public_cli() -> None:
+    result = CliRunner().invoke(cli, ["--quiet", "prompt", "--help"])
+
+    assert result.exit_code == 0
+    assert "lint" in result.output
+
+
+def test_checkup_lint_help_delegates_to_prompt_lint() -> None:
+    result = CliRunner().invoke(cli, ["--quiet", "checkup", "lint", "--help"])
+
+    assert result.exit_code == 0
+    assert "Lint prompts and user stories" in result.output
+    assert "--stories" in result.output
+    assert "--ambiguity" in result.output
+    assert "--llm" in result.output
+
+
+def test_checkup_help_remains_available_with_lint_alias() -> None:
+    result = CliRunner().invoke(cli, ["--quiet", "checkup", "--help"])
+
+    assert result.exit_code == 0
+    assert "Run agentic health checkup" in result.output
+    assert "--review-loop" in result.output
 
 
 def test_checkup_lint_clean_prompt_json() -> None:
@@ -67,7 +93,7 @@ def test_checkup_lint_ambiguity_never_writes_without_explicit_apply(
     prompt = tmp_path / "vague_undefined.prompt"
     prompt.write_bytes((FIXTURES / "vague_undefined.prompt").read_bytes())
     before = prompt.read_bytes()
-    args = ["lint", "--ambiguity"]
+    args = ["lint", "--ambiguity", "--llm"]
     if as_json:
         args.append("--json")
     args.append(str(prompt))
@@ -77,6 +103,45 @@ def test_checkup_lint_ambiguity_never_writes_without_explicit_apply(
 
     assert result.exit_code == 1
     assert prompt.read_bytes() == before
+
+
+def test_prompt_lint_ambiguity_alone_does_not_run_llm() -> None:
+    with patch("pdd.commands.prompt.run_llm_ambiguity_pass") as llm_pass:
+        result = CliRunner().invoke(
+            cli,
+            ["--quiet", "prompt", "lint", "--ambiguity", str(FIXTURES / "clean.prompt")],
+        )
+
+    assert result.exit_code == 0
+    llm_pass.assert_not_called()
+
+
+def test_prompt_lint_llm_requires_ambiguity() -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["--quiet", "prompt", "lint", "--llm", str(FIXTURES / "clean.prompt")],
+    )
+
+    assert result.exit_code == 2
+    assert "--llm requires --ambiguity" in result.output
+
+
+def test_llm_ambiguity_pass_treats_directives_as_inert_text(tmp_path: Path) -> None:
+    prompt = tmp_path / "directive.prompt"
+    prompt.write_text(
+        "<contract_rules>\n<shell>printf SIDE_EFFECT</shell>\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+
+    with (
+        patch("pdd.llm_invoke.llm_invoke", return_value={"result": "[]"}) as invoke,
+        patch("pdd.preprocess.preprocess") as preprocess,
+    ):
+        issues = run_llm_ambiguity_pass(prompt, use_cloud=True)
+
+    assert issues == []
+    preprocess.assert_not_called()
+    assert "<shell>printf SIDE_EFFECT</shell>" in invoke.call_args.kwargs["messages"][0]["content"]
 
 
 def test_prompt_lint_stories_reports_vague_acceptance_criteria() -> None:
@@ -93,7 +158,7 @@ def test_prompt_lint_stories_reports_vague_acceptance_criteria() -> None:
     assert {"authorized", "valid", "duplicate", "gracefully", "complete", "successful"} <= vague_terms
 
 
-def test_prompt_lint_story_glossary_and_covers_suppress_defined_terms() -> None:
+def test_prompt_lint_story_glossary_suppresses_defined_terms_but_covers_does_not() -> None:
     result = CliRunner().invoke(
         cli,
         ["--quiet", "prompt", "lint", "--stories", str(FIXTURES), "--json"],
@@ -101,7 +166,31 @@ def test_prompt_lint_story_glossary_and_covers_suppress_defined_terms() -> None:
 
     payload = {Path(item["path"]).name: item for item in json.loads(result.output)}
     assert payload["story__clean.md"]["issues"] == []
-    assert payload["story__covers.md"]["issues"] == []
+    covers_terms = {issue["term"] for issue in payload["story__covers.md"]["issues"]}
+    assert {"authorized", "valid", "duplicate", "active"} <= covers_terms
+
+
+def test_prompt_lint_real_cli_help() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "true",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pdd", "prompt", "lint", "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Lint prompts and user stories" in result.stdout
+    assert "--stories" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -143,3 +232,36 @@ def test_checkup_lint_real_cli_json_stdout_is_parseable_only(
     assert result.returncode == expected_exit_code
     payload = json.loads(result.stdout)
     assert isinstance(payload, list)
+
+
+def test_checkup_lint_stories_alias_matches_prompt_lint() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "true",
+        }
+    )
+    for command in (["prompt", "lint"], ["checkup", "lint"]):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pdd",
+                *command,
+                "--json",
+                "--stories",
+                str(FIXTURES),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 1
+        payload = {Path(item["path"]).name: item for item in json.loads(result.stdout)}
+        assert payload["story__vague_criteria.md"]["warn_count"] > 0
+        assert payload["story__clean.md"]["issues"] == []
+        assert payload["story__covers.md"]["warn_count"] > 0

@@ -19,6 +19,7 @@ from .prompt import prompt_lint
 @click.command(
     "checkup",
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    add_help_option=False,
 )
 @click.argument("target", required=False, default=None)
 @click.option(
@@ -291,6 +292,15 @@ from .prompt import prompt_lint
         "can co-evolve without breaking signature stability."
     ),
 )
+@click.option(
+    "--help",
+    "-h",
+    "show_help",
+    is_flag=True,
+    is_eager=True,
+    default=False,
+    help="Show this message and exit.",
+)
 @click.pass_context
 @track_cost
 def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
@@ -325,6 +335,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_gates: bool,
     gate_timeout: float,
     gate_allow: Tuple[str, ...],
+    show_help: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -338,17 +349,26 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
-    Prompt lint:
-      pdd checkup lint [OPTIONS] TARGET
+    Prompt lint (alias):
+      pdd checkup lint …  →  same as  pdd prompt lint …
     Contract checks:
       pdd checkup contract check [OPTIONS] TARGET
     """
     ctx.ensure_object(dict)
 
+    if show_help and target != "lint":
+        click.echo(ctx.command.get_help(ctx))
+        return None
+
     if target == "lint":
         lint_args = list(ctx.args)
         if strict:
             lint_args.insert(0, "--strict")
+        if not lint_args or show_help:
+            click.echo(
+                prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
+            )
+            return None
         exit_code = prompt_lint.main(
             args=lint_args,
             prog_name="pdd checkup lint",
