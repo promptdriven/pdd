@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -21,7 +21,7 @@
 Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
 
 % Requirements
-1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -48,6 +48,23 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
 13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
 14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+15. **Clean Restart Mode** (`clean_restart=True`): When set by the caller, the orchestrator MUST perform a clean restart for this issue *before* the normal state-load / PR-guard / step-loop entry path runs:
+    - At entry (before `load_workflow_state`), call `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` to discard any persisted local + GitHub state from a prior run on this issue.
+    - Skip the **Existing PR Guard** (Requirement 12) entirely — a clean restart explicitly wants to ignore the previously generated `change/issue-{N}` branch and PR.
+    - Skip the **Stale State Detection** (Requirement 13) entirely — state has already been cleared, and `issue_updated_at` comparison would be meaningless.
+    - Force `start_step = 1` regardless of any partially recovered state (loaded state, if present, MUST NOT cause step-skipping in this mode).
+    - Force the worktree base ref. Without `clean_restart`, `_setup_worktree` deliberately reuses `origin/change/issue-{N}` as the base when that remote branch already exists, to preserve cross-machine resume (so a second machine inherits the first machine's prior commits). With `clean_restart=True` this reuse is exactly the bug being fixed (prior stopped / wrong-model artifacts on the remote branch leak into the restart), so the orchestrator MUST pass `clean_restart=True` into `_setup_worktree`. The helper then (a) fetches `+refs/heads/change/issue-{N}:refs/remotes/origin/change/issue-{N}` to refresh Step 13 `--force-with-lease` metadata in the remote-tracking ref (not just `FETCH_HEAD`), (b) keeps `remote_exists=False` so the remote branch is never used as the worktree base, (c) forces the base to `_resolve_main_ref(git_root)`, (d) refuses to fall back to the literal `"HEAD"` (the user's current feature branch) — returning a clear error instead — and (e) refuses to fall through to the "reuse existing local branch" path when `git branch -D change/issue-{N}` fails because the branch is checked out in another worktree. The orchestrator MUST also NOT short-circuit worktree setup based on cached `state["worktree_path"]`.
+    - When stale state for a different worktree exists, treat it as fully discarded: do not reuse `state["github_comment_id"]`, `state["step_comments"]`, `state["preflight_drift_healed"]`, or any other resume-only marker.
+    - This mode is idempotent: a second `clean_restart=True` invocation MUST behave identically to the first (state is cleared each time at entry).
+    - **Persist the flag in workflow state**: immediately after initializing the fresh state dict (in the `else` branch), set `state["clean_restart"] = True` when `effective_clean_restart` is True — NOT just when the raw CLI `clean_restart` flag is True. This covers the case where staleness detection triggers a fresh-start during a persisted-clean-restart resume: the new state dict must still carry `clean_restart=True` so the next resume continues to skip the PR guard, use force-push semantics, and skip old-branch reuse. Using the raw CLI flag here would silently drop the flag whenever a stale-detect restart occurs mid-clean-restart chain.
+    - **Compute `effective_clean_restart` early** (immediately after `load_workflow_state`, before the PR guard): `effective_clean_restart = clean_restart or bool((state or {}).get("clean_restart", False))`. This single variable MUST be used in place of the raw `clean_restart` CLI flag for: (a) the Existing PR Guard, (c) both `_setup_worktree` call sites, (d) the Step 13 context, and (e) every `save_workflow_state(..., dedupe=...)` call. **EXCEPTION**: Stale State Detection (Requirement 13) MUST use the raw `clean_restart` CLI flag — NOT `effective_clean_restart`. When the CLI flag is True, the pre-clear already ran so the check is meaningless. When only the persisted flag is True (resume path), the user may have added issue comments between the stopped run and the resume; those would be silently ignored if staleness detection is skipped. The state-initialization branch (`if state is not None and not clean_restart`) also stays on the raw CLI flag — a resume MUST still load the prior step outputs from state, not start fresh.
+    - Duplicate state-comment hazard: forward `dedupe=effective_clean_restart` to every `save_workflow_state` call. The first save (when `github_comment_id` is None) then finds ALL existing state comments for this (issue, workflow), PATCHes the most-recent in place, and DELETEs the rest. This closes the race where a concurrent worker re-creates a state comment in the gap between the pre-clear sweep and the first save, leaving two valid markers that a future normal resume could pick from at random. Once `github_comment_id` is bound (after the first save), the dedupe flag becomes a no-op because saves take the PATCH-by-id path. Note: `github_clear_state` now deletes EVERY matching state comment by default (not just the first), so the pre-clear guarantee holds even without `dedupe=True`. The on-save dedupe still matters because a comment can be re-created BETWEEN clear and save, including when a plain resume inherits `clean_restart=True` from persisted state. Post-first-save concurrent-worker races (where two workers hold valid `github_comment_id`s on different physical comments) are out of scope here.
+16. **Mode-Aware Startup Comment**: Immediately after the worktree is set up and before Step 1 runs, post exactly one trusted startup comment to the issue via `post_step_comment_once` (using a reserved `step_num=0` key so it dedupes correctly on resume). The comment body MUST explicitly state:
+    - **Mode**: `"Clean restart"` when `clean_restart=True`, otherwise `"Resuming from step {start_step}"` if `start_step > 1`, otherwise `"Starting fresh"`.
+    - **Model**: the resolved model name (or `"unknown"` if not yet determined at startup).
+    - **Base branch**: the result of `_resolve_main_ref_name(git_root)` — returns the branch name (e.g. `"origin/main"`) not the commit SHA, so the reader can verify the workflow started from the correct branch. Falls back to `"HEAD"` when no ref resolves.
+    - **Command**: `"pdd-issue (full change → sync flow)"`.
+    Wrap the body as a `## Step 0/13: Workflow Startup` header so it aligns with the existing per-step success comment format. Failure to post (gh CLI missing, network error) MUST be log-and-continue; never raise into the orchestrator loop.
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -183,7 +200,7 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits, **associated_documents** (list of doc paths discovered from the include graph + architecture BFS — LLM must emit `ASSOCIATED_DOCS_{MODIFIED,CONFLICTS,UNCHANGED}` markers, one bucket per doc)
 - Step 11 receives: issue_content, step9_output, **step10_output** (so DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers emitted by Step 10.5 reach the review loop), worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
-- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests, **clean_restart** (`"true"` or `"false"`) — Step 13 uses this to decide whether to force-push (`--force-with-lease`) and whether to look for an existing open PR to update in place rather than creating a new one
 
 % Dependency Context (Before Step 6)
 Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
@@ -358,11 +375,17 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
 1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
    - Resolve the main branch ref for use as worktree base
    - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
-   - For each, run `git rev-parse --verify <ref>` — return the commit hash on success
+   - For each, run `git rev-parse --verify <ref>` — return the **commit hash** on success
    - If none resolve, return the literal string `"HEAD"` as last resort
    - This prevents worktrees from being based on the user's current feature branch
 
-2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+1b. Helper function: `_resolve_main_ref_name(git_root: Path) -> str`
+   - Same probe order as `_resolve_main_ref` (`origin/main`, `origin/master`, `main`, `master`)
+   - Returns the **ref name** (e.g. `"origin/main"`) instead of the commit hash
+   - Used for human-readable display (e.g. the Req 16 startup comment's "Base branch" field)
+   - Falls back to the literal string `"HEAD"` when no ref resolves
+
+2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, *, clean_restart: bool = False) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/change-issue-{issue_number}/` relative to git root
    - Branch name: `change/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
@@ -372,11 +395,12 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
      - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
      - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add --force {path} {branch}` (without `-b` flag, `--force` required because git refuses to checkout a branch already in use by another worktree)
    - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
+   - When `clean_restart=True`, fetch `+refs/heads/change/issue-{issue_number}:refs/remotes/origin/change/issue-{issue_number}` to refresh force-with-lease metadata in the remote-tracking ref for Step 13, but do not reuse it as the worktree base; always create the worktree from `_resolve_main_ref(git_root)` so previous branch artifacts cannot leak into the fresh run
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 3. In orchestrator loop, before Step 9:
    - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
-   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=effective_clean_restart)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 9-13
    - Add `worktree_path` to context dict (for Steps 9-13 prompt formatting)
@@ -388,10 +412,12 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
    - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
    - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+   - `_normalize_pr_base_branch(ref_name: str) -> str` - Convert `_resolve_main_ref_name` output into a GitHub PR base branch by stripping a leading `origin/`, returning concrete names like `main` or `master`, and falling back to `main` only when no named ref resolves
    - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain=v1 -z --untracked-files=all`, parsed via `pdd.git_porcelain.parse_porcelain_z` so paths with spaces, embedded quotes, or a literal `" -> "` substring round-trip verbatim (the old text-mode `--porcelain` output is lossy — see issue #1080). Use the new-side path verbatim. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits). Skip temp files matching `.agentic_prompt_*`.
    - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
    - `_check_existing_pr(repo_owner, repo_name, issue_number) -> Optional[str]` - Use `gh pr list` to check for open PR with `head:change/issue-{issue_number}`. Return PR URL if found.
    - `_fetch_issue_updated_at(repo_owner, repo_name, issue_number) -> str` - Fetch current `updated_at` timestamp for the GitHub issue via `gh api`. Used after clarification stops to capture the timestamp AFTER the bot's own comment.
+   - Before Step 13, set context key `base_branch` from `_normalize_pr_base_branch(_resolve_main_ref_name(...))` and require the Step 13 prompt to use `gh pr create --base {base_branch}` rather than hardcoding `main`.
 
 % Console Output
 

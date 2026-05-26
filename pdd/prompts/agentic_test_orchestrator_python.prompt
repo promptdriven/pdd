@@ -14,6 +14,7 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
     - Clear state upon successful completion.
 3. **Workspace Isolation**:
     - Automatically create and manage isolated git worktrees for each issue (branch name format: `test/issue-{number}`).
+    - When `clean_restart=True`, fetch `+refs/heads/test/issue-{number}:refs/remotes/origin/test/issue-{number}` for Step 17 `--force-with-lease` safety, create the test worktree from the resolved default branch (`origin/main`, `origin/master`, `main`, then `master`) rather than current `HEAD`, and fail clearly if no default branch ref resolves.
     - Handle cleanup of existing worktrees/branches to ensure a clean state.
 4. **Context Propagation**:
     - Parse tags from LLM outputs (e.g., `FILES_CREATED`, `TEST_TYPE`, `STOP_CONDITION`).
@@ -59,3 +60,4 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 
 # Deliverable
 A Python module named `agentic_test_orchestrator.py` containing the primary entry point `run_agentic_test_orchestrator`. The function must return a tuple: `(success: bool, message: str, total_cost: float, model: str, changed_files: List[str])`.
+The entry point must accept `clean_restart: bool = False`; when true, call `clear_workflow_state(...)` before any `load_workflow_state(...)`, start from fresh in-memory state even if the clear fails, save `state["clean_restart"] = True`, post a visible Step 0 startup comment with `Mode: Clean restart`, pass the effective clean-restart flag into `_setup_worktree(...)` so stale generated branches cannot become the worktree base, and include the effective flag in the Step 17 submit-PR context so the prompt uses `git push --force-with-lease` plus existing-PR update handling. If a later normal resume loads `clean_restart=True` from state, keep using clean worktree and PR semantics.

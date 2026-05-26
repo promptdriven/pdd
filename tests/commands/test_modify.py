@@ -191,6 +191,15 @@ def test_change_agentic_invalid_args(runner, mock_run_agentic_change, mock_handl
     # Verify it didn't call the agentic runner
     mock_run_agentic_change.assert_not_called()
 
+
+def test_change_clean_restart_rejects_non_issue_url(runner, mock_run_agentic_change):
+    """--clean-restart should only run with a GitHub issue URL."""
+    result = runner.invoke(change, ["--clean-restart", "not-a-url"])
+
+    assert result.exit_code == 2
+    assert "--clean-restart can only be used" in result.output
+    mock_run_agentic_change.assert_not_called()
+
 def test_change_manual_standard_success(runner, mock_change_main, mock_path_exists):
     """Test manual mode (standard) with 3 arguments."""
     mock_change_main.return_value = ("Modified Prompt", 0.5, "gpt-3.5")

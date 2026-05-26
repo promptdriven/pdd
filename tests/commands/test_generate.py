@@ -542,6 +542,28 @@ def test_test_agentic_mode_options(runner, mock_agentic_test):
     assert kwargs["use_github_state"] is False
 
 
+def test_test_agentic_mode_clean_restart(runner, mock_agentic_test):
+    """Test 'test' command forwards --clean-restart in Agentic mode."""
+    url = "https://github.com/user/repo/issues/1"
+    result = runner.invoke(generate_module.test, [url, "--clean-restart"])
+
+    assert result.exit_code == 0
+    kwargs = mock_agentic_test.call_args[1]
+    assert kwargs["clean_restart"] is True
+
+
+def test_test_clean_restart_rejects_non_issue_http_url(runner, mock_agentic_test):
+    """--clean-restart should only run for a GitHub issue URL."""
+    result = runner.invoke(
+        generate_module.test,
+        ["https://example.com/not-an-issue", "--clean-restart"],
+    )
+
+    assert result.exit_code != 0
+    assert "--clean-restart can only be used" in result.output
+    mock_agentic_test.assert_not_called()
+
+
 def test_test_agentic_mode_failure(runner):
     """Test 'test' command exits with 1 when agentic test generation fails (issue #593)."""
     url = "https://github.com/user/repo/issues/1"

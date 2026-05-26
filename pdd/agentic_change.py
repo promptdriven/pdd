@@ -164,6 +164,7 @@ def run_agentic_change(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
@@ -177,6 +178,10 @@ def run_agentic_change(
         quiet: If True, suppresses standard output.
         timeout_adder: Additional time to add to step timeouts.
         use_github_state: If True, persists state to GitHub comments.
+        reasoning_time: Optional maximum reasoning time for models that support it.
+        clean_restart: If True, discard any persisted state for this issue
+            and start a fresh full pdd-issue flow from the default base
+            branch (issue #1149).
 
     Returns:
         Tuple containing:
@@ -265,4 +270,5 @@ def run_agentic_change(
         timeout_adder=timeout_adder,
         use_github_state=use_github_state,
         reasoning_time=reasoning_time,
+        clean_restart=clean_restart,
     )

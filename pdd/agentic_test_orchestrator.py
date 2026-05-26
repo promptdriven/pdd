@@ -155,11 +155,27 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def _resolve_main_ref(git_root: Path) -> str:
+    """Resolve a default branch ref for clean-restart worktree bases."""
+    for ref in ("origin/main", "origin/master", "main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or ref
+    return "HEAD"
+
+
 def _setup_worktree(
     cwd: Path,
     issue_number: int,
     quiet: bool,
     console: Any,
+    *,
+    clean_restart: bool = False,
 ) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
@@ -189,10 +205,30 @@ def _setup_worktree(
         if not del_ok:
             return None, f"Failed to delete existing branch {branch_name}: {del_err}"
 
+    base_ref = "HEAD"
+    if clean_restart:
+        try:
+            lease_refspec = f"+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}"
+            subprocess.run(
+                ["git", "fetch", "origin", lease_refspec],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        base_ref = _resolve_main_ref(git_root)
+        if base_ref == "HEAD":
+            return None, (
+                "Cannot perform clean restart: no main/master ref resolves "
+                "(checked origin/main, origin/master, main, master). Refusing "
+                "to base the fresh test worktree on current HEAD."
+            )
+
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
             cwd=git_root,
             capture_output=True,
             check=True,
@@ -309,6 +345,7 @@ def run_agentic_test_orchestrator(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 18-step agentic test generation workflow.
@@ -325,8 +362,26 @@ def run_agentic_test_orchestrator(
         console.print(f"Generating tests for issue #{issue_number}: \"{issue_title}\"")
 
     state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(
-        cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
+    if clean_restart:
+        try:
+            clear_workflow_state(
+                cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: clean_restart pre-clear failed (continuing with fresh in-memory state): {e}[/yellow]"
+                )
+        state, loaded_gh_id = None, None
+    else:
+        state, loaded_gh_id = load_workflow_state(
+            cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state
+        )
+
+    persisted_clean_restart = (state or {}).get("clean_restart", False)
+    effective_clean_restart = clean_restart or persisted_clean_restart is True or (
+        isinstance(persisted_clean_restart, str)
+        and persisted_clean_restart.lower() == "true"
     )
 
     if state is not None:
@@ -347,6 +402,9 @@ def run_agentic_test_orchestrator(
         github_comment_id = None
         worktree_path = None
 
+    if effective_clean_restart:
+        state["clean_restart"] = True
+
     step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
 
@@ -358,7 +416,28 @@ def run_agentic_test_orchestrator(
         "issue_number": issue_number,
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "clean_restart": "true" if effective_clean_restart else "false",
     }
+
+    if clean_restart:
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=0,
+                body=(
+                    "## Step 0/18: Workflow Startup\n\n"
+                    "- **Mode**: Clean restart\n"
+                    f"- **Model**: {model_used}\n"
+                    "- **Command**: pdd test"
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(f"[yellow]Workflow startup comment failed: {exc}[/yellow]")
 
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
@@ -774,14 +853,20 @@ def run_agentic_test_orchestrator(
                 text=True,
                 check=True,
             ).stdout.strip()
-            if current_branch not in ["main", "master"] and not quiet:
+            if not effective_clean_restart and current_branch not in ["main", "master"] and not quiet:
                 console.print(
                     f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]"
                 )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-        wt_path, err = _setup_worktree(cwd, issue_number, quiet, console)
+        wt_path, err = _setup_worktree(
+            cwd,
+            issue_number,
+            quiet,
+            console,
+            clean_restart=effective_clean_restart,
+        )
         if not wt_path:
             return False, f"Failed to create worktree: {err}", total_cost, model_used, []
         worktree_path = wt_path

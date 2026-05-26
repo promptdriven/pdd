@@ -96,6 +96,16 @@ def mock_dependencies(temp_cwd):
 # Unit Tests
 # -----------------------------------------------------------------------------
 
+def test_step13_prompt_uses_resolved_base_branch():
+    """Step 13 must not hardcode main for repos whose default branch is master."""
+    prompt = Path("pdd/prompts/agentic_change_step13_create_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--base {base_branch}" in prompt
+    assert "--base main" not in prompt
+
+
 def test_orchestrator_happy_path(mock_dependencies, temp_cwd):
     """
     Test the full successful execution of the orchestrator (Steps 1-13).
@@ -886,7 +896,7 @@ def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
 
     # Patch _setup_worktree to return our worktree path and create prompt files
     # after the mock setup (avoiding the rmtree in real _setup_worktree)
-    def mock_setup_worktree(cwd, issue_num, quiet):
+    def mock_setup_worktree(cwd, issue_num, quiet, **kwargs):
         prompts_dir = worktree_path / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "foo_python.prompt").write_text(
@@ -2257,6 +2267,211 @@ def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_
     assert "step5" in labels_called, "Step 5 should be called when resuming"
 
 
+def test_persisted_clean_restart_resume_still_detects_stale_state(mock_dependencies, temp_cwd):
+    """Persisted clean_restart=True in workflow state must NOT suppress staleness
+    detection on a normal resume.
+
+    Scenario: A clean-restart run completes steps 1-6 and saves state with
+    clean_restart=True. The user adds new feedback to the issue. The user then
+    resumes with plain `pdd change` (no --clean-restart flag). The issue's
+    updated_at timestamp has changed; the orchestrator must detect the mismatch
+    and start fresh so the new feedback is incorporated, not silently ignored.
+
+    Finding from PR #1150 round-6 review: effective_clean_restart (which includes
+    persisted state) was used for the stale-detection guard, so a persisted
+    clean_restart=True would skip the staleness check, silently ignoring new
+    issue comments added between the stopped run and the resume.
+    """
+    mocks = mock_dependencies
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, f"ok {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    # Persisted state from a stopped clean restart, with an OLD issue timestamp.
+    old_timestamp = "2026-01-01T10:00:00Z"
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 6,
+            "step_outputs": {str(i): f"out{i}" for i in range(1, 7)},
+            "issue_updated_at": old_timestamp,
+            "worktree_path": str(temp_cwd),
+            "clean_restart": True,  # persisted from stopped clean restart
+        },
+        "ghid",
+    )
+
+    new_timestamp = "2026-01-02T09:00:00Z"  # issue updated after run stopped
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        return_value=True,
+    ):
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix with new comment",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=42,
+            issue_author="me",
+            issue_title="Bug",
+            issue_updated_at=new_timestamp,
+            cwd=temp_cwd,
+            quiet=True,
+            clean_restart=False,  # normal resume — flag NOT set
+        )
+
+    assert mocks["clear_state"].called, (
+        "Stale-state detection must run even when state['clean_restart']=True is persisted; "
+        "clear_workflow_state should have been called after detecting the timestamp mismatch"
+    )
+    labels = [c.kwargs.get("label", "") for c in mocks["run"].call_args_list]
+    assert "step1" in labels, (
+        "After stale-state clear, workflow must start from step 1 to incorporate new issue feedback; "
+        f"steps called: {labels}"
+    )
+
+
+def test_stale_detect_after_persisted_clean_restart_preserves_flag(mock_dependencies, temp_cwd):
+    """After a stale-state clear during a persisted-clean-restart resume, the fresh
+    state dict must still carry clean_restart=True.
+
+    Scenario: clean-restart run saves state with clean_restart=True through step 4.
+    Issue gets new feedback. User resumes normally. Stale detection fires, clears
+    state, and restarts from step 1. The new state must have clean_restart=True so
+    that the NEXT resume (if step 9+ fails again) still skips the PR guard, uses
+    --force-with-lease in worktree setup, and passes clean_restart='true' to Step 13.
+
+    Finding from PR #1150 round-7 review: the fresh-state branch used
+    `if clean_restart:` (raw CLI flag, which is False on a plain resume), so a
+    stale-detect restart silently dropped the persisted flag.
+    """
+    mocks = mock_dependencies
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, f"ok {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    # Persisted state from a stopped clean restart, with an OLD issue timestamp.
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 4,
+            "step_outputs": {str(i): f"out{i}" for i in range(1, 5)},
+            "issue_updated_at": "2026-01-01T10:00:00Z",
+            "worktree_path": str(temp_cwd),
+            "clean_restart": True,
+        },
+        "ghid",
+    )
+
+    saved_states: list = []
+
+    def capture_save(cwd, issue_number, wf_type, state, state_dir,
+                     repo_owner, repo_name, use_github_state=True,
+                     github_comment_id=None, **kwargs):
+        saved_states.append(dict(state))
+        return "ghid"
+
+    mocks["save_state"].side_effect = capture_save
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        return_value=True,
+    ):
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=42,
+            issue_author="me",
+            issue_title="Bug",
+            issue_updated_at="2026-01-02T09:00:00Z",  # newer than stored
+            cwd=temp_cwd,
+            quiet=True,
+            clean_restart=False,  # normal resume — stale detect fires
+        )
+
+    assert saved_states, "save_workflow_state was never called"
+    first_save = saved_states[0]
+    assert first_save.get("clean_restart") is True, (
+        "After stale-detect clear during persisted-clean-restart resume, the fresh "
+        f"state must still carry clean_restart=True; got {first_save.get('clean_restart')!r}"
+    )
+
+
+def test_startup_comment_shows_ref_name_not_sha(mock_dependencies, temp_cwd):
+    """The Req 16 startup comment must show the branch name (e.g. 'origin/main')
+    not the commit SHA. A SHA is opaque to readers trying to verify the workflow
+    started from the intended branch.
+
+    Finding from PR #1150 round-7 review: _resolve_main_ref() returns the SHA;
+    the startup comment was using it directly for the 'Base branch' field.
+    """
+    mocks = mock_dependencies
+    mocks["run"].side_effect = lambda **kw: (True, f"ok {kw.get('label','')}", 0.1, "gpt-4")
+
+    captured_bodies: list = []
+
+    def capture_startup(repo_owner, repo_name, issue_number, step_num,
+                        body, posted_steps, cwd):
+        if step_num == 0:
+            captured_bodies.append(body)
+        return True
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        side_effect=capture_startup,
+    ), patch(
+        "pdd.agentic_change_orchestrator._resolve_main_ref_name",
+        return_value="origin/main",
+    ):
+        run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=42,
+            issue_author="me",
+            issue_title="Bug",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert captured_bodies, "Step 0 startup comment was never posted"
+    body = captured_bodies[0]
+    assert "origin/main" in body, (
+        f"Startup comment 'Base branch' must show ref name ('origin/main'), not a SHA; "
+        f"got body={body!r}"
+    )
+    # Ensure it is not a SHA (40 hex chars)
+    import re
+    sha_pattern = re.compile(r'\b[0-9a-f]{40}\b')
+    assert not sha_pattern.search(body), (
+        f"Startup comment must not contain a raw SHA; body={body!r}"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Bug #448: JSON in step output causes KeyError in subsequent step formatting
 # -----------------------------------------------------------------------------
@@ -2811,7 +3026,7 @@ def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, tem
 
     saved_states = []
 
-    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+    def capture_save(cwd, issue_number, wf_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None, **kwargs):
         saved_states.append(dict(state))
         return None
 
@@ -3155,7 +3370,7 @@ def test_step10_postcheck_preserves_existing_architecture_params(mock_dependenci
         }
     ]
 
-    def mock_setup_worktree(cwd, issue_num, quiet):
+    def mock_setup_worktree(cwd, issue_num, quiet, **kwargs):
         prompts_dir = worktree_path / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "orchestrator_python.prompt").write_text(
@@ -3526,7 +3741,7 @@ def test_sync_order_does_not_clobber_existing_sync_order_sh(mock_dependencies, t
     mock_run.side_effect = side_effect_run
     mock_template_loader.return_value = "Mocked Prompt Template"
 
-    def mock_setup_worktree(cwd, issue_num, quiet):
+    def mock_setup_worktree(cwd, issue_num, quiet, **kwargs):
         prompts_dir = worktree_path / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         (prompts_dir / "foo_python.prompt").write_text(
@@ -5603,4 +5818,701 @@ class TestTrustedStepCommentPosting:
         assert 112 not in step_nums, (
             "Failed Step 12 should not have posted a fallback comment "
             f"or burned composite key 112. Saw: {step_nums}"
+        )
+
+
+# -----------------------------------------------------------------------------
+# Clean Restart Mode (issue #1149) — Req 15 + Req 16
+# -----------------------------------------------------------------------------
+
+class TestCleanRestartMode:
+    """Verify that clean_restart=True clears persisted state, skips the
+    existing-PR guard, forces start_step=1 even when prior state exists,
+    and posts the mode-aware Step 0 startup comment."""
+
+    def _make_side_effect(self):
+        """Run all steps successfully so the orchestrator reaches Step 13."""
+        def side_effect(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+            if label == "step10":
+                return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/owner/repo/pull/9", 0.1, "gpt-4")
+            return (True, f"output {label}", 0.1, "gpt-4")
+        return side_effect
+
+    def test_clean_restart_clears_state_before_load(self, mock_dependencies, temp_cwd):
+        """clean_restart=True must call clear_workflow_state BEFORE
+        load_workflow_state so the rest of the orchestrator sees an
+        empty slate. Verified by inspecting mock call order."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        parent_mock = MagicMock()
+        parent_mock.attach_mock(mocks["clear_state"], "clear_state")
+        parent_mock.attach_mock(mocks["load_state"], "load_state")
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        method_names = [call[0] for call in parent_mock.mock_calls]
+        first_clear = method_names.index("clear_state")
+        first_load = method_names.index("load_state")
+        assert first_clear < first_load, (
+            f"clear_workflow_state must be called BEFORE load_workflow_state "
+            f"under clean_restart=True; observed order: {method_names}"
+        )
+
+    def test_clean_restart_skips_existing_pr_guard(self, mock_dependencies, temp_cwd):
+        """clean_restart=True must NOT call _check_existing_pr — the
+        caller explicitly wants to ignore any previously generated PR."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Even if a previous PR DID exist, clean restart should not see it.
+        mocks["check_pr"].return_value = "https://github.com/owner/repo/pull/99"
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            success, msg, *_ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        assert mocks["check_pr"].call_count == 0, (
+            "Under clean_restart=True the existing-PR guard MUST be skipped; "
+            f"_check_existing_pr was called {mocks['check_pr'].call_count} time(s)."
+        )
+        # And we should not have early-returned with the "PR already exists" message.
+        assert "PR already exists" not in msg
+
+    def test_clean_restart_forces_start_at_step_one_despite_cached_state(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """clean_restart=True must run Step 1 even when load_workflow_state
+        somehow returns prior step-output cache (e.g. a race against another
+        worker that re-wrote state after the pre-clear)."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Simulate a stale resume cache surviving the pre-clear.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 8,
+                "step_outputs": {str(i): f"cached step{i}" for i in range(1, 9)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd / "stale-worktree"),
+            },
+            "ghid",
+        )
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        labels = [c.kwargs.get("label", "") for c in mocks["run"].call_args_list]
+        assert "step1" in labels, (
+            f"clean_restart=True must execute Step 1, not skip via cached "
+            f"last_completed_step=8. Labels seen: {labels}"
+        )
+
+    def test_clean_restart_posts_step0_startup_comment(self, mock_dependencies, temp_cwd):
+        """clean_restart=True must post the Req 16 startup comment with
+        step_num=0, Mode='Clean restart', and named base branch."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        step0_calls = [
+            c for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        ]
+        assert step0_calls, (
+            "Req 16: a startup comment with step_num=0 MUST be posted. "
+            f"Got step_nums={[c.kwargs.get('step_num') for c in mock_post_once.call_args_list]}"
+        )
+        body = step0_calls[0].kwargs.get("body", "")
+        assert "Step 0/13: Workflow Startup" in body
+        assert "Clean restart" in body, (
+            f"Startup comment body MUST advertise Mode='Clean restart' under "
+            f"clean_restart=True; got body={body!r}"
+        )
+        assert "Base branch" in body
+        assert "pdd-issue" in body
+
+    def test_normal_run_posts_starting_fresh_startup_comment(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """clean_restart=False + no prior state must post Mode='Starting fresh'."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        step0_calls = [
+            c for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        ]
+        assert step0_calls, "Step 0 startup comment must be posted on a fresh run."
+        body = step0_calls[0].kwargs.get("body", "")
+        assert "Starting fresh" in body, (
+            f"Body should advertise Mode='Starting fresh' on a fresh run; got {body!r}"
+        )
+
+    def test_resume_run_posts_resuming_startup_comment(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """clean_restart=False + cached state with last_completed_step>0
+        must post Mode='Resuming from step N'."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 7,
+                "step_outputs": {str(i): f"cached step{i}" for i in range(1, 8)},
+                "issue_updated_at": "",
+            },
+            "ghid",
+        )
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        step0_calls = [
+            c for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        ]
+        assert step0_calls, "Step 0 startup comment must be posted on a resume run."
+        body = step0_calls[0].kwargs.get("body", "")
+        assert "Resuming from step 8" in body, (
+            f"Body should advertise Mode='Resuming from step 8' (8 = "
+            f"last_completed_step 7 + 1); got {body!r}"
+        )
+
+    def test_clean_restart_is_persisted_in_workflow_state(self, mock_dependencies, temp_cwd):
+        """When clean_restart=True, the orchestrator must set state['clean_restart'] = True
+        so that a subsequent normal resume (no --clean-restart flag) can still pass
+        clean_restart='true' to Step 13 and use --force-with-lease + the existing-PR
+        update path."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+
+        saved_states: list = []
+
+        def capture_save(cwd, issue_number, wf_type, state, state_dir,
+                         repo_owner, repo_name, use_github_state=True,
+                         github_comment_id=None, **kwargs):
+            saved_states.append(dict(state))
+            return "ghid"
+
+        mocks["save_state"].side_effect = capture_save
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        assert saved_states, "save_workflow_state was never called"
+        first_save = saved_states[0]
+        assert first_save.get("clean_restart") is True, (
+            f"Expected state['clean_restart'] = True persisted on first save; "
+            f"got {first_save.get('clean_restart')!r}"
+        )
+
+    def test_step13_inherits_clean_restart_from_persisted_state(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """When state has clean_restart=True (persisted from a prior clean-restart
+        invocation) and the user resumes normally (clean_restart=False), Step 13
+        must still receive clean_restart='true' so it uses --force-with-lease
+        instead of a plain push that would reject on divergent remote history."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Simulate resumed state: prior clean restart ran through Step 12, failed
+        # at Step 13; clean_restart=True was persisted in the state comment.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 12,
+                "step_outputs": {str(i): f"cached step{i}" for i in range(1, 13)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd),
+                "clean_restart": True,
+            },
+            "ghid",
+        )
+
+        import pdd.agentic_change_orchestrator as _orch
+        real_sub = _orch.substitute_template_variables
+        captured_s13_ctx: list = []
+
+        def capturing_sub(template, ctx):
+            # Step 13 context is the first (and only) one with "clean_restart" key
+            if "clean_restart" in ctx and "sync_order_script" in ctx:
+                captured_s13_ctx.append(dict(ctx))
+            return real_sub(template, ctx)
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_change_orchestrator.substitute_template_variables",
+            side_effect=capturing_sub,
+        ), patch(
+            "pdd.agentic_change_orchestrator._resolve_main_ref_name",
+            return_value="origin/master",
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=False,  # normal resume — flag comes from state
+            )
+
+        assert captured_s13_ctx, (
+            "substitute_template_variables was not called with a Step 13 context "
+            "(expected both 'clean_restart' and 'sync_order_script' keys)"
+        )
+        ctx = captured_s13_ctx[0]
+        assert ctx["clean_restart"] == "true", (
+            f"Step 13 context must have clean_restart='true' from persisted state; "
+            f"got {ctx['clean_restart']!r}"
+        )
+        assert ctx["base_branch"] == "master", (
+            f"Step 13 context must derive PR base from resolved default ref; "
+            f"got {ctx['base_branch']!r}"
+        )
+
+    def test_resume_with_persisted_clean_restart_skips_pr_guard(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """When state["clean_restart"]=True was persisted by a prior clean-restart
+        invocation and the user resumes with plain pdd change (clean_restart=False CLI),
+        the existing-PR guard must be skipped — the PR from the stopped clean restart
+        should not block the continuation.
+
+        Finding from PR #1150 round-5 review: effective_clean_restart was only
+        computed near Step 13; the PR guard used only the raw CLI flag.
+        """
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # An open PR exists from the stopped clean-restart run.
+        mocks["check_pr"].return_value = "https://github.com/owner/repo/pull/77"
+        # Resumed state with clean_restart=True persisted.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 6,
+                "step_outputs": {str(i): f"out{i}" for i in range(1, 7)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd),
+                "clean_restart": True,
+            },
+            "ghid",
+        )
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            success, msg, *_ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=False,  # normal resume
+            )
+
+        assert mocks["check_pr"].call_count == 0, (
+            "Resume with persisted clean_restart=True MUST skip the PR guard; "
+            f"_check_existing_pr was called {mocks['check_pr'].call_count} time(s)."
+        )
+        assert "PR already exists" not in msg, (
+            f"Resuming clean-restart run must not early-return with 'PR already exists'; msg={msg!r}"
+        )
+
+    def test_resume_with_persisted_clean_restart_uses_effective_flag_for_worktree(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """When state["clean_restart"]=True is persisted and the user resumes with
+        plain pdd change, the worktree setup call must receive effective_clean_restart=True
+        so it skips branch reuse while preserving lease-safe fetch behavior and
+        forces the base ref from main — not reintroduce the old stopped-run branch.
+
+        Finding from PR #1150 round-5 review: both _setup_worktree call sites
+        passed only the raw CLI flag.
+        """
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # Resumed state: clean_restart was persisted, worktree no longer exists.
+        mocks["load_state"].return_value = (
+            {
+                "last_completed_step": 8,
+                "step_outputs": {str(i): f"out{i}" for i in range(1, 9)},
+                "issue_updated_at": "2026-01-01T00:00:00Z",
+                "worktree_path": str(temp_cwd / "gone-worktree"),  # does not exist
+                "clean_restart": True,
+            },
+            "ghid",
+        )
+
+        setup_calls: list = []
+
+        def fake_setup(cwd, issue_num, quiet, **kwargs):
+            setup_calls.append(kwargs)
+            return (temp_cwd, None)
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_change_orchestrator._setup_worktree",
+            side_effect=fake_setup,
+        ):
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=False,  # normal resume — flag comes from state
+            )
+
+        assert setup_calls, "_setup_worktree was not called (worktree path should have been missing)"
+        for call_kwargs in setup_calls:
+            assert call_kwargs.get("clean_restart") is True, (
+                f"_setup_worktree must receive clean_restart=True from effective flag; "
+                f"got {call_kwargs.get('clean_restart')!r}"
+            )
+        assert mocks["save_state"].call_args_list, "save_workflow_state was not called"
+        for call in mocks["save_state"].call_args_list:
+            assert call.kwargs.get("dedupe") is True, (
+                "save_workflow_state must use effective_clean_restart for dedupe "
+                f"on persisted clean-restart resumes; got {call.kwargs.get('dedupe')!r}"
+            )
+
+    def test_clean_restart_pre_clear_failure_is_warned_not_fatal(
+        self, mock_dependencies, temp_cwd,
+    ):
+        """If clear_workflow_state raises during the pre-clear, the
+        orchestrator must log-and-continue rather than abort: the user
+        explicitly asked for a clean restart, and the worst-case
+        consequence is just that we proceed with whatever state load
+        returns (which the defensive `not clean_restart` guard will
+        still ignore on the resume-data branch)."""
+        mocks = mock_dependencies
+        mocks["run"].side_effect = self._make_side_effect()
+        # First call raises (pre-clear), subsequent calls (e.g. stale-state
+        # path / end-of-run clear) succeed.
+        mocks["clear_state"].side_effect = [RuntimeError("github 500"), None, None]
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ):
+            success, msg, *_ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                issue_author="me",
+                issue_title="Bug",
+                cwd=temp_cwd,
+                quiet=True,
+                clean_restart=True,
+            )
+
+        assert success is True, (
+            f"Pre-clear failure under clean_restart MUST be log-and-continue; "
+            f"orchestrator aborted instead with msg={msg!r}"
+        )
+
+
+# -----------------------------------------------------------------------------
+# _setup_worktree clean_restart base-ref enforcement (issue #1149 round 2)
+# -----------------------------------------------------------------------------
+
+class TestSetupWorktreeCleanRestart:
+    """Direct unit tests on ``_setup_worktree`` to lock in Req 15's base-ref
+    guarantee. The orchestrator-level tests above mock out the helper, so
+    these are the only place the actual git plumbing under clean_restart
+    is verified.
+    """
+
+    def _patch_git(self, *, main_ref="abc123def456", remote_exists=False,
+                  local_exists=False, branch_delete_ok=True):
+        """Return a subprocess.run side_effect that fakes the git calls
+        ``_setup_worktree`` shells out to."""
+        calls = []
+
+        def side_effect(args, **kwargs):
+            calls.append(list(args))
+            cmd = list(args)
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = ""
+            m.stderr = ""
+
+            # git rev-parse --show-toplevel  (via _get_git_root)
+            if cmd[:2] == ["git", "rev-parse"] and "--show-toplevel" in cmd:
+                m.stdout = "/tmp/fake-root\n"
+                return m
+
+            # git rev-parse --verify <ref>  (via _resolve_main_ref)
+            if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+                # Honor the requested main_ref only for origin/main; fail
+                # the rest so _resolve_main_ref falls through deterministically.
+                if "origin/main" in cmd:
+                    m.stdout = f"{main_ref}\n"
+                    return m
+                # Force failure for other refs by raising
+                err = subprocess.CalledProcessError(128, cmd)
+                err.stderr = b"fatal: not a valid ref"
+                raise err
+
+            # git fetch origin <branch>
+            if cmd[:2] == ["git", "fetch"]:
+                if remote_exists:
+                    return m
+                err = subprocess.CalledProcessError(128, cmd)
+                err.stderr = b"fatal: couldn't find remote ref change/issue-99"
+                raise err
+
+            # git show-ref --verify refs/remotes/origin/<branch>
+            if cmd[:2] == ["git", "show-ref"] and "--verify" in cmd:
+                if remote_exists:
+                    return m
+                err = subprocess.CalledProcessError(1, cmd)
+                err.stderr = b""
+                raise err
+
+            # _branch_exists: git show-ref --verify refs/heads/<branch>
+            # Some branch_exists calls use show-ref; handled above.
+
+            # git branch -D
+            if cmd[:2] == ["git", "branch"] and "-D" in cmd:
+                if branch_delete_ok:
+                    return m
+                err = subprocess.CalledProcessError(1, cmd)
+                err.stderr = b"branch is currently checked out"
+                raise err
+
+            # git worktree ...
+            if cmd[:2] == ["git", "worktree"]:
+                return m
+
+            return m
+
+        return calls, side_effect
+
+    def test_clean_restart_fetches_remote_for_lease_without_reusing_as_base(
+        self, tmp_path,
+    ):
+        """When ``origin/change/issue-N`` already exists from a stopped /
+        wrong-model run, ``clean_restart=True`` MUST refresh the remote ref
+        for Step 13's ``--force-with-lease`` safety, but still base the new
+        worktree on ``_resolve_main_ref(git_root)`` instead. Without this
+        split behavior either the previous run's commits leak back in or the
+        force-with-lease push lacks lease information in fresh executors."""
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        calls, side = self._patch_git(remote_exists=True)
+        with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=side), \
+             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_change_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_change_orchestrator._branch_exists", return_value=False):
+            wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
+
+        assert err is None, f"unexpected error: {err}"
+        # Direct behavioral check: fetch is allowed/required for lease safety.
+        fetches = [c for c in calls if c[:2] == ["git", "fetch"]]
+        assert fetches, (
+            "Under clean_restart=True _setup_worktree MUST fetch the remote "
+            f"change/issue-N branch for --force-with-lease; saw no fetches."
+        )
+        assert [
+            "git",
+            "fetch",
+            "origin",
+            "+refs/heads/change/issue-1149:refs/remotes/origin/change/issue-1149",
+        ] in fetches
+        # Worktree was created from a real main ref, not from origin/<branch>.
+        adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+        assert adds, "expected a git worktree add invocation"
+        last_add = adds[-1]
+        assert "origin/change/issue-1149" not in last_add, (
+            f"clean_restart worktree must NOT base on origin/<branch>; saw: {last_add!r}"
+        )
+
+    def test_clean_restart_aborts_when_main_ref_falls_back_to_HEAD(
+        self, tmp_path,
+    ):
+        """If no main/master ref resolves, ``_resolve_main_ref`` returns
+        the literal string ``"HEAD"``. Silently using HEAD would base the
+        fresh worktree on the user's CURRENT feature branch — exactly
+        the "never the current HEAD" violation Req 15 calls out. Under
+        clean_restart we must abort with a clear error instead."""
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        # _resolve_main_ref calls subprocess.run WITHOUT check=True and
+        # gates on returncode. Force every rev-parse --verify to report
+        # returncode != 0 so _resolve_main_ref falls all the way through
+        # to its "HEAD" fallback string.
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = ""
+            m.stderr = ""
+            if cmd[:2] == ["git", "rev-parse"] and "--show-toplevel" in cmd:
+                m.stdout = str(tmp_path) + "\n"
+                return m
+            if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+                m.returncode = 128
+                return m
+            return m
+
+        with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=side_effect), \
+             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_change_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_change_orchestrator._branch_exists", return_value=False):
+            wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
+
+        assert wt is None, "Expected refusal when main_ref falls back to HEAD."
+        assert err and "clean restart" in err.lower() and "HEAD" in err, (
+            f"Expected a clear HEAD-fallback error message; got {err!r}"
+        )
+
+    def test_clean_restart_refuses_to_reuse_undeletable_local_branch(
+        self, tmp_path,
+    ):
+        """If the local ``change/issue-N`` branch exists and ``git branch
+        -D`` fails (e.g. it's checked out in another worktree), the
+        default code path reuses that local branch as the worktree base.
+        Under clean_restart that's a Req 15 violation; we abort with a
+        clear pointer to the offending worktree."""
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        calls, side = self._patch_git(branch_delete_ok=False)
+        with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=side), \
+             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_change_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_change_orchestrator._branch_exists", return_value=True), \
+             patch(
+                 "pdd.agentic_change_orchestrator._delete_branch",
+                 return_value=(False, "branch checked out elsewhere"),
+             ):
+            wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
+
+        assert wt is None
+        assert err and "clean restart" in err.lower(), (
+            f"Expected a clean-restart-refusal error; got {err!r}"
         )

@@ -537,3 +537,159 @@ def test_issue_updated_at_defaults_to_empty_string(mock_dependencies):
     assert call_kwargs[1].get("issue_updated_at") == "" or \
            "" in call_kwargs[0], \
            "issue_updated_at should default to empty string"
+
+
+# ---------------------------------------------------------------------------
+# Requirement 1a: clean_restart kwarg is forwarded verbatim to the orchestrator
+# ---------------------------------------------------------------------------
+
+def _setup_simple_happy_path(mock_subprocess):
+    """Shared helper: stub subprocess so the orchestrator gets called once."""
+    issue_data = {
+        "title": "T",
+        "body": "B",
+        "user": {"login": "u"},
+        "comments_url": "",
+    }
+
+    def side_effect(args, **kwargs):
+        cmd = args if isinstance(args, list) else []
+        if "api" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(issue_data)
+            return m
+        if "repo" in cmd and "clone" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            return m
+        m = MagicMock()
+        m.returncode = 1  # force clone path
+        return m
+
+    mock_subprocess.side_effect = side_effect
+
+
+def test_clean_restart_defaults_to_false(mock_dependencies):
+    """When clean_restart is not provided, the orchestrator must receive False."""
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+    _setup_simple_happy_path(mock_subprocess)
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+        run_agentic_change("https://github.com/owner/repo/issues/1")
+
+    mock_orch.assert_called_once()
+    assert mock_orch.call_args.kwargs.get("clean_restart") is False
+
+
+def test_clean_restart_true_is_forwarded(mock_dependencies):
+    """clean_restart=True must be passed through to the orchestrator verbatim."""
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+    _setup_simple_happy_path(mock_subprocess)
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+        run_agentic_change(
+            "https://github.com/owner/repo/issues/1",
+            clean_restart=True,
+        )
+
+    mock_orch.assert_called_once()
+    assert mock_orch.call_args.kwargs.get("clean_restart") is True
+
+
+def test_clean_restart_is_keyword_only():
+    """clean_restart MUST be keyword-only — it cannot be passed positionally."""
+    # Positional call with extra arg should raise TypeError before any side-effects.
+    with pytest.raises(TypeError):
+        # 2nd positional arg is not allowed because of the `*` separator in the signature.
+        run_agentic_change("https://github.com/owner/repo/issues/1", True)  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Requirement 4 / 4a: URL parsing helpers
+# ---------------------------------------------------------------------------
+
+def test_parse_issue_url_all_supported_formats():
+    """All three documented issue URL formats must parse to the same tuple."""
+    from pdd.agentic_change import _parse_issue_url
+
+    for url in (
+        "https://github.com/owner/repo/issues/42",
+        "https://www.github.com/owner/repo/issues/42",
+        "github.com/owner/repo/issues/42",
+    ):
+        assert _parse_issue_url(url) == ("owner", "repo", 42)
+
+
+def test_parse_issue_url_returns_none_for_non_match():
+    from pdd.agentic_change import _parse_issue_url
+
+    assert _parse_issue_url("https://gitlab.com/owner/repo/issues/1") is None
+    assert _parse_issue_url("https://github.com/owner/repo/pull/1") is None
+    assert _parse_issue_url("random nonsense") is None
+
+
+def test_parse_pr_url_all_supported_formats():
+    """All three documented PR URL formats must parse to (owner, repo, pr_number)."""
+    from pdd.agentic_change import _parse_pr_url
+
+    for url in (
+        "https://github.com/owner/repo/pull/7",
+        "https://www.github.com/owner/repo/pull/7",
+        "github.com/owner/repo/pull/7",
+    ):
+        assert _parse_pr_url(url) == ("owner", "repo", 7)
+
+
+def test_parse_pr_url_returns_none_for_issue_url():
+    """An issue URL passed to the PR helper must return None (not parse as PR)."""
+    from pdd.agentic_change import _parse_pr_url
+
+    assert _parse_pr_url("https://github.com/owner/repo/issues/7") is None
+    assert _parse_pr_url("not a url at all") is None
+
+
+def test_parse_pr_url_uses_re_search_for_embedded_urls():
+    """Spec 4a: must use re.search so embedded PR URLs still parse."""
+    from pdd.agentic_change import _parse_pr_url
+
+    embedded = "Please see https://github.com/owner/repo/pull/123 for details."
+    assert _parse_pr_url(embedded) == ("owner", "repo", 123)
+
+
+# ---------------------------------------------------------------------------
+# Requirement 9: full orchestrator call shape (all kwargs forwarded)
+# ---------------------------------------------------------------------------
+
+def test_orchestrator_receives_timeout_adder_and_use_github_state(mock_dependencies):
+    """timeout_adder and use_github_state are passed through verbatim."""
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+    _setup_simple_happy_path(mock_subprocess)
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+        run_agentic_change(
+            "https://github.com/owner/repo/issues/1",
+            timeout_adder=12.5,
+            use_github_state=False,
+        )
+
+    mock_orch.assert_called_once()
+    kwargs = mock_orch.call_args.kwargs
+    assert kwargs["timeout_adder"] == 12.5
+    assert kwargs["use_github_state"] is False
+
+
+def test_orchestrator_return_value_propagated(mock_dependencies):
+    """The 5-tuple from the orchestrator must be returned to the caller unchanged."""
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+    _setup_simple_happy_path(mock_subprocess)
+    mock_orch.return_value = (False, "boom", 9.99, "openai", ["a.py", "b.py"])
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+        result = run_agentic_change("https://github.com/owner/repo/issues/1")
+
+    assert result == (False, "boom", 9.99, "openai", ["a.py", "b.py"])

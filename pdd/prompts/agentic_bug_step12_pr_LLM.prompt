@@ -20,6 +20,7 @@ You are working on step 12 of 12 (final step) in an agentic bug investigation wo
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Clean Restart Mode: {clean_restart}
 
 % Issue Content
 <issue_content>
@@ -99,8 +100,14 @@ Do NOT create a new branch - just stage, commit, and push.
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
-   - Push the branch to origin
-   - Create a draft pull request using `gh pr create --draft`
+   - If `clean_restart` is `true`, push with `git push --force-with-lease -u origin fix/issue-{issue_number}` so a stopped run's old remote branch can be replaced safely.
+   - Otherwise, push with `git push -u origin fix/issue-{issue_number}`.
+   - If `clean_restart` is `true`, check for an existing open PR first:
+     ```bash
+     gh pr list --head fix/issue-{issue_number} --state open --json number,url
+     ```
+     If one exists, update that PR with `gh pr edit <number> --title "Add failing tests for #{issue_number}" --body "..."` and record its URL instead of creating a duplicate.
+   - If no open PR exists, create a draft pull request using `gh pr create --draft`
    - Link to the issue using "Fixes #{issue_number}" in the PR body
 
 3. **Post final summary**
@@ -110,9 +117,26 @@ Do NOT create a new branch - just stage, commit, and push.
    - Include the agentic `pdd fix` command using the GitHub issue URL
    - The agentic fix command automatically detects prompt files, code files, and test files from the issue context
 
-% PR Creation Command
+% PR Creation Commands
+
+Push first:
 
 ```bash
+# clean_restart == true
+git push --force-with-lease -u origin fix/issue-{issue_number}
+
+# clean_restart != true
+git push -u origin fix/issue-{issue_number}
+```
+
+Then create or update the PR:
+
+```bash
+# clean_restart == true and an open PR already exists
+gh pr list --head fix/issue-{issue_number} --state open --json number,url
+gh pr edit <number> --title "Add failing tests for #{issue_number}" --body "..."
+
+# otherwise
 gh pr create --draft --title "Add failing tests for #{issue_number}" --body "$(cat <<'EOF'
 ## Summary
 Adds failing tests that detect the bug reported in #{issue_number}.

@@ -19,7 +19,7 @@ from unittest.mock import patch, MagicMock
 
 # Ensure the project root is in sys.path so we can import the module
 project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+sys.path.insert(0, str(project_root))
 
 try:
     from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
@@ -37,7 +37,7 @@ def mock_load_prompt_template(template_name: str) -> str:
     return f"MOCK PROMPT FOR: {template_name}\nContext: {{issue_content}}"
 
 
-def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, timeout: float = None, max_retries: int = 3):
+def mock_run_agentic_task(instruction: str = "", cwd: Path = None, verbose: bool = False, quiet: bool = False, label: str = "", timeout: float = None, max_retries: int = 3, **kwargs):
     """
     Mock implementation of run_agentic_task.
     Simulates the output of an LLM agent for each step of the 13-step change workflow.
@@ -136,14 +136,16 @@ def main():
         print("Starting Agentic Change Orchestrator Simulation...")
         print("-" * 60)
 
-        # Patch the internal dependencies to avoid real git/filesystem operations
+        # Patch the internal dependencies to avoid real git/filesystem/network operations
         with patch("pdd.agentic_change_orchestrator.load_prompt_template", side_effect=mock_load_prompt_template), \
              patch("pdd.agentic_change_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
              patch("pdd.agentic_change_orchestrator._get_git_root", return_value=temp_cwd), \
              patch("pdd.agentic_change_orchestrator._setup_worktree", return_value=(temp_cwd, None)), \
+             patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None), \
              patch("pdd.agentic_change_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_change_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_change_orchestrator.clear_workflow_state", return_value=None), \
+             patch("pdd.agentic_change_orchestrator.post_step_comment", return_value=True), \
              patch("pdd.agentic_change_orchestrator.build_dependency_graph", side_effect=Exception("Mocked graph")), \
              patch("pdd.agentic_change_orchestrator.generate_sync_order_script", return_value="echo 'Mock sync'"):
 

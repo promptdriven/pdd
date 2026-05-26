@@ -169,7 +169,8 @@ def run_agentic_test(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Main entry point for agentic test generation.
@@ -180,6 +181,7 @@ def run_agentic_test(
         quiet: Suppress non-error output
         timeout_adder: Additional seconds to add to step timeouts
         use_github_state: Whether to persist state to GitHub comments
+        clean_restart: Discard saved workflow state before starting
         
     Returns:
         (success, message, total_cost, model_used, changed_files)
@@ -243,7 +245,8 @@ def run_agentic_test(
             verbose=verbose,
             quiet=quiet,
             timeout_adder=timeout_adder,
-            use_github_state=use_github_state
+            use_github_state=use_github_state,
+            clean_restart=clean_restart,
         )
     except Exception as e:
         import traceback

@@ -46,8 +46,8 @@
      - **Decorators**: `@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`. The `clears_run_report=True` flag mirrors the `generate` decorator so a successful `pdd example` invalidates any stale `.pdd/meta/<module>_<language>_run.json` for the affected module; without it, fingerprints would be refreshed while runtime verification state could still describe the pre-mutation example output.
 
   3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
-     - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
-     - **Agentic Mode**: Triggered if first arg is a URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, ...)`.
+     - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--clean-restart`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
+     - **Agentic Mode**: Triggered if first arg is a GitHub issue URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. `--clean-restart` is valid only in this agentic GitHub issue mode and must reject arbitrary HTTP/GitHub non-issue URLs.
      - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
 

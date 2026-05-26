@@ -24,7 +24,7 @@ code_generator_main = None
 _DEFAULT_CODE_GENERATOR_MAIN = None
 
 _GITHUB_ISSUE_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+    r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:[/?#].*)?$"
 )
 
 class GenerateCommand(click.Command):
@@ -157,7 +157,7 @@ def generate(
 
         verbose = ctx.obj.get("verbose", False) if ctx.obj else False
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
-        is_github_issue = bool(prompt_file and _GITHUB_ISSUE_RE.search(prompt_file))
+        is_github_issue = bool(prompt_file and _GITHUB_ISSUE_RE.match(prompt_file.strip()))
         has_code_generation_options = bool(
             output
             or original_prompt
@@ -366,6 +366,7 @@ def example(
 @click.option("--manual", is_flag=True, help="Use manual mode with explicit file arguments.")
 @click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (Agentic mode).")
 @click.option("--no-github-state", is_flag=True, help="Disable GitHub issue comment-based state persistence (Agentic mode).")
+@click.option("--clean-restart", is_flag=True, help="Discard saved agentic test state and start from step 1 (Agentic mode).")
 @click.option("--output", help="Specify where to save the generated test file.")
 @click.option("--language", help="Specify the programming language.")
 @click.option("--coverage-report", type=click.Path(exists=True), help="Path to the coverage report file.")
@@ -381,6 +382,7 @@ def test(
     manual: bool,
     timeout_adder: float,
     no_github_state: bool,
+    clean_restart: bool,
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
@@ -403,6 +405,10 @@ def test(
     try:
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
+
+        is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
+        if clean_restart and (manual or not is_url):
+            raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 
         # Story metadata linking: pdd test story__my_story.md
         if (len(args) == 1 and not manual
@@ -464,9 +470,6 @@ def test(
             }
             return result_dict, cost, model
 
-        # Determine mode
-        is_url = args[0].startswith("http") or "github.com" in args[0]
-
         if is_url and not manual:
             # Agentic Mode
             if len(args) != 1:
@@ -481,7 +484,8 @@ def test(
                 verbose=verbose,
                 quiet=quiet,
                 timeout_adder=timeout_adder,
-                use_github_state=not no_github_state
+                use_github_state=not no_github_state,
+                clean_restart=clean_restart,
             )
 
             if success:

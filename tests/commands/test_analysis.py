@@ -181,6 +181,20 @@ def test_bug_agentic_wrong_args(runner, mock_context_obj):
     assert result.exit_code != 0
     assert "Agentic mode requires exactly one argument" in result.output
 
+
+def test_bug_clean_restart_rejects_non_issue_url(runner, mock_context_obj):
+    """--clean-restart should only run with a GitHub issue URL."""
+    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
+        result = runner.invoke(
+            bug,
+            ["--clean-restart", "not-a-url"],
+            obj=mock_context_obj,
+        )
+
+    assert result.exit_code == 2
+    assert "--clean-restart can only be used" in result.output
+    mock_agentic.assert_not_called()
+
 def test_bug_manual_success(runner, mock_context_obj):
     """Test 'bug' command in manual mode."""
     with patch('pdd.commands.analysis.bug_main') as mock_main:
@@ -599,6 +613,17 @@ def test_bug_agentic_mode_no_github_state(runner):
         
         assert result.exit_code == 0
         assert mock_agentic.call_args[1]["use_github_state"] is False
+
+
+def test_bug_agentic_mode_clean_restart(runner):
+    """Test 'bug' agentic mode forwards --clean-restart."""
+    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
+        mock_agentic.return_value = (True, "Fixed", 1.0, "gpt-4", [])
+
+        result = runner.invoke(bug, ["https://github.com/u/r/issues/1", "--clean-restart"])
+
+        assert result.exit_code == 0
+        assert mock_agentic.call_args[1]["clean_restart"] is True
 
 def test_bug_manual_mode_success(runner):
     """Test 'bug' in manual mode with 5 valid files."""

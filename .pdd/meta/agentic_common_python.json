@@ -1,20 +1,22 @@
 {
   "pdd_version": "0.0.236",
-  "timestamp": "2026-05-13T21:12:18.639728+00:00",
+  "timestamp": "2026-05-26T00:00:00.000000+00:00",
   "command": "fix",
-  "prompt_hash": "0764e050c24965be44c8948bdc4b2c98c0f0b057b4d47b0798a819a350861080",
-  "code_hash": "32f8c23ee26c39af4939ea81fdfe9d3e7480e23e8f8cd453bddcc0703b81ae6d",
+  "prompt_hash": "631f9633021c0cb748efcc0a4e8b81c4e02cd15629a52b1d99e0a7bd4bc6712c",
+  "code_hash": "82e30c361de4d7b9a62928fe21d8f55df96691c461c73750b30595e3a04446f2",
   "example_hash": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
-  "test_hash": "6d1c3d5d1c87eafaa30153055478244d4302dfc8ac45e9a07b09e3fa80e95576",
+  "test_hash": "02ffedf502abf754bf81c21133fd6fc50b3a1ff53af55c5843e2b02244bcd671",
   "test_files": {
-    "test_agentic_common.py": "6d1c3d5d1c87eafaa30153055478244d4302dfc8ac45e9a07b09e3fa80e95576",
+    "test_agentic_common.py": "02ffedf502abf754bf81c21133fd6fc50b3a1ff53af55c5843e2b02244bcd671",
     "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "1988f9b022bd4071f95aef13ba6a6a6681279711ad6f718744195b8e0b9dac9e",
-    "test_agentic_common_worktree.py": "b726b24513865a7e3c23700b192bac001ab09190d7371b6d6714f0cf076c58e2"
+    "test_agentic_common_worktree.py": "16fb52387d635f1bbccbac20d08ef5b5d878021b70fc1ad79e5d36664df2b9a9"
   },
   "include_deps": {
     "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/agentic_common.py": "32f8c23ee26c39af4939ea81fdfe9d3e7480e23e8f8cd453bddcc0703b81ae6d"
+    "pdd/agentic_common.py": "82e30c361de4d7b9a62928fe21d8f55df96691c461c73750b30595e3a04446f2",
+    "pdd/llm_invoke.py": "c0cd59f42c2d096e0f9d85e280c6c96ed82834220f2a6952735a8195b0be0772"
   }
 }
