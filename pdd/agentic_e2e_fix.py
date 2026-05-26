@@ -24,7 +24,7 @@ _BRANCH_PATTERNS = (
     re.compile(r"Created branch ['\"`]([^'\"`\n]+)['\"`]"),
     re.compile(r"Branch:\s*([A-Za-z0-9._/\-]+)"),
 )
-_WORKTREE_PREFIXES = ("fix", "bug", "change")
+_WORKTREE_PREFIXES = ("fix", "bug", "test", "change")
 
 
 def _check_gh_cli() -> bool:
@@ -168,6 +168,25 @@ def _find_worktree_for_issue(issue_number: int) -> Optional[Path]:
     return None
 
 
+def _clean_restart_working_directory(issue_number: int, quiet: bool) -> Path:
+    """Return a non-generated workspace when clean restart starts inside one."""
+    cwd = Path.cwd().resolve()
+    generated_names = {f"{prefix}-issue-{issue_number}" for prefix in _WORKTREE_PREFIXES}
+    for candidate in (cwd, *cwd.parents):
+        if (
+            candidate.name in generated_names
+            and candidate.parent.name == "worktrees"
+            and candidate.parent.parent.name == ".pdd"
+        ):
+            repo_root = candidate.parent.parent.parent.resolve()
+            if not quiet:
+                console.print(
+                    f"[blue]Clean restart requested; leaving stale worktree {candidate}.[/blue]"
+                )
+            return repo_root
+    return cwd
+
+
 def _get_current_branch(cwd: Path) -> str:
     """Return the current git branch for the provided working directory."""
     try:
@@ -191,15 +210,25 @@ def _find_working_directory(
     issue_comments: str,
     quiet: bool,
     force: bool = False,
+    *,
+    clean_restart: bool = False,
 ) -> Tuple[Path, Optional[str], bool]:
     """Resolve the working directory and enforce branch-safety checks."""
+    cwd = Path.cwd()
+    if clean_restart:
+        cwd = _clean_restart_working_directory(issue_number, quiet)
+        if not quiet:
+            console.print(
+                "[blue]Clean restart requested; ignoring prior worktrees and branch hints.[/blue]"
+            )
+        return cwd, None, False
+
     worktree_path = _find_worktree_for_issue(issue_number)
     if worktree_path is not None:
         if not quiet:
             console.print(f"[blue]Using worktree: {worktree_path}[/blue]")
         return worktree_path, None, False
 
-    cwd = Path.cwd()
     expected_branch = _extract_branch_from_comments(issue_comments)
     current_branch = _get_current_branch(cwd) if expected_branch else ""
 
@@ -238,6 +267,7 @@ def run_agentic_e2e_fix(
     skip_ci: bool = False,
     skip_cleanup: bool = False,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """Run the agentic E2E fix workflow for a GitHub issue."""
     if not _check_gh_cli():
@@ -282,6 +312,7 @@ def run_agentic_e2e_fix(
         comments_text,
         quiet,
         force,
+        clean_restart=clean_restart,
     )
     if should_abort:
         if not quiet:
@@ -323,6 +354,7 @@ def run_agentic_e2e_fix(
             skip_ci=skip_ci,
             skip_cleanup=skip_cleanup,
             reasoning_time=reasoning_time,
+            clean_restart=clean_restart,
         )
     except Exception as exc:
         message = f"Orchestrator failed: {exc}"

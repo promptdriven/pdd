@@ -20,6 +20,7 @@ You are working on step 17 of 18 (final step) in an agentic test generation work
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Clean Restart Mode: {clean_restart}
 
 % Issue Content
 <issue_content>
@@ -123,16 +124,39 @@ Do NOT create a new branch - just stage, commit, and push.
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
-   - Push the branch to origin
-   - Create a draft pull request using `gh pr create --draft`
+   - If `clean_restart` is `true`, push with `git push --force-with-lease -u origin test/issue-{issue_number}` so a stopped run's old remote branch can be replaced safely.
+   - Otherwise, push with `git push -u origin test/issue-{issue_number}`.
+   - If `clean_restart` is `true`, check for an existing open PR first:
+     ```bash
+     gh pr list --head test/issue-{issue_number} --state open --json number,url
+     ```
+     If one exists, update that PR with `gh pr edit <number> --title "Add tests for #{issue_number}" --body "..."` and record its URL instead of creating a duplicate.
+   - If no open PR exists, create a draft pull request using `gh pr create --draft`
    - Link to the issue using "Closes #{issue_number}" in the PR body
 
 3. **Post final summary**
    - Comment on the issue with PR link and next steps
 
-% PR Creation Command
+% PR Creation Commands
+
+Push first:
 
 ```bash
+# clean_restart == true
+git push --force-with-lease -u origin test/issue-{issue_number}
+
+# clean_restart != true
+git push -u origin test/issue-{issue_number}
+```
+
+Then create or update the PR:
+
+```bash
+# clean_restart == true and an open PR already exists
+gh pr list --head test/issue-{issue_number} --state open --json number,url
+gh pr edit <number> --title "Add tests for #{issue_number}" --body "..."
+
+# otherwise
 gh pr create --draft --title "Add tests for #{issue_number}" --body "$(cat <<'EOF'
 ## Summary
 Adds tests based on the requirements in #{issue_number}.
