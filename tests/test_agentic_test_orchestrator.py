@@ -270,6 +270,11 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
     """clean_restart should clear durable state and start from step 1."""
     mocks = mock_deps
     default_args["clean_restart"] = True
+    mocks["template"].side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_test_step9_submit_pr_LLM"
+        else "Mock prompt: {issue_content}"
+    )
 
     stale_state = {
         "last_completed_step": 4,
@@ -295,6 +300,12 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
     mocks["load"].assert_not_called()
     assert "step1" in [c.kwargs["label"] for c in mocks["run"].call_args_list]
     assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    step17_calls = [
+        c for c in mocks["run"].call_args_list
+        if c.kwargs.get("label") == "step17"
+    ]
+    assert step17_calls
+    assert "clean=true" in step17_calls[0].kwargs["instruction"]
 
 
 def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
@@ -414,6 +425,17 @@ def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
     assert adds, "expected git worktree add"
     assert adds[-1][-1] == "abc123"
     assert adds[-1][-1] != "HEAD"
+
+
+def test_submit_pr_prompt_uses_clean_restart_push_and_pr_update():
+    """Step 17 must handle old remote test branches during clean restart."""
+    prompt = Path("pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "git push --force-with-lease -u origin test/issue-{issue_number}" in prompt
+    assert "gh pr list --head test/issue-{issue_number}" in prompt
+    assert "gh pr edit <number>" in prompt
 
 
 # ---------------------------------------------------------------------------

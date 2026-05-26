@@ -397,6 +397,7 @@ def run_agentic_test_orchestrator(
         "issue_number": issue_number,
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "clean_restart": "true" if clean_restart else "false",
     }
 
     for s_num, s_out in step_outputs.items():
