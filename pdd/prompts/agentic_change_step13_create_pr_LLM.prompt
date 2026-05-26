@@ -12,6 +12,7 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 - Issue Title: {issue_title}
 - Worktree Path: {worktree_path}
 - Branch Name: change/issue-{issue_number}
+- Base Branch: {base_branch}
 - Files Changed: {files_to_stage}
 - Sync Order Script: {sync_order_script}
 - Sync Order Commands: {sync_order_list}
@@ -72,7 +73,7 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
      Record that PR's number and URL as the result; skip `gh pr create`.
    - If no open PR exists, create one:
      ```bash
-     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
+     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head change/issue-{issue_number}
      ```
 
    Whether creating or editing, the PR must:
@@ -91,7 +92,7 @@ Push the branch (use `--force-with-lease` if `clean_restart` is `true`), then cr
 update the PR following the logic in step 4 above:
 
 ```bash
-gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
+gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head change/issue-{issue_number}
 # OR, if an open PR already exists under clean restart:
 gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
 ```
