@@ -639,6 +639,18 @@ class TestMergeSemantics:
         merged = _merge_fix_locations(original, needs_fix, safe, unclassified)
         assert set(merged) == {"a.py", "b.py", "d.py", "e.py"}
 
+    def test_value_level_needs_fix_not_added_to_fix_locations(self):
+        """Value-domain siblings are expansion items, not source locations."""
+        original = ["pdd/context_generator_main.py", "pdd/construct_paths.py"]
+        needs_fix = ["extension:.htm", "button:save", "pdd/extra_fix.py"]
+        safe = []
+        unclassified = []
+
+        merged = _merge_fix_locations(original, needs_fix, safe, unclassified)
+        assert "pdd/extra_fix.py" in merged
+        assert "extension:.htm" not in merged
+        assert "button:save" not in merged
+
     def test_unclassified_default_to_needs_fix(self):
         """Files not mentioned in retry output default to NEEDS_FIX."""
         original = ["a.py"]
