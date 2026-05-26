@@ -223,7 +223,8 @@ class TestExpansionItemsPlaceholderInPrompts:
             assert alias in step6_content
         assert "C++" in step6_content
         assert "language.lower()" in step6_content
-        assert "safe when language is `zsh`" in step6_content
+        assert "unsafe path wins for expansion coverage" in step6_content
+        assert "NEEDS_FIX: extension:.zsh" in step6_content
 
     def test_orchestrator_prompt_accepts_value_level_needs_fix_items(self):
         """Generated orchestrator spec must preserve non-path NEEDS_FIX support."""
