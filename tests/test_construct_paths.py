@@ -2617,9 +2617,10 @@ class TestConstructPathsResolutionModeParameter:
         pddrc = subdir / ".pddrc"
         pddrc.write_text("""contexts:
   default:
-    generate_output_path: "src/"
-    test_output_path: "tests/"
-    example_output_path: "examples/"
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
 """)
 
         # Create input files
@@ -2677,9 +2678,10 @@ class TestConstructPathsResolutionModeParameter:
         pddrc = subdir / ".pddrc"
         pddrc.write_text("""contexts:
   default:
-    generate_output_path: "src/"
-    test_output_path: "tests/"
-    example_output_path: "examples/"
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
 """)
 
         # Create input files
