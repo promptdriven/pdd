@@ -1004,7 +1004,12 @@ def test_setup_worktree_clean_restart_fetches_remote_and_uses_main_ref(tmp_path)
 
     assert err is None
     assert wt_path == tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
-    assert ["git", "fetch", "origin", "fix/issue-1"] in calls
+    assert [
+        "git",
+        "fetch",
+        "origin",
+        "+refs/heads/fix/issue-1:refs/remotes/origin/fix/issue-1",
+    ] in calls
     adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
     assert adds
     assert adds[-1][-1] == "abc123"

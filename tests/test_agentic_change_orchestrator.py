@@ -6438,6 +6438,12 @@ class TestSetupWorktreeCleanRestart:
             "Under clean_restart=True _setup_worktree MUST fetch the remote "
             f"change/issue-N branch for --force-with-lease; saw no fetches."
         )
+        assert [
+            "git",
+            "fetch",
+            "origin",
+            "+refs/heads/change/issue-1149:refs/remotes/origin/change/issue-1149",
+        ] in fetches
         # Worktree was created from a real main ref, not from origin/<branch>.
         adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
         assert adds, "expected a git worktree add invocation"

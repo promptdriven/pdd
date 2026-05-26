@@ -518,8 +518,9 @@ def _setup_worktree(
     remote_ref = f"origin/{branch_name}"
     remote_exists = False
     try:
+        lease_refspec = f"+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}"
         subprocess.run(
-            ["git", "fetch", "origin", branch_name],
+            ["git", "fetch", "origin", lease_refspec],
             cwd=git_root, capture_output=True, check=True
         )
         if not clean_restart:

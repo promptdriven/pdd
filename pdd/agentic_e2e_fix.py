@@ -191,15 +191,24 @@ def _find_working_directory(
     issue_comments: str,
     quiet: bool,
     force: bool = False,
+    *,
+    clean_restart: bool = False,
 ) -> Tuple[Path, Optional[str], bool]:
     """Resolve the working directory and enforce branch-safety checks."""
+    cwd = Path.cwd()
+    if clean_restart:
+        if not quiet:
+            console.print(
+                "[blue]Clean restart requested; ignoring prior worktrees and branch hints.[/blue]"
+            )
+        return cwd, None, False
+
     worktree_path = _find_worktree_for_issue(issue_number)
     if worktree_path is not None:
         if not quiet:
             console.print(f"[blue]Using worktree: {worktree_path}[/blue]")
         return worktree_path, None, False
 
-    cwd = Path.cwd()
     expected_branch = _extract_branch_from_comments(issue_comments)
     current_branch = _get_current_branch(cwd) if expected_branch else ""
 
@@ -283,6 +292,7 @@ def run_agentic_e2e_fix(
         comments_text,
         quiet,
         force,
+        clean_restart=clean_restart,
     )
     if should_abort:
         if not quiet:
