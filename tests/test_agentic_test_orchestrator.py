@@ -293,7 +293,8 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
 
     mocks["run"].side_effect = side_effect
 
-    success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+    with patch("pdd.agentic_test_orchestrator.post_step_comment_once") as mock_post_once:
+        success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
     assert success is True
     assert mocks["clear"].call_count >= 1
@@ -306,6 +307,10 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
     ]
     assert step17_calls
     assert "clean=true" in step17_calls[0].kwargs["instruction"]
+    assert any(
+        c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
+        for c in mock_post_once.call_args_list
+    )
 
 
 def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
@@ -421,6 +426,7 @@ def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
 
     assert err is None
     assert wt_path == tmp_path / ".pdd" / "worktrees" / "test-issue-1"
+    assert ["git", "fetch", "origin", "test/issue-1"] in calls
     adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
     assert adds, "expected git worktree add"
     assert adds[-1][-1] == "abc123"

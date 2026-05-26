@@ -152,7 +152,14 @@ def _resolve_main_ref(git_root: Path) -> str:
     return "HEAD"
 
 
-def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
+def _setup_worktree(
+    cwd: Path,
+    issue_number: int,
+    quiet: bool,
+    resume_existing: bool = False,
+    *,
+    clean_restart: bool = False,
+) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
     Returns (worktree_path, error_message).
@@ -164,6 +171,17 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
     branch_name = f"fix/issue-{issue_number}"
     worktree_rel_path = Path(".pdd") / "worktrees" / f"fix-issue-{issue_number}"
     worktree_path = git_root / worktree_rel_path
+
+    if clean_restart:
+        try:
+            subprocess.run(
+                ["git", "fetch", "origin", branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
 
     # Clean up existing directory if it exists
     if worktree_path.exists():
@@ -186,6 +204,11 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
         success, _err = _delete_branch(cwd, branch_name)
         if success:
             branch_exists = False
+        elif clean_restart:
+            return None, (
+                f"Cannot perform clean restart: local branch {branch_name!r} "
+                "could not be deleted. Remove the worktree using it, then retry."
+            )
         else:
             # Branch couldn't be deleted — will reuse with --force,
             # then reset to HEAD so old commits don't pollute the PR.
@@ -201,6 +224,12 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
             # Resolve main branch as base — avoids leaking unrelated commits
             # when user runs pdd bug from a non-main branch.
             base_ref = _resolve_main_ref(git_root)
+            if clean_restart and base_ref == "HEAD":
+                return None, (
+                    "Cannot perform clean restart: no main/master ref resolves "
+                    "(checked origin/main, origin/master, main, master). Refusing "
+                    "to base the fresh bug worktree on current HEAD."
+                )
             cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref]
         subprocess.run(
             cmd,
@@ -1532,11 +1561,34 @@ def run_agentic_bug_orchestrator(
         "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "clean_restart": "true" if clean_restart else "false",
         "step5_reproduction_tests": "",
         "fix_locations": "none",
         "step6_expansion_items": "none",
         "step9_test_verification": "",
     }
+
+    if clean_restart:
+        startup_body = (
+            "- **Mode**: Clean restart\n"
+            f"- **Model**: {model_used}\n"
+            "- **Command**: pdd bug\n"
+        )
+        try:
+            post_step_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=0,
+                total_steps=12,
+                description="Workflow Startup",
+                output="",
+                cwd=cwd,
+                body=startup_body,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(f"[yellow]Workflow startup comment failed: {exc}[/yellow]")
     
     # Populate context with previous step outputs
     for s_key, s_out in step_outputs.items():
@@ -1786,12 +1838,18 @@ def run_agentic_bug_orchestrator(
                         text=True,
                         check=True
                     ).stdout.strip()
-                    if current_branch not in ["main", "master"] and not quiet:
+                    if not clean_restart and current_branch not in ["main", "master"] and not quiet:
                         console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
 
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
+                wt_path, err = _setup_worktree(
+                    cwd,
+                    issue_number,
+                    quiet,
+                    resume_existing=False,
+                    clean_restart=clean_restart,
+                )
                 if not wt_path:
                     return False, f"Failed to create worktree: {err}", total_cost, model_used, []
                 worktree_path = wt_path

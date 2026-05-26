@@ -207,6 +207,15 @@ def _setup_worktree(
 
     base_ref = "HEAD"
     if clean_restart:
+        try:
+            subprocess.run(
+                ["git", "fetch", "origin", branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
         base_ref = _resolve_main_ref(git_root)
         if base_ref == "HEAD":
             return None, (
@@ -399,6 +408,26 @@ def run_agentic_test_orchestrator(
         "issue_title": issue_title,
         "clean_restart": "true" if clean_restart else "false",
     }
+
+    if clean_restart:
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=0,
+                body=(
+                    "## Step 0/18: Workflow Startup\n\n"
+                    "- **Mode**: Clean restart\n"
+                    f"- **Model**: {model_used}\n"
+                    "- **Command**: pdd test"
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(f"[yellow]Workflow startup comment failed: {exc}[/yellow]")
 
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out

@@ -56,7 +56,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
 7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
-9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment. If `clean_restart=True`, call `clear_workflow_state(...)` before any load and start from fresh in-memory state even if the clear fails.
+9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment. If `clean_restart=True`, call `clear_workflow_state(...)` before any load, start from fresh in-memory state even if the clear fails, post a visible Step 0 startup comment with `Mode: Clean restart`, and pass clean-restart context to worktree/PR creation so old remote branches can be replaced safely.
 10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
 
 % Step Execution
@@ -148,7 +148,7 @@ The orchestrator must parse step output to detect stop conditions:
 
 Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
 
-1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False, *, clean_restart: bool = False) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
    - Branch name: `fix/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
@@ -158,7 +158,8 @@ Before Step 7, create an isolated git worktree for test generation and PR creati
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 2. In orchestrator loop, before Step 7 (the first step that can write files — Step 7 may auto-fix prompt specifications and emits `PROMPT_FIXED`):
-   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)`
+   - When `clean_restart=True`, fetch `origin/fix/issue-{issue_number}` only to refresh Step 12 `--force-with-lease` metadata, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted.
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 7-12
    - Add `worktree_path` to context dict (for Step 12 prompt formatting)

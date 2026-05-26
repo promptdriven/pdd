@@ -7489,12 +7489,17 @@ class TestNotABugSuppressedOnResume:
 
         mock_run.side_effect = side_effect
 
-        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.post_step_comment_once") as mock_post_once:
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
         assert any("step2" in label for label in called_labels), called_labels
         assert any("step3" in label for label in called_labels), called_labels
+        assert any(
+            c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
+            for c in mock_post_once.call_args_list
+        )
 
     def test_prompt_documents_not_a_bug_suppressed_on_resume(self):
         """Orchestrator source prompt must document the demotion token.

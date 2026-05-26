@@ -47,7 +47,7 @@ from typing import List, Tuple
 pytestmark = pytest.mark.timeout(450)
 
 # Import the module under test
-from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator, _setup_worktree
 
 # --- Fixtures ---
 
@@ -908,6 +908,7 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
     with (
         patch("pdd.agentic_bug_orchestrator.clear_workflow_state") as mock_clear,
         patch("pdd.agentic_bug_orchestrator.load_workflow_state") as mock_load,
+        patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True) as mock_post,
     ):
         success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
 
@@ -915,6 +916,54 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
     mock_clear.assert_called_once()
     mock_load.assert_not_called()
     assert "step1" in [call.kwargs["label"] for call in mock_run.call_args_list]
+    assert any(c.kwargs.get("step_num") == 0 for c in mock_post.call_args_list)
+
+
+def test_setup_worktree_clean_restart_fetches_remote_and_uses_main_ref(tmp_path):
+    """clean_restart must replace stale remote bug branches without using HEAD."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        cmd = list(args)
+        calls.append(cmd)
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+            if "origin/main" in cmd:
+                result.stdout = "abc123\n"
+                return result
+            result.returncode = 128
+            return result
+        return result
+
+    with patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_bug_orchestrator._branch_exists", return_value=False), \
+         patch("pdd.agentic_bug_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt_path, err = _setup_worktree(
+            tmp_path,
+            1,
+            quiet=True,
+            clean_restart=True,
+        )
+
+    assert err is None
+    assert wt_path == tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    assert ["git", "fetch", "origin", "fix/issue-1"] in calls
+    adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+    assert adds
+    assert adds[-1][-1] == "abc123"
+    assert adds[-1][-1] != "HEAD"
+
+
+def test_step12_prompt_uses_clean_restart_push_and_pr_update():
+    """Step 12 must handle old remote bug branches during clean restart."""
+    prompt = Path("pdd/prompts/agentic_bug_step12_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "git push --force-with-lease -u origin fix/issue-{issue_number}" in prompt
+    assert "gh pr list --head fix/issue-{issue_number}" in prompt
+    assert "gh pr edit <number>" in prompt
 
 
 def test_state_cleared_on_success(mock_dependencies, default_args, tmp_path):

@@ -2261,6 +2261,26 @@ def run_agentic_e2e_fix_orchestrator(
     else:
         clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
 
+    if clean_restart:
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=0,
+                body=(
+                    "## Step 0/11: Workflow Startup\n\n"
+                    "- **Mode**: Clean restart\n"
+                    f"- **Model**: {model_used}\n"
+                    "- **Command**: pdd fix"
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(f"[yellow]Workflow startup comment failed: {exc}[/yellow]")
+
     console.print(f"Fixing e2e tests for issue #{issue_number}: \"{issue_title}\"")
 
     # Reuse pdd-bug analysis if available (Issue #830: skip redundant diagnosis)
