@@ -187,13 +187,19 @@ def _next_step(current: Union[int, float]) -> Union[int, float]:
 # Git helpers
 # ---------------------------------------------------------------------------
 
-def _get_git_root(cwd: Path) -> Optional[Path]:
+def _get_git_root(
+    cwd: Path,
+    *,
+    git_cmd: str = "git",
+    git_env: Optional[Dict[str, str]] = None,
+) -> Optional[Path]:
     """Get the root directory of the git repository."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            [git_cmd, "rev-parse", "--show-toplevel"],
             cwd=cwd,
             capture_output=True,
+            env=git_env,
             text=True,
             check=True,
         )
@@ -276,6 +282,16 @@ def _pr_base_tracking_ref(pr_number: int) -> str:
     return f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
 
 
+def _trusted_gate_git(worktree: Path) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+    """Resolve git for gate-layer subprocesses without trusting worktree PATH."""
+    from .checkup_gates import _build_subprocess_env, _resolve_trusted_git
+
+    git_cmd = _resolve_trusted_git(worktree)
+    if not git_cmd:
+        return None, None
+    return git_cmd, _build_subprocess_env(worktree)
+
+
 def _refresh_pr_base_ref(
     worktree: Path,
     pr_owner: str,
@@ -291,20 +307,39 @@ def _refresh_pr_base_ref(
     if not base_ref:
         return
 
-    git_root = _get_git_root(worktree)
+    git_cmd, git_env = _trusted_gate_git(worktree)
+    if not git_cmd or git_env is None:
+        pr_metadata["base_ref_fetch_error"] = (
+            "trusted git binary not found on sanitized PATH"
+        )
+        return
+
+    git_root = _get_git_root(worktree, git_cmd=git_cmd, git_env=git_env)
     if not git_root:
         pr_metadata["base_ref_fetch_error"] = "worktree is not a git repository"
         return
 
-    remote_target = _resolve_pr_remote(git_root, pr_owner, pr_repo)
+    remote_target = _resolve_pr_remote(
+        git_root,
+        pr_owner,
+        pr_repo,
+        git_cmd=git_cmd,
+        git_env=git_env,
+    )
     if remote_target is None:
         remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
 
     base_local_ref = _pr_base_tracking_ref(pr_number)
     try:
+        # Bounded timeout so a stalled transport (auth prompt, dead
+        # remote, transient hang) cannot hold the review loop forever.
+        # The deterministic-gate layer's own ``gate_timeout`` does not
+        # apply to this fetch because the fetch runs BEFORE gate
+        # discovery. 60s matches the default per-gate timeout so the
+        # operator sees a single consistent upper bound.
         subprocess.run(
             [
-                "git",
+                git_cmd,
                 "fetch",
                 remote_target,
                 f"refs/heads/{base_ref}:{base_local_ref}",
@@ -312,14 +347,54 @@ def _refresh_pr_base_ref(
             ],
             cwd=git_root,
             capture_output=True,
+            env=git_env,
             text=True,
             check=True,
+            timeout=60,
         )
+    except subprocess.TimeoutExpired:
+        # Surface as ``base_ref_fetch_error`` so the review loop's
+        # ``_enforce_gates_before_clean`` converts it into a synthetic
+        # ``gate:base-ref`` blocker finding (iter-19 fail-closed path).
+        # Without this branch a timeout would leak as an unhandled
+        # ``TimeoutExpired`` from ``_refresh_pr_base_ref`` and the loop
+        # would abort with a stack trace instead of a clean refusal.
+        pr_metadata["base_ref_fetch_error"] = (
+            f"git fetch timed out after 60s for base ref {base_ref!r}"
+        )
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: PR base ref fetch timed out: "
+                f"{pr_metadata['base_ref_fetch_error']}[/yellow]"
+            )
+        return
     except subprocess.CalledProcessError as exc:
-        safe_err = (exc.stderr or str(exc)).strip()
+        # Env-token redaction alone is insufficient.
+        # Git stderr on a failed fetch can carry
+        # credentials that did NOT come from the process env — a
+        # credential-helper-supplied PAT, a GitHub App installation
+        # token minted at runtime, a remote URL with embedded
+        # `https://<user>:<token>@host` basic-auth, or a `Bearer`
+        # header from a verbose transport. The console.print and
+        # `pr_metadata["base_ref_fetch_error"]` surfaces both flow
+        # into long-term log capture (rich console → stdout → CI
+        # log) and the rendered checkup report. Scrub through the
+        # full regex catch-all BEFORE either surface sees the
+        # string. Keep the env-token `_redact_secret` pass for
+        # belt-and-braces: regex patterns are best-effort and a
+        # token that does not match a known shape (e.g. a 16-char
+        # custom internal token) still falls through; the explicit
+        # secret subtraction guarantees the env value is gone.
+        raw_err = (exc.stderr or str(exc)).strip()
+        safe_err = _scrub_secrets(raw_err)
         token = _github_token_from_env()
         if token:
             safe_err = _redact_secret(safe_err, token)
+        # The remote URL fallback `https://github.com/<owner>/<repo>.git`
+        # is non-sensitive, but a configured remote NAME may also be
+        # echoed verbatim. Names are not secret. URLs WITH embedded
+        # credentials would have been caught above by the regex
+        # patterns (`ghp_`/`ghs_`/`gho_`/…) and the env-token strip.
         pr_metadata["base_ref_fetch_error"] = safe_err or "git fetch failed"
         if not quiet:
             console.print(
@@ -400,6 +475,9 @@ def _resolve_pr_remote(
     git_root: Path,
     pr_owner: str,
     pr_repo: str,
+    *,
+    git_cmd: str = "git",
+    git_env: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Find a configured git remote whose URL points at ``pr_owner/pr_repo``.
 
@@ -414,9 +492,10 @@ def _resolve_pr_remote(
     """
     try:
         result = subprocess.run(
-            ["git", "remote", "-v"],
+            [git_cmd, "remote", "-v"],
             cwd=git_root,
             capture_output=True,
+            env=git_env,
             check=True,
             text=True,
         )
@@ -554,6 +633,26 @@ def _github_token_from_env() -> str:
     )
 
     return fn()
+
+
+def _scrub_secrets(text: str) -> str:
+    """Lazy wrapper around the review-loop regex secret scrubber.
+
+    `_refresh_pr_base_ref` previously redacted
+    only the env-derived GitHub token before publishing fetch stderr to the
+    console and `pr_metadata`. Tokens that travel via git credential helper,
+    a GitHub App installation token minted at runtime, or an embedded
+    `x-access-token:...@github.com` in a remote URL would all slip through.
+    Pipe the stderr through this regex catch-all (covers `ghp_`/`ghs_`/`gho_`,
+    `sk-...`, `Bearer`/`Authorization` headers, AWS access keys, Slack
+    tokens, and the common `https://<user>:<token>@host` URL shape) before
+    any console.print or `pr_metadata` storage.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _scrub_secrets as fn,
+    )
+
+    return fn(text)
 
 
 def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
@@ -950,6 +1049,12 @@ def _format_pr_changed_files_for_prompt(
         if api_changed_files
         else ""
     )
+    git_cmd, git_env = _trusted_gate_git(worktree)
+    if not git_cmd or git_env is None:
+        return api_fallback or (
+            "PR changed files unavailable: trusted git binary was not found "
+            "on the sanitized PATH. Run targeted tests conservatively."
+        )
     if pr_metadata is not None:
         base_ref = str(pr_metadata.get("base_ref") or "").strip()
         if base_ref:
@@ -990,9 +1095,10 @@ def _format_pr_changed_files_for_prompt(
         seen_bases.add(base)
         try:
             verify = subprocess.run(
-                ["git", "rev-parse", "--verify", base],
+                [git_cmd, "rev-parse", "--verify", base],
                 cwd=worktree,
                 capture_output=True,
+                env=git_env,
                 text=True,
             )
         except (OSError, subprocess.SubprocessError):
@@ -1003,7 +1109,7 @@ def _format_pr_changed_files_for_prompt(
         try:
             diff = subprocess.run(
                 [
-                    "git",
+                    git_cmd,
                     "diff",
                     "--name-status",
                     "--find-renames",
@@ -1011,6 +1117,7 @@ def _format_pr_changed_files_for_prompt(
                 ],
                 cwd=worktree,
                 capture_output=True,
+                env=git_env,
                 text=True,
             )
         except (OSError, subprocess.SubprocessError):

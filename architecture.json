@@ -7660,7 +7660,12 @@
               "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
               "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
-              "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
+              "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)",
+              "Issue #1092: at every clean-exit site (round-start LLM clean, review-only clean, post-verify clean, pending-findings-empty early exit, and fallback-reviewer clean), invokes _enforce_gates_before_clean to run pdd.checkup_gates over the loop-owned worktree; any failing deterministic gate (PR-range git diff --check, prettier --check, a non-mutating Python syntax check via builtin compile(), optional ruff/black/mypy/`npx --no-install tsc --noEmit`) is converted to a synthetic blocker ReviewFinding (reviewer prefix `gate:`) that the loop feeds back into the fixer rather than declaring clean",
+              "Issue #1092 base-ref refresh: when config.enable_gates is True the loop calls pdd.agentic_checkup_orchestrator._refresh_pr_base_ref after _fetch_pr_metadata, fetching the PR's base branch into the dedicated tracking ref refs/remotes/pdd-checkup/pr-{N}/base (NEVER refs/remotes/origin/<base>, which would mutate the operator's tracking refs when their origin is a fork) and populating pr_metadata['base_local_ref']. The fetch is bounded by a 60s subprocess timeout so a stalled transport cannot hold the review loop forever. The refresh helper resolves a trusted absolute git binary through pdd.checkup_gates and uses the sanitized gate env for its git-root, remote, and fetch subprocesses, so PATH=.:$PATH cannot execute a PR-shipped ./git before gate discovery. The review-loop short-circuit that skipped _fetch_pr_metadata in review-only mode is suppressed when gates are enabled so review-only on non-main-base PRs still gets the PR-range git-diff-check guarantee. discover_gates resolves base_ref from pr_metadata['base_local_ref'] first and falls back to the raw base_ref name when the refresh helper succeeded but did not land the ref",
+              "Issue #1092 fail-closed on refresh error: when _refresh_pr_base_ref populates pr_metadata['base_ref_fetch_error'] (subprocess CalledProcessError, TimeoutExpired, or other failure), _enforce_gates_before_clean appends a crash-row to state.gate_runs (phase='base-ref-refresh') and returns a single synthetic gate:base-ref blocker ReviewFinding. The loop refuses the clean verdict the same way it does for a crashed gate runner — never silently falls back to origin/main or worktree-only git diff --check, both of which would let an LLM clean verdict ride over a check we cannot prove ran against the right base",
+              "Issue #1092 fail-closed on metadata fetch: when _fetch_pr_metadata returns no usable base_ref (gh API outage, auth error, invalid JSON), the loop sets pr_metadata['base_ref_fetch_error'] BEFORE the refresh-call site so the same gate:base-ref fail-closed path engages — the pre-fix guard (if pr_metadata.get('base_ref')) silently skipped the refresh and let gates run with base_ref=None",
+              "Issue #1092 fail-closed on changed-files fallback: _pr_changed_files_all walks the base-candidate list using a trusted absolute git binary plus the sanitized gate env, then falls back to HEAD~1...HEAD only when every authoritative base diff failed. When the caller passed a real pr_metadata (base_ref or base_local_ref set) and the scanner had to fall back, the scanner records pr_metadata['changed_files_fallback']. _enforce_gates_before_clean then emits a single gate:changed-files blocker (phase='changed-files-resolution') so iter-30 node_modules and iter-27/iter-32 config-touched skips cannot be silently bypassed by a truncated inventory missing earlier-commit poisoning (iter-34 Finding 1). The same trusted git path is used by the sibling _pr_changed_python_files scanner so static drift detection cannot execute a PR-shipped ./git either. The same sentinel is also set — and same blocker emitted — when _pr_changed_files_all RAISES; the previous 'swallow into []' path proceeded with an empty inventory and let the safety skips no-op (iter-35 Finding 1). Exception text is scrubbed before storage. The fallback path stays valid when no base_ref was expected (unit-test paths)"
             ]
           },
           {
@@ -7697,7 +7702,10 @@
           "clean_reviewer_states",
           "fallback_reviewer_on_failure",
           "timeout_adder",
-          "reasoning_time"
+          "reasoning_time",
+          "enable_gates",
+          "gate_timeout",
+          "gate_allow"
         ],
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
@@ -7723,11 +7731,94 @@
     }
   },
   {
+    "reason": "Issue #1092: deterministic local gates the review loop runs before honoring any LLM 'clean' verdict.",
+    "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (PR-range git diff --check, prettier --check via package.json, a non-mutating Python syntax check via the builtin compile() builtin per changed .py file, optional ruff/black/mypy when configured in pyproject.toml, optional `npx --no-install tsc --noEmit` when typescript is declared AND node_modules/typescript/bin/tsc is on disk). Per-file gates pass POSIX `--` end-of-options separator so paths cannot be parsed as flags. Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, sanitized PATH, and secret redaction; gate discovery and changed-file git probes resolve a trusted absolute git binary outside the PR worktree so PATH=.:$PATH cannot run a PR-shipped ./git. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
+    "dependencies": [
+      "checkup_review_loop_python.prompt"
+    ],
+    "priority": 217.6,
+    "filename": "checkup_gates_python.prompt",
+    "filepath": "pdd/checkup_gates.py",
+    "tags": [
+      "agentic",
+      "checkup",
+      "review-loop",
+      "gates",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "discover_gates",
+            "signature": "(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = (), base_ref: Optional[str] = None) -> List[Gate]",
+            "returns": "List[Gate]",
+            "sideEffects": [
+              "Reads package.json, pyproject.toml, tsconfig.json, and .git markers from the loop-owned worktree (read-only)",
+              "Probes PATH for ruff/black/mypy/npx via shutil.which (read-only)",
+              "Stats node_modules/typescript/bin/tsc before emitting the tsc-noemit gate; the argv is `npx --no-install tsc --noEmit --incremental false --composite false --tsBuildInfoFile /dev/null` so the gate runs the local binary (no registry install) AND cannot dirty the worktree with .tsbuildinfo even when tsconfig sets incremental: true, AND cannot trip TS6379 when the tsconfig extends chain sets composite: true. Also skips the gate when the PR diff modified tsconfig*.json (PR-controlled compilerOptions/paths/plugins are RCE-equivalent) OR any path under node_modules/ (iter-30 Finding 1 generalises iter-29 Finding 3 — every path under node_modules/ is a potential plugin/transformer/binary the gate would execute)",
+              "Skips npm-script gates (format:check / prettier:check / lint:check / typecheck / tsc / tsc:noemit) when the PR diff modified the tool config the script would load (prettier.config.* / .prettierrc* / eslint.config.* / .eslintrc* / tsconfig*.json) OR when the PR diff modified any package.json (root or nested) — corepack reads the top-level packageManager field and fetches+execs the PR-selected version on first invocation, turning the local gate into a registry download (iter-40 Finding 2). Those config files are loaded as executable JavaScript or interpreted compiler options by the corresponding tool, so a fork PR could otherwise achieve RCE through the gate (iter-27 Finding 3). Prettier/eslint script gates additionally skip on ANY PR-modified .cjs/.mjs/.js file because their configs can require() arbitrary local JS plugins anywhere in the worktree and we cannot statically follow the require chain (iter-29 Finding 2). tsc-style script gates additionally skip when ANY tsconfig in the extends chain sets incremental: true or composite: true — the script body cannot inject --incremental false like the direct gate, so running it would write tsbuildinfo (iter-29 Finding 1; walked with bounded depth to defend against cyclic configs). The emit-signal walk starts not only from the worktree-root tsconfig.json but from EVERY custom -p/--project target referenced by a recognised script (file or directory shape — the directory form resolves to <dir>/tsconfig.json). Without that extension a stable `tsc -p config/build.json --noEmit` whose config/build.json (or its extends chain) sets incremental: true would slip past the root-only walk and write .tsbuildinfo (iter-38 Finding 2). The chain walk treats package-name extends (e.g. '@demo/tsconfig') as potentially emit-signalling because the resolved config lives under node_modules where the gate layer cannot read it without parsing the resolver, AND a fork PR can install/modify the package (iter-30 Finding 2). ALL npm script gates (and the direct tsc-noemit gate) additionally skip when the PR diff modified anything under node_modules/ — every script invokes a binary or transitively loads code from there and a fork PR can land a poisoned shim at e.g. node_modules/.bin/prettier (iter-30 Finding 1; the package-lock.json / yarn.lock files live OUTSIDE node_modules/ so the common 'add a dependency' PR is unaffected). The ENTIRE npm-family gate path (script gates AND direct tsc-noemit) short-circuits when a package-manager config in the worktree can redirect script execution: .npmrc/.pnpmrc declaring script-shell, .yarnrc declaring script-shell or yarn-path, .yarnrc.yml declaring yarnPath, the presence of .yarn/releases/, OR a PR diff touching .npmrc/.pnpmrc/.yarnrc/.yarnrc.yml or anything under .yarn/. Confirmed against npm/pnpm/yarn 1 and npx 10.x: each honours script-shell so a PR-supplied ./evil-sh wraps the validated argv before it runs (iter-38 Finding 1)",
+              "Uses tokenized `--noEmit` detection in script acceptance so `tsc --noEmitOnError` (different flag, still emits) and `tsc --noEmit false` (explicit disable) cannot bypass the substring check (iter-27 Finding 2). Also rejects tsc-flavoured scripts that carry --watch/-w (would hang the gate), --incremental (writes tsbuildinfo regardless of --noEmit), --generateTrace, --generateCpuProfile, --listFiles, --listEmittedFiles, --diagnostics, --extendedDiagnostics, --traceResolution — the script-based path cannot inject overrides like the direct gate can (iter-33). The custom-config scan uses shlex tokenisation (handles quoted paths with embedded spaces, iter-36 Finding 2) and a single-prefix `./` strip (so hidden-directory paths like `.config/lint.json` survive comparison, iter-36 Finding 1). For tsc the scan also walks the local extends chain of `tsconfig.json` AND of every CUSTOM tsconfig referenced by a script via `-p` / `--project` (file or directory form — the directory form resolves to `<dir>/tsconfig.json`), bounded by the depth limit, refusing to leave the worktree, and deduped by resolved path. A PR-modified custom-named base (e.g. `base.json`) skips the script gate even when reached only through a non-root tsconfig chain (iter-36 Finding 3 + iter-37 Findings 1 + 2). Path comparison normalises both sides via `os.path.normpath` so non-canonical paths like `--config config/../config/lint.json` still match the PR diff (iter-37 Finding 3)",
+              "_script_is_acceptable rejects npm scripts whose body starts with `npx ` UNLESS `--no-install` is also present; bare `npx <tool>` would otherwise let `npm run <script>` reach the same registry-install fallback the tsconfig path guards against, defeating the issue #1092 non-mutation contract via the package.json discovery surface",
+              "Emits py-compile gates with `python -B -c 'import sys; src = open(sys.argv[1], ...).read(); compile(src, sys.argv[1], \"exec\")' <abs>` argv. The builtin compile() validates syntax without writing ANY bytecode — neither -B alone nor py_compile(cfile=os.devnull) work (the former because py_compile writes the artifact explicitly, the latter because py_compile uses an atomic rename onto cfile that cannot target /dev/null). Without this guard the loop's downstream commit-and-push helper would stage generated bytecode on repos whose .gitignore does not exclude __pycache__/",
+              "Skips ruff/black/mypy gates when the PR diff modified any Python tool config (pyproject.toml / setup.cfg / ruff.toml / .ruff.toml / tox.ini / mypy.ini / .mypy.ini). A fork PR can otherwise poison [tool.black] force-exclude or [tool.ruff] exclude to silently pass over real failures (iter-32 Findings 2 + 3). Additionally skips mypy when the EXISTING [tool.mypy] config declares any local-path plugin (relative/absolute/.py-suffixed) — mypy imports and executes plugin code during type-checking, so a PR that modifies just the referenced plugin file still achieves RCE (iter-32 Finding 1). iter-38 Finding 3 extends the skip: even a 'pure package' plugin name (e.g. `my_project.mypy_plugin`) disables the gate when the worktree contains a top-level `my_project/` package (`__init__.py`, namespace-dir, or `my_project.py`) — under an editable install or PYTHONPATH-points-at-worktree env mypy's plugin import would otherwise resolve to PR-controlled worktree code. iter-39 Finding 2 widens the worktree-match probe to the src/ layout so a matching `worktree/src/<top_level>/` (or namespace-dir, or `worktree/src/<top_level>.py`) also disables the gate — editable installs of src-layout projects add `src/` to `sys.path`. Third-party pure-package plugins (mypy_django_plugin.main) whose top-level name appears NEITHER at the worktree root NOR under src/ stay supported",
+              "When base_ref resolves in the worktree, emits git-diff-check across <base>...HEAD using a trusted absolute git binary resolved through the sanitized PATH, so a committed whitespace/conflict-marker failure is caught even on a clean worktree without executing a worktree-local ./git shim"
+            ]
+          },
+          {
+            "name": "run_gates",
+            "signature": "(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]",
+            "returns": "List[GateResult]",
+            "sideEffects": [
+              "Spawns each gate as a list-form subprocess with cwd=worktree, env scrubbed of PDD_*, the Python import-path family (PYTHONPATH/PYTHONHOME/PYTHONSTARTUP/PYTHONUSERBASE/PYTHONNOUSERSITE), AND the npm/Node config + import-path family (NPM_CONFIG_*/npm_config_* — both case forms are independent env keys — plus NODE_OPTIONS and NODE_PATH), then PATH is sanitized to drop empty entries, '.', relative entries, and any entry that resolves inside the worktree, and forced CI=1/NO_COLOR=1/FORCE_COLOR=0/COREPACK_ENABLE_AUTO_PIN=0. Stripping the PYTHON* family is iter-38 Finding 3's primary defence. Stripping the NPM_CONFIG/npm_config family is iter-39 Finding 3's primary defence: NPM_CONFIG_SCRIPT_SHELL (confirmed against npm 10.x) redirects `npm run` to a PR-controlled shell even on a clean .npmrc. NODE_OPTIONS=--require=./evil.js injects arbitrary JS into the `npx --no-install tsc` gate; NODE_PATH is Node's PYTHONPATH analogue. Forcing COREPACK_ENABLE_AUTO_PIN=0 (iter-39 Finding 1) keeps Corepack-managed yarn/pnpm from mutating package.json by auto-pinning a `packageManager` field on first run — the gate's cwd IS the loop-owned PR worktree and the downstream commit/push helper would otherwise stage the mutation. The PATH sanitization (iter-40 Finding 1 + Greg PR #1095 review) prevents an operator's PATH=.:$PATH (or any worktree-resolving entry) from letting a PR-shipped ./git/./mypy/./npm/./npx shim become the gate binary. Gate.cmd ALSO stores absolute tool paths (resolved via shutil.which against the same sanitized PATH at discovery time), including the git-diff-check git binary, so subprocess.run never re-consults PATH for the top-level binary; the env-side sanitization is defence in depth for nested tool spawns by node/npm",
+              "Captures stdout/stderr, scrubs through _scrub_secrets, THEN truncates to ~10KB each side (scrub-before-truncate so secrets crossing the boundary still match the anchored regex)",
+              "Scrubs GateResult.error at the source in _execute_one — FileNotFoundError's repr embeds the full argv tuple, so an operator-supplied token in gate.cmd would otherwise land verbatim in ReviewFinding.evidence and the per-gate artifact",
+              "Writes per-gate human-readable artifacts and a JSON manifest under artifacts_dir/round-{R}-{mode}-gate-*.txt and round-{R}-{mode}-gates.json; both paths scrub the exception text on persistence failures before logging at WARNING and do not re-emit raw tracebacks with exc_info=True",
+              "Gate.to_dict() scrubs every string field (name/cmd/source/required_fix_hint) so the JSON manifest and final-state.json gates entries are safe to ship to long-term audit storage even when a fork PR poisons package.json scripts with literal tokens; the bare gate.cmd list still flows through _execute_one unchanged for subprocess invocation",
+              "Per-file gates (py-compile/ruff/black/mypy) name themselves as `py-compile:<rel>` and set `source=<rel>` to the changed file path — both fields are scrubbed at every consumer site (artifact filename via _safe_slug(_scrub(name)), artifact body, _build_evidence/_build_finding_message, ReviewFinding.reviewer/location) so a PR file whose path contains a token-shaped substring (e.g. pkg/ghp_xxx.py) cannot leak into the public PR comment or final-state.json (iter-25 Finding 1)",
+              "ruff/black/mypy argvs emit a POSIX `--` separator before the changed-file list (e.g. `ruff check -- <changed_py>`) so a PR file named like `--config=evil.py` is treated as a positional path, never as a flag (iter-25 Finding 2)",
+              "Persistence-failure logging scrubs gate.name AND the exception text before WARNING, and does NOT re-emit the raw traceback via exc_info=True at DEBUG (traceback.format_exception would otherwise re-render the raw exception message and defeat the WARNING-line scrub) (iter-25 Finding 3)",
+              "Never raises: timeouts, missing binaries, and OSErrors are captured as GateResult rows with exit_code=None and non-empty error"
+            ]
+          },
+          {
+            "name": "gate_results_to_findings",
+            "signature": "(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]",
+            "returns": "List[ReviewFinding]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ],
+        "dataclasses": [
+          "Gate",
+          "GateResult"
+        ],
+        "config_knobs": [
+          "DEFAULT_GATE_TIMEOUT_SECONDS"
+        ],
+        "artifacts_layout": {
+          "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
+          "per_round": [
+            "round-{N}-{mode}-gates.json",
+            "round-{N}-{mode}-gate-{slug}.txt"
+          ]
+        }
+      }
+    },
+    "position": {
+      "x": 15700,
+      "y": 3200
+    }
+  },
+  {
     "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
-    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
+    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
     "dependencies": [
       "agentic_common_python.prompt",
-      "checkup_review_loop_python.prompt"
+      "checkup_review_loop_python.prompt",
+      "checkup_gates_python.prompt"
     ],
     "priority": 218,
     "filename": "agentic_checkup_orchestrator_python.prompt",
