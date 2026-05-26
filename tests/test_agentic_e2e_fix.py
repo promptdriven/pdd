@@ -140,6 +140,20 @@ def test_find_working_directory_clean_restart_ignores_stale_hints(tmp_path: Path
     mock_find.assert_not_called()
 
 
+def test_clean_restart_leaves_stale_test_worktree(tmp_path: Path) -> None:
+    """clean_restart should escape a stopped pdd test worktree too."""
+    repo_root = tmp_path / "repo"
+    stale_worktree = repo_root / ".pdd" / "worktrees" / "test-issue-99"
+    nested_cwd = stale_worktree / "tests"
+    nested_cwd.mkdir(parents=True)
+
+    with patch("pdd.agentic_e2e_fix.Path.cwd", return_value=nested_cwd):
+        assert agentic_e2e_fix._clean_restart_working_directory(
+            99,
+            quiet=True,
+        ) == repo_root.resolve()
+
+
 def test_run_agentic_e2e_fix_returns_error_when_gh_is_missing() -> None:
     """The entry point should fail fast when the GitHub CLI is unavailable."""
     with patch("pdd.agentic_e2e_fix._check_gh_cli", return_value=False):
