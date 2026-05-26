@@ -171,6 +171,44 @@ def test_agentic_mode_passes_all_options(runner: CliRunner, mock_deps) -> None:
     assert kwargs.get("reasoning_time") is None
 
 
+def test_agentic_clean_restart_disables_resume(runner: CliRunner, mock_deps) -> None:
+    issue_url = "https://github.com/example/repo/issues/822"
+    mock_deps["run_agentic_e2e_fix"].return_value = (
+        True,
+        "Applied fix",
+        0.5,
+        "gpt-4.1",
+        [],
+    )
+
+    result = runner.invoke(fix, ["--clean-restart", issue_url])
+
+    assert result.exit_code == 0
+    assert mock_deps["run_agentic_e2e_fix"].call_args.kwargs["resume"] is False
+    assert mock_deps["run_agentic_e2e_fix"].call_args.kwargs["clean_restart"] is True
+
+
+def test_clean_restart_rejected_outside_agentic_issue_mode(runner: CliRunner, mock_deps) -> None:
+    result = runner.invoke(
+        fix,
+        ["--clean-restart", "prompt.prompt", "code.py", "tests/test_fix.py", "error.log"],
+    )
+
+    assert result.exit_code != 0
+    assert "--clean-restart can only be used" in result.output
+    mock_deps["run_agentic_e2e_fix"].assert_not_called()
+    mock_deps["fix_main"].assert_not_called()
+
+
+def test_clean_restart_rejects_non_issue_http_url(runner: CliRunner, mock_deps) -> None:
+    result = runner.invoke(fix, ["--clean-restart", "https://example.com/not-an-issue"])
+
+    assert result.exit_code != 0
+    assert "--clean-restart can only be used" in result.output
+    mock_deps["run_agentic_e2e_fix"].assert_not_called()
+    mock_deps["fix_main"].assert_not_called()
+
+
 def test_agentic_failure_prints_failure_message(runner: CliRunner, mock_deps) -> None:
     mock_deps["run_agentic_e2e_fix"].return_value = (False, "Could not fix", 0.2, "gpt-4.1", [])
 

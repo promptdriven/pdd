@@ -302,6 +302,36 @@ def test_run_agentic_test_success_flow(
     assert call_kwargs["repo_owner"] == "owner"
     assert call_kwargs["timeout_adder"] == 10.0
     assert call_kwargs["verbose"] is True
+    assert call_kwargs["clean_restart"] is False
+
+
+def test_run_agentic_test_clean_restart_forwarded(
+    mock_shutil_which,
+    mock_subprocess,
+    mock_orchestrator,
+):
+    """run_agentic_test should pass clean_restart through to the orchestrator."""
+    mock_shutil_which.return_value = "/bin/gh"
+    issue_json = {"title": "T", "body": "B", "user": {"login": "U"}, "state": "open"}
+
+    def side_effect(cmd, **kwargs):
+        if "api" in cmd and "issues/1" in str(cmd):
+            return MagicMock(stdout=json.dumps(issue_json), returncode=0)
+        if "api" in cmd:
+            return MagicMock(stdout="[]", returncode=0)
+        if "git remote" in str(cmd):
+            return MagicMock(stdout="https://github.com/owner/repo.git", returncode=0)
+        return MagicMock(returncode=0)
+
+    mock_subprocess.side_effect = side_effect
+
+    success, _, _, _, _ = agentic_test.run_agentic_test(
+        "https://github.com/owner/repo/issues/1",
+        clean_restart=True,
+    )
+
+    assert success is True
+    assert mock_orchestrator.call_args[1]["clean_restart"] is True
 
 def test_run_agentic_test_orchestrator_exception(
     mock_shutil_which, 
