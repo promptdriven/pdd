@@ -456,9 +456,10 @@ def _parse_scope_classification(step6_output: str) -> str:
 def _parse_needs_fix(step6_output: str) -> List[Tuple[str, str]]:
     """Parse NEEDS_FIX lines from Step 6 output (issue #1208).
 
-    Each NEEDS_FIX line has the form `NEEDS_FIX: <path> | <reason>`. Returns a
-    list of (path, reason) tuples. Lines missing a `|` separator are treated as
-    `(path, "")`. Empty paths are skipped.
+    Each NEEDS_FIX line has the form `NEEDS_FIX: <item> | <reason>`. The item
+    may be a source path or a stable value-level sibling ID such as
+    `extension:.htm`. Returns a list of (item, reason) tuples. Lines missing a
+    `|` separator are treated as `(item, "")`. Empty items are skipped.
     """
     results: List[Tuple[str, str]] = []
     for match in re.finditer(r"NEEDS_FIX:\s*(.+)", step6_output):
@@ -480,8 +481,9 @@ def _parse_safe_evidence(step6_output: str) -> List[Tuple[str, str, str]]:
     """Parse SAFE_EVIDENCE lines from Step 6 output (issue #1208).
 
     Each SAFE_EVIDENCE line has the form
-    `SAFE_EVIDENCE: <path> | <line> | <reason>`. Returns (path, line, reason)
-    tuples. Telemetry-only; not folded into EXPANSION_ITEMS.
+    `SAFE_EVIDENCE: <item> | <evidence location> | <reason>`. Returns
+    (item, evidence, reason) tuples. Telemetry-only; not folded into
+    EXPANSION_ITEMS.
     """
     results: List[Tuple[str, str, str]] = []
     for match in re.finditer(r"SAFE_EVIDENCE:\s*(.+)", step6_output):
@@ -503,7 +505,7 @@ def _merge_needs_fix_into_expansion(
 ) -> str:
     """Fold NEEDS_FIX sibling paths into the EXPANSION_ITEMS string.
 
-    Each sibling is rendered as `<path>: <reason>` (or just `<path>` if no
+    Each sibling is rendered as `<item>: <reason>` (or just `<item>` if no
     reason was provided) and appended to the existing comma-separated list.
     Entries already present in `expansion` are not duplicated. Returns "none"
     only when both inputs are empty.

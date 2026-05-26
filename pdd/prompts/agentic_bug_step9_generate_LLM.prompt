@@ -159,7 +159,7 @@ Step 6 classified the fix scope as:
 
 Use this to shape your generated tests:
 - **LOCALIZED**: Generate the tests planned by Step 8 for the single fix site. Do NOT invent sibling tests beyond Step 8's plan.
-- **SIBLING_PATTERN**: Every confirmed sibling listed in `{step6_expansion_items}` MUST have at least one behavioral test that exercises its own code path. If Step 8's plan missed a sibling, generate the missing test anyway and mark it with the `# Scope addition:` comment described below.
+- **SIBLING_PATTERN**: Every confirmed sibling listed in `{step6_expansion_items}` MUST have at least one behavioral test that exercises its own code path or value case. A sibling item can be a file path, command, route, UI control, enum/config value, file extension, content type, language row, provider/model, state marker, or other domain case. If Step 8's plan missed a sibling, generate the missing test anyway and mark it with the `# Scope addition:` comment described below.
 - **CROSS_CUTTING**: Generate tests against the centralized mechanism (helper/context/decorator/middleware), not N near-duplicate tests at each call site.
 
 Missing or unrecognized values should be treated as `LOCALIZED` (backward compatible).
@@ -174,7 +174,7 @@ Step 6's independent analysis identified these items beyond what the issue propo
 
 Use this list according to the final scope classification:
 - **LOCALIZED**: Generate tests for listed items only when they are part of the single localized fix site or proposed-fix gap. Do NOT broaden into sibling coverage from this list alone.
-- **SIBLING_PATTERN**: You MUST generate at least one test for each listed item. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
+- **SIBLING_PATTERN**: You MUST generate at least one test for each listed item, whether the item is a source path or a value-level case such as an extension alias, command alias, state marker, status value, or UI action. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
 - **CROSS_CUTTING**: Treat listed items as affected call-site evidence, not a per-item test checklist. Generate the centralized mechanism tests plus one or two representative integration tests through distinct listed entry points.
 
 % Worktree Setup

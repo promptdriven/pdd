@@ -109,13 +109,13 @@ After Step 6 completes, the orchestrator MUST parse three additional markers fro
    - If missing or unrecognized, default to `LOCALIZED` (backward compatible with older Step 6 runs).
    - Expose via `context["scope_classification"]` so Steps 8 and 9 can render `{scope_classification}` in their templates.
 
-2. `NEEDS_FIX: <path> | <reason>`
+2. `NEEDS_FIX: <item> | <reason>`
    - Parse ALL matching lines (one sibling per line).
-   - For each line, capture the path token (before the first `|`) and the full reason text.
+   - For each line, capture the item token (before the first `|`) and the full reason text. The item may be a source path or a stable value-level sibling ID such as `extension:.htm`, `command:resume`, `button:save`, `status:archived`, or `model:gpt-x`.
    - Treat each parsed line as a confirmed sibling that must be added to the EXPANSION_ITEMS list passed to Steps 8 and 9 via `context["step6_expansion_items"]`.
    - Fold `NEEDS_FIX` items into the existing EXPANSION_ITEMS string using comma separation, deduplicating against entries already present from the `EXPANSION_ITEMS:` marker.
 
-3. `SAFE_EVIDENCE: <path> | <line> | <reason>`
+3. `SAFE_EVIDENCE: <item> | <evidence location> | <reason>`
    - Parse ALL matching lines for telemetry/audit purposes. SAFE_EVIDENCE entries are informational — they document the sibling search but are NOT added to `EXPANSION_ITEMS` or `FIX_LOCATIONS`.
 
 **Deterministic auto-downgrade.** If `SCOPE_CLASSIFICATION` is `SIBLING_PATTERN` but ZERO `NEEDS_FIX` lines were emitted, the orchestrator MUST downgrade the classification to `LOCALIZED` before threading it into Steps 8 and 9. This guards against partial sibling searches that would otherwise inflate scope without evidence. Log the downgrade so it appears in step output for debugging.

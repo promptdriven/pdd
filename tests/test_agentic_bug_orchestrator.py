@@ -7358,12 +7358,32 @@ class TestStep6ScopeClassification:
 
         assert _parse_needs_fix("NEEDS_FIX: pdd/foo.py") == [("pdd/foo.py", "")]
 
+    def test_parse_needs_fix_accepts_value_level_items(self):
+        from pdd.agentic_bug_orchestrator import _parse_needs_fix
+
+        output = "NEEDS_FIX: extension:.htm | HTML alias still rewrites to .html\n"
+        assert _parse_needs_fix(output) == [
+            ("extension:.htm", "HTML alias still rewrites to .html"),
+        ]
+
     def test_parse_safe_evidence_lines(self):
         from pdd.agentic_bug_orchestrator import _parse_safe_evidence
 
         output = "SAFE_EVIDENCE: pdd/baz.py | 42 | guarded by feature flag\n"
         assert _parse_safe_evidence(output) == [
             ("pdd/baz.py", "42", "guarded by feature flag"),
+        ]
+
+    def test_parse_safe_evidence_accepts_value_level_items(self):
+        from pdd.agentic_bug_orchestrator import _parse_safe_evidence
+
+        output = "SAFE_EVIDENCE: extension:.yaml | pdd/data/language_format.csv:17 | canonical YAML suffix already works\n"
+        assert _parse_safe_evidence(output) == [
+            (
+                "extension:.yaml",
+                "pdd/data/language_format.csv:17",
+                "canonical YAML suffix already works",
+            ),
         ]
 
 
