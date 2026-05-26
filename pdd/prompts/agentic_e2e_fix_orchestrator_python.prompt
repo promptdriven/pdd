@@ -114,10 +114,11 @@ If a prior cycle applied a direct edit but the current cycle makes no new meanin
 `E2E_FIX_STEP_TIMEOUTS[8]` MUST be `3600.0` (1 hour base). Step 8 fans out to one full recursive `pdd fix --loop` invocation per failing dev unit, and `run_agentic_task` caps the aggregate retry budget at `2 * effective_timeout`, giving Step 8 a 2-hour ceiling under the 4-hour Cloud Run job limit. The earlier 1000s budget was inherited from the original single-LLM-call step shape and silently kills recursive fix mid-iteration on large dev units (for example, 2000+ line files where regenerating the file once can take tens of minutes). All other entries in `E2E_FIX_STEP_TIMEOUTS` keep their existing values.
 
 % Reuse pdd-bug Analysis (Issue #830)
-On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed. Exception: when `clean_restart=True`, do NOT load or reuse sibling pdd-bug state; the user asked for restart-from-scratch and stale bug diagnosis from a stopped/wrong-model run must not skip Steps 2/3.
+On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed. Exception: when the effective clean-restart flag is true, do NOT load or reuse sibling pdd-bug state; the user asked for restart-from-scratch and stale bug diagnosis from a stopped/wrong-model run must not skip Steps 2/3.
 
 % Resume & State
 - `clean_restart=True` forces fresh e2e-fix state even if `resume=True`: skip `load_workflow_state`, call `clear_workflow_state`, post a visible Step 0 startup comment with `Mode: Clean restart`, and start from cycle 1 step 1.
+- Persist `clean_restart` in every e2e-fix workflow-state save. On later normal resumes (`resume=True`, CLI clean_restart flag absent), inherit `state["clean_restart"] == True` into an effective clean-restart flag so sibling pdd-bug state remains suppressed for the rest of the restarted run.
 - `validate_cached_state` rewinds `last_completed_step` past any cached step output prefixed with `FAILED:`.
 - Persist `initial_file_hashes` and `initial_sha` in workflow state and restore them on resume so direct-edit detection and Step 11 full-diff still work after interruption.
 - `_check_staleness` warns if any tracked file's mtime is newer than `last_saved_at`.

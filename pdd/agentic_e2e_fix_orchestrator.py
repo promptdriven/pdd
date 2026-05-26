@@ -1980,6 +1980,7 @@ def _build_post_loop_state(
     step_comments_set: Set[int],
     initial_file_hashes: Optional[Dict[str, Optional[str]]],
     initial_sha: Optional[str],
+    clean_restart: bool = False,
 ) -> Dict[str, Any]:
     """Build a workflow-state dict from function-scope locals only.
 
@@ -2027,6 +2028,7 @@ def _build_post_loop_state(
             else None
         ),
         "initial_sha": initial_sha if isinstance(initial_sha, str) else None,
+        "clean_restart": clean_restart,
     }
 
 
@@ -2101,6 +2103,7 @@ def run_agentic_e2e_fix_orchestrator(
     # consulted in the inline cycle-waste-breaker and cleared at the next
     # legitimate cycle rollover.
     cycle_baseline_unverified = False
+    effective_clean_restart = clean_restart
 
     # Resume Logic
     if resume and not clean_restart:
@@ -2108,6 +2111,11 @@ def run_agentic_e2e_fix_orchestrator(
             cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state
         )
         if loaded_state:
+            persisted_clean_restart = loaded_state.get("clean_restart", False)
+            effective_clean_restart = persisted_clean_restart is True or (
+                isinstance(persisted_clean_restart, str)
+                and persisted_clean_restart.lower() == "true"
+            )
             resumed_from_state = True
             console.print(f"[blue]Resuming from cycle {loaded_state.get('current_cycle', 1)} step {loaded_state.get('last_completed_step', 0)}...[/blue]")
             current_cycle = loaded_state.get("current_cycle", 0)
@@ -2292,7 +2300,7 @@ def run_agentic_e2e_fix_orchestrator(
         cwd / ".pdd" / "state" / f"bug_state_{issue_number}.json",
         cwd / ".pdd" / "bug-state" / f"bug_state_{issue_number}.json",
     ]
-    if clean_restart:
+    if effective_clean_restart:
         if not quiet:
             console.print("[blue]Clean restart: ignoring prior pdd-bug analysis state.[/blue]")
     else:
@@ -2361,6 +2369,7 @@ def run_agentic_e2e_fix_orchestrator(
             "step_comments": sorted(step_comments_set),
             "initial_file_hashes": dict(initial_file_hashes),
             "initial_sha": initial_sha,
+            "clean_restart": effective_clean_restart,
             # Persist None when the resumed cycle's baseline is unverified
             # (legacy state / pre-snapshot interrupt) — otherwise the next
             # resume would trust the fresh post-edit snapshot and immediately
@@ -2877,6 +2886,7 @@ def run_agentic_e2e_fix_orchestrator(
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id,
                     "step_comments": sorted(step_comments_set),
+                    "clean_restart": effective_clean_restart,
                     # Workflow-start snapshot — restored on resume so direct-edit
                     # detection survives interruption.
                     "initial_file_hashes": dict(initial_file_hashes),
@@ -3292,6 +3302,7 @@ def run_agentic_e2e_fix_orchestrator(
                             step_comments_set=step_comments_set,
                             initial_file_hashes=initial_file_hashes,
                             initial_sha=initial_sha,
+                            clean_restart=effective_clean_restart,
                         ),
                         state_dir, repo_owner, repo_name,
                         use_github_state, github_comment_id,
@@ -3378,6 +3389,7 @@ def run_agentic_e2e_fix_orchestrator(
                             step_comments_set=step_comments_set,
                             initial_file_hashes=initial_file_hashes,
                             initial_sha=initial_sha,
+                            clean_restart=effective_clean_restart,
                         ),
                         state_dir, repo_owner, repo_name,
                         use_github_state, github_comment_id,
@@ -3469,6 +3481,7 @@ def run_agentic_e2e_fix_orchestrator(
             "last_saved_at": datetime.now().isoformat(),
             "github_comment_id": github_comment_id,
             "step_comments": sorted(step_comments_set),
+            "clean_restart": effective_clean_restart,
             # Issue #1034 codex P2 follow-up: persist workflow-start and
             # cycle-start snapshots so resume after an interrupt still has
             # the data needed for direct-edit detection and the cycle-waste-
@@ -3521,6 +3534,7 @@ def run_agentic_e2e_fix_orchestrator(
                 "last_saved_at": datetime.now().isoformat(),
                 "github_comment_id": github_comment_id,
                 "step_comments": sorted(step_comments_set),
+                "clean_restart": effective_clean_restart,
                 # Issue #1034 codex P2 follow-up: persist workflow-start and
                 # cycle-start snapshots so resume after a fatal exception
                 # still has the data needed for direct-edit detection and

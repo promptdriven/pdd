@@ -7501,6 +7501,63 @@ class TestNotABugSuppressedOnResume:
             for c in mock_post_once.call_args_list
         )
 
+    def test_resume_inherits_clean_restart_for_sibling_bug_state(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """A normal resume after clean restart must keep ignoring pdd-bug state."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["clean_restart"] = False
+        e2e_fix_default_args["max_cycles"] = 1
+
+        cwd = e2e_fix_default_args["cwd"]
+        bug_state_dir = cwd / ".pdd" / "state"
+        bug_state_dir.mkdir(parents=True, exist_ok=True)
+        bug_state_file = bug_state_dir / f"bug_state_{e2e_fix_default_args['issue_number']}.json"
+        bug_state_file.write_text(json.dumps({
+            "step_outputs": {
+                "2": "Stale bug step 2 output",
+                "3": "Stale root cause: CODE_BUG in old branch",
+            }
+        }))
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 1,
+            "step_outputs": {"1": "Cached step 1 output"},
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {},
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": {},
+            "clean_restart": True,
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Fresh output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        assert any("step2" in label for label in called_labels), called_labels
+        assert any("step3" in label for label in called_labels), called_labels
+
     def test_prompt_documents_not_a_bug_suppressed_on_resume(self):
         """Orchestrator source prompt must document the demotion token.
 

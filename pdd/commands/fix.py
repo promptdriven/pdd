@@ -13,14 +13,16 @@ from ..operation_log import log_operation
 from ..track_cost import track_cost
 
 
-_GITHUB_OR_HTTP_RE = re.compile(r"^(?:https?://|github\.com/)")
+_GITHUB_ISSUE_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
+)
 _USER_STORY_RE = re.compile(r"^story__.+\.md$", re.IGNORECASE)
 
 
 def _is_issue_url(value: str) -> bool:
-    """Return True when the first CLI argument should route to agentic mode."""
+    """Return True when the first CLI argument is a GitHub issue URL."""
     candidate = value.strip()
-    return bool(_GITHUB_OR_HTTP_RE.match(candidate))
+    return bool(_GITHUB_ISSUE_RE.match(candidate))
 
 
 def _is_user_story_file(value: str) -> bool:
