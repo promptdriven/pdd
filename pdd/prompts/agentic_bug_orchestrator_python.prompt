@@ -59,6 +59,21 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment. If `clean_restart=True`, call `clear_workflow_state(...)` before any load, start from fresh in-memory state even if the clear fails, save `state["clean_restart"] = True`, post a visible Step 0 startup comment with `Mode: Clean restart`, and pass the effective clean-restart context to worktree/PR creation so old remote branches can be replaced safely. If a later normal resume loads `clean_restart=True` from state, continue using clean worktree and PR semantics.
 10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
 
+% Step 9 Structural Test Guard
+
+After Step 9 writes tests, the orchestrator scans generated or modified test files for structural/non-behavioral assertions such as `inspect.getsource`, `inspect.signature`, `assert hasattr(...)`, or source-string matching. The guard must catch structural tests introduced by Step 9 but must NOT retry only because the target test file already contained structural tests before Step 9 ran.
+
+Implementation requirements:
+1. Snapshot full pre-Step-9 test-file content before invoking Step 9, not just line counts.
+2. If a post-Step-9 file is byte-identical to the snapshot, report no new structural violations.
+3. If the snapshot is a strict line-prefix of the post-Step-9 file, scan only appended lines.
+4. If the file was rewritten rather than appended, run the full structural detector on the current content, then subtract violation identities already present in the pre-Step-9 snapshot. A violation identity should be stable across line moves, using the violation kind plus the offending stripped source line, not the line number. This prevents false retries when a model rewrites a file that already had an unrelated structural test, while still catching any new structural test added by the rewrite.
+5. If new structural violations remain, retry Step 9 once with feedback and backup/restore the rejected files as before.
+
+% Step 9 Fix-Location Coverage Check
+
+After Step 9 writes tests, the orchestrator deterministically verifies that generated tests cover every Step 6 `FIX_LOCATIONS` entry when there is more than one fix location. Direct references count when test content contains the dotted module path (`pdd.commands.generate`), slash path without extension (`pdd/commands/generate`), or basename as a word. For command modules under `pdd/commands/*.py`, a CliRunner test that imports `pdd.cli` and invokes a Click command declared in that module also counts as coverage for the command module. Extract command names from decorators such as `@click.command("example")` or `@click.command(name="generate")`. This avoids false retries when tests correctly exercise `pdd/commands/generate.py` through the public CLI entrypoint instead of importing the command module directly.
+
 % Step Execution
 For each step (1-12):
 1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
@@ -122,6 +137,8 @@ After Step 6 completes, the orchestrator MUST parse three additional markers fro
 **Deterministic auto-downgrade.** If `SCOPE_CLASSIFICATION` is `SIBLING_PATTERN` but ZERO `NEEDS_FIX` lines were emitted, the orchestrator MUST downgrade the classification to `LOCALIZED` before threading it into Steps 8 and 9. This guards against partial sibling searches that would otherwise inflate scope without evidence. Log the downgrade so it appears in step output for debugging.
 
 **Threading.** The orchestrator must thread `scope_classification` into the context dict used to format Step 8 and Step 9 templates. Default to `"LOCALIZED"` in the initial context dict (alongside `fix_locations` and `step6_expansion_items`) so missing/early steps render cleanly.
+
+**Resume-derived Step 8 fields.** The orchestrator must also include `planned_test_count` in the initial context dict, defaulting to `"all"`. When resuming from a state that already has `step8_output`, recompute `planned_test_count` from that cached Step 8 output with `_count_planned_tests(...)` before formatting Step 9. Otherwise Step 9 can render a literal `{planned_test_count}` placeholder on resume and lose the exact planned-test-count instruction.
 
 % Step 6 PATTERN_SEARCH Retry Path (issue #1208 follow-up)
 
