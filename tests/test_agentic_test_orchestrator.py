@@ -301,6 +301,7 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
     mocks["load"].assert_not_called()
     assert "step1" in [c.kwargs["label"] for c in mocks["run"].call_args_list]
     assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    assert any(c.args[3].get("clean_restart") is True for c in mocks["save"].call_args_list)
     step17_calls = [
         c for c in mocks["run"].call_args_list
         if c.kwargs.get("label") == "step17"
@@ -311,6 +312,51 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
         c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
         for c in mock_post_once.call_args_list
     )
+
+
+def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
+    mock_deps, default_args
+):
+    """A normal resume after clean restart keeps clean worktree and PR behavior."""
+    mocks = mock_deps
+    mocks["template"].side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_test_step9_submit_pr_LLM"
+        else "Mock prompt: {issue_content}"
+    )
+    step_outputs = {str(step): f"cached step {step}" for step in range(1, 12)}
+    step_outputs["5.5"] = "cached enhanced plan"
+    mocks["load"].return_value = (
+        {
+            "last_completed_step": 11,
+            "step_outputs": step_outputs,
+            "total_cost": 1.1,
+            "model_used": "anthropic",
+            "clean_restart": True,
+        },
+        None,
+    )
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    step17_calls = [
+        c for c in mocks["run"].call_args_list
+        if c.kwargs.get("label") == "step17"
+    ]
+    assert step17_calls
+    assert "clean=true" in step17_calls[0].kwargs["instruction"]
+    assert any(c.args[3].get("clean_restart") is True for c in mocks["save"].call_args_list)
 
 
 def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
