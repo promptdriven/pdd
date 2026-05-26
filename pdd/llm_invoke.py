@@ -69,78 +69,161 @@ except Exception:
 # happens to tolerate both shapes together, which is why PR #1156 (CSV
 # flip to `adaptive`) appeared sufficient — it isn't, on Vertex.
 #
-# The fix is two layers:
+# LiteLLM's gating helper for "model uses adaptive thinking" has been
+# renamed between releases:
+#   * 1.80.x — `AnthropicConfig._is_claude_opus_4_5` matches only
+#     opus-4-5. `_map_reasoning_effort` ignores the model and always
+#     returns the legacy enabled shape; `map_openai_params` then adds
+#     output_config.effort *and* leaves the enabled-shape thinking
+#     unchanged. So we need (a) predicate extension AND (b) a
+#     post-process wrap to replace the stale enabled shape.
+#   * 1.82.x — `_is_claude_opus_4_5` is gone, replaced by
+#     `_is_claude_4_6_model` (+ `_is_opus_4_6_model`). The new
+#     `_map_reasoning_effort(model)` returns `{type: adaptive}` directly
+#     when the predicate matches, and `map_openai_params` then adds
+#     output_config.effort. So we only need predicate extension.
 #
-# (1) `_is_claude_opus_4_5` hardcodes the "opus-4-5" substring; extend it
-#     to also match opus-4-7 so every Anthropic-relay provider routes
-#     Opus 4.7 through the same code path. VertexAIAnthropicConfig
-#     inherits from AnthropicConfig, so the predicate change reaches the
-#     Vertex adapter without additional wiring.
-#
-# (2) `map_openai_params` has a bug for Opus 4.5+ users of
-#     `reasoning_effort`: it sets `output_config.effort` (correct) but
-#     ALSO unconditionally overwrites `optional_params["thinking"]` with
-#     the legacy `{"type":"enabled","budget_tokens":N}` shape from
-#     `_map_reasoning_effort`. The Anthropic API says "Use
-#     thinking.type.adaptive AND output_config.effort"; Vertex enforces
-#     this and rejects the call. Wrap `map_openai_params` to replace the
-#     stale enabled-shape with adaptive whenever output_config is set,
-#     preserving the caller's explicit `thinking` value if any.
-#
-# Both patches are idempotent (sentinel attributes) so
-# `importlib.reload(pdd.llm_invoke)` — which several tests do — doesn't
-# wrap closures into themselves. Remove both when LiteLLM ships native
-# opus-4-7 matching and a fix for the reasoning_effort overwrite.
+# Each patch is in its own try/except and sentinel-guarded against
+# `importlib.reload(pdd.llm_invoke)` (several tests do that). Each is a
+# no-op when the corresponding helper isn't present, so the same module
+# works across LiteLLM 1.80.x and 1.82.x. Remove when LiteLLM ships
+# native opus-4-7 matching.
 #
 # Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig,
-# so neither patch reaches the Azure adapter. Azure Opus 4.7 callers
-# need a separate code-path fix (CSV row currently `budget`).
+# so none of these patches reach the Azure adapter. Azure Opus 4.7
+# callers need a separate code-path fix (stock CSV row is `budget`).
 try:
     from litellm.llms.anthropic.chat.transformation import (
         AnthropicConfig as _AnthropicConfigOpus47,
     )
-    _existing_is_opus_4_5 = _AnthropicConfigOpus47._is_claude_opus_4_5
-    if not getattr(_existing_is_opus_4_5, "_pdd_opus_4_7_patched", False):
-        _orig_is_opus_4_5 = _existing_is_opus_4_5
-        def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
-            m = model.lower() if isinstance(model, str) else ""
-            return _orig_is_opus_4_5(self, model) or "opus-4-7" in m or "opus_4_7" in m
-        _patched_is_opus_4_5._pdd_opus_4_7_patched = True
-        _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
-
-    _existing_map = _AnthropicConfigOpus47.map_openai_params
-    if not getattr(_existing_map, "_pdd_opus_4_7_thinking_patched", False):
-        _orig_map_openai_params = _existing_map
-        def _patched_map_openai_params(self, non_default_params, optional_params, model, drop_params=False):  # pylint: disable=function-redefined
-            result = _orig_map_openai_params(self, non_default_params, optional_params, model, drop_params)
-            if not self._is_claude_opus_4_5(model):
-                return result
-            if "output_config" not in result:
-                return result
-            current = result.get("thinking")
-            if not (isinstance(current, dict) and current.get("type") == "enabled"):
-                return result
-            user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
-            if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
-                result["thinking"] = user_thinking
-            else:
-                result["thinking"] = {"type": "adaptive"}
-            return result
-        _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
-        _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
-except Exception as _opus_4_7_patch_err:  # pylint: disable=broad-except
+except Exception as _opus_4_7_import_err:  # pylint: disable=broad-except
+    _AnthropicConfigOpus47 = None  # type: ignore
     logger.error(
-        "[opus_4_7_patch] Failed to patch AnthropicConfig for opus-4-7: %s",
-        _opus_4_7_patch_err,
+        "[opus_4_7_patch] Could not import AnthropicConfig: %s",
+        _opus_4_7_import_err,
     )
 
+if _AnthropicConfigOpus47 is not None:
+    # Aliases the patched predicate must additionally match. Opus 4.5 is
+    # included so the 1.82.x predicate rename doesn't silently regress
+    # callers (LiteLLM 1.82.6 dropped 4.5 from `_is_claude_4_6_model`,
+    # which it now controls). Dot-aliases mirror LiteLLM's own naming
+    # support so we don't miss `claude-opus-4.7` style identifiers.
+    _OPUS_ADDITIONAL_ALIASES = (
+        "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+        "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
+    )
+
+    # ---- 1.80.x predicate: _is_claude_opus_4_5 -------------------------------
+    try:
+        _existing_is_opus_4_5 = getattr(_AnthropicConfigOpus47, "_is_claude_opus_4_5", None)
+        if _existing_is_opus_4_5 is not None and not getattr(
+            _existing_is_opus_4_5, "_pdd_opus_4_7_patched", False
+        ):
+            _orig_is_opus_4_5 = _existing_is_opus_4_5
+            def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
+                m = model.lower() if isinstance(model, str) else ""
+                return _orig_is_opus_4_5(self, model) or any(a in m for a in _OPUS_ADDITIONAL_ALIASES)
+            _patched_is_opus_4_5._pdd_opus_4_7_patched = True
+            _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[opus_4_7_patch] _is_claude_opus_4_5 patch failed: %s", _err)
+
+    # ---- 1.82.x predicates: _is_claude_4_6_model + _is_opus_4_6_model --------
+    # These are @staticmethod in 1.82.x. Wrap and reinstall as staticmethod so
+    # internal `AnthropicConfig._is_claude_4_6_model(model)` calls still work.
+    for _helper_name in ("_is_claude_4_6_model", "_is_opus_4_6_model"):
+        try:
+            _existing_helper = getattr(_AnthropicConfigOpus47, _helper_name, None)
+            if _existing_helper is None:
+                continue
+            _underlying = (
+                _existing_helper.__func__
+                if hasattr(_existing_helper, "__func__")
+                else _existing_helper
+            )
+            if getattr(_underlying, "_pdd_opus_4_7_helper_patched", False):
+                continue
+            def _make_patched(orig, aliases):
+                def _patched(model):
+                    m = model.lower() if isinstance(model, str) else ""
+                    return orig(model) or any(a in m for a in aliases)
+                _patched._pdd_opus_4_7_helper_patched = True
+                return _patched
+            _new_static = staticmethod(_make_patched(_underlying, _OPUS_ADDITIONAL_ALIASES))
+            setattr(_AnthropicConfigOpus47, _helper_name, _new_static)
+        except Exception as _err:  # pylint: disable=broad-except
+            logger.error("[opus_4_7_patch] %s patch failed: %s", _helper_name, _err)
+
+    # ---- map_openai_params post-process wrap (both versions) -----------------
+    # 1.80.x: _map_reasoning_effort always returns the legacy enabled shape;
+    #         reasoning_effort branch overwrites caller's adaptive thinking
+    #         with that — the wrap rewrites enabled→adaptive on opus-4-7.
+    # 1.82.x: _map_reasoning_effort returns adaptive (with the patched
+    #         predicate) but DROPS caller-supplied `display`/extra fields
+    #         when the reasoning_effort branch fires after the thinking
+    #         branch — the wrap restores the caller's richer payload.
+    try:
+        _existing_map = _AnthropicConfigOpus47.map_openai_params
+        if not getattr(_existing_map, "_pdd_opus_4_7_thinking_patched", False):
+            _orig_map_openai_params = _existing_map
+            def _adaptive_pred(self, model):
+                """Either-version predicate accessor."""
+                p1 = getattr(self, "_is_claude_opus_4_5", None)
+                if p1 is not None and p1(model):
+                    return True
+                p2 = getattr(self, "_is_claude_4_6_model", None)
+                if p2 is not None and p2(model):
+                    return True
+                return False
+            def _patched_map_openai_params(self, non_default_params, optional_params, model, drop_params=False):  # pylint: disable=function-redefined
+                result = _orig_map_openai_params(self, non_default_params, optional_params, model, drop_params)
+                if not _adaptive_pred(self, model):
+                    return result
+                current = result.get("thinking")
+                if not isinstance(current, dict):
+                    return result
+                # Case A (1.80.x): result still has enabled shape — rewrite.
+                # Case B (1.82.x): result has bare {type:adaptive} — preserve caller's payload.
+                user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
+                if current.get("type") == "enabled":
+                    if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                        result["thinking"] = user_thinking
+                    else:
+                        result["thinking"] = {"type": "adaptive"}
+                elif current.get("type") == "adaptive":
+                    if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                        # Caller supplied richer payload (display/effort/...) —
+                        # merge their fields into the result without dropping
+                        # anything LiteLLM already filled in.
+                        merged = dict(current)
+                        for k, v in user_thinking.items():
+                            if k not in merged:
+                                merged[k] = v
+                        result["thinking"] = merged
+                return result
+            _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
+            _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[opus_4_7_patch] map_openai_params patch failed: %s", _err)
+
 # Bedrock Converse uses AmazonConverseConfig — a separate class that does
-# NOT inherit from AnthropicConfig — so neither patch above reaches it.
-# Its `map_openai_params` builds `thinking={"type":"enabled","budget_tokens":N}`
-# via `AnthropicConfig._map_reasoning_effort(...)` directly, with no
-# Opus 4.5/4.7 branch at all. Wrap it to convert the legacy enabled
-# shape into adaptive for any opus-4-7 model name, mirroring the
-# direct/Vertex fix above. Sentinel-guarded for reload safety.
+# NOT inherit from AnthropicConfig — so the patches above don't reach it
+# directly. In 1.80.x, Converse's `map_openai_params` calls
+# `AnthropicConfig._map_reasoning_effort(value)` (always enabled shape).
+# In 1.82.x, Converse calls `_handle_reasoning_effort_parameter` which
+# calls `AnthropicConfig._map_reasoning_effort(reasoning_effort=value,
+# model=model)` — and the predicate patch above flips that to adaptive
+# for opus-4-7, with no effort field attached.
+#
+# AWS Bedrock Converse for Claude flattens adaptive thinking into a
+# single key (no output_config sibling like the direct Anthropic API).
+# Wrap Converse `map_openai_params` to:
+#   * normalize any remaining `thinking.type.enabled` to adaptive on
+#     opus-4-7 (defensive — 1.80.x without the predicate-effective
+#     change), and
+#   * make sure the effort hint from `reasoning_effort` lands in the
+#     thinking dict so `time_to_effort_level()` isn't dropped.
 try:
     from litellm.llms.bedrock.chat.converse_transformation import (
         AmazonConverseConfig as _AmazonConverseConfigOpus47,
@@ -148,22 +231,23 @@ try:
     _existing_converse_map = _AmazonConverseConfigOpus47.map_openai_params
     if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
         _orig_converse_map = _existing_converse_map
+        # Match LiteLLM's own naming convention (hyphen + dot aliases).
+        _CONVERSE_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
         def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
             result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
             m = model.lower() if isinstance(model, str) else ""
-            if "opus-4-7" not in m and "opus_4_7" not in m:
+            if not any(a in m for a in _CONVERSE_OPUS_47_ALIASES):
                 return result
             current = result.get("thinking")
-            if not (isinstance(current, dict) and current.get("type") == "enabled"):
+            if not isinstance(current, dict):
                 return result
-            # AWS Bedrock Converse for Claude flattens adaptive thinking into a
-            # single key (no output_config sibling like the direct Anthropic
-            # API). Preserve the caller's adaptive payload if present; otherwise
-            # rebuild it carrying over the effort hint from reasoning_effort
-            # so time_to_effort_level() isn't silently dropped on the floor.
-            new_thinking = {"type": "adaptive"}
+            ctype = current.get("type")
+            if ctype not in ("enabled", "adaptive"):
+                return result
+            new_thinking = {"type": "adaptive"} if ctype == "enabled" else dict(current)
             user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
             if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                # Caller-supplied payload wins (carries display=summarized, etc.)
                 new_thinking = dict(user_thinking)
             effort = non_default_params.get("reasoning_effort") if isinstance(non_default_params, dict) else None
             if isinstance(effort, str) and "effort" not in new_thinking:

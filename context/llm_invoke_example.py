@@ -1,89 +1,87 @@
 import os
 import sys
-from typing import Dict, Any
 from pydantic import BaseModel
 
-# Import the llm_invoke function from the module
-from pdd.llm_invoke import llm_invoke
+# Import the target module functions
+from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
+"""
+Example usage of the pdd.llm_invoke module.
+
+This module provides a unified interface for calling Large Language Models (LLMs)
+across different providers (OpenAI, Anthropic, Gemini, local models, etc.) with
+built-in support for model selection, cost calculation, and structured outputs.
+
+Inputs for llm_invoke:
+    - prompt (str): A string template containing placeholders like {topic}.
+    - input_json (dict or list): Values to format into the prompt.
+    - strength (float): 0.0 to 1.0. 0.0 picks the cheapest model, 0.5 picks the base model, 1.0 picks the highest ELO model.
+    - temperature (float): Randomness of the model (e.g., 0.1 for deterministic, 0.8 for creative).
+    - verbose (bool): Whether to print debug and token usage logs.
+    - output_pydantic (BaseModel): A Pydantic class to enforce structured JSON output.
+    - time (float): 0.0 to 1.0 indicating reasoning effort or budget for models that support it.
+
+Outputs of llm_invoke (Dict):
+    - result (str or BaseModel): The raw text or parsed structured object returned by the model.
+    - cost (float): The estimated cost of the API call in USD ($).
+    - model_name (str): The exact name of the model that was successfully used.
+    - thinking_output (str | None): Internal reasoning text if the model provides it.
+    - finish_reason (str): Why the model stopped generating (e.g., 'stop').
+    - attempted_models (list): Chronological list of models attempted during fallback.
+"""
 
 def main() -> None:
-    """
-    Example script demonstrating how to use the llm_invoke function.
-    
-    llm_invoke provides a unified interface to call LLMs via LiteLLM, handling:
-    - Model selection (based on cost/ELO strength from a CSV)
-    - Context window validation
-    - Structured outputs (Pydantic / JSON Schema)
-    - Cost calculation and attribution tracking
-    """
-    # Ensure we have an API key to run without interactive prompts.
-    # For this example, we assume we want to use an OpenAI model.
+    # Check for a required environment variable (API key)
+    # The exact key depends on the models configured in your project's llm_model.csv
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         print("OPENAI_API_KEY not set. Set it to run this example.")
         sys.exit(0)
 
-    # Set environment variables to control behavior in a headless environment
-    # PDD_FORCE=1 disables interactive prompts for missing API keys
-    os.environ["PDD_FORCE"] = "1"
-    # Set a default model that uses the checked API key
-    os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
+    # Optionally enable verbose Python logging for the module
+    set_verbose_logging(True)
 
-    print("--- Example 1: Basic Text Generation ---")
-    # llm_invoke automatically formats the prompt string with input_json
-    basic_response = llm_invoke(
-        prompt="Write a one-sentence greeting for {name}.",
-        input_json={"name": "Alice"},
-        temperature=0.7,
-        strength=0.5,  # 0.5 uses the base model
-        verbose=False
+    print("--- Example 1: Simple Text Generation ---")
+    # Call the LLM with a simple prompt and dictionary input
+    response = llm_invoke(
+        prompt="Tell me a one sentence interesting fact about {topic}.",
+        input_json={"topic": "space"},
+        strength=0.5,       # Use the default base model
+        temperature=0.7,    # Slightly creative
+        verbose=True,
+        time=0.0            # No extra reasoning time required
     )
     
-    print(f"Model Used: {basic_response.get('model_name')}")
-    print(f"Result: {basic_response.get('result')}")
-    print(f"Estimated Cost: ${basic_response.get('cost'):.6f}")
-    print(f"Finish Reason: {basic_response.get('finish_reason')}")
+    print(f"Raw Result: {response['result']}")
+    print(f"Model used: {response['model_name']}")
+    print(f"Estimated Cost (USD): ${response['cost']:.6f}")
+    print(f"Attempted Models: {response['attempted_models']}")
 
 
-    print("\n--- Example 2: Structured Output (Pydantic) ---")
-    # Define a Pydantic model for the desired output structure
-    class CharacterInfo(BaseModel):
-        name: str
-        role: str
-        level: int
+    print("\n--- Example 2: Structured Output with Pydantic ---")
+    # Define a Pydantic model to enforce the shape of the LLM's response
+    class FactStructure(BaseModel):
+        fact: str
+        category: str
+        confidence: float
 
-    # Pass the Pydantic class to output_pydantic to enforce JSON schema validation
-    structured_response = llm_invoke(
-        prompt="Generate a random fantasy RPG character.",
-        input_json={},
-        output_pydantic=CharacterInfo,
-        temperature=0.8,
-        verbose=False
+    # Call the LLM requesting the output to match the Pydantic schema
+    response_structured = llm_invoke(
+        prompt="Provide a fact about {topic} and categorize it. Output JSON only.",
+        input_json={"topic": "the ocean"},
+        strength=0.8,       # Prefer a higher-capability model for structured tasks
+        temperature=0.1,    # Low temperature for strict compliance
+        output_pydantic=FactStructure,
+        verbose=True
     )
+
+    # The 'result' is automatically parsed into a FactStructure instance
+    result_obj = response_structured['result']
     
-    result_obj = structured_response.get('result')
-    # result_obj will be an instantiated CharacterInfo object
-    if hasattr(result_obj, "model_dump"):
-        print(f"Structured Result: {result_obj.model_dump()}")
-    else:
-        print(f"Fallback/Raw Result: {result_obj}")
-
-
-    print("\n--- Example 3: Using Direct Messages API ---")
-    # You can bypass the prompt/input_json template system and provide messages directly
-    messages = [
-        {"role": "system", "content": "You are a calculator. Return ONLY the integer result."},
-        {"role": "user", "content": "What is 15 + 27?"}
-    ]
-    
-    msg_response = llm_invoke(
-        messages=messages,
-        temperature=0.0,
-        time=0.0  # Disable reasoning effort for simple tasks
-    )
-    print(f"Calculation Result: {msg_response.get('result')}")
-
+    print(f"Parsed Fact: {result_obj.fact}")
+    print(f"Parsed Category: {result_obj.category}")
+    print(f"Parsed Confidence: {result_obj.confidence}")
+    print(f"Estimated Cost (USD): ${response_structured['cost']:.6f}")
 
 if __name__ == "__main__":
     main()

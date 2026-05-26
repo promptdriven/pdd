@@ -7256,28 +7256,47 @@ def test_llm_invoke_fast_fails_on_permanent_invalid_request_error(
 
 
 def test_anthropic_config_is_opus_4_5_matches_opus_4_7():
-    """`import pdd.llm_invoke` must extend LiteLLM's _is_claude_opus_4_5 so
-    Opus 4.7 also routes through the adaptive thinking shape, on every
-    Anthropic-relay provider (direct, Vertex, Bedrock, Azure)."""
+    """`import pdd.llm_invoke` must extend LiteLLM's adaptive-thinking
+    predicate to match opus-4-7, so every Anthropic-relay provider (direct,
+    Vertex, Bedrock) routes Opus 4.7 to the new shape.
+
+    LiteLLM renamed this helper between 1.80.x (`_is_claude_opus_4_5`) and
+    1.82.x (`_is_claude_4_6_model`). The patch covers whichever exists;
+    the test asserts the patch took effect on the predicate that exists
+    in the installed version."""
     import pdd.llm_invoke  # noqa: F401 — import is the action under test
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
     cfg = AnthropicConfig()
-    # Pre-existing 4.5 match must still work.
-    assert cfg._is_claude_opus_4_5("claude-opus-4-5") is True
-    # New: 4.7 must now match too, including the Vertex-prefixed form.
-    assert cfg._is_claude_opus_4_5("claude-opus-4-7") is True
-    assert cfg._is_claude_opus_4_5("vertex_ai/claude-opus-4-7") is True
-    assert cfg._is_claude_opus_4_5("anthropic.claude-opus-4-7") is True
+    pred = (
+        getattr(cfg, "_is_claude_opus_4_5", None)
+        or getattr(cfg, "_is_claude_4_6_model", None)
+    )
+    assert pred is not None, (
+        "LiteLLM exposes neither _is_claude_opus_4_5 (1.80.x) nor "
+        "_is_claude_4_6_model (1.82.x); patch needs a new code path."
+    )
+    # The patched predicate must match opus-4-7 across naming variants —
+    # hyphen + dot aliases — to mirror LiteLLM's own naming convention.
+    assert pred("claude-opus-4-7") is True
+    assert pred("vertex_ai/claude-opus-4-7") is True
+    assert pred("anthropic.claude-opus-4-7") is True
+    assert pred("claude-opus-4.7") is True
+    assert pred("vertex_ai/claude-opus-4.7") is True
+    # Opus 4.5 must continue matching even on 1.82.x — LiteLLM upstream
+    # dropped 4.5 from `_is_claude_4_6_model`, so our extension restores
+    # that path so custom CSV rows pointing at 4.5 don't regress to the
+    # legacy enabled shape.
+    assert pred("claude-opus-4-5") is True
+    assert pred("claude-opus-4.5") is True
     # Unrelated models must still NOT match.
-    assert cfg._is_claude_opus_4_5("claude-sonnet-4-6") is False
-    assert cfg._is_claude_opus_4_5("gpt-5") is False
+    assert pred("gpt-5") is False
 
 
 def test_anthropic_config_opus_patch_covers_vertex_subclass():
-    """VertexAIAnthropicConfig inherits _is_claude_opus_4_5 from
-    AnthropicConfig; the patch must propagate to the subclass so the
-    Vertex AI Anthropic adapter also picks the adaptive shape."""
+    """VertexAIAnthropicConfig inherits the predicate from AnthropicConfig;
+    the patch must propagate to the subclass so the Vertex AI Anthropic
+    adapter also picks the adaptive shape."""
     import pdd.llm_invoke  # noqa: F401
     try:
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
@@ -7287,7 +7306,12 @@ def test_anthropic_config_opus_patch_covers_vertex_subclass():
         import pytest
         pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
     cfg = VertexAIAnthropicConfig()
-    assert cfg._is_claude_opus_4_5("vertex_ai/claude-opus-4-7") is True
+    pred = (
+        getattr(cfg, "_is_claude_opus_4_5", None)
+        or getattr(cfg, "_is_claude_4_6_model", None)
+    )
+    assert pred is not None
+    assert pred("vertex_ai/claude-opus-4-7") is True
 
 
 # ------------------------------------------------------------------------------
@@ -7320,12 +7344,14 @@ def test_map_openai_params_vertex_opus_47_effort_only_emits_adaptive_shape():
     """The vertex_ai/claude-opus-4-7 CSV row carries reasoning_type=effort,
     so pdd hands LiteLLM only `reasoning_effort`. Pre-patch, LiteLLM
     produced thinking.type.enabled (rejected by Vertex). Post-patch, the
-    final shape must be thinking.type.adaptive + output_config.effort."""
-    thinking, output_config = _map_thinking_kwargs(
-        {"reasoning_effort": "high"}, "vertex_ai/claude-opus-4-7"
-    )
-    assert thinking == {"type": "adaptive"}, thinking
-    assert output_config == {"effort": "high"}, output_config
+    final shape must be thinking.type.adaptive + output_config.effort —
+    for both hyphen and dot naming variants."""
+    for model in ("vertex_ai/claude-opus-4-7", "vertex_ai/claude-opus-4.7"):
+        thinking, output_config = _map_thinking_kwargs(
+            {"reasoning_effort": "high"}, model
+        )
+        assert thinking == {"type": "adaptive"}, (model, thinking)
+        assert output_config == {"effort": "high"}, (model, output_config)
 
 
 def test_map_openai_params_bedrock_opus_47_effort_only_emits_adaptive_shape():
@@ -7356,13 +7382,16 @@ def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
 
 
 def test_map_openai_params_unrelated_model_unchanged():
-    """The wrap is opt-in via _is_claude_opus_4_5 — sonnet-4-6 and other
-    non-Opus models must retain LiteLLM's legacy enabled shape so we don't
-    regress callers that haven't migrated to adaptive thinking."""
+    """The patch is gated on opus-4-7 substring (and pre-existing predicates).
+    GPT-5 must not be affected by any patch layer — LiteLLM drops Anthropic-
+    only params for it via drop_params, so neither `thinking` nor
+    `output_config` should appear in the mapped kwargs."""
     thinking, output_config = _map_thinking_kwargs(
-        {"reasoning_effort": "high"}, "claude-sonnet-4-6"
+        {"reasoning_effort": "high"}, "gpt-5"
     )
-    assert thinking == {"type": "enabled", "budget_tokens": 4096}, thinking
+    # GPT-5 routed through AnthropicConfig is nonsense, but the assertion
+    # is: our patch does not inject adaptive/output_config for it.
+    assert not (isinstance(thinking, dict) and thinking.get("type") == "adaptive"), thinking
     assert output_config is None, output_config
 
 
@@ -7461,9 +7490,11 @@ def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
 
 
 def test_bedrock_converse_adapter_unrelated_models_unchanged():
-    """The Converse wrap is gated on opus-4-7 substring. Sonnet 4.6 and
-    Opus 4.5 must keep LiteLLM's existing behavior so we don't disturb
-    other Converse callers."""
+    """The Converse wrap is gated on opus-4-7 substring — non-opus-4-7
+    models must pass through unchanged. LiteLLM's native behavior for
+    these varies by version (1.80.x emits enabled, 1.82.x emits adaptive
+    for sonnet-4-6 + opus-4-6), so the assertion is just that the patch
+    didn't *add* an `effort` field that wasn't already there."""
     import pdd.llm_invoke  # noqa: F401
     try:
         from litellm.llms.bedrock.chat.converse_transformation import (
@@ -7474,8 +7505,8 @@ def test_bedrock_converse_adapter_unrelated_models_unchanged():
         pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
     cfg = AmazonConverseConfig()
     for model in (
-        "bedrock/anthropic.claude-opus-4-5",
         "bedrock/anthropic.claude-sonnet-4-6",
+        "bedrock/anthropic.claude-opus-4-5",
     ):
         result = cfg.map_openai_params(
             non_default_params={"reasoning_effort": "high"},
@@ -7483,4 +7514,7 @@ def test_bedrock_converse_adapter_unrelated_models_unchanged():
             model=model,
             drop_params=True,
         )
-        assert result.get("thinking") == {"type": "enabled", "budget_tokens": 4096}, (model, result)
+        thinking = result.get("thinking")
+        # The pdd patch's effort-injection is the only modification it makes
+        # to the Converse output; for non-opus-4-7 models it must not fire.
+        assert not (isinstance(thinking, dict) and "effort" in thinking), (model, thinking)
