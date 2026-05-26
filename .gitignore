@@ -257,6 +257,7 @@ yarn.lock
 !.pdd/meta/get_test_command_python.json
 !.pdd/meta/git_update_python.json
 !.pdd/meta/llm_invoke_python.json
+!.pdd/meta/preprocess_python.json
 !.pdd/meta/summarize_directory_python.json
 .pdd/meta/*_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
