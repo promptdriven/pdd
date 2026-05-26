@@ -1077,7 +1077,7 @@ def _preflight_drift_heal(
             # a different version when devs have a global install plus a
             # project-local one.
             result = subprocess.run(
-                [sys.executable, "-m", "pdd", "update", drift.code_path],
+                [sys.executable, "-m", "pdd", "update", "--sync-metadata", drift.code_path],
                 cwd=str(worktree_path),
                 capture_output=True,
                 text=True,
