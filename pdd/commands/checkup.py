@@ -242,6 +242,49 @@ from ..core.utils import echo_model_line
         "verifier would collapse the reviewer/fixer independence."
     ),
 )
+@click.option(
+    "--no-gates",
+    "no_gates",
+    is_flag=True,
+    default=False,
+    help=(
+        "Disable the deterministic-gate enforcement layer (issue #1092). "
+        "By default the review loop discovers a conservative set of fast "
+        "local checks (prettier --check, git diff --check against the PR "
+        "range, a non-mutating Python syntax check, optional "
+        "ruff/black/mypy/tsc) and refuses a clean LLM verdict if "
+        "any of them fail on the PR worktree. Pass --no-gates to fall "
+        "back to LLM-only verdicts (legacy behavior); the loop will then "
+        "trust the reviewer's clean even if a deterministic check would "
+        "have failed locally."
+    ),
+)
+@click.option(
+    "--gate-timeout",
+    "gate_timeout",
+    type=float,
+    default=60.0,
+    show_default=True,
+    help=(
+        "Per-gate wall-clock timeout in seconds. A gate exceeding this "
+        "cap is recorded as a runner-side failure (exit_code=None) and "
+        "treated as a blocker finding rather than blocking the loop."
+    ),
+)
+@click.option(
+    "--gate-allow",
+    "gate_allow",
+    type=str,
+    multiple=True,
+    default=(),
+    help=(
+        "Repeatable. Forward-compatibility hook for opting extra gate "
+        "names into discovery beyond the conservative v1 set. Each "
+        "value is one gate name. Discovery remains allowlist-only; this "
+        "argument is threaded through so the CLI and discovery surfaces "
+        "can co-evolve without breaking signature stability."
+    ),
+)
 @click.pass_context
 @track_cost
 def checkup(
@@ -273,6 +316,9 @@ def checkup(
     blocking_severities: Optional[str],
     clean_reviewer_states: Optional[str],
     fallback_reviewer_on_failure: bool,
+    no_gates: bool,
+    gate_timeout: float,
+    gate_allow: Tuple[str, ...],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -421,6 +467,9 @@ def checkup(
             blocking_severities=blocking_severities,
             clean_reviewer_states=clean_reviewer_states,
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,
+            enable_gates=not no_gates,
+            gate_timeout=gate_timeout,
+            gate_allow=tuple(gate_allow),
         )
 
         if not quiet:

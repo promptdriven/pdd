@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
@@ -337,6 +339,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 # Issue #1088: the final-report render re-fetches the
                 # remote PR head SHA to detect stale-head drift. Include
                 # ``head_sha`` matching the ``_git_rev_parse_head`` stub
@@ -353,6 +356,8 @@ class TestCheckupReviewLoopRuntime:
             mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def test_clean_pass_requires_primary_reviewer_only(
         self, monkeypatch: Any, tmp_path: Path
@@ -748,10 +753,23 @@ class TestCheckupReviewLoopRuntime:
         import pdd.checkup_review_loop as mod
 
         monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        # Iter-17 Finding 3: review-only with gates enabled (the default)
+        # now fetches PR metadata so the gate layer can compute the PR
+        # range against a non-``main`` base. The test's original
+        # ``pytest.fail`` here predates that change; return a minimal
+        # valid metadata payload instead, and keep the strict
+        # no-commit/no-push assertion below — that is the actual
+        # invariant the test is pinning.
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
-            lambda *a, **k: pytest.fail("metadata fetch"),
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+               "base_ref": "main",
+                "base_ref": "main",
+                "head_sha": "a" * 40,
+            },
         )
         monkeypatch.setattr(
             mod,
@@ -759,6 +777,8 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: pytest.fail("commit/push should not run"),
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
         calls: List[Tuple[str, str]] = []
         finding = {
             "severity": "critical",
@@ -1010,6 +1030,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -1018,6 +1039,8 @@ class TestCheckupReviewLoopRuntime:
             mod, "_commit_and_push_if_changed", lambda *a, **k: (False, "auth failed")
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
         calls: List[Tuple[str, str]] = []
         finding = {
@@ -3267,6 +3290,7 @@ class TestShaBackedVerificationTrustBoundary:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_sha": head_sha,
             },
         )
@@ -3277,6 +3301,8 @@ class TestShaBackedVerificationTrustBoundary:
             mod, "_git_rev_parse_head", lambda *a, **k: rev_parse_head
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _fake_task(
         self,
@@ -3429,6 +3455,7 @@ class TestShaBackedVerificationTrustBoundary:
             base = {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+            "base_ref": "main",
             }
             if len(metadata_calls) == 1:
                 base["head_sha"] = sha_a
@@ -3440,6 +3467,8 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
         monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -3737,6 +3766,7 @@ class TestShaBackedVerificationTrustBoundary:
             return {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_sha": sha_a if len(metadata_calls) == 1 else sha_b,
             }
 
@@ -3752,6 +3782,8 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
         calls: List[str] = []
 
@@ -3818,6 +3850,7 @@ class TestShaBackedVerificationTrustBoundary:
             base: Dict[str, str] = {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+            "base_ref": "main",
             }
             if len(metadata_calls) == 1:
                 base["head_sha"] = sha_a
@@ -3836,6 +3869,8 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
         monkeypatch.setattr(
             mod,
             "_run_role_task",
@@ -4272,6 +4307,72 @@ class TestPromptInjection:
         assert "prioritizing the blocking severities\n(blocker)" in prompt
         assert "every valid" in prompt
         assert "Do not use\n\"focused\"" in prompt
+
+
+class TestScrubSecretsPatterns:
+    """Direct unit tests for ``_scrub_secrets`` redaction patterns.
+
+    The integration tests cover end-to-end behaviour; these pin the
+    individual regex behaviours so a future "tighten" of the pattern
+    set can be caught at the smallest possible scope.
+    """
+
+    def test_redacts_generic_basic_auth_url_userinfo(self) -> None:
+        """Generic ``scheme://user:password@host`` credentials must be
+        replaced even when the password is a custom internal token
+        shape that does NOT match any prefix-anchored pattern
+        (``ghp_``/``ghs_``/``sk-``/``AIza``/etc.). Git stderr on a
+        failed fetch echoes such URLs verbatim; the lookbehind/
+        lookahead pattern preserves the surrounding scheme + host
+        so the diagnostic remains useful.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        leaky = (
+            "fatal: Authentication failed for "
+            "'https://x-access-token:customToken123456789@github.com/o/r.git/'"
+        )
+        scrubbed = _scrub_secrets(leaky)
+        assert "customToken123456789" not in scrubbed
+        assert "x-access-token:customToken123456789" not in scrubbed
+        # Scheme + host survive — operator can still read the URL shape.
+        assert "https://" in scrubbed
+        assert "github.com/o/r.git" in scrubbed
+        assert "[REDACTED]" in scrubbed
+
+    def test_redacts_basic_auth_for_arbitrary_scheme(self) -> None:
+        """Pattern must work for non-HTTPS schemes too — ``http://``,
+        ``ssh://``, ``git://`` all carry the same userinfo shape.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        for scheme in ("http", "https", "ssh", "git"):
+            line = f"remote: {scheme}://alice:s3cret-PA55W0RD@host.example/path"
+            scrubbed = _scrub_secrets(line)
+            assert "alice:s3cret-PA55W0RD" not in scrubbed, scheme
+            assert "[REDACTED]" in scrubbed, scheme
+            assert f"{scheme}://" in scrubbed, scheme
+            assert "host.example" in scrubbed, scheme
+
+    def test_url_userinfo_pattern_leaves_plain_urls_alone(self) -> None:
+        """No userinfo → no redaction. A bare ``https://github.com/...``
+        URL must survive verbatim so the diagnostic context the
+        operator needs is not over-redacted.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        plain = "fatal: cannot connect to https://github.com/o/r.git"
+        assert _scrub_secrets(plain) == plain
+
+    def test_url_userinfo_does_not_match_path_with_at(self) -> None:
+        """``foo://bar/baz@quux`` is a path with a literal ``@``, not
+        userinfo — the lookahead/lookbehind around ``://``…``@``
+        plus the no-slash char classes prevent a false match.
+        """
+        from pdd.checkup_review_loop import _scrub_secrets
+
+        path_with_at = "loaded https://example.com/path/v1@2024/file.txt"
+        assert _scrub_secrets(path_with_at) == path_with_at
 
 
 class TestParseHelpers:
@@ -6775,11 +6876,14 @@ class TestPromptSourceGuardIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _seed_registry(
         self, tmp_path: Path, modules: List[Dict[str, Any]]
@@ -7973,6 +8077,7 @@ class TestArchitectureRegistryEditGuardIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -7980,6 +8085,8 @@ class TestArchitectureRegistryEditGuardIntegration:
         monkeypatch.setattr(
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -8555,6 +8662,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -8562,6 +8670,8 @@ class TestRound6UntrackedDirectoryBypassIntegration:
         monkeypatch.setattr(
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -9085,6 +9195,7 @@ class TestRound7SymlinkedPackageBypassIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -9092,6 +9203,8 @@ class TestRound7SymlinkedPackageBypassIntegration:
         monkeypatch.setattr(
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -10021,3 +10134,1453 @@ class TestRound13PromptsSubdirImportableBypass:
         # code scan must NOT flag the .prompt path.
         if reason is not None:
             assert "pdd/prompts/foo_v2.prompt" not in reason
+class TestReviewLoopDeterministicGates:
+    """Issue #1092: deterministic local gates gate the clean verdict.
+
+    These tests pin the contract that a failing local deterministic
+    check (e.g. ``prettier --check``) cannot be overridden by an LLM
+    "clean" verdict at ANY clean-exit site in the review loop.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        sha = "a" * 40
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "main",
+                # Iter-23 Finding 1: gates fail closed when metadata
+                # has no base_ref (gh-API failure semantics). Supply
+                # a base_ref so the default _patch_io still
+                # represents a real PR scenario; tests that exercise
+                # the fail-closed path override this stub.
+                "base_ref": "main",
+                # Issue #1088 R-V5 trust boundary: the render-time
+                # PR-head re-fetch compares this against the pushed
+                # SHA; aligning them keeps gate tests on the verifier
+                # path and out of the stale-head downgrade path.
+                "head_sha": sha,
+            },
+        )
+        # Iter-23: gates auto-refresh the PR base ref. The default
+        # stub is a no-op success — tests that exercise refresh
+        # failure modes override it.
+        monkeypatch.setattr(
+            mod,
+            "_refresh_pr_base_ref",
+            lambda *a, **k: None,
+        )
+        # Iter-34 Finding 1: ``_pr_changed_files_all`` falls back to
+        # ``HEAD~1...HEAD`` and sets a sentinel on pr_metadata when
+        # the PR-range diff fails. The default _patch_io tmp_path is
+        # not a multi-commit PR worktree, so the real scanner would
+        # always set the sentinel and trip the fail-closed path —
+        # masking what the gate-specific tests are trying to
+        # exercise. Stub to a clean empty inventory; tests that
+        # exercise the fallback path override this.
+        monkeypatch.setattr(
+            mod,
+            "_pr_changed_files_all",
+            lambda *a, **k: [],
+        )
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
+        )
+        # Issue #1088 R-V4: the verifier only runs when the push captures
+        # a non-empty pushed_head_sha. Without this stub the verify-path
+        # gate tests fall into R-V6's "budget exhausted before verifier"
+        # branch and the gate enforcement post-verify never fires.
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+    def _stub_failing_gate(
+        self,
+        monkeypatch: Any,
+        *,
+        gate_name: str = "prettier-check",
+        fail_rounds: Tuple[int, ...] = (1,),
+    ) -> List[int]:
+        """Patch the gate runner so it reports a failing gate for ``fail_rounds``.
+
+        Returns a list that is mutated to record each ``round_number`` the
+        runner was invoked with so tests can assert call counts.
+        """
+        import pdd.checkup_gates as gates_mod
+        import pdd.checkup_review_loop as mod
+
+        rounds_seen: List[int] = []
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name=gate_name,
+                    cmd=["echo", "fake"],
+                    source="package.json:scripts.format:check",
+                    required_fix_hint="Run prettier --write . locally.",
+                )
+            ]
+
+        def fake_run(worktree, gates, *, artifacts_dir, round_number, mode, default_timeout=60.0):
+            rounds_seen.append(round_number)
+            exit_code = 1 if round_number in fail_rounds else 0
+            return [
+                gates_mod.GateResult(
+                    gate=g,
+                    exit_code=exit_code,
+                    stdout_excerpt="Code style issues found." if exit_code else "",
+                    stderr_excerpt="",
+                    duration_seconds=0.01,
+                    started_at_iso="2026-01-01T00:00:00Z",
+                )
+                for g in gates
+            ]
+
+        # Patch BOTH the source-module symbols (so other importers see the
+        # stubs) and the loop's local import resolution path.
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", fake_run)
+        # ``_enforce_gates_before_clean`` imports lazily; patch the parent
+        # module's attribute lookup so the imports inside the helper hit
+        # our stubs.
+        _ = mod
+        return rounds_seen
+
+    def test_clean_reviewer_with_failing_prettier_gate_blocks_clean_verdict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Reviewer says clean; a failing prettier gate must keep the loop open."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # The gate keeps failing every round, so the loop runs to
+        # max_rounds and the reviewer never lands at "clean".
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+        # Reviewer always says clean; fixer pretends to act.
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=findings" in report
+        # The synthetic gate finding made it into the dedup'd findings.
+        assert "gate:prettier-check" in report
+
+    def test_fixer_receives_gate_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch)
+        instructions: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            instructions.append(instruction)
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The fixer's prompt must reference the synthetic gate finding.
+        fix_instructions = [
+            text for text in instructions if "fix" in text.lower()
+        ]
+        joined = "\n".join(fix_instructions)
+        assert "gate:prettier-check" in joined or "deterministic-gate" in joined
+
+    def test_gates_rerun_after_fixer_push_and_clean_when_passing(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Happy path: gate fails round 1, fixer addresses, gate passes round 2."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        rounds_seen = self._stub_failing_gate(monkeypatch, fail_rounds=(1,))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=3),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Gate runner must have been invoked across multiple rounds.
+        assert 1 in rounds_seen
+        # Loop ends clean once the gate stops failing.
+        assert "reviewer-status: codex=clean" in report
+        assert "fresh-final-review: clean" in report
+
+    def test_verify_clean_with_failing_gate_does_not_mark_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Verify-path coverage: post-fix verifier says clean, but gate fails."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Round 1: reviewer reports findings → fixer runs → verifier says
+        # clean. The gate fails AFTER the verify pass. The loop must
+        # NOT declare clean.
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+        review_calls = {"n": 0}
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix" in label:
+                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+            review_calls["n"] += 1
+            if review_calls["n"] == 1:
+                # Reviewer reports a finding so the loop enters the
+                # fixer / verifier path.
+                payload = {
+                    "status": "findings",
+                    "issue_aligned": True,
+                    "summary": "f",
+                    "findings": [
+                        {
+                            "severity": "blocker",
+                            "reviewer": role,
+                            "area": "test",
+                            "evidence": "e",
+                            "finding": "fix me",
+                            "required_fix": "do it",
+                            "location": "f.py:1",
+                        }
+                    ],
+                }
+                return True, json.dumps(payload), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The post-verify path must not end clean while the gate is red.
+        assert "reviewer-status: codex=clean" not in report
+        assert "gate:prettier-check" in report
+
+    def test_review_only_with_failing_gate_reports_findings_not_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(review_only=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        assert "gate:prettier-check" in report
+
+    def test_fallback_reviewer_clean_with_failing_gate_does_not_ship(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The fallback-reviewer clean path must also honour the gate veto."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Gate fails in every round so the fallback clean cannot ship.
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+
+        # Primary reviewer fails, fallback reviewer (the fixer's role) is
+        # promoted and reports clean. Without #1092, the loop would ship
+        # the fallback's clean verdict immediately. With #1092, the
+        # gate-failure findings must keep the loop open and the verdict
+        # at "findings".
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if role == "codex":
+                # Primary reviewer always fails → fallback promotion fires.
+                return False, "Authentication failed", 0.0, role
+            if "fix" in label:
+                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+            # Fallback reviewer always reports clean.
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                max_rounds=1,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Loop must NOT exit clean (fresh-final stays missing).
+        assert "fresh-final-review: clean" not in report
+        # Gate finding must be in the rendered findings table.
+        assert "gate:prettier-check" in report
+
+    def test_no_gates_flag_preserves_legacy_behavior(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``enable_gates=False`` must skip the helper entirely."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Make ``discover_gates`` raise — if the loop is honouring
+        # ``enable_gates=False``, the helper short-circuits before
+        # touching ``checkup_gates`` and the loop completes cleanly.
+        def boom(*a: Any, **k: Any):
+            raise AssertionError("gates should not run when disabled")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(enable_gates=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=clean" in report
+
+    def test_gate_artifacts_are_persisted_under_pdd_checkup_review_loop_dir(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        # Stub a single failing gate so we can inspect the persisted
+        # artifact path without exercising the full loop.
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        artifacts = tmp_path / ".pdd" / "checkup-review-loop"
+        artifacts.mkdir(parents=True, exist_ok=True)
+
+        findings = _enforce_gates_before_clean(
+            state=ReviewLoopState(reviewer_status={"codex": "missing"}),
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=artifacts,
+            round_number=3,
+            mode="review",
+            pr_metadata={},
+            reviewer="codex",
+        )
+
+        assert findings, "failing gate must yield at least one finding"
+        manifest = artifacts / "round-3-review-gates.json"
+        assert manifest.exists(), (
+            f"expected manifest at {manifest}; got "
+            f"{sorted(p.name for p in artifacts.iterdir())}"
+        )
+
+    def test_gate_runs_render_in_final_report_and_final_state(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The ### Deterministic Gates section + final-state.json gates field."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "### Deterministic Gates" in report
+        assert "prettier-check" in report
+        # The final-state.json artifact must include the structured
+        # gate-run audit trail.
+        final_state_path = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+        )
+        assert final_state_path.exists(), (
+            f"missing {final_state_path}; siblings: "
+            f"{sorted(p.name for p in final_state_path.parent.iterdir())}"
+        )
+        payload = json.loads(final_state_path.read_text(encoding="utf-8"))
+        assert "gates" in payload
+        assert payload["gates"], "expected at least one gate-run entry"
+        assert payload["gates"][0]["mode"]
+        assert payload["gates"][0]["results"]
+
+    def test_enforce_gates_runner_crash_produces_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 1, Finding 3: when ``run_gates`` raises
+        (provider bug, subprocess regression, disk full inside the runner),
+        ``_enforce_gates_before_clean`` MUST fail closed by returning a
+        synthetic blocker finding instead of swallowing the failure.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError("runner kaboom")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        findings = _enforce_gates_before_clean(
+            state=ReviewLoopState(reviewer_status={"codex": "missing"}),
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata={},
+            reviewer="codex",
+        )
+        assert findings, "runner crash must NOT silently swallow into []"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "blocker"
+        assert f.reviewer == "gate:runner"
+        assert "runner" in f.finding.lower() or "crash" in f.finding.lower()
+        evidence_lower = f.evidence.lower()
+        assert (
+            "runtimeerror" in evidence_lower or "runner kaboom" in evidence_lower
+        )
+
+    def test_enforce_gates_runner_crash_scrubs_secrets_from_logs_and_state(
+        self, monkeypatch: Any, tmp_path: Path, caplog: Any
+    ) -> None:
+        """Iter-15 Finding 3: ``str(exc)`` from a crashed gate runner can
+        carry tokens (``OPENAI_API_KEY``, ``GITHUB_TOKEN``, ``sk-…``,
+        ``Bearer`` headers). The pre-fix code logged it raw and stored
+        it raw on ``state.gate_runs`` before the report/final-state
+        writers scrubbed downstream. CI/cloud log capture is a public
+        surface — scrub BEFORE the logger and the state row, not after.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=["echo", "x"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        secret = "sk-supersecret-ABCDEFGHIJKLMNOPQRSTUVWX"
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError(f"upstream barfed token={secret}")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            findings = _enforce_gates_before_clean(
+                state=state,
+                config=ReviewLoopConfig(),
+                worktree=tmp_path,
+                artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+                round_number=1,
+                mode="review",
+                pr_metadata={},
+                reviewer="codex",
+            )
+
+        assert findings, "crash must still fail closed"
+        # The warning-level log line MUST NOT carry the raw secret.
+        warning_text = "\n".join(
+            rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"
+        )
+        assert "gates: run_gates crashed" in warning_text
+        assert secret not in warning_text, (
+            "raw token leaked into WARNING log before _scrub_secrets"
+        )
+        # The state.gate_runs row (persisted into final-state.json) must
+        # also be scrubbed at write time, not just at render time.
+        assert state.gate_runs, "crash must record a gate_runs row"
+        raw_row_error = state.gate_runs[-1].get("error", "")
+        assert secret not in raw_row_error, (
+            "raw token leaked into state.gate_runs[].error"
+        )
+
+    def test_enforce_gates_discover_crash_scrubs_secrets_from_logs(
+        self, monkeypatch: Any, tmp_path: Path, caplog: Any
+    ) -> None:
+        """Iter-15 Finding 3: same scrub guarantee for the discovery
+        crash path (``discover_gates`` raising)."""
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        secret = "sk-anothersecret-1234567890ABCDEFGHIJ"
+        def boom_discover(*a: Any, **k: Any):
+            raise RuntimeError(f"pyproject barfed token={secret}")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", boom_discover)
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            findings = _enforce_gates_before_clean(
+                state=state,
+                config=ReviewLoopConfig(),
+                worktree=tmp_path,
+                artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+                round_number=1,
+                mode="review",
+                pr_metadata={},
+                reviewer="codex",
+            )
+
+        assert findings
+        warning_text = "\n".join(
+            rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"
+        )
+        assert "gates: discovery crashed" in warning_text
+        assert secret not in warning_text
+        raw_row_error = state.gate_runs[-1].get("error", "")
+        assert secret not in raw_row_error
+
+    def test_enforce_gates_runner_crash_blocks_clean_verdict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Full-loop coverage: when the gate runner crashes, the loop
+        must not declare clean. The synthetic blocker finding rides
+        through the normal pending-findings path.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError("runner kaboom")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # A crashed runner MUST NOT silently ship clean.
+        assert "reviewer-status: codex=clean" not in report
+        assert "gate:runner" in report
+
+    def test_final_report_renders_gate_runner_crash_row(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 2, Finding 2: when ``_enforce_gates_before_clean``
+        records a discover/run crash, the ``### Deterministic Gates`` section
+        of the rendered report MUST show the crash row (phase + exception
+        class). Previously the renderer iterated ``run.get("results", [])``
+        which is ``[]`` for a crash, so the section emitted a bare header
+        with no useful operator-facing detail.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError("renderer-test kaboom")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "### Deterministic Gates" in report
+        # Slice the Deterministic Gates section so we don't accidentally
+        # match a substring from the Findings table (whose ``finding``
+        # field already says "runner crashed").
+        start = report.index("### Deterministic Gates")
+        rest = report[start:]
+        next_section_idx = rest.find("\n### ", 1)
+        det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
+        # The crash row must explicitly name the phase (``run_gates``)
+        # and the exception class (``RuntimeError``).
+        assert "runner crash" in det_section.lower(), (
+            f"Deterministic Gates section missing crash row:\n{det_section}"
+        )
+        assert "run_gates" in det_section, det_section
+        assert "RuntimeError" in det_section, det_section
+
+    def test_final_report_scrubs_secrets_in_gate_runner_crash_row(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 3, Finding (MEDIUM, secret leak):
+        the ``### Deterministic Gates`` crash-row renderer prints
+        ``run["error"]`` directly. ``run["error"]`` is built from
+        ``f"{type(exc).__name__}: {exc}"`` and a subprocess exception
+        can embed env-derived secrets (``OPENAI_API_KEY``,
+        ``GITHUB_TOKEN``, ``ANTHROPIC_API_KEY``, …). The final report
+        is posted back to the source issue + PR as a public comment,
+        so any secret-bearing token in the crash row would leak.
+
+        The renderer MUST scrub through the loop's existing
+        ``_scrub_secrets`` helper BEFORE rendering. ``final-state.json``
+        persistence must also scrub the same fields.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        # The exception message embeds a token that matches the
+        # ``sk-ant-`` pattern in ``_SECRET_SCRUB_PATTERNS``. Codex's
+        # repro flagged this exact class.
+        secret_token = "sk-ant-fake-1234567890abcdef"
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError(f"failure with token {secret_token}")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+
+        # The whole report (which becomes a public GitHub comment) MUST
+        # NOT contain the raw token. Check the ``### Deterministic
+        # Gates`` section in particular so a regression in the new
+        # renderer is pinpointed precisely.
+        assert secret_token not in report, (
+            "raw secret leaked into rendered report; the crash-row "
+            "renderer must scrub run['error'] through _scrub_secrets "
+            "before render"
+        )
+        start = report.index("### Deterministic Gates")
+        rest = report[start:]
+        next_section_idx = rest.find("\n### ", 1)
+        det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
+        assert "[REDACTED]" in det_section, (
+            f"crash row must show [REDACTED] in place of the token:\n"
+            f"{det_section}"
+        )
+        assert secret_token not in det_section
+        # Defang must not eat the diagnostic context.
+        assert "runner crash" in det_section.lower()
+        assert "RuntimeError" in det_section
+
+        # final-state.json persists ``state.gate_runs`` raw — make sure
+        # the on-disk audit trail does NOT leak the token either.
+        final_state_path = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+        )
+        if final_state_path.exists():
+            payload_text = final_state_path.read_text(encoding="utf-8")
+            assert secret_token not in payload_text, (
+                "raw secret persisted to final-state.json gate_runs; "
+                "the persistence path must scrub run['error'] too"
+            )
+
+    def test_gate_finding_carries_stable_dedup_key(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_gates import Gate, GateResult, gate_results_to_findings
+
+        gate = Gate(
+            name="prettier-check",
+            cmd=["prettier", "--check", "."],
+            source="package.json:scripts.format:check",
+        )
+        r1 = gate_results_to_findings(
+            [
+                GateResult(
+                    gate=gate,
+                    exit_code=1,
+                    stdout_excerpt="round-1 output",
+                    stderr_excerpt="",
+                    duration_seconds=0.1,
+                    started_at_iso="2026-01-01T00:00:00Z",
+                )
+            ],
+            round_number=1,
+        )
+        r2 = gate_results_to_findings(
+            [
+                GateResult(
+                    gate=gate,
+                    exit_code=1,
+                    stdout_excerpt="round-2 output (different excerpt)",
+                    stderr_excerpt="",
+                    duration_seconds=0.1,
+                    started_at_iso="2026-01-01T00:00:01Z",
+                )
+            ],
+            round_number=2,
+        )
+        assert r1[0].key == r2[0].key
+
+    def test_base_ref_refresh_error_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-19 Finding 2: when ``_refresh_pr_base_ref`` reports
+        ``base_ref_fetch_error``, the gate layer would otherwise fall
+        back to ``origin/main`` (stale on a non-``main`` base) or the
+        worktree-only ``git diff --check`` — silently honouring an LLM
+        clean verdict over a check we cannot prove ran against the
+        right base. Refuse clean with a synthetic blocker finding so
+        the operator either fixes the upstream/network access or
+        passes ``--no-gates`` explicitly.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        pr_metadata = {
+            "base_ref": "release-1.4",
+            "base_ref_fetch_error": (
+                "fatal: couldn't find remote ref refs/heads/release-1.4"
+            ),
+        }
+        findings = _enforce_gates_before_clean(
+            state=state,
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata=pr_metadata,
+            reviewer="codex",
+        )
+        assert findings, "refresh error must fail closed with a finding"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "blocker"
+        assert f.reviewer == "gate:base-ref"
+        assert "release-1.4" in f.evidence
+        # Crash-row written so the renderer surfaces the failure too.
+        assert state.gate_runs, "refresh error must record a gate_runs row"
+        assert state.gate_runs[-1]["phase"] == "base-ref-refresh"
+
+    def test_failed_metadata_fetch_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-23 Finding 1: when ``_fetch_pr_metadata`` itself fails
+        (gh outage, auth, invalid JSON) it returns ``{}`` — and the
+        pre-fix guard ``if pr_metadata.get("base_ref")`` then
+        short-circuited the refresh and let gates run with a None
+        base_ref, silently falling back to ``origin/main`` /
+        worktree-only ``git diff --check``. The metadata path MUST
+        fail closed with the same ``gate:base-ref`` blocker as the
+        refresh path.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Simulate a gh-side failure: _fetch_pr_metadata returns {}.
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", lambda *a, **k: {})
+        refresh_calls: List[Any] = []
+        monkeypatch.setattr(
+            mod,
+            "_refresh_pr_base_ref",
+            lambda *a, **k: refresh_calls.append(a),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Fail-closed contract: the refresh is NOT called (nothing
+        # to refresh against) and the loop refuses clean.
+        assert refresh_calls == []
+        assert "gate:base-ref" in report
+        assert "reviewer-status: codex=clean" not in report
+
+    def test_changed_files_exception_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-35 Finding 1: when ``_pr_changed_files_all`` RAISES
+        unexpectedly, the previous behaviour swallowed the
+        exception into ``changed_files=[]`` and discovery
+        proceeded with an empty inventory — iter-30 ``node_modules``
+        and iter-27/iter-32 config-touched skips couldn't engage.
+        Set the ``changed_files_fallback`` sentinel in the except
+        branch so the iter-34 ``gate:changed-files`` blocker
+        fires.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_review_loop as mod
+
+        secret = "ghp_" + ("E" * 40)
+        def boom(*a, **k):
+            raise OSError(f"git binary missing — token {secret}")
+
+        monkeypatch.setattr(mod, "_pr_changed_files_all", boom)
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        findings = _enforce_gates_before_clean(
+            state=state,
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata={"base_ref": "main"},
+            reviewer="codex",
+        )
+        assert findings, "changed-files exception must fail closed"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.reviewer == "gate:changed-files"
+        # The exception text MUST be scrubbed before landing in
+        # state.gate_runs or the finding.
+        assert secret not in (f.evidence or "")
+        assert secret not in (state.gate_runs[-1].get("error") or "")
+        assert state.gate_runs[-1]["phase"] == "changed-files-resolution"
+
+    def test_changed_files_fallback_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-34 Finding 1: when ``_pr_changed_files_all`` falls back
+        to ``HEAD~1...HEAD`` (every base-range diff failed), the
+        changed-file inventory is TRUNCATED on a multi-commit PR —
+        earlier commits are invisible. The iter-30 ``node_modules``
+        skip and the iter-27/iter-32 config-touched skips all
+        depend on a complete inventory; a truncated list lets
+        earlier-commit poisoning slip through. Fail closed with a
+        ``gate:changed-files`` blocker.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_review_loop as mod
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        pr_metadata = {
+            "base_ref": "main",
+            # Pre-populated by the scanner when it fell back.
+            "changed_files_fallback": (
+                "PR-range diff against every base candidate failed; "
+                "fell back to HEAD~1...HEAD"
+            ),
+        }
+        # Stub the scanner so it doesn't actually run git in the
+        # test's tmp_path. The fail-closed branch fires BEFORE the
+        # scan, so the stub need only return something innocuous.
+        monkeypatch.setattr(
+            mod, "_pr_changed_files_all", lambda *a, **k: []
+        )
+
+        findings = _enforce_gates_before_clean(
+            state=state,
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata=pr_metadata,
+            reviewer="codex",
+        )
+        assert findings, "changed-files fallback must fail closed"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "blocker"
+        assert f.reviewer == "gate:changed-files"
+        assert "changed-files" in f.location or "_pr_changed_files_all" in f.location
+        # A crash-row is recorded so the rendered report's
+        # Deterministic Gates section surfaces the failure.
+        assert state.gate_runs, "fallback must record a gate_runs row"
+        assert state.gate_runs[-1]["phase"] == "changed-files-resolution"
+
+    def test_unexpected_refresh_exception_sets_base_ref_fetch_error(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-21 Finding 3: when ``_refresh_pr_base_ref`` raises an
+        UNEXPECTED exception (anything outside the documented
+        CalledProcessError/TimeoutExpired branches it handles
+        internally), the review loop's except wrapper MUST still set
+        ``pr_metadata['base_ref_fetch_error']`` so the iter-19
+        fail-closed path engages. Previously the loop only logged at
+        debug level and the gate layer silently fell back to
+        ``origin/main`` or the worktree-only check.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+               "base_ref": "main",
+                "base_ref": "release-1.4",
+                "head_sha": "a" * 40,
+            },
+        )
+
+        secret = "ghp_SECRETSECRETSECRETSECRETSECRETabcdef"
+
+        def boom(*a, **k):
+            # Any non-subprocess exception escapes the helper.
+            raise RuntimeError(f"unexpected with token {secret}")
+
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fail-closed path MUST engage: a gate:base-ref blocker
+        # finding appears in the report and the loop did NOT mark the
+        # reviewer clean.
+        assert "gate:base-ref" in report
+        assert "reviewer-status: codex=clean" not in report
+        # The leaked token MUST NOT appear in the rendered report —
+        # the scrub before storing on base_ref_fetch_error must
+        # neutralize it.
+        assert secret not in report
+
+    def test_review_loop_calls_refresh_pr_base_ref_when_gates_enabled(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-17 Finding 1+2: gates need the PR's actual base ref, and
+        the refresh MUST land it in the dedicated
+        ``refs/remotes/pdd-checkup/pr-<N>/base`` namespace (NOT
+        ``refs/remotes/origin/<base>``, which would mutate the
+        operator's tracking refs when their origin is a fork)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # The default _fetch_pr_metadata stub omits base_ref; override
+        # to surface a non-main base so the refresh path fires.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+               "base_ref": "main",
+                "base_ref": "release-1.4",
+                "head_sha": "a" * 40,
+            },
+        )
+        calls: List[Dict[str, Any]] = []
+
+        def fake_refresh(
+            worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet
+        ):
+            calls.append({"owner": pr_owner, "repo": pr_repo, "n": pr_number})
+            pr_metadata["base_local_ref"] = (
+                f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
+            )
+
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", fake_refresh)
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The refresh helper must have been invoked exactly once.
+        assert len(calls) == 1, calls
+        # The gate finding must still surface so the loop refuses clean.
+        assert "gate:prettier-check" in report
+
+    def test_review_only_still_fetches_metadata_when_gates_enabled(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-17 Finding 3: review-only used to short-circuit
+        ``_fetch_pr_metadata`` to ``{}``, which dropped ``base_ref``
+        and left gates unable to compute the PR range on non-``main``
+        bases. When gates are enabled the metadata fetch MUST run
+        regardless of ``review_only``."""
+        from pdd.checkup_review_loop import (
+            run_checkup_review_loop,
+            ReviewLoopConfig,
+        )
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        fetch_calls: List[Tuple[str, str, int]] = []
+
+        def fake_fetch(owner, repo, n):
+            fetch_calls.append((owner, repo, n))
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+               "base_ref": "main",
+                "base_ref": "release-1.4",
+                "head_sha": "a" * 40,
+            }
+
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_fetch)
+        refresh_calls: List[int] = []
+
+        def fake_refresh(
+            worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet
+        ):
+            refresh_calls.append(pr_number)
+            pr_metadata["base_local_ref"] = (
+                f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
+            )
+
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", fake_refresh)
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1,))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        config = ReviewLoopConfig(
+            reviewers="codex",
+            reviewer="codex",
+            fixer=None,
+            review_only=True,
+            max_rounds=1,
+        )
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=config,
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Metadata fetch AND base-ref refresh must both fire even in
+        # review-only mode.
+        assert fetch_calls, "metadata fetch must run when gates are on"
+        assert refresh_calls, "base-ref refresh must run when gates are on"
+        assert "gate:prettier-check" in report
+
+    def test_gate_discovery_crash_does_not_leak_exception_via_debug_log(
+        self, tmp_path: Path, monkeypatch: Any, caplog: Any
+    ) -> None:
+        """Iter-40 Finding 3: the gate discovery/run_gates crash paths
+        previously emitted ``logger.debug(..., exc_info=True)`` which
+        re-renders the raw exception message at DEBUG level —
+        bypassing the WARNING-line scrub above. A token in the
+        exception message (e.g. a path string that surfaced a Bearer
+        header) would land in DEBUG-captured log streams. Verify that
+        a crash whose exception contains a token-shaped string does
+        NOT cause the token to appear in captured DEBUG logs."""
+        import logging
+        from pdd import checkup_gates as cg
+
+        SECRET = "sk-proj-LEAK-CANARY-1234567890abcdef1234567890abcdef"
+
+        def _exploding_discover(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError(
+                f"discovery failed while reading {SECRET}/auth-cache"
+            )
+
+        # ``_enforce_gates_before_clean`` imports ``discover_gates``
+        # lazily from ``pdd.checkup_gates`` — patch at the source.
+        monkeypatch.setattr(cg, "discover_gates", _exploding_discover)
+
+        # Build a minimal state for the helper. The dataclass uses
+        # field defaults for everything; only ``enable_gates`` needs to
+        # be True (default).
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+
+        config = ReviewLoopConfig(enable_gates=True, gate_timeout=10.0)
+        state = ReviewLoopState()
+
+        with caplog.at_level(logging.DEBUG, logger="pdd.checkup_review_loop"):
+            findings = _enforce_gates_before_clean(
+                worktree=tmp_path,
+                config=config,
+                state=state,
+                reviewer="codex",
+                round_number=1,
+                mode="review",
+                artifacts_dir=tmp_path / "artifacts",
+                pr_metadata=None,
+            )
+
+        # The helper MUST produce a synthetic blocker finding (fail
+        # closed) without re-raising.
+        assert findings, "gate discovery crash must produce a blocker finding"
+
+        # The captured log output (WARNING + DEBUG) MUST NOT contain
+        # the secret.
+        captured = "\n".join(rec.getMessage() for rec in caplog.records)
+        # Also walk traceback renderings on any DEBUG record that
+        # carries ``exc_info``.
+        for rec in caplog.records:
+            if rec.exc_info:
+                import traceback
+                tb = "".join(
+                    traceback.format_exception(*rec.exc_info)
+                )
+                captured = captured + "\n" + tb
+        assert SECRET not in captured, (
+            "iter-40 Finding 3: exception text containing a secret leaked "
+            "into DEBUG log capture; check exc_info=True on log calls in "
+            "_enforce_gates_before_clean"
+        )
+
+
+class TestPrChangedFilesScannerBaseLocalRef:
+    """Iter-18 Findings 2+3: the changed-file scanners that scope
+    py_compile/ruff/black/mypy gates and the list-drift detector must
+    prefer ``pr_metadata['base_local_ref']`` (the dedicated tracking
+    ref populated by ``_refresh_pr_base_ref``) over the
+    ``origin/<base>`` / ``main`` / ``master`` candidate set.
+
+    Without the dedicated-ref preference, a PR targeting a non-``main``
+    base whose base was just freshly fetched into
+    ``refs/remotes/pdd-checkup/pr-<N>/base`` would still compute the
+    diff against a stale ``origin/main`` — silently dropping every
+    file the PR actually changed on that base.
+    """
+
+    def _make_pr_repo(self, tmp_path: Path) -> Tuple[Path, str]:
+        """Build a synthetic repo with a non-main base ref and an
+        additional commit on the PR branch that introduces a Python
+        file. Returns (worktree, base_local_ref)."""
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "--allow-empty", "-m", "init", "-q"],
+            cwd=tmp_path, check=True,
+        )
+        # Synthetic release base diverged from main:
+        subprocess.run(["git", "checkout", "-q", "-b", "release-1.4"], cwd=tmp_path, check=True)
+        (tmp_path / "release_anchor.txt").write_text("anchor\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "-m", "release-base", "-q"],
+            cwd=tmp_path, check=True,
+        )
+        local_ref = "refs/remotes/pdd-checkup/pr-1/base"
+        subprocess.run(
+            ["git", "update-ref", local_ref, "HEAD"],
+            cwd=tmp_path, check=True,
+        )
+        # PR branch off the release base, changing a Python file:
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "feature.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "-m", "feat", "-q"],
+            cwd=tmp_path, check=True,
+        )
+        return tmp_path, local_ref
+
+    def test_pr_changed_files_all_uses_base_local_ref(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _pr_changed_files_all
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        pr_metadata = {
+            "base_ref": "release-1.4",
+            "base_local_ref": local_ref,
+        }
+        files = _pr_changed_files_all(worktree, pr_metadata)
+        # Must include the Python file the PR added on the release base
+        # — exactly the file that would silently disappear if the
+        # scanner fell back to ``origin/main`` (which does not exist
+        # in this synthetic repo at all).
+        assert "pkg/feature.py" in files
+
+    def test_pr_changed_files_all_uses_trusted_git_under_dot_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from pdd.checkup_review_loop import _pr_changed_files_all
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        shim = worktree / "git"
+        marker = worktree / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        files = _pr_changed_files_all(
+            worktree,
+            {
+                "base_ref": "release-1.4",
+                "base_local_ref": local_ref,
+            },
+        )
+
+        assert "pkg/feature.py" in files
+        assert not marker.exists()
+
+    def test_pr_changed_python_files_uses_base_local_ref(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _pr_changed_python_files
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        pr_metadata = {
+            "base_ref": "release-1.4",
+            "base_local_ref": local_ref,
+        }
+        files = _pr_changed_python_files(worktree, pr_metadata)
+        assert files == ["pkg/feature.py"]
+
+    def test_pr_changed_python_files_uses_trusted_git_under_dot_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from pdd.checkup_review_loop import _pr_changed_python_files
+
+        worktree, local_ref = self._make_pr_repo(tmp_path)
+        shim = worktree / "git"
+        marker = worktree / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        files = _pr_changed_python_files(
+            worktree,
+            {
+                "base_ref": "release-1.4",
+                "base_local_ref": local_ref,
+            },
+        )
+
+        assert files == ["pkg/feature.py"]
+        assert not marker.exists()
