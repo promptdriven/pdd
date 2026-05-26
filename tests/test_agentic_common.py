@@ -2976,6 +2976,11 @@ class TestFindStateCommentPagination:
                 f"Without it, GitHub API only returns first 30 comments. "
                 f"Command was: {args}"
             )
+            assert "--slurp" in args, (
+                f"gh api command missing --slurp flag. "
+                f"Without it, paginated REST pages may be emitted as multiple JSON documents. "
+                f"Command was: {args}"
+            )
 
     # ---- Test 2: Behavioral — state comment beyond 30 is found ----
 
@@ -3001,6 +3006,24 @@ class TestFindStateCommentPagination:
             )
             comment_id, state = result
             assert comment_id == 1035  # 1000 + 35
+            assert state["last_completed_step"] == 35
+
+    def test_find_state_comment_flattens_slurped_pages(self, tmp_path):
+        """``gh api --paginate --slurp`` wraps REST pages in an outer list."""
+        mock_comments = _make_mock_comments(42, state_positions=[35])
+        pages = [mock_comments[:30], mock_comments[30:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(pages),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            assert result is not None
+            comment_id, state = result
+            assert comment_id == 1035
             assert state["last_completed_step"] == 35
 
     # ---- Test 3: Returns first matching state comment ----
@@ -7534,6 +7557,18 @@ class TestDuplicateStateCommentHandling:
         assert ids == [1002, 1005, 1007], (
             f"Expected every matching id [1002, 1005, 1007]; got {ids!r}"
         )
+
+    def test_find_all_flattens_slurped_pages(self, tmp_path):
+        """The duplicate-marker sweep must see matches on every slurped page."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+        pages = [mock_comments[:4], mock_comments[4:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(pages))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007]
 
     def test_github_clear_state_deletes_all_matching_markers(self, tmp_path):
         """``github_clear_state`` must DELETE every comment carrying

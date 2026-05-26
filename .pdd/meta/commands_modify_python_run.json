@@ -6,6 +6,6 @@
   "coverage": 100.0,
   "test_hash": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0",
   "test_files": {
-    "test_modify.py": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0"
+    "tests/commands/test_modify.py": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0"
   }
 }

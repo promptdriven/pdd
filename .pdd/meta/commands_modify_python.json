@@ -2,12 +2,12 @@
   "pdd_version": "0.0.233",
   "timestamp": "2026-05-23T19:10:56.040966+00:00",
   "command": "fix",
-  "prompt_hash": "15d899d2a4d7bdcb3dce7e5fbc2c5f077ec63890cee645a4c79d30b8233f0a63",
-  "code_hash": "587c1cd545b000c2ad3b9eaccbfdfd74259762f188e7e2d1f2f2cd378388f895",
+  "prompt_hash": "88d860b7e2025cdaa9de42360928c42b80d217a568b0f341a8670c655c3a6d3f",
+  "code_hash": "dd63b331edf4b1356c57ff717bda99cb94696694bf863efcdf4700ca5d5bd3d9",
   "example_hash": "84edd899e3202fe13dc2e9437505a85552ec870b325e5628727d7202371d8134",
   "test_hash": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0",
   "test_files": {
-    "test_modify.py": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0"
+    "tests/commands/test_modify.py": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
