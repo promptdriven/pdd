@@ -7576,6 +7576,37 @@ class TestStep6ScopeOrchestratorWiring:
             "_apply_step6_scope_markers does not auto-downgrade scope."
         )
 
+    def test_pattern_retry_overflow_files_flow_into_expansion(self):
+        """Regression for PR #1210 round 5: when PATTERN_SEARCH finds more
+        than _MAX_GREP_RESULTS unclassified files, the overflow MUST still
+        flow into both FIX_LOCATIONS and step6_expansion_items as
+        conservative NEEDS_FIX defaults with a clear "not LLM-reviewed"
+        reason. Silently dropping overflow lets Step 8/9 miss real
+        same-root-cause siblings on broad (>50-match) bugs.
+        """
+        source = self._read_orchestrator_source()
+        # The merge must use the FULL grep set (cap + overflow), not just the
+        # cap-fitted slice.
+        assert "fix_locs, needs_fix, safe, all_grep_unclassified" in source, (
+            "Retry success must merge against the full grep set "
+            "(all_grep_unclassified = cap-fitted + overflow). Otherwise "
+            "overflow files never reach FIX_LOCATIONS."
+        )
+        assert "fix_locs, [], [], all_grep_unclassified" in source, (
+            "Retry failure must merge against the full grep set so overflow "
+            "files default to NEEDS_FIX alongside the cap-fitted unclassifieds."
+        )
+        # Overflow must be folded into sibling_evidence with the overflow reason.
+        assert "_OVERFLOW_REASON" in source, (
+            "Retry path must label overflow defaults with an explicit "
+            "'PATTERN_SEARCH overflow' reason so Step 8/9 know they were not "
+            "LLM-reviewed."
+        )
+        assert "for fname in overflow_unclassified:" in source, (
+            "Retry path must iterate overflow_unclassified to append each "
+            "overflow file to sibling_evidence."
+        )
+
     def test_pattern_retry_path_folds_siblings_into_expansion_items(self):
         """Regression for PR #1210: when Step 6's PATTERN_SEARCH retry classifies
         a grep-discovered file as NEEDS_FIX, the orchestrator must update
