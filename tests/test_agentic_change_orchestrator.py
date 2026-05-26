@@ -96,6 +96,16 @@ def mock_dependencies(temp_cwd):
 # Unit Tests
 # -----------------------------------------------------------------------------
 
+def test_step13_prompt_uses_resolved_base_branch():
+    """Step 13 must not hardcode main for repos whose default branch is master."""
+    prompt = Path("pdd/prompts/agentic_change_step13_create_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--base {base_branch}" in prompt
+    assert "--base main" not in prompt
+
+
 def test_orchestrator_happy_path(mock_dependencies, temp_cwd):
     """
     Test the full successful execution of the orchestrator (Steps 1-13).
@@ -6141,6 +6151,9 @@ class TestCleanRestartMode:
         ), patch(
             "pdd.agentic_change_orchestrator.substitute_template_variables",
             side_effect=capturing_sub,
+        ), patch(
+            "pdd.agentic_change_orchestrator._resolve_main_ref_name",
+            return_value="origin/master",
         ):
             run_agentic_change_orchestrator(
                 issue_url="http://url",
@@ -6163,6 +6176,10 @@ class TestCleanRestartMode:
         assert ctx["clean_restart"] == "true", (
             f"Step 13 context must have clean_restart='true' from persisted state; "
             f"got {ctx['clean_restart']!r}"
+        )
+        assert ctx["base_branch"] == "master", (
+            f"Step 13 context must derive PR base from resolved default ref; "
+            f"got {ctx['base_branch']!r}"
         )
 
     def test_resume_with_persisted_clean_restart_skips_pr_guard(
@@ -6222,8 +6239,8 @@ class TestCleanRestartMode:
     ):
         """When state["clean_restart"]=True is persisted and the user resumes with
         plain pdd change, the worktree setup call must receive effective_clean_restart=True
-        so it skips the remote-fetch / branch-reuse path and forces the base ref
-        from main — not reintroduce the old stopped-run branch.
+        so it skips branch reuse while preserving lease-safe fetch behavior and
+        forces the base ref from main — not reintroduce the old stopped-run branch.
 
         Finding from PR #1150 round-5 review: both _setup_worktree call sites
         passed only the raw CLI flag.
@@ -6273,6 +6290,12 @@ class TestCleanRestartMode:
             assert call_kwargs.get("clean_restart") is True, (
                 f"_setup_worktree must receive clean_restart=True from effective flag; "
                 f"got {call_kwargs.get('clean_restart')!r}"
+            )
+        assert mocks["save_state"].call_args_list, "save_workflow_state was not called"
+        for call in mocks["save_state"].call_args_list:
+            assert call.kwargs.get("dedupe") is True, (
+                "save_workflow_state must use effective_clean_restart for dedupe "
+                f"on persisted clean-restart resumes; got {call.kwargs.get('dedupe')!r}"
             )
 
     def test_clean_restart_pre_clear_failure_is_warned_not_fatal(
@@ -6390,15 +6413,15 @@ class TestSetupWorktreeCleanRestart:
 
         return calls, side_effect
 
-    def test_clean_restart_skips_remote_fetch_even_when_remote_branch_exists(
+    def test_clean_restart_fetches_remote_for_lease_without_reusing_as_base(
         self, tmp_path,
     ):
         """When ``origin/change/issue-N`` already exists from a stopped /
-        wrong-model run, ``clean_restart=True`` MUST skip the fetch +
-        remote-reuse path entirely and base the new worktree on
-        ``_resolve_main_ref(git_root)`` instead. Without this guarantee
-        the previous run's commits leak right back in — the bug
-        issue #1149 set out to eliminate."""
+        wrong-model run, ``clean_restart=True`` MUST refresh the remote ref
+        for Step 13's ``--force-with-lease`` safety, but still base the new
+        worktree on ``_resolve_main_ref(git_root)`` instead. Without this
+        split behavior either the previous run's commits leak back in or the
+        force-with-lease push lacks lease information in fresh executors."""
         from pdd.agentic_change_orchestrator import _setup_worktree
 
         calls, side = self._patch_git(remote_exists=True)
@@ -6409,11 +6432,11 @@ class TestSetupWorktreeCleanRestart:
             wt, err = _setup_worktree(tmp_path, 1149, quiet=True, clean_restart=True)
 
         assert err is None, f"unexpected error: {err}"
-        # Direct behavioral check: no fetch call under clean_restart.
+        # Direct behavioral check: fetch is allowed/required for lease safety.
         fetches = [c for c in calls if c[:2] == ["git", "fetch"]]
-        assert not fetches, (
-            "Under clean_restart=True _setup_worktree MUST NOT fetch the "
-            f"remote change/issue-N branch; saw fetch calls: {fetches!r}"
+        assert fetches, (
+            "Under clean_restart=True _setup_worktree MUST fetch the remote "
+            f"change/issue-N branch for --force-with-lease; saw no fetches."
         )
         # Worktree was created from a real main ref, not from origin/<branch>.
         adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
