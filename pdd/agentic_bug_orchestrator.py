@@ -405,7 +405,8 @@ def _parse_expansion_items(step6_output: str) -> str:
     """Extract expansion items from Step 6's EXPANSION_ITEMS marker.
 
     Returns a deduplicated comma-separated string of expansion items, or "none"
-    if the marker is absent, empty, or explicitly "none" (SCOPE_MATCH / NO_PROPOSED_FIX).
+    if the marker is absent, empty, or explicitly "none" (PROPOSED_FIX_MATCH /
+    NO_PROPOSED_FIX).
 
     When the orchestrator's PATTERN_SEARCH retry appends an updated
     EXPANSION_ITEMS line, the LAST marker wins so resume re-derives the
