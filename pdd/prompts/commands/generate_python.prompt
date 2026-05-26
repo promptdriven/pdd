@@ -47,7 +47,7 @@
 
   3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
      - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--clean-restart`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
-     - **Agentic Mode**: Triggered if first arg is a URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, clean_restart=clean_restart, ...)`.
+     - **Agentic Mode**: Triggered if first arg is a GitHub issue URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. `--clean-restart` is valid only in this agentic GitHub issue mode and must reject arbitrary HTTP/GitHub non-issue URLs.
      - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
 
