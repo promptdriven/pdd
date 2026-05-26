@@ -299,9 +299,8 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
             total = len(vars_)
             n_set = len(present_pairs)
             if missing:
-                missing_str = ", ".join(missing)
                 print(f"  {YELLOW}! {provider}: {n_set}/{total} vars set "
-                      f"(missing: {missing_str}){RESET}")
+                      f"(missing {len(missing)}){RESET}")
             else:
                 print(f"  {GREEN}✓ {provider}: {n_set}/{total} vars set{RESET}")
             found.extend(present_pairs)
@@ -310,7 +309,7 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
             for v in vars_:
                 src = _source_for(v)
                 if src is not None:
-                    print(f"  {GREEN}✓ {v:<28}{RESET} ({src})")
+                    print(f"  {GREEN}✓ {provider:<28}{RESET} ({src})")
                     found.append((v, src))
 
     print()
@@ -329,9 +328,9 @@ def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str,
                     oauth_providers.append(getattr(r, "provider", cli_name))
 
         if oauth_providers:
-            uniq = ", ".join(sorted(set(oauth_providers)))
+            count = len(set(oauth_providers))
             print(f"{GREEN}✓ stored OAuth/subscription/config credentials detected "
-                  f"({uniq}). No API key needed for the agentic CLI.{RESET}")
+                  f"for {count} provider(s). No API key needed for the agentic CLI.{RESET}")
             print(f"{DIM}Hint: re-run `pdd setup` later to add an API key "
                   f"for direct litellm-backed commands.{RESET}")
         else:

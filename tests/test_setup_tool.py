@@ -28,15 +28,15 @@
 #       → "Setup interrupted" message, clean exit.
 #
 # V. Key Scanning (via run_setup)
-#   9.  test_scan_finds_env_keys: Keys in os.environ → found and displayed
+#   9.  test_scan_finds_env_keys: Keys in os.environ → provider found and displayed
 #       with source "shell environment".
-#   10. test_scan_finds_multiple_keys: Multiple keys → all found, count correct.
+#   10. test_scan_finds_multiple_keys: Multiple providers → all found, count correct.
 #   11. test_scan_no_keys_prompts_user: No keys anywhere → interactive
 #       prompt is invoked; after adding one, flow continues.
 #   12. test_scan_multi_var_provider_grouped: Pipe-delimited api_key →
 #       grouped display shows "N/N vars set".
 #   13. test_scan_multi_var_provider_partial: Some vars missing →
-#       grouped display shows partial count and missing names.
+#       grouped display shows partial count and missing count.
 #
 # VI. Model Configuration (via run_setup)
 #   14. test_models_added_from_reference_csv: Matching API keys →
@@ -513,7 +513,7 @@ def test_keyboard_interrupt_phase2():
 # ===========================================================================
 
 def test_scan_finds_env_keys(tmp_path, monkeypatch):
-    """Keys in os.environ → found with 'shell environment' source."""
+    """Keys in os.environ → provider shown with 'shell environment' source."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=SIMPLE_REF_CSV,
@@ -521,13 +521,13 @@ def test_scan_finds_env_keys(tmp_path, monkeypatch):
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
-    assert "ANTHROPIC_API_KEY" in output
+    assert "Anthropic" in output
     assert "shell environment" in output
     assert "1 API key" in output
 
 
 def test_scan_finds_multiple_keys(tmp_path, monkeypatch):
-    """Multiple keys in os.environ → all found."""
+    """Multiple keys in os.environ → providers shown without raw key names."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=SIMPLE_REF_CSV,
@@ -535,8 +535,10 @@ def test_scan_finds_multiple_keys(tmp_path, monkeypatch):
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
-    assert "ANTHROPIC_API_KEY" in output
-    assert "OPENAI_API_KEY" in output
+    assert "Anthropic" in output
+    assert "OpenAI" in output
+    assert "ANTHROPIC_API_KEY" not in output
+    assert "OPENAI_API_KEY" not in output
     assert "2 API key" in output
 
 
@@ -585,7 +587,7 @@ def test_scan_multi_var_provider_grouped(tmp_path, monkeypatch):
 
 
 def test_scan_multi_var_provider_partial(tmp_path, monkeypatch):
-    """Partial multi-var credentials → missing vars shown."""
+    """Partial multi-var credentials → missing count shown."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=BEDROCK_REF_CSV,
