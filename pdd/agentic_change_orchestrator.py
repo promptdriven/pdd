@@ -1539,7 +1539,7 @@ def run_agentic_change_orchestrator(
     # Normalize step comments tracking (Set[int] of step indices already posted)
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
-    
+
     pddrc_context = _load_pddrc_context(cwd)
 
     context = {
