@@ -117,7 +117,7 @@
           },
           {
             "name": "github_save_state",
-            "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None) -> Optional[int]",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]",
             "returns": "Optional[int]"
           },
           {
@@ -137,7 +137,7 @@
           },
           {
             "name": "save_workflow_state",
-            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]",
+            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]",
             "returns": "Optional[int]"
           },
           {

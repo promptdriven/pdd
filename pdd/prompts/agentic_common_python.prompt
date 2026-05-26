@@ -141,7 +141,8 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, O
 `post_final_comment(repo_owner, repo_name, issue_number, reason, total_cost, steps_completed, total_steps, cwd) -> bool`
 `validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
 `load_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]`
-`save_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]` - Must return `None` on GitHub failure (Issue #830).
+`github_save_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]`
+`save_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None, *, dedupe: bool = False) -> Optional[int]` - Must return `None` on GitHub failure (Issue #830). When `dedupe=True` and there is no current GitHub comment id, adopt the newest matching state comment and delete older duplicates before saving.
 `clear_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None`
 
 % Constants

@@ -153,13 +153,13 @@ Before Step 7, create an isolated git worktree for test generation and PR creati
    - Branch name: `fix/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
    - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
-   - If branch already exists locally, delete with `git branch -D`
+   - If branch already exists locally, delete with `git branch -D` when `clean_restart=True` or `resume_existing=False`; clean restart must not preserve an old local `fix/issue-{issue_number}` branch even on the resume-restoration path.
    - Create worktree: `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 2. In orchestrator loop, before Step 7 (the first step that can write files — Step 7 may auto-fix prompt specifications and emits `PROMPT_FIXED`):
    - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)`
-   - When `clean_restart=True`, fetch `+refs/heads/fix/issue-{issue_number}:refs/remotes/origin/fix/issue-{issue_number}` to refresh Step 12 `--force-with-lease` metadata in the remote-tracking ref, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted.
+   - When `clean_restart=True`, fetch `+refs/heads/fix/issue-{issue_number}:refs/remotes/origin/fix/issue-{issue_number}` to refresh Step 12 `--force-with-lease` metadata in the remote-tracking ref, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted. This applies even when resume restoration calls `_setup_worktree(..., resume_existing=True, clean_restart=True)`.
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 7-12
    - Add `worktree_path` to context dict (for Step 12 prompt formatting)
