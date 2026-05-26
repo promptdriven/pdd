@@ -834,7 +834,10 @@ def _parse_classification_evidence(
     seen: set[str] = set()
 
     for match in re.finditer(r"NEEDS_FIX:\s*(.*)", retry_output):
-        filepath = match.group(1).strip().strip("`")
+        raw = match.group(1).strip()
+        # Accept both legacy bare-path form ("NEEDS_FIX: pdd/foo.py") and the
+        # Step 6 prompt's pipe-delimited form ("NEEDS_FIX: pdd/foo.py | reason").
+        filepath = raw.split("|", 1)[0].strip().strip("`")
         if filepath and filepath not in seen:
             needs_fix.append(filepath)
             seen.add(filepath)
@@ -2362,12 +2365,15 @@ def run_agentic_bug_orchestrator(
                         "2. Determine if this code has the same vulnerability as the files "
                         "already in FIX_LOCATIONS.\n"
                         "3. Output EXACTLY ONE of:\n"
-                        "   NEEDS_FIX: filepath\n"
+                        "   NEEDS_FIX: filepath | reason it shares the root cause\n"
                         "   SAFE_EVIDENCE: filepath | line_number | reason why this usage is safe\n\n"
                         "RULES:\n"
                         "- Files without explicit SAFE_EVIDENCE default to NEEDS_FIX\n"
                         "- To mark SAFE, you MUST cite a specific line that makes the usage safe\n"
                         "- Do NOT remove any files from the original FIX_LOCATIONS\n"
+                        "- Use the SAME marker format as Step 6: NEEDS_FIX takes a `<path> | <reason>`\n"
+                        "  pair so the orchestrator can fold each confirmed sibling into the\n"
+                        "  EXPANSION_ITEMS list that Step 8/9 plan tests against.\n"
                     )
 
                     retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
@@ -2385,6 +2391,10 @@ def run_agentic_bug_orchestrator(
                     state["total_cost"] = total_cost
                     state["model_used"] = model_used
 
+                    # Confirmed siblings (with reasons) that need to flow into
+                    # step6_expansion_items so Step 8/9 plan tests for them.
+                    sibling_evidence: List[Tuple[str, str]] = []
+
                     if retry_success:
                         needs_fix, safe = _parse_classification_evidence(retry_output)
 
@@ -2396,9 +2406,26 @@ def run_agentic_bug_orchestrator(
                             fix_locs, needs_fix, safe, unclassified_filenames
                         )
 
+                        # Capture (path, reason) for sibling expansion. Reuse the
+                        # main-path parser so retry output that uses the Step 6
+                        # `NEEDS_FIX: <path> | <reason>` format is handled
+                        # identically to the original Step 6 output.
+                        sibling_evidence = _parse_needs_fix(retry_output)
+                        classified_basenames = {Path(f).name for f in needs_fix} | {Path(f).name for f in safe}
+                        # Files that the LLM did not classify are defaulted to
+                        # NEEDS_FIX by _merge_fix_locations — surface them in
+                        # expansion items too, with no reason since none was
+                        # provided.
+                        sibling_keys = {p for p, _ in sibling_evidence}
+                        for fname in unclassified_filenames:
+                            if Path(fname).name in classified_basenames:
+                                continue
+                            if fname in sibling_keys:
+                                continue
+                            sibling_evidence.append((fname, ""))
+
                         # Log which unclassified files were defaulted to NEEDS_FIX
                         if not quiet:
-                            classified_basenames = {Path(f).name for f in needs_fix} | {Path(f).name for f in safe}
                             for fname in unclassified_filenames:
                                 if Path(fname).name not in classified_basenames:
                                     console.print(
@@ -2413,6 +2440,7 @@ def run_agentic_bug_orchestrator(
                         merged = _merge_fix_locations(
                             fix_locs, [], [], unclassified_filenames
                         )
+                        sibling_evidence = [(f, "") for f in unclassified_filenames]
                         if not quiet:
                             for fname in unclassified_filenames:
                                 console.print(
@@ -2421,11 +2449,28 @@ def run_agentic_bug_orchestrator(
                                 )
 
                     context["fix_locations"] = ", ".join(merged)
+
+                    # Fold confirmed siblings into step6_expansion_items so Step 8
+                    # (test planning) and Step 9 (test generation) emit tests for
+                    # each one — Step 8 reads {step6_expansion_items}, not
+                    # FIX_LOCATIONS, when planning sibling coverage.
+                    expansion_after_retry = context.get("step6_expansion_items", "none")
+                    if sibling_evidence:
+                        expansion_after_retry = _merge_needs_fix_into_expansion(
+                            expansion_after_retry,
+                            sibling_evidence,
+                        )
+                        context["step6_expansion_items"] = expansion_after_retry
                     # Preserve original root cause analysis for downstream steps (7, 8).
                     # Append a FIX_LOCATIONS line so _parse_fix_locations picks up
                     # the verified set on resume. _parse_fix_locations uses finditer
                     # + dedup, so the second line's superset is handled correctly.
+                    # Also append an updated EXPANSION_ITEMS line when retry-discovered
+                    # siblings were folded in, so resume re-parses the merged set
+                    # instead of reverting to the original Step 6 expansion list.
                     step_output = step_output + f"\n\n% Updated after grep verification\nFIX_LOCATIONS: {', '.join(merged)}"
+                    if sibling_evidence:
+                        step_output = step_output + f"\nEXPANSION_ITEMS: {expansion_after_retry}"
                     context["step6_output"] = step_output
 
                     if not quiet:

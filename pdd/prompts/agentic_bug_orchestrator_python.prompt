@@ -122,6 +122,22 @@ After Step 6 completes, the orchestrator MUST parse three additional markers fro
 
 **Threading.** The orchestrator must thread `scope_classification` into the context dict used to format Step 8 and Step 9 templates. Default to `"LOCALIZED"` in the initial context dict (alongside `fix_locations` and `step6_expansion_items`) so missing/early steps render cleanly.
 
+% Step 6 PATTERN_SEARCH Retry Path (issue #1208 follow-up)
+
+When Step 6 emits a `PATTERN_SEARCH:` marker, the orchestrator runs a deterministic `grep -rE` to verify FIX_LOCATIONS is complete. Files found by grep but missing from FIX_LOCATIONS are sent back to the Step 6 model in a retry call. The retry output uses the SAME marker format as the original Step 6 output:
+
+```
+NEEDS_FIX: <path> | <reason it shares the root cause>
+SAFE_EVIDENCE: <path> | <line> | <reason it is safe>
+```
+
+The retry-path parsing contract:
+
+1. **NEEDS_FIX parsing must split on `|`.** Capture the path token (everything before the first `|`), strip backticks/whitespace, and discard the reason for FIX_LOCATIONS merge purposes. Treating the full `<path> | <reason>` string as a path produces a bogus filepath that downstream steps cannot resolve.
+2. **Confirmed siblings from the retry must flow into `context["step6_expansion_items"]`.** After merging the retry's NEEDS_FIX/SAFE_EVIDENCE into FIX_LOCATIONS, re-parse the retry output with the same `_parse_needs_fix`-style helper used for the original Step 6 output and fold each `(path, reason)` pair into the existing EXPANSION_ITEMS string via the same `_merge_needs_fix_into_expansion` helper. Step 8 reads `{step6_expansion_items}` (not `FIX_LOCATIONS`) when planning sibling test coverage, so siblings discovered only by the grep retry are otherwise invisible to Step 8/9.
+3. **Conservative default on retry failure.** If the retry call fails (rate limit, network error, agent abort), every unclassified grep-discovered file is treated as `NEEDS_FIX` for FIX_LOCATIONS purposes AND appended to `step6_expansion_items` (with an empty reason, since the LLM did not classify them). This keeps Step 8/9 test coverage aligned with the conservative fix scope.
+4. **Resume safety.** After updating FIX_LOCATIONS and `step6_expansion_items`, append `FIX_LOCATIONS: <merged>` (and, when applicable, an updated `EXPANSION_ITEMS: <merged>`) to `context["step6_output"]` so a resumed run re-derives the same merged set deterministically.
+
 % Early Exit Conditions (Hard Stops)
 
 The orchestrator must parse step output to detect stop conditions:
