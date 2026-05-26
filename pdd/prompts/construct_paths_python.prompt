@@ -44,7 +44,14 @@
      default_language, target_coverage, strength, temperature, budget, max_attempts.
      Also passes through 'outputs' dict from context_config if present.
    - Track matched context in resolved_config['_matched_context'] for debugging.
-
+   - Validate `.pddrc` keys at load time (issue #1198): emit a UserWarning for any
+     unknown key at the root, context, or defaults levels. Warning format:
+     `WARNING: .pddrc contains unknown key 'X' at path 'Y', ignored. Run 'pdd setup' to regenerate.`
+     Unknown keys are reported but not rejected, so stale configs continue to load.
+     Known keys by level — Root: `version`, `contexts`. Context: `paths`, `defaults`.
+     Defaults: `generate_output_path`, `test_output_path`, `example_output_path`, `prompts_dir`,
+     `prompt_path`, `default_language`, `target_coverage`, `strength`, `temperature`, `budget`,
+     `max_attempts`, `outputs`, `auto_deps_csv_path`.
 2. Context Detection and Pattern Matching:
    - `_match_path_to_contexts(path_str, contexts, use_specificity, is_absolute)`:
      Core matching logic. Skips 'default' context. For absolute paths uses "*/" prefix matching.
