@@ -565,6 +565,46 @@ class TestParseClassificationEvidence:
 
 
 # ---------------------------------------------------------------------------
+# _is_llm_classified — shared by _merge_fix_locations and the retry block
+# ---------------------------------------------------------------------------
+
+
+class TestIsLlmClassified:
+    """Round 2 regression for PR #1210: classification semantics must match
+    between the FIX_LOCATIONS merge and the step6_expansion_items fold so a
+    full-path SAFE on one file does not silently drop a different full-path
+    file with the same basename from sibling test coverage."""
+
+    def test_safe_full_path_does_not_classify_different_full_path(self):
+        """SAFE_EVIDENCE on pdd/foo.py must NOT cover tests/foo.py — both are
+        unambiguous full paths and only the LLM-named one was reviewed."""
+        from pdd.agentic_bug_orchestrator import _is_llm_classified
+
+        needs_fix: list[str] = []
+        safe = ["pdd/foo.py"]
+        unclassified = ["pdd/foo.py", "tests/foo.py"]
+        assert _is_llm_classified("pdd/foo.py", needs_fix, safe, unclassified) is True
+        assert _is_llm_classified("tests/foo.py", needs_fix, safe, unclassified) is False
+
+    def test_bare_basename_covers_single_match_unambiguously(self):
+        """LLM emitted bare `foo.py` and grep found exactly one foo.py — the
+        bare reference unambiguously refers to it."""
+        from pdd.agentic_bug_orchestrator import _is_llm_classified
+
+        unclassified = ["pdd/foo.py"]
+        assert _is_llm_classified("pdd/foo.py", [], ["foo.py"], unclassified) is True
+
+    def test_bare_basename_does_not_cover_when_multiple_match(self):
+        """Two files share the basename — bare reference is ambiguous, so
+        neither is marked classified and both get the conservative default."""
+        from pdd.agentic_bug_orchestrator import _is_llm_classified
+
+        unclassified = ["pdd/foo.py", "tests/foo.py"]
+        assert _is_llm_classified("pdd/foo.py", [], ["foo.py"], unclassified) is False
+        assert _is_llm_classified("tests/foo.py", [], ["foo.py"], unclassified) is False
+
+
+# ---------------------------------------------------------------------------
 # Merge semantics (integration-level)
 # ---------------------------------------------------------------------------
 
