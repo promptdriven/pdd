@@ -284,18 +284,73 @@ try:
     if not getattr(_existing_vertex_transform, "_pdd_opus_4_7_vertex_patched", False):
         _orig_vertex_transform = _existing_vertex_transform
         _VERTEX_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        # Map LiteLLM "low/medium/high/max" reasoning_effort levels back to a
+        # default `output_config.effort` value when none is present on the
+        # incoming request. This mirrors what LiteLLM's map_openai_params
+        # does — we replicate it here so retry-path calls that bypass
+        # map_openai_params still get a sensible effort hint.
+        def _effort_from_budget_tokens(budget_tokens):
+            try:
+                bt = int(budget_tokens or 0)
+            except Exception:  # pylint: disable=broad-except
+                return "high"
+            # Anthropic's documented buckets:
+            #   minimal/low: 1024, medium: 4096, high: 8192, max: 16384+
+            if bt >= 16384:
+                return "max"
+            if bt >= 8192:
+                return "high"
+            if bt >= 4096:
+                return "medium"
+            return "low"
+
         def _patched_vertex_transform(self, model, messages, optional_params, litellm_params, headers):  # pylint: disable=function-redefined
             data = _orig_vertex_transform(self, model, messages, optional_params, litellm_params, headers)
             m = model.lower() if isinstance(model, str) else ""
             if not any(a in m for a in _VERTEX_OPUS_47_ALIASES):
                 return data
-            # The original transform_request popped output_config from `data`;
-            # restore it from optional_params so Vertex receives the
-            # thinking.type.adaptive + output_config.effort pair Opus 4.7
-            # actually requires.
-            oc = optional_params.get("output_config") if isinstance(optional_params, dict) else None
-            if isinstance(oc, dict) and "output_config" not in data:
-                data["output_config"] = oc
+            # Vertex AI Opus 4.7 rejects the legacy `thinking.type.enabled`
+            # shape entirely; the API instructs callers to use
+            # `thinking.type.adaptive` + `output_config.effort`. Force this
+            # shape unconditionally for opus-4-7 because:
+            #
+            #   * map_openai_params produces the right shape on the first
+            #     call (predicate + restore-output_config patches both fire),
+            #     but LiteLLM's `num_retries` retry path re-enters
+            #     transform_request with a stale `optional_params` dict that
+            #     carries `thinking={type:enabled,budget_tokens:N}` and no
+            #     output_config. Without unconditional rewrite here, the
+            #     retry call goes out with the legacy shape and Vertex 400s.
+            #
+            #   * Other code paths (compact-mode retry, fallback budget
+            #     calculation, anything that calls litellm.completion()
+            #     directly with thinking={"type":"enabled",...}) hit the
+            #     same wire if not normalized here.
+            current_thinking = data.get("thinking")
+            budget_tokens = None
+            if isinstance(current_thinking, dict):
+                if current_thinking.get("type") == "enabled":
+                    budget_tokens = current_thinking.get("budget_tokens")
+                    data["thinking"] = {"type": "adaptive"}
+            else:
+                data["thinking"] = {"type": "adaptive"}
+            # output_config: prefer caller's value, else derive from
+            # reasoning_effort/budget_tokens, else default to "high".
+            if "output_config" not in data:
+                oc = optional_params.get("output_config") if isinstance(optional_params, dict) else None
+                if isinstance(oc, dict):
+                    data["output_config"] = oc
+                else:
+                    effort = None
+                    if isinstance(optional_params, dict):
+                        re_effort = optional_params.get("reasoning_effort")
+                        if isinstance(re_effort, str):
+                            effort = re_effort
+                    if effort is None and budget_tokens is not None:
+                        effort = _effort_from_budget_tokens(budget_tokens)
+                    if effort is None:
+                        effort = "high"
+                    data["output_config"] = {"effort": effort}
             return data
         _patched_vertex_transform._pdd_opus_4_7_vertex_patched = True
         _VertexAIAnthropicConfigOpus47.transform_request = _patched_vertex_transform
