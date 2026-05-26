@@ -18,7 +18,7 @@
   - etc.
 
 % Here is the help of pdd: ```<./README.md>```
-  
+
 % Here is an example directory structure: ```├── README.md
 ├── TODO.md
 ├── Makefile
@@ -13637,8 +13637,8 @@ You are an expert Python developer responsible for implementing the `agentic_fix
     - **Standard Gate** (`_verify_and_log`): Uses `verify_cmd` (with `{test}` and `{cwd}` placeholders) or falls back to `get_run_command_for_file`. If no command is found, default to the Python interpreter.
     - **Verification Enablement**: Controlled by `PDD_AGENTIC_VERIFY_FORCE` (always on), `verify_cmd` presence, and `PDD_AGENTIC_VERIFY` env var (`"0"` disables, `"auto"` disables, else enabled). Default is enabled.
     - For non-Python languages, trust the agent's own verification result from the explore task.
-4. **Logging & UI**: Use `rich.console` for formatted output. 
-    - Support "quiet", "normal", and "verbose" log levels via `PDD_AGENTIC_LOGLEVEL`. 
+4. **Logging & UI**: Use `rich.console` for formatted output.
+    - Support "quiet", "normal", and "verbose" log levels via `PDD_AGENTIC_LOGLEVEL`.
     - Default to "quiet" if `PYTEST_CURRENT_TEST` is set.
     - In verbose mode, show unified diffs of changed files and truncated previews of command outputs.
 5. **Resilience**: Handle timeouts (`PDD_AGENTIC_VERIFY_TIMEOUT`) for agent calls and verification steps. Ensure instruction files are cleaned up after execution.
@@ -13668,7 +13668,7 @@ You are an expert Python developer responsible for implementing the `agentic_fix
 ### Instructions
 1. **Entry Point**: Implement `run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd, cwd, *, verbose, quiet, protect_tests)` returning `(success, message, est_cost, used_model, changed_files)`.
 2. **Path Resolution**: Resolve code and test paths relative to the provided `cwd` parameter. Use `Path.resolve()` consistently to ensure the agent receives absolute paths.
-3. **Prompt Construction**: Load `agentic_fix_primary_LLM` (Python) or `agentic_fix_nonpython_LLM` (other languages). 
+3. **Prompt Construction**: Load `agentic_fix_primary_LLM` (Python) or `agentic_fix_nonpython_LLM` (other languages).
     - The Python template requires: `code_abs`, `test_abs`, `prompt_content`, `error_content`, `verify_cmd`, and `protect_tests`.
     - The non-Python template requires: `code_abs`, `test_abs`, `prompt_content`, `error_content`, and `protect_tests`.
 4. **Execution Flow**:
@@ -16740,7 +16740,7 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 
 # Requirements
 1. **Workflow Execution**: Implement a linear sequence of 18 steps (including fractional steps like 5.5) defined by specific prompt templates.
-2. **State Management**: 
+2. **State Management**:
     - Support persistence and resumption using `load_workflow_state` and `save_workflow_state`.
     - Track `total_cost`, `model_used`, and `last_completed_step`.
     - Clear state upon successful completion.
@@ -16784,8 +16784,8 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 3. **Parsing Logic**: Use regex to extract file lists from `FILES_CREATED` and `FILES_MODIFIED`. Handle "none" or "n/a" as empty lists.
 4. **The Loop (Steps 8-11)**: For web tests, implement a loop (max 3 iterations) that performs manual browser testing (Step 8), creates regression tests (Step 9), validates them (Step 10), and checks for completion (Step 11).
 5. **Resume Logic**: When resuming, ensure `likely_ci_cwd` is recalculated from the cached Step 12 output to ensure subsequent test execution steps run in the correct directory.
-6. **Stop Conditions**: 
-    - If Step 1 detects a duplicate, stop. 
+6. **Stop Conditions**:
+    - If Step 1 detects a duplicate, stop.
     - If Step 3 (Clarification) returns a stop condition, save the state such that it re-runs Step 3 on resume (save `last_completed_step` as Step 2).
 7. **Output Formatting**: Ensure all console output uses the `rich` library for consistent styling.
 
@@ -21362,7 +21362,7 @@ Error Handling:
 % Inputs:
 	•	Current output: <current_output>{current_output}</current_output>
 	•	Desired output: <desired_output>{desired_output}</desired_output>
-	•	Code under test: <code_under_test>{code_under_test}</code_under_test> 
+	•	Code under test: <code_under_test>{code_under_test}</code_under_test>
 	•	Program used to run the code under test: <program_used_to_run_code_under_test>{program_used_to_run_code_under_test}</program_used_to_run_code_under_test>
 	•	Prompt that generated the code: <prompt_that_generated_code>{prompt_that_generated_code}</prompt_that_generated_code>
 % Output:
@@ -21381,7 +21381,7 @@ Error Handling:
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'current_output' - A string that is the current output of the code.
         'desired_output' - A string that is the desired output of the code.
         'prompt_used_to_generate_the_code' #create a function that adds two numbers in python
@@ -21391,7 +21391,7 @@ Error Handling:
         'temperature' - A float that is the temperature of the LLM model to use.
         'language' - A string that is the language of the unit test to be generated.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
-    Outputs: 
+    Outputs:
         'unit_test'- A string that is the generated unit test code.
         'total_cost' - A float that is the total cost to generate the unit test code.
         'model_name' - A string that is the name of the selected LLM model
@@ -21410,7 +21410,7 @@ Error Handling:
 
 % This program will use llm_invoke to do the following:
     Step 1. Load the 'bug_to_unit_test_LLM' prompt template using load_prompt_template.
-    Step 2. Run the inputs through the model using llm_invoke, ensuring the `time` parameter is passed. 
+    Step 2. Run the inputs through the model using llm_invoke, ensuring the `time` parameter is passed.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
             - 'current_output'
@@ -21422,7 +21422,7 @@ Error Handling:
     Step 3. Pretty print the markdown formatting that is present in the result via the rich Markdown function.
     Step 4. Detect if the generation is incomplete using the unfinished_prompt function (strength .89) by passing in the last 600 characters of the output of Step 2.
         - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant.    
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant.
     Step 5. Print out the total_cost including all the costs.
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
@@ -21625,7 +21625,7 @@ Error Handling:
 
 % Here is how to use the internal modules:
     <internal_modules>
-        % Here is an example how to preprocess the prompt from a file using an internal module: 
+        % Here is an example how to preprocess the prompt from a file using an internal module:
         <preprocess_example>
             <include select="def:preprocess">pdd/preprocess.py</include>
         </preprocess_example>
@@ -22552,7 +22552,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 # Requirements
 1. **Path Orchestration**: Resolve input and output paths using `construct_paths`, ensuring that CLI flags, front-matter overrides, and `.pddrc` defaults are applied in the correct precedence (CLI > Front-matter > Config).
     - Inject `EXAMPLE_OUTPUT_PATH` into `env_vars` for templates that reference `${EXAMPLE_OUTPUT_PATH}`. Precedence: explicit `-e EXAMPLE_OUTPUT_PATH=…` > `resolved_config["example_output_path"]` > `resolved_config["examples_dir"]` > template front-matter default. The fallback to `examples_dir` is required to keep generated `<include>` paths aligned with where `pdd example` writes files (#616). Strip a single trailing `/` or `\` before injection.
-2. **Incremental Generation**: 
+2. **Incremental Generation**:
     - Detect if an output file already exists.
     - Implement a Git-based "time travel" mechanism: if a file is unchanged in HEAD, search up to 10 previous commits to find a different version of the prompt to use as the "original" for a diff-based update.
     - Automate Git staging (`git add`) of modified files before incremental attempts to allow for potential rollbacks.
@@ -22932,7 +22932,7 @@ Now, implement those changes to create the updated code:
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'prompt1' - First prompt in the pair of prompts we are comparing.
         'prompt2' - Second prompt in the pair of prompts we are comparing.
         'strength' - A float that is the strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
@@ -22959,7 +22959,7 @@ Now, implement those changes to create the updated code:
 
 % This function will do the following:
     Step 1. Load the 'conflict_LLM' and 'extract_conflict_LLM' prompt templates.
-    Step 2. Run the prompts through the model using llm_invoke with the provided strength, temperature, and time. 
+    Step 2. Run the prompts through the model using llm_invoke with the provided strength, temperature, and time.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'PROMPT1'
             - 'PROMPT2'
@@ -23420,7 +23420,7 @@ Deterministic content extraction from files based on line ranges, Python AST str
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'code_module' - A string that is the code module to generate a concise example for.
         'prompt' - A string that is the prompt that was used to generate the code_module.
         'language' - A string that is the language of the code module. Default is "python".
@@ -23817,7 +23817,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
     {CHANGE_DESCRIPTION}
     </change_description>
 </input>
- 
+
 
 % Here is an example of an output for a given input:
 <example>
@@ -23945,7 +23945,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 % Here is how to use the internal modules:
     <internal_modules>
         % Here is an example how to preprocess the prompt from a file: <preprocess_example><include select="def:preprocess">pdd/preprocess.py</include></preprocess_example>
-        
+
         % For loading prompt templates:
         <load_prompt_template_example>
             <include>context/load_prompt_template_example.py</include>
@@ -24263,7 +24263,7 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
 
 % Make sure the following happens:
     - Document in detail what the input and output parameters in the doc strings
-    - Someone needs to be able to fully understand how to use the module from the example.        
+    - Someone needs to be able to fully understand how to use the module from the example.
     - Use correct import statements based on the actual file structure
     - The example should be a complete, runnable script that imports from the actual module
     - Include proper file path handling and module discovery if needed
@@ -24305,7 +24305,7 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
 % Output a JSON with key changes_list which has a value that is the list of JSON objects with the following keys:
     - 'prompt_name': Indicate with 'prompt_1' or 'prompt_2' which prompt needs to be changed.
     - 'change_instructions': Detailed instructions of how the prompt should be changed. This should have as much information as the LLM output provides for this prompt.
-    
+
 % Example output:
 <output_example>{{"changes_list":[
     {{
@@ -24326,7 +24326,7 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
 % Output a JSON with key changes_list which has a value that is the list of JSON objects with the following keys:
     - 'prompt_name': String which containts the exact name of prompt that needs to be changed.
     - 'change_instructions': Detailed instructions of how the prompt should be changed. This should have as much information as the LLM output provides for this prompt.
-    
+
 % Example output:
 <output_example>{{"changes_list":[
     {{
@@ -24340,11 +24340,11 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
 ]}}</output_example>
 
 ===== extract_program_code_fix_LLM.prompt =====
-% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a program and code module bug fix report. 
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a program and code module bug fix report.
 
 % IMPORTANT: The crash command is designed to fix errors in BOTH the code module AND the calling program that caused the crash. You should fix whatever needs to be fixed to make the program run successfully:
 - If the code module has bugs, fix the code module
-- If the calling program has bugs, fix the calling program  
+- If the calling program has bugs, fix the calling program
 - If both have issues that contribute to the crash, fix BOTH
 - The goal is to ensure the program runs without errors after the fix
 
@@ -24387,9 +24387,9 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
 
 
 ===== extract_prompt_split_LLM.prompt =====
-% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM split a prompt into a sub_prompt and modified_prompt. 
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM split a prompt into a sub_prompt and modified_prompt.
 
-% Here is the generated llm_output: 
+% Here is the generated llm_output:
 <llm_output>
     {llm_output}
 </llm_output>
@@ -24398,7 +24398,7 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
     - 'explaination': String containing the explanation of the split and how the prompts should be extracted properly so that both prompts are complete and functional. For instance, sometimes there will be messages like '[... other internal module examples ...]' which means text is missing and should be copied from the input prompt.
     - 'extracted_functionality': String containing the extracted functionality (the sub_prompt) that implements the interface defined in the example_code.
     - 'remaining_prompt': String containing the modified original prompt that will import and use the functionality from the extracted sub-prompt. Sometimes only the changed portion of the modified prompt is given so you may need to combine it with parts of the input prompt to get the complete modified prompt.
-    
+
 
 ===== extract_prompt_update_LLM.prompt =====
 % You are an expert Software Engineer. Your goal is to extract the updated prompt from the LLM output in JSON format.
@@ -24447,10 +24447,10 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
 % Here is the unit test bug fix report: <fix_report>{unit_test_fix}</fix_report>
 
 % Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Read the text around the code block to determine this. Also, often this is signified by comments in the code like:
-    - `# Rest of the code remains the same`, 
+    - `# Rest of the code remains the same`,
     - `# Other tests remain unchanged`
-    - `# ... [remaining test functions remain unchanged]` or 
-    - `# ... rest of the test file remains unchanged ...` at the end of code snippets. 
+    - `# ... [remaining test functions remain unchanged]` or
+    - `# ... rest of the test file remains unchanged ...` at the end of code snippets.
 
 % Here are examples of inputs and proper outputs of this prompt:
     <examples>
@@ -24547,7 +24547,7 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
                 <fix_report_example>
                     ```python
                     import pytest
-                    from auth_service import AuthService                    
+                    from auth_service import AuthService
 
                     # ... [other tests] ...
 
@@ -24616,7 +24616,7 @@ This module handles embedding computation via `litellm.embedding()` and cosine s
                 </unit_test_example>
 
                 <fix_report_example>
-                    ```python                
+                    ```python
                     import pytest
                     from calculator import Calculator
 
@@ -25008,7 +25008,7 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
 1. **Iterative Fixing**: Implement a loop that runs up to `max_attempts`. In each iteration, run the `verification_program` using `run_process_with_output`.
 2. **Hybrid Cloud Support**: If `use_cloud` is True, route LLM fix requests to the `cloud_crash_fix` endpoint. Otherwise, use the local `fix_code_module_errors`.
 3. **Cost & Budget Management**: Track `total_cost` starting from `prior_cost`. Terminate the loop if `total_cost` exceeds `budget`.
-4. **File Handling & Backups**: 
+4. **File Handling & Backups**:
     - Validate existence of `code_file` and `verification_program`.
     - Create initial backups in `.pdd/backups/<code_stem>/<timestamp>/`.
     - Create per-attempt backups of both the code and the verification program.
@@ -25032,7 +25032,7 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
 2. **Normalization**: Implement `_normalize_agentic_result` to handle 2, 3, 4, or 5-tuple returns from the agentic crash handler, ensuring a consistent 5-tuple output.
 3. **Process Management**: Implement `run_process_with_output` to handle subprocess execution. Use `os.killpg` with `signal.SIGKILL` for timeouts. Ensure threads are joined with a timeout and pipes are closed to prevent hanging.
 4. **Cloud Integration**: Implement `cloud_crash_fix` using the `requests` library to call the `crashCode` endpoint. Handle JWT authentication via `CloudConfig`. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`) so the `PDD_CLOUD_TIMEOUT` env var is honored end-to-end — do NOT hardcode a literal (e.g. `timeout=400` or a module-level `CLOUD_REQUEST_TIMEOUT` constant), which silently ignores the env var and was one of the non-compliant sites that contributed to #1272. The function's `if not CLOUD_AVAILABLE or CloudConfig is None: raise RuntimeError(...)` early-exit already guarantees the helper is available before the POST executes, so no additional None-guard is needed at the call site.
-5. **Verification Logic**: 
+5. **Verification Logic**:
     - For Python: Run using `sys.executable`.
     - For Non-Python: Use `default_verify_cmd_for`. If no command exists or verification fails, trigger agentic fallback immediately.
 6. **XML History**: The `<history>` root must contain `<attempt>` blocks. Each attempt must include `<verification>` (with `<status>`, `<output>`, `<error>`), `<current_error>`, and `<fixing>` (with `<llm_analysis>`, `<decision>`, `<cost>`, `<model>`).
@@ -25153,7 +25153,7 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
 
 % This program will do the following:
     Step 1. Load the 'fix_code_module_errors_LLM' and 'extract_program_code_fix_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time. 
+    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'program'
             - 'prompt'
@@ -25161,7 +25161,7 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
             - 'errors'
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
     Step 3. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function. Also pretty print the number of tokens in the result and the cost.
-    Step 4. Run a second llm_invoke with the EXTRACTION_STRENGTH constant, the provided temperature, and time to extract the fixes. 
+    Step 4. Run a second llm_invoke with the EXTRACTION_STRENGTH constant, the provided temperature, and time to extract the fixes.
         4a. Pass the following string parameters to the prompt during invoke:
             - 'program_code_fix': This is the result of the first llm_invoke
             - 'program'
@@ -25375,7 +25375,7 @@ def fix_error_loop(
 <examples>
     <example_1>
     % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/1/test_conflicts_in_prompts.py</include></example_unit_test>
-    
+
     % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts.py</include></example_code_under_test>
 
     % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts_python.prompt</include></example_prompt>
@@ -25488,9 +25488,9 @@ def fix_error_loop(
 
 % This program will do the following:
     Step 1. Load the 'fix_errors_from_unit_tests_LLM' prompt template.
-    
+
     Step 2. Note: The 'error' input parameter contains the current error message and potentially relevant history (like previous test results or fix attempts from the current session) formatted by the calling function (e.g., fix_error_loop.py). This function uses the 'error_log_file' path *only* for writing its own analysis output (see Step 3e), not for reading input history. Handle file I/O errors gracefully when *writing* the log.
-    
+
     Step 3. Run the LLM prompt from Step 1 through llm_invoke:
         3a. Preprocess the input 'prompt' string using preprocess(recursive=False, double_curly_brackets=True).
         3b. Preprocess the loaded 'fix_errors_from_unit_tests_LLM' template string using preprocess(recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'errors', 'prompt']).
@@ -25509,12 +25509,12 @@ def fix_error_loop(
             - 'language' (the input language, to ensure correct post-processing validation)
         3d. Store the full LLM response as analysis_results
         3e. Append the output to error_file with a clear separator and timestamp to distinguish it from previous content
-    
+
     Step 4. Pretty print the analysis results with markdown formatting via the rich Markdown function to both:
         - Console (when verbose is True)
         - error_file (always)
         Also print the number of output tokens and cost.
-    
+
     Step 5. Run a second LLM prompt to extract the fixed code/test:
         5a. Load the 'extract_unit_code_fix_LLM' prompt template.
         5b. Preprocess this second prompt template.
@@ -25530,7 +25530,7 @@ def fix_error_loop(
             - 'fixed_unit_test' (string)
             - 'fixed_code' (string)
         5e. Note: This function does *not* use the 'edit_file' tool or write the fixed code/test to files itself. It returns the fixes for the caller to handle.
-    
+
     Step 6. Clean up temporary files and return the tuple containing:
             - update_unit_test (from Step 5d)
             - update_code (from Step 5d)
@@ -26588,15 +26588,15 @@ Create a Python module for deterministic completion checks to verify if a LLM pr
     ) -> str:
         """
         Get a Firebase ID token using GitHub's Device Flow authentication.
-        
+
         Args:
             firebase_api_key: Firebase Web API key
             github_client_id: OAuth client ID for GitHub app
             app_name: Unique name for your CLI application (default: "my-cli-app")
-            
+
         Returns:
             str: A valid Firebase ID token
-            
+
         Raises:
             AuthError: If authentication fails
             NetworkError: If there are connectivity issues
@@ -26701,14 +26701,14 @@ Create a Python module for deterministic completion checks to verify if a LLM pr
                 github_client_id=GITHUB_CLIENT_ID
             )
             # Use token for API calls...
-            
+
         except AuthError as e:
             print(f"Authentication failed: {e}")
         except NetworkError as e:
             print(f"Network error: {e}")
         except TokenError as e:
             print(f"Token error: {e}")
-``` 
+```
 
 % End User Experience:
     - User runs CLI command
@@ -27104,7 +27104,7 @@ Here is the coverage report: ```{coverage_report}```
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'existing_unit_tests' - A string that is the existing unit tests for the code under test.
         'coverage_report' - A string that is the coverage report for the code under test.
         'code' - A string that is the code under test.
@@ -27139,7 +27139,7 @@ Here is the coverage report: ```{coverage_report}```
 
 % This function will do the following:
     Step 1. Load the 'increase_tests_LLM' prompt template.
-    Step 2. Run the prompt through the model using llm_invoke, passing the input strength and the time parameter. 
+    Step 2. Run the prompt through the model using llm_invoke, passing the input strength and the time parameter.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'existing_unit_tests'
             - 'coverage_report'
@@ -27173,7 +27173,7 @@ Here is the coverage report: ```{coverage_report}```
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'original_prompt' - A string containing the original prompt that was used to generate the existing code.
         'new_prompt' - A string containing the updated prompt that needs to be processed.
         'existing_code' - A string containing the existing code that was generated from the original prompt.
@@ -27211,7 +27211,7 @@ Here is the coverage report: ```{coverage_report}```
 
 % This program will use Langchain to do the following:
     Step 1. Load the 'diff_analyzer_LLM' prompt template using load_prompt_template with preprocess double_curly_brackets=True but be sure to exclude the input parameters from getting double curly brackets.
-    
+
     Step 2. Run the diff_analyzer_LLM prompt through llm_invoke:
         - a. Pass the following parameters to llm_invoke:
             * 'ORIGINAL_PROMPT': The original prompt
@@ -27221,17 +27221,17 @@ Here is the coverage report: ```{coverage_report}```
             * Pass the provided time parameter
         - b. Extract 'is_big_change', 'change_description', and 'analysis' from the Pydantic output
         - c. If verbose is True, print the analysis and whether the change is considered big or small
-    
+
     Step 3. Determine whether to use incremental patching or full regeneration:
         - a. If force_incremental is True, set should_regenerate to False, regardless of the diff analyzer's result
         - b. Otherwise, set should_regenerate to the value of is_big_change from the diff analyzer
         - c. If verbose is True and force_incremental is True, print a message indicating that incremental patching is being forced
-    
+
     Step 4. Based on the should_regenerate decision:
         - a. If should_regenerate is True (major change detected and not overridden):
             * Return None for updated_code, False for is_incremental, the cost incurred so far, and the model name used
             * The calling function should handle the full regeneration
-        
+
         - b. If should_regenerate is False (minor change detected or force_incremental is True):
             * Load the 'code_patcher_LLM' prompt template using load_prompt_template
             * Run the code_patcher_LLM prompt through llm_invoke:
@@ -28061,7 +28061,7 @@ It calls `auto_include` to analyze the prompt and get back a string of directive
 
 
 ===== llm_model_csv.prompt =====
-% You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers: 
+% You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers:
     - 'provider': OpenAI, Anthropic, etc.
     - 'model': the available model strings for that provider (e.g. "gpt-5-nano")
     - 'input': The input cost per million tokens (e.g. 0.15)
@@ -28129,7 +28129,7 @@ It calls `auto_include` to analyze the prompt and get back a string of directive
 
 
 ===== main_gen_prompt.prompt =====
-% You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands. 
+% You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands.
 
 % Here is the instructions for the current CLI program `pdd`:
     <cli_command_readme><include query="bug command usage, options, and subcommands">./README.md</include></cli_command_readme>
@@ -29066,11 +29066,11 @@ MISMATCHES:
 
 
 ===== postprocess_0_python.prompt =====
-% You are an expert Python engineer. Your goal is to write a python function called 'postprocess_0' that will post-process the string output of a LLM so that the code can be run. 
+% You are an expert Python engineer. Your goal is to write a python function called 'postprocess_0' that will post-process the string output of a LLM so that the code can be run.
 
 % Here are the inputs and outputs of the function:
-    Input: 
-        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
+    Input:
+        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks.
         'language' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
     Output: returns a string that is the processed string that contains a properly commented out comments so that code can be run
 
@@ -29119,8 +29119,8 @@ context_generator('your_python_file.py', 'output_example.py', force=False)
 ```
 
 Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
-To implement the context_generator function as described, we will follow the steps outlined in   
-your request. Below is the complete implementation of the function, which includes reading a     
+To implement the context_generator function as described, we will follow the steps outlined in
+your request. Below is the complete implementation of the function, which includes reading a
 Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
 the output to a specified file.'''
 
@@ -29163,8 +29163,8 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
 #```
 #
 #Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
-#To implement the context_generator function as described, we will follow the steps outlined in   
-#your request. Below is the complete implementation of the function, which includes reading a     
+#To implement the context_generator function as described, we will follow the steps outlined in
+#your request. Below is the complete implementation of the function, which includes reading a
 #Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
 #the output to a specified file.'''
 
@@ -29418,13 +29418,13 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'csv_file' - A string containing the path to the csv file.
         'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
         'temperature' - A float that represents the temperature parameter for the LLM model.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to the change function. Default is DEFAULT_TIME.
         'code_directory' - A string containing the path to the directory where the code files are stored.
-        'language' - A string representing the default programming language of the code files if they don't have a language suffix. 
+        'language' - A string representing the default programming language of the code files if they don't have a language suffix.
         'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
         'budget' - A float representing the maximum cost allowed for the change process.
     Outputs:
@@ -29435,7 +29435,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-    % Here is an example of the change function that will be used: 
+    % Here is an example of the change function that will be used:
         <change_example>
         # Example usage of the change function
         from .change import change  # Assuming change.py is in the same directory or package
@@ -29508,7 +29508,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
             3. The directory containing the CSV file with the basename of the prompt_name
             4. The code_directory with the basename of the prompt_name
         - If the prompt file is found in any of these locations, use it; otherwise, log an error and skip this row.
-    
+
     Step 2. Loop through each line in the csv file:
         a. Initialize variables:
             - Initialize a list_of_jsons to store the modified prompts.
@@ -29751,12 +29751,12 @@ Respond with a JSON object containing:
 
     CLI Outputs:
         - prompt_results.log: Writes out the results of the tests to a log file and rich prints out the results to the console.
- 
+
  % The CSV file format is as follows with a header row:
     - test_case (filename of a JSON string/object), where:
         • String values in nested structures will be recursively replaced with file contents if they match files in the reference directory (./tests/csv/name_of_prompt_to_be_tested)
         • Empty strings will be preserved as-is
-    - eval_type (string), 
+    - eval_type (string),
     - expected_output (filename of a JSON string/object or string), with:
         • Same nested file loading rules as test_case
         • Supports multi-level JSON structures with mixed types
@@ -29781,7 +29781,7 @@ Respond with a JSON object containing:
     - Step 2: Read the CSV file and for the test_case and expected_output columnsreplace the key value filename to the actual file content from disk into a dictionary. Non-string or empty string key values are the actual dictionary values and don't have to be loaded from another file.
     - Step 3: For each row in the CSV file:
         * Run the prompt with the test case via llm_invoke. If the expected output is a JSON string, then be sure to run llm_invoke with structured output to get a dictionary output. You need to build a dynamic Pydantic model (using pydantic.RootModel) with the correct data types based on the expected output json from the CSV file to capture the expected output. This dynamic model will be passed as the output_pydantic parameter to llm_invoke.
-        * If the test case is 
+        * If the test case is
             - "deterministic", then the expected output can be compared using a string comparison. Otherwise, do a string comparison of each key of expected_output dictionary with the dictionary from the llm_invoke output. Indicate which specific key value pairs are different by running a separate diff of the expected_output and the llm_invoke output for each of the keys that are different. Rich print the diff (rich.syntax.Syntax) so it's easy to see the differences.
             - "LLM_equivalent" then the expected output can be compared to the output of the prompt using a comparison prompt via llm_invoke.
 
@@ -29792,7 +29792,7 @@ Respond with a JSON object containing:
         • Type mismatches (e.g. expected dict vs received string)
         • Unified diffs with color coding:
             - Green: Added content
-            - Red: Removed content  
+            - Red: Removed content
             - Yellow: Location markers
     - Handle special cases:
         • JSON strings with escaped newlines
@@ -29952,7 +29952,7 @@ empty for device-flow or local models.
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the CLI:
-    Command Line Interface Input arguments: 
+    Command Line Interface Input arguments:
         'test_file' - A string containing the path to the test file.
         '--json-only' - An optional boolean flag. If present, output *only* the JSON to standard output.  Do not print any other messages.
     Command Line Interface Outputs:
@@ -30009,7 +30009,7 @@ empty for device-flow or local models.
     Function 1: detect_host_python_executable()
         Inputs: None
         Outputs: A string containing the path to the Python executable that should be used for subprocess calls.
-        
+
         This function should:
         Step 1. Check for virtual environment (venv, virtualenv, poetry, pipenv) using the VIRTUAL_ENV environment variable.
         Step 2. If VIRTUAL_ENV is set, try to find Python executable in common locations within the virtual environment:
@@ -30026,7 +30026,7 @@ empty for device-flow or local models.
     Function 2: get_environment_info()
         Inputs: None
         Outputs: A dictionary containing detailed environment information for debugging.
-        
+
         This function should return a dictionary with the following keys:
         - 'sys_executable': The current sys.executable path
         - 'detected_executable': The result of detect_host_python_executable()
@@ -30042,7 +30042,7 @@ empty for device-flow or local models.
     Function 3: is_in_virtual_environment()
         Inputs: None
         Outputs: A boolean indicating whether we're currently running in any kind of virtual environment.
-        
+
         This function should return True if any of the following environment variables are set:
         - VIRTUAL_ENV
         - CONDA_PREFIX
@@ -30052,7 +30052,7 @@ empty for device-flow or local models.
     Function 4: get_environment_type()
         Inputs: None
         Outputs: A string indicating the type of environment ('conda', 'venv', 'poetry', 'pipenv', 'system', 'unknown').
-        
+
         This function should:
         Step 1. Check environment variables in order of precedence:
             - If CONDA_PREFIX is set, return 'conda'
@@ -30180,12 +30180,12 @@ empty for device-flow or local models.
         - CONTEXT_PATH for context files
         - LOG_FILE for regression logging
         - COST_FILE for tracking command costs
-    
+
     2. Use consistent variables across different commands:
         - EXTENSION_SCRIPT, EXTENSION_PROMPT, EXTENSION_TEST for extension-related files
         - CHANGE_PROMPT, CHANGE_SCRIPT, CHANGE_CONTEXT_PROMPT for change-related files
         - SPLIT_PROMPT, SPLIT_SCRIPT, SPLIT_EXAMPLE_SCRIPT for split-related files
-    
+
     3. Implement a robust logging system:
         - Create a log() function for verbose output (enabled by default)
         - Create a log_timestamped() function for regression.log entries
@@ -30193,7 +30193,7 @@ empty for device-flow or local models.
             - Executes pdd commands with consistent parameters
             - Logs command execution and results
             - Handles errors and exits on failure
-    
+
     4. For each pdd command, implement the following:
         - generate: Create extension script from prompt
         - example: Generate verification program
@@ -30216,19 +30216,19 @@ empty for device-flow or local models.
             - Compare Python extension outputs
             - Generate bug-specific tests
         - auto-deps: Handle dependency analysis
-    
+
     5. Configuration settings:
         - Set PDD_AUTO_UPDATE=false
         - Use strength=0.85 and temperature=1.0
         - Enable verbose output by default
         - Track costs in regression_cost.csv
-    
+
     6. Error handling and cleanup:
         - Remove existing regression.log at start
         - Check and handle command failures
         - Verify file existence before operations
         - Calculate and display total cost at completion
-    
+
     7. OS compatibility:
         - Handle sed differences between BSD (macOS) and GNU (Linux)
         - Use appropriate path handling for different systems
@@ -30473,7 +30473,7 @@ Implementation assumptions (explicit)
 
 
 ===== run_generated_python.prompt =====
-% You are an expert Python software engineer. Your task is to implement a program called `run_generated` that executes a Python script. It will take in one argument, the prompt file name path. The name of the file will have a '_python.prompt' at the end of it. The program will replace this with .py and attempt to execute the Python script. The prompt file is in the 'prompts' directory but the generated will be in the pdd directory, both share the same root directory it will need to change the file path directory from prompts to pdd. 
+% You are an expert Python software engineer. Your task is to implement a program called `run_generated` that executes a Python script. It will take in one argument, the prompt file name path. The name of the file will have a '_python.prompt' at the end of it. The program will replace this with .py and attempt to execute the Python script. The prompt file is in the 'prompts' directory but the generated will be in the pdd directory, both share the same root directory it will need to change the file path directory from prompts to pdd.
 
 ===== setup_tool_python.prompt =====
 <pdd-reason>Orchestrates pdd setup with OpenCode-aware CLI bootstrap and deterministic model configuration.</pdd-reason>
@@ -30703,13 +30703,13 @@ from pdd.model_tester import _run_test
 
 % Here are the inputs and outputs of this prompt:
     <input_definitions>
-    Input: 
+    Input:
         'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
         'input_code' - A string that contains the code that was generated from the input_prompt.
         'example_code' - A string that contains an interface defining the specific functionality to extract into the sub_prompt. The sub_prompt will generate code that implements this interface.
     </input_definitions>
     <output_definitions>
-    Output: 
+    Output:
         'sub_prompt' - A string that contains the extracted functionality as defined by the example_code interface that was split from the input_prompt.
         'modified_prompt' - A string that contains the modified original prompt that will import and use the functionality defined in the sub_prompt.
     </output_definitions>
@@ -30727,7 +30727,7 @@ from pdd.model_tester import _run_test
     2. Write out several paragraphs in detail all the functionality of the sub_prompt by looking at the input_prompt and input_code.
     3. Write out what are the possible difficulties in splitting the prompt according to the input example_code. For each difficulty write several paragraphs
     4. Write out how to overcome the difficulties. Write several paragraphs for each difficulty.
-    5. Write the sub_prompt which would generate the code that could be used by the example_code. This prompt should carefully consider all the prior steps and ensure enough detail is provided to generate the code properly. Internal modules need to be imported using include and other appropriate xml tags in the same style as the input_prompt. 
+    5. Write the sub_prompt which would generate the code that could be used by the example_code. This prompt should carefully consider all the prior steps and ensure enough detail is provided to generate the code properly. Internal modules need to be imported using include and other appropriate xml tags in the same style as the input_prompt.
     6. Write the complete modified_prompt which would incorporate the sub_prompt without any duplications or conflicting functionalities.
 </instructions>
 
@@ -32413,7 +32413,7 @@ Explain your reasoning here in plain text (no JSON). Reference the file sections
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'code_file' (str) - A string that contains the text of the code file.
         'code_line' (int) - An integer that represents the line number in the code file that the debugger is on.
         'prompt_file' (str) - A string that contains the text of the .prompt file.
@@ -32632,7 +32632,7 @@ def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, 
             "Here is how you run the code: ```bash\npython code.py```\n\nHere is the code: ```python\ndef hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef```"
             </llm_output>
         </input>
-        <output>    
+        <output>
         {{
         "explanation": "I identified the main unfinished code block which starts with triple backticks (```) in the text and removed all content before it. The remaining text, excluding the backticks and language tag, was extracted as the code block.",
         "code_block": "def hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef"
@@ -32645,7 +32645,7 @@ def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, 
             ""
             </llm_output>
         </input>
-        <output>    
+        <output>
         {{
         "explanation": "There is nothing.",
         "code_block": ""
@@ -33034,7 +33034,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 % Relevant LiteLLM Documentation:
     - Model Cost Data Structure (illustrative): <litellm_model_cost_example><web>https://docs.litellm.ai/docs/completion/token_usage#8-model_cost</web></litellm_model_cost_example>
     - Check Schema Support: <litellm_supports_schema_example><web>https://docs.litellm.ai/docs/completion/json_mode#2-check-if-model-supports-json_schema</web></litellm_supports_schema_example>
-    - Supported Providers/Models (for identifiers): <litellm_providers_list><web>https://docs.litellm.ai/docs/providers</web></litellm_providers_list> 
+    - Supported Providers/Models (for identifiers): <litellm_providers_list><web>https://docs.litellm.ai/docs/providers</web></litellm_providers_list>
 
 ===== update_prompt_LLM.prompt =====
 % You are an expert LLM Prompt Engineer. Your goal is to update the prompt
@@ -33095,7 +33095,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 
 
 ===== update_prompt_python.prompt =====
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code. 
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -33368,10 +33368,10 @@ Follow these steps to tag the prompt:
     Step 2. Discuss what could be appropriate XML tags for this input_raw_prompt.
     Step 3. Insert the XML tags at the correct locations in the input_raw_prompt without introducing any new content. Only add tags to existing content. The XML tags should be enhancing the input_raw_prompt's format, structure and readability.
 </steps>
-    
+
 <general_points>
     - With triple backtick includes and curly bracket placeholders, there could be lots of text in them after preprocessing so XML tags will help to organize the content.
-    - No need to include the initial and ending triple backticks for the XML code block.  
+    - No need to include the initial and ending triple backticks for the XML code block.
 </general_points>
 
 ===== xml_tagger_python.prompt =====
@@ -33380,13 +33380,13 @@ Follow these steps to tag the prompt:
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
         'strength' - A float value representing the strength parameter for the LLM model. Range is between 0 and 1.
         'temperature' - A float value representing the temperature parameter for the LLM model. Range is between 0 and 1.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
-    Outputs as a tuple: 
+    Outputs as a tuple:
         'xml_tagged' - A string containing the prompt with properly added XML tags.
         'total_cost' - A float representing the total cost of running the LCELs.
         'model_name' - A string representing the name of the selected LLM model.
@@ -33406,7 +33406,7 @@ Follow these steps to tag the prompt:
 
 % This program will do the following:
     Step 1. Load the 'xml_convertor_LLM' and 'extract_xml_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time. 
+    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'raw_prompt'
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
