@@ -155,11 +155,27 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def _resolve_main_ref(git_root: Path) -> str:
+    """Resolve a default branch ref for clean-restart worktree bases."""
+    for ref in ("origin/main", "origin/master", "main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or ref
+    return "HEAD"
+
+
 def _setup_worktree(
     cwd: Path,
     issue_number: int,
     quiet: bool,
     console: Any,
+    *,
+    clean_restart: bool = False,
 ) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
@@ -189,10 +205,20 @@ def _setup_worktree(
         if not del_ok:
             return None, f"Failed to delete existing branch {branch_name}: {del_err}"
 
+    base_ref = "HEAD"
+    if clean_restart:
+        base_ref = _resolve_main_ref(git_root)
+        if base_ref == "HEAD":
+            return None, (
+                "Cannot perform clean restart: no main/master ref resolves "
+                "(checked origin/main, origin/master, main, master). Refusing "
+                "to base the fresh test worktree on current HEAD."
+            )
+
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
             cwd=git_root,
             capture_output=True,
             check=True,
@@ -787,14 +813,14 @@ def run_agentic_test_orchestrator(
                 text=True,
                 check=True,
             ).stdout.strip()
-            if current_branch not in ["main", "master"] and not quiet:
+            if not clean_restart and current_branch not in ["main", "master"] and not quiet:
                 console.print(
                     f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]"
                 )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-        wt_path, err = _setup_worktree(cwd, issue_number, quiet, console)
+        wt_path, err = _setup_worktree(cwd, issue_number, quiet, console, clean_restart=clean_restart)
         if not wt_path:
             return False, f"Failed to create worktree: {err}", total_cost, model_used, []
         worktree_path = wt_path
