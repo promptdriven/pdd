@@ -7242,3 +7242,346 @@ def test_llm_invoke_fast_fails_on_permanent_invalid_request_error(
                 f"fast-fail did not trigger: litellm.completion was called "
                 f"{mock_completion.call_count} times, expected 1"
             )
+
+
+# ==============================================================================
+# Regression test: LiteLLM AnthropicConfig._is_claude_opus_4_5 monkey-patch
+#
+# Importing pdd.llm_invoke must extend LiteLLM's "is this an adaptive-thinking
+# Opus" predicate to match opus-4-7. Without this, Vertex AI / Azure / Bedrock
+# Anthropic adapters (all inherit AnthropicConfig) send the legacy
+# thinking.type.enabled shape for Opus 4.7 and the provider 400s with
+# "is not supported for this model".
+# ==============================================================================
+
+
+def test_anthropic_config_is_opus_4_5_matches_opus_4_7():
+    """`import pdd.llm_invoke` must extend LiteLLM's adaptive-thinking
+    predicate to match opus-4-7, so every Anthropic-relay provider (direct,
+    Vertex, Bedrock) routes Opus 4.7 to the new shape.
+
+    LiteLLM renamed this helper between 1.80.x (`_is_claude_opus_4_5`) and
+    1.82.x (`_is_claude_4_6_model`). The patch covers whichever exists;
+    the test asserts the patch took effect on the predicate that exists
+    in the installed version."""
+    import pdd.llm_invoke  # noqa: F401 — import is the action under test
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    cfg = AnthropicConfig()
+    pred = (
+        getattr(cfg, "_is_claude_opus_4_5", None)
+        or getattr(cfg, "_is_claude_4_6_model", None)
+    )
+    assert pred is not None, (
+        "LiteLLM exposes neither _is_claude_opus_4_5 (1.80.x) nor "
+        "_is_claude_4_6_model (1.82.x); patch needs a new code path."
+    )
+    # The patched predicate must match opus-4-7 across naming variants —
+    # hyphen + dot aliases — to mirror LiteLLM's own naming convention.
+    assert pred("claude-opus-4-7") is True
+    assert pred("vertex_ai/claude-opus-4-7") is True
+    assert pred("anthropic.claude-opus-4-7") is True
+    assert pred("claude-opus-4.7") is True
+    assert pred("vertex_ai/claude-opus-4.7") is True
+    # Opus 4.5 must continue matching even on 1.82.x — LiteLLM upstream
+    # dropped 4.5 from `_is_claude_4_6_model`, so our extension restores
+    # that path so custom CSV rows pointing at 4.5 don't regress to the
+    # legacy enabled shape.
+    assert pred("claude-opus-4-5") is True
+    assert pred("claude-opus-4.5") is True
+    # Unrelated models must still NOT match.
+    assert pred("gpt-5") is False
+
+
+def test_anthropic_config_opus_patch_covers_vertex_subclass():
+    """VertexAIAnthropicConfig inherits the predicate from AnthropicConfig;
+    the patch must propagate to the subclass so the Vertex AI Anthropic
+    adapter also picks the adaptive shape."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+    cfg = VertexAIAnthropicConfig()
+    pred = (
+        getattr(cfg, "_is_claude_opus_4_5", None)
+        or getattr(cfg, "_is_claude_4_6_model", None)
+    )
+    assert pred is not None
+    assert pred("vertex_ai/claude-opus-4-7") is True
+
+
+# ------------------------------------------------------------------------------
+# Transform-level shape assertions
+#
+# Predicate alone isn't enough: LiteLLM's map_openai_params also unconditionally
+# overwrites optional_params["thinking"] with the legacy enabled shape when
+# `reasoning_effort` is passed — even when _is_claude_opus_4_5 matches. The
+# wrap fixes the final shape Vertex sees. These tests pin the actual
+# transformed kwargs, not just the predicate result.
+# ------------------------------------------------------------------------------
+
+
+def _map_thinking_kwargs(non_default, model):
+    """Run AnthropicConfig.map_openai_params with the pdd.llm_invoke patch
+    applied. Returns (thinking, output_config) from the result."""
+    import pdd.llm_invoke  # noqa: F401 — ensures the wrap is installed
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    cfg = AnthropicConfig()
+    result = cfg.map_openai_params(
+        non_default_params=non_default,
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    return result.get("thinking"), result.get("output_config")
+
+
+def test_map_openai_params_vertex_opus_47_effort_only_emits_adaptive_shape():
+    """The vertex_ai/claude-opus-4-7 CSV row carries reasoning_type=effort,
+    so pdd hands LiteLLM only `reasoning_effort`. Pre-patch, LiteLLM
+    produced thinking.type.enabled (rejected by Vertex). Post-patch, the
+    final shape must be thinking.type.adaptive + output_config.effort —
+    for both hyphen and dot naming variants."""
+    for model in ("vertex_ai/claude-opus-4-7", "vertex_ai/claude-opus-4.7"):
+        thinking, output_config = _map_thinking_kwargs(
+            {"reasoning_effort": "high"}, model
+        )
+        assert thinking == {"type": "adaptive"}, (model, thinking)
+        assert output_config == {"effort": "high"}, (model, output_config)
+
+
+def test_map_openai_params_bedrock_opus_47_effort_only_emits_adaptive_shape():
+    """Bedrock anthropic.claude-opus-4-7 row is also reasoning_type=effort
+    in the CSV — same code path, must produce the same adaptive shape."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "anthropic.claude-opus-4-7"
+    )
+    assert thinking == {"type": "adaptive"}, thinking
+    assert output_config == {"effort": "high"}, output_config
+
+
+def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
+    """The Anthropic,claude-opus-4-7 row is reasoning_type=adaptive — pdd
+    sends both thinking={adaptive, display=summarized} and
+    reasoning_effort. The wrap must preserve the caller's richer adaptive
+    payload (display field) instead of stripping it back to bare
+    {type: adaptive}."""
+    thinking, output_config = _map_thinking_kwargs(
+        {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "reasoning_effort": "medium",
+        },
+        "claude-opus-4-7",
+    )
+    assert thinking == {"type": "adaptive", "display": "summarized"}, thinking
+    assert output_config == {"effort": "medium"}, output_config
+
+
+def test_map_openai_params_unrelated_model_unchanged():
+    """The patch is gated on opus-4-7 substring (and pre-existing predicates).
+    GPT-5 must not be affected by any patch layer — LiteLLM drops Anthropic-
+    only params for it via drop_params, so neither `thinking` nor
+    `output_config` should appear in the mapped kwargs."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "gpt-5"
+    )
+    # GPT-5 routed through AnthropicConfig is nonsense, but the assertion
+    # is: our patch does not inject adaptive/output_config for it.
+    assert not (isinstance(thinking, dict) and thinking.get("type") == "adaptive"), thinking
+    assert output_config is None, output_config
+
+
+# ------------------------------------------------------------------------------
+# Bedrock-adapter coverage: invoke (AmazonAnthropicClaudeConfig) inherits from
+# AnthropicConfig and is reached by the AnthropicConfig wrap above. Converse
+# (AmazonConverseConfig) does NOT inherit and needs its own wrap. These tests
+# exercise the actual LiteLLM Bedrock classes — not the AnthropicConfig stand-
+# in used above — so a regression that breaks the Converse code path can't
+# slip through.
+# ------------------------------------------------------------------------------
+
+
+def test_bedrock_invoke_adapter_opus_47_adaptive_via_inheritance():
+    """AmazonAnthropicClaudeConfig inherits map_openai_params + the
+    _is_claude_opus_4_5 predicate from AnthropicConfig. With the
+    pdd.llm_invoke wrap in place, Bedrock invoke-style Opus 4.7 must
+    produce the adaptive shape + output_config."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonAnthropicClaudeConfig in this env")
+    cfg = AmazonAnthropicClaudeConfig()
+    result = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="bedrock/anthropic.claude-opus-4-7",
+        drop_params=True,
+    )
+    assert result.get("thinking") == {"type": "adaptive"}, result.get("thinking")
+    assert result.get("output_config") == {"effort": "high"}, result.get("output_config")
+
+
+def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
+    """AmazonConverseConfig is a separate class that doesn't inherit from
+    AnthropicConfig — needs its own wrap. The Converse map_openai_params
+    builds thinking={type:enabled} via AnthropicConfig._map_reasoning_effort
+    with no Opus 4.5/4.7 branch. The wrap rewrites it to adaptive for
+    opus-4-7 model names so the AWS API doesn't 400, and carries the
+    reasoning_effort hint into the flattened thinking dict (Converse
+    doesn't expose an output_config sibling like the direct Anthropic API)."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-opus-4-7",
+        "bedrock/converse/anthropic.claude-opus-4-7",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
+
+
+def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
+    """When the caller already supplied thinking={type: adaptive, ...}, the
+    wrap must preserve their richer payload (e.g. display=summarized) and
+    only fill in effort if they didn't set it themselves."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    result = cfg.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive", "display": "summarized", "effort": "low"},
+            "reasoning_effort": "high",
+        },
+        optional_params={},
+        model="bedrock/anthropic.claude-opus-4-7",
+        drop_params=True,
+    )
+    # Caller's explicit effort wins over the reasoning_effort hint.
+    assert result.get("thinking") == {
+        "type": "adaptive",
+        "display": "summarized",
+        "effort": "low",
+    }, result.get("thinking")
+
+
+def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_47():
+    """LiteLLM 1.82.6's VertexAIAnthropicConfig.transform_request unconditionally
+    pops `output_config` from the request body (comment: "VertexAI doesn't
+    support output_config"). That assumption is wrong for Opus 4.7: the Vertex
+    API explicitly requires `output_config.effort` alongside
+    `thinking.type.adaptive` — the error message itself instructs callers to
+    use both. The patch wraps transform_request to restore output_config on
+    the wire for opus-4-7 model names."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    optional_params = {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+    body = cfg.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert body.get("thinking") == {"type": "adaptive"}, body
+    assert body.get("output_config") == {"effort": "high"}, body
+
+
+def test_vertex_anthropic_transform_request_no_op_for_unrelated_models():
+    """The wrap only restores output_config on opus-4-7. For non-opus-4-7,
+    the wrap is a no-op — the body LiteLLM produces is whatever the
+    un-patched version would produce (varies by LiteLLM version: 1.80.x
+    doesn't strip output_config at all; 1.82.x strips it for everything).
+    What matters is the wrap doesn't *interfere*: a wrap that mutates
+    non-opus-4-7 output would silently corrupt other callers."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    optional_params = {
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+        "output_config": {"effort": "high"},
+    }
+    body = cfg.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    # The wrap's only mutation is on opus-4-7. For sonnet-4-6 the body
+    # must match whatever LiteLLM would have produced without our wrap.
+    # Thinking is always preserved across versions (not stripped).
+    assert body.get("thinking") == {"type": "enabled", "budget_tokens": 4096}, body
+
+
+def test_bedrock_converse_adapter_unrelated_models_unchanged():
+    """The Converse wrap is gated on opus-4-7 substring — non-opus-4-7
+    models must pass through unchanged. LiteLLM's native behavior for
+    these varies by version (1.80.x emits enabled, 1.82.x emits adaptive
+    for sonnet-4-6 + opus-4-6), so the assertion is just that the patch
+    didn't *add* an `effort` field that wasn't already there."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-sonnet-4-6",
+        "bedrock/anthropic.claude-opus-4-5",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        thinking = result.get("thinking")
+        # The pdd patch's effort-injection is the only modification it makes
+        # to the Converse output; for non-opus-4-7 models it must not fire.
+        assert not (isinstance(thinking, dict) and "effort" in thinking), (model, thinking)
