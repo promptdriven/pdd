@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -2610,3 +2610,394 @@ class TestRefreshPrBaseRefTimeout:
         assert md.get("base_local_ref") == _pr_base_tracking_ref(1)
         assert "base_ref_fetch_error" not in md
         assert not marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1212 — checkup --pr hides test failures, lets fixer push unrelated
+# code, never converges.
+#
+# Bug 1: Step 5 failure detail not surfaced to user (only generic warning logged)
+# Bug 2: Step 6 fixer has no scope guard; can create files outside PR changed-file set
+# Bug 3: Step 7 verifier non-discriminating; passes without causal-connection check
+# Bug 5: Fixer (steps 6.1/6.2/6.3) always runs even when Step 5 is clean
+#
+# Tests marked FAILS_ON_CURRENT_CODE will fail on buggy code, pass once fixed.
+# Tests marked PASSES_ON_CURRENT_CODE guard existing correct behaviour.
+# ---------------------------------------------------------------------------
+
+
+# PR metadata snapshot used by all issue-1212 tests.
+_PR_META_1212: Dict[str, str] = {
+    "clone_url": "https://github.com/o/r.git",
+    "head_ref": "change/fix",
+    "head_owner": "o",
+    "head_repo": "r",
+    "head_sha": "abc123deadbeef",
+    "api_changed_files": "- M: pdd/main.py\n- M: tests/test_main.py",
+    "api_changed_files_full": "- M: pdd/main.py\n- M: tests/test_main.py",
+}
+
+# Minimal PR-mode arguments for run_agentic_checkup_orchestrator.
+_PR_ARGS_1212: Dict = {
+    "issue_url": "https://github.com/o/r/issues/99",
+    "issue_content": "Bug in pdd/main.py causing test failures",
+    "repo_owner": "o",
+    "repo_name": "r",
+    "issue_number": 99,
+    "issue_title": "Fix pdd/main.py",
+    "architecture_json": "{}",
+    "pddrc_content": "",
+    "verbose": False,
+    "quiet": True,
+    "no_fix": False,
+    "use_github_state": False,
+    "timeout_adder": 0.0,
+    "pr_url": "https://github.com/o/r/pull/200",
+    "pr_owner": "o",
+    "pr_repo": "r",
+    "pr_number": 200,
+    "test_scope": "targeted",
+}
+
+
+def _pr_patches_1212(
+    tmp_path: Path,
+    *,
+    step_side_effect,
+    git_changed_files: Optional[List[str]] = None,
+    commit_push_return=(True, "No changes to commit"),
+    pr_metadata: Optional[Dict] = None,
+) -> tuple:
+    """Return a tuple of context-manager patchers for a PR-fix-mode run.
+
+    Usage::
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=fn)
+        with patches[0], patches[1], ...:
+            run_agentic_checkup_orchestrator(...)
+    """
+    wt = tmp_path / "wt"
+    wt.mkdir(exist_ok=True)
+    meta = pr_metadata if pr_metadata is not None else dict(_PR_META_1212)
+    return (
+        patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+        patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=meta),
+        patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=step_side_effect),
+        patch("pdd.agentic_checkup_orchestrator._git_changed_files",
+              return_value=git_changed_files or []),
+        patch("pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+              return_value=commit_push_return),
+        patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)),
+        patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
+        patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+        patch("pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+              return_value=None),
+        patch("pdd.agentic_checkup_orchestrator._check_prompt_source_guard", return_value=None),
+        patch("pdd.agentic_checkup_orchestrator.console"),
+    )
+
+
+class TestIssue1212Bug1Step5FailureSignalPropagation:
+    """Bug 1: Step 5 failure output must flow to Step 6's context and user-visible logs."""
+
+    def test_step5_failure_output_in_step6_context(self, tmp_path):
+        """Step 5 failure text is stored in context and passed to Step 6's prompt.
+
+        PASSES_ON_CURRENT_CODE: context["step5_output"] is correctly set to the raw
+        step-5 output, so Step 6 receives it. This test guards against regression.
+        """
+        step5_failure_text = "FAILED: test_foo.py::test_bar - AssertionError: got None"
+        captured_step6_contexts: List[Dict] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure_text, 0.1, "model")
+            if step_num == 6.1:
+                captured_step6_contexts.append(dict(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured_step6_contexts, "Step 6.1 must be invoked after Step 5 failure"
+        ctx = captured_step6_contexts[0]
+        assert "step5_output" in ctx
+        # The mock text already begins with "FAILED:" to simulate a failure description.
+        assert "FAILED:" in ctx["step5_output"]
+        assert "test_foo.py" in ctx["step5_output"]
+
+    def test_step5_failure_logged_visibly_not_only_as_warning(self, tmp_path):
+        """When Step 5 fails, its actual failure content must be printed to the console.
+
+        FAILS_ON_CURRENT_CODE: The orchestrator prints only a generic yellow warning;
+        the actual pytest failure detail (test IDs, FAILED lines) is never shown.
+        """
+        step5_failure_text = (
+            "FAILED tests/test_main.py::test_critical_path - AssertionError\n"
+            "short test summary info\n"
+            "FAILED tests/test_main.py::test_critical_path"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure_text, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], \
+             patches[10] as mc:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        all_printed = " ".join(
+            str(arg) for call_obj in mc.print.call_args_list for arg in call_obj.args
+        )
+        # Actual failure content (test IDs, FAILED lines) must appear in the log.
+        # On current code only the generic warning is printed — this assertion FAILS.
+        assert "test_critical_path" in all_printed or "FAILED tests" in all_printed, (
+            "Step 5 failure detail must be printed to the console so operators can see "
+            "what failed. Currently only a generic warning is shown."
+        )
+
+
+class TestIssue1212Bug2FixerScopeGuard:
+    """Bug 2: Step 6 fixer must be constrained to the PR's existing changed-file set."""
+
+    def test_fixer_out_of_scope_files_rejected_before_push(self, tmp_path):
+        """Fixer files outside the PR's changed-file set must be rejected before push.
+
+        FAILS_ON_CURRENT_CODE: No scope guard compares _git_changed_files() against
+        pr_metadata["api_changed_files"]. The fixer can create 6866 lines of unrelated
+        plugin code and it gets pushed.
+
+        Acceptance criterion from issue #1212:
+          "A test asserts that a Step 6 fixer producing files outside the PR's existing
+          changed-file set is rejected (or routed through an explicit expansion path)
+          before commit."
+        """
+        out_of_scope_files = [
+            "plugins/security-guidance/README.md",
+            "plugins/security-guidance/rules/xss.yaml",
+            "plugins/security-guidance/rules/sqli.yaml",
+        ]
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=out_of_scope_files,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        # Must NOT push when out-of-scope files were added (no scope guard on current code).
+        push_mock.assert_not_called()
+        assert success is False
+
+    def test_fixer_scope_guard_allows_in_scope_files(self, tmp_path):
+        """Fixer changes that stay within the PR's changed-file set are allowed.
+
+        PASSES_ON_CURRENT_CODE (positive case): fixer only modifies files already in
+        api_changed_files — push should proceed normally.
+        """
+        in_scope_files = ["pdd/main.py", "tests/test_main.py"]
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=in_scope_files,
+            commit_push_return=(True, "Pushed 2 files to PR branch"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_called_once()
+
+
+class TestIssue1212Bug3Step7NonDiscriminatingVerifier:
+    """Bug 3: Step 7 must verify causal connection between fixer diff and Step 5 failure."""
+
+    def test_step7_context_contains_step5_failure_and_fixer_files(self, tmp_path):
+        """Step 7 context includes both Step 5 failure output and fixer changed files.
+
+        PASSES_ON_CURRENT_CODE: plumbing is already correct — this test guards regression.
+        """
+        step5_failure = "FAILED pdd/main.py::test_import - ImportError: cannot import name 'foo'"
+        captured_step7_contexts: List[Dict] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                captured_step7_contexts.append(dict(context))
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured_step7_contexts, "Step 7 must be invoked"
+        ctx = captured_step7_contexts[0]
+        assert "step5_output" in ctx
+        assert "pdd/main.py" in ctx["step5_output"]
+        assert "test_import" in ctx["step5_output"]
+        assert "pdd/main.py" in ctx.get("files_to_stage", "")
+
+    def test_orchestrator_allows_push_when_fixer_diff_unrelated_to_step5_failure(
+        self, tmp_path
+    ):
+        """Orchestrator must block push when fixer diff has no overlap with Step 5 failure paths.
+
+        FAILS_ON_CURRENT_CODE: No causal-connection gate exists. When the fixer touches
+        only files unrelated to the Step 5 failure paths, the push proceeds anyway —
+        this is how 6866 lines of unrelated plugin code reached PR #1210.
+
+        Acceptance criterion from issue #1212:
+          "A test asserts that Step 7 fails the run if the fixer diff does not touch any
+          file related to the Step 5 failure signal."
+        """
+        step5_failure = (
+            "FAILED pdd/main.py::test_critical_path - AssertionError\n"
+            "FAILED pdd/main.py::test_edge_case - AttributeError"
+        )
+        unrelated_fixer_files = ["plugins/security-guidance/README.md"]
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_CREATED: plugins/security-guidance/README.md", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=unrelated_fixer_files,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        # Must NOT push when fixer files have zero overlap with Step 5 failure paths.
+        push_mock.assert_not_called()
+        assert success is False
+
+
+class TestIssue1212Bug5CleanRunConvergence:
+    """Bug 5: Clean runs must produce zero commits so the loop has a stable finish line."""
+
+    def test_clean_step5_skips_fixer_steps(self, tmp_path):
+        """When Step 5 reports no failures (success=True), Steps 6.1/6.2/6.3 must be skipped.
+
+        FAILS_ON_CURRENT_CODE: The fix-verify loop runs all steps including fixer steps
+        regardless of Step 5's outcome. With no concrete failure to fix, the fixer
+        hallucinates changes and the loop cannot converge.
+        """
+        invoked_steps: List = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked_steps.append(step_num)
+            if step_num == 5:
+                return (True, "All tests passed. 42 passed, 0 failed.", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        fixer_steps_invoked = [s for s in invoked_steps if s in (6.1, 6.2, 6.3)]
+        assert not fixer_steps_invoked, (
+            f"Fixer steps {fixer_steps_invoked} were invoked despite Step 5 reporting "
+            "no failures. When Step 5 is clean the fixer steps must be skipped."
+        )
+
+    def test_clean_run_produces_no_commit_or_push(self, tmp_path):
+        """A clean checkup run with no worktree changes must produce zero push calls.
+
+        FAILS_ON_CURRENT_CODE: _commit_and_push_if_changed is called unconditionally
+        after Step 7 passes, making it impossible to reach a stable no-op state.
+        """
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, "All tests passed, no failures.", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_not_called()
+
+    def test_repeated_clean_runs_stay_stable(self, tmp_path):
+        """Two consecutive clean runs each produce zero push calls (convergence).
+
+        FAILS_ON_CURRENT_CODE: Each run finds something to push because the fixer always
+        runs and the push gate has no stable success condition.
+        """
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, "All tests passed, 0 failed.", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        push_call_counts: List[int] = []
+        for run_num in range(2):
+            run_dir = tmp_path / f"run{run_num}"
+            run_dir.mkdir()
+            patches = _pr_patches_1212(
+                run_dir,
+                step_side_effect=step_side_effect,
+                git_changed_files=[],
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+                 patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+                run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": run_dir})
+            push_call_counts.append(push_mock.call_count)
+
+        assert push_call_counts == [0, 0], (
+            f"Expected [0, 0] push calls across two clean runs, got {push_call_counts}. "
+            "Clean runs must be idempotent — each must produce zero commits."
+        )

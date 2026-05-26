@@ -23,6 +23,13 @@ Focus on remaining/new problems that the previous iteration did not fix.
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 - Project Root: {project_root}
+- PR-verification mode: {pr_mode}
+- PR URL (PR mode only): {pr_url}
+- PR test scope (PR mode only): {pr_test_scope}
+- PR changed files (PR mode only):
+<pr_changed_files>
+{pr_changed_files}
+</pr_changed_files>
 
 % User Request
 <issue_content>
@@ -49,6 +56,15 @@ Focus on remaining/new problems that the previous iteration did not fix.
 <step5_output>
 {step5_output}
 </step5_output>
+
+% PR Scope Guard (PR mode only)
+
+When `PR-verification mode` is `true`, you MUST constrain all file changes to the PR's scope:
+
+- **Allowed**: Fix files listed in `<pr_changed_files>`, their direct test files, and any files whose failures are directly caused by the PR's changed files (e.g., a shared utility that the PR broke).
+- **NOT allowed**: Create or modify files that are outside the PR's changed-file set and not causally connected to the `<step5_output>` failures. Do NOT generate new features, new plugins, new modules, or new test suites unrelated to the listed failures.
+- If a fix genuinely requires touching files outside `<pr_changed_files>`, list them explicitly under `EXPANSION_ITEMS:` in your comment with a causal justification (e.g., "test_foo.py imports utils.py which was broken by the PR change to core.py").
+- If `<pr_changed_files>` says PR changed files are unavailable, restrict fixes to files directly referenced in `<step5_output>` failure paths and the files identified in the issue.
 
 % Your Task
 
