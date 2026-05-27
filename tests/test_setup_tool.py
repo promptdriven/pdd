@@ -28,15 +28,15 @@
 #       → "Setup interrupted" message, clean exit.
 #
 # V. Key Scanning (via run_setup)
-#   9.  test_scan_finds_env_keys: Keys in os.environ → found and displayed
+#   9.  test_scan_finds_env_keys: Keys in os.environ → provider found and displayed
 #       with source "shell environment".
-#   10. test_scan_finds_multiple_keys: Multiple keys → all found, count correct.
+#   10. test_scan_finds_multiple_keys: Multiple providers → all found, count correct.
 #   11. test_scan_no_keys_prompts_user: No keys anywhere → interactive
 #       prompt is invoked; after adding one, flow continues.
 #   12. test_scan_multi_var_provider_grouped: Pipe-delimited api_key →
 #       grouped display shows "N/N vars set".
 #   13. test_scan_multi_var_provider_partial: Some vars missing →
-#       grouped display shows partial count and missing names.
+#       grouped display shows partial count and missing count.
 #
 # VI. Model Configuration (via run_setup)
 #   14. test_models_added_from_reference_csv: Matching API keys →
@@ -68,11 +68,13 @@
 
 import csv
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from pdd import setup_tool
+from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +88,14 @@ SIMPLE_REF_CSV = [
     {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY",
      "base_url": "", "input": "5", "output": "15", "coding_arena_elo": "1100",
      "max_reasoning_tokens": "", "structured_output": "", "reasoning_type": "", "location": ""},
+]
+
+GOOGLE_GEMINI_REF_CSV = [
+    {"provider": "Google Gemini", "model": "gemini/gemini-3-flash-preview",
+     "api_key": "GEMINI_API_KEY", "base_url": "", "input": "0.5",
+     "output": "3", "coding_arena_elo": "1437",
+     "max_reasoning_tokens": "", "structured_output": "True",
+     "reasoning_type": "effort", "location": ""},
 ]
 
 BEDROCK_REF_CSV = [
@@ -125,11 +135,23 @@ TEST_FAILURE_RESULT = {
 # Env vars to clean to prevent leakage from real environment
 _ENV_VARS_TO_CLEAN = [
     "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
     "DEEPSEEK_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
     "AWS_REGION_NAME", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT",
     "VERTEXAI_LOCATION", "AZURE_API_KEY", "AZURE_API_BASE",
     "AZURE_API_VERSION",
 ]
+
+
+def test_print_pdd_logo_includes_positioning(capsys):
+    """Setup onboarding banner should include the repositioning line."""
+    setup_tool._print_pdd_logo()
+
+    output = capsys.readouterr().out
+    assert PDD_FULL_TAGLINE in output
+    assert PDD_POSITIONING in output
+    assert "THE LAST" in output
+    assert "PROGRAMMING LANGUAGE" in output
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +456,7 @@ def test_oauth_only_user_skips_step1_api_key_prompt(tmp_path, monkeypatch):
     # The "add at least one API key" prompt must NOT fire.
     assert "To continue setup, add at least one API key" not in output
     # Instead, the green OAuth-detected confirmation should appear.
-    assert "stored OAuth/subscription credentials detected" in output
+    assert "stored OAuth/subscription/config credentials detected" in output
     # OAuth-only setup should not advertise the direct API-key quick-start path.
     assert "pdd generate success_python.prompt" not in output
 
@@ -500,7 +522,7 @@ def test_keyboard_interrupt_phase2():
 # ===========================================================================
 
 def test_scan_finds_env_keys(tmp_path, monkeypatch):
-    """Keys in os.environ → found with 'shell environment' source."""
+    """Keys in os.environ → provider shown with 'shell environment' source."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=SIMPLE_REF_CSV,
@@ -508,13 +530,13 @@ def test_scan_finds_env_keys(tmp_path, monkeypatch):
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
-    assert "ANTHROPIC_API_KEY" in output
+    assert "Anthropic" in output
     assert "shell environment" in output
     assert "1 API key" in output
 
 
 def test_scan_finds_multiple_keys(tmp_path, monkeypatch):
-    """Multiple keys in os.environ → all found."""
+    """Multiple keys in os.environ → providers shown without raw key names."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=SIMPLE_REF_CSV,
@@ -522,8 +544,10 @@ def test_scan_finds_multiple_keys(tmp_path, monkeypatch):
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
-    assert "ANTHROPIC_API_KEY" in output
-    assert "OPENAI_API_KEY" in output
+    assert "Anthropic" in output
+    assert "OpenAI" in output
+    assert "ANTHROPIC_API_KEY" not in output
+    assert "OPENAI_API_KEY" not in output
     assert "2 API key" in output
 
 
@@ -572,7 +596,7 @@ def test_scan_multi_var_provider_grouped(tmp_path, monkeypatch):
 
 
 def test_scan_multi_var_provider_partial(tmp_path, monkeypatch):
-    """Partial multi-var credentials → missing vars shown."""
+    """Partial multi-var credentials → missing count shown."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=BEDROCK_REF_CSV,
@@ -604,6 +628,43 @@ def test_models_added_from_reference_csv(tmp_path, monkeypatch):
     assert "claude-sonnet" in content
     # OpenAI should NOT be present (no key set)
     assert "gpt-4o" not in content
+
+
+def test_google_api_key_configures_gemini_catalog_rows(tmp_path, monkeypatch):
+    """GOOGLE_API_KEY satisfies Gemini catalog rows that still name GEMINI_API_KEY."""
+    output, mocks = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=GOOGLE_GEMINI_REF_CSV,
+        env_keys={"GOOGLE_API_KEY": "google-test-key"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    content = user_csv.read_text()
+    assert "gemini/gemini-3-flash-preview" in content
+    assert "GOOGLE_API_KEY" in content
+    assert "GEMINI_API_KEY" not in content
+    assert "No matching cloud models" not in output
+    mocks["run_test"].assert_called_once()
+    assert mocks["run_test"].call_args[0][0]["api_key"] == "GOOGLE_API_KEY"
+
+
+def test_google_api_key_normalizes_existing_gemini_user_rows(tmp_path, monkeypatch):
+    """Rerunning setup updates existing Gemini rows to the configured Google alias."""
+    _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=GOOGLE_GEMINI_REF_CSV,
+        user_csv_rows=GOOGLE_GEMINI_REF_CSV,
+        env_keys={"GOOGLE_API_KEY": "google-test-key"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    content = user_csv.read_text()
+    assert "GOOGLE_API_KEY" in content
+    assert "GEMINI_API_KEY" not in content
 
 
 def test_models_deduplicated(tmp_path, monkeypatch):
@@ -806,7 +867,7 @@ def test_exit_summary_oauth_only_advertises_agentic_commands(tmp_path, monkeypat
     `pdd change <issue>`, `pdd bug <issue>`, `pdd fix <issue>`,
     `pdd test <issue>`, `pdd checkup <issue>`) dispatch through agentic
     workflows which spawn the configured CLI as a subprocess and use its
-    OAuth/subscription credential. They work NOW for OAuth-only users — that's
+    OAuth/subscription/config credential. They work NOW for OAuth-only users — that's
     the workflow this setup just enabled. Pointing such users only at `claude`
     standalone misrepresents what's available.
 
@@ -873,7 +934,7 @@ def test_exit_summary_oauth_only_summary_file_matches_terminal(tmp_path, monkeyp
     assert "pdd generate <prompt-file>" in summary
     assert "pdd sync <issue-url>" not in summary
     cli_block = summary[summary.find("CLIs Configured:"):summary.find("API Keys Configured:")]
-    assert "OAuth/subscription credential configured" in cli_block
+    assert "OAuth/subscription/config credential configured" in cli_block
     assert "no API key" not in cli_block
     # The summary file mentions both fallback paths so the user has options.
     assert "pdd setup" in summary

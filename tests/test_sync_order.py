@@ -61,6 +61,34 @@ def test_extract_includes_empty_file(tmp_path):
     f.write_text("", encoding="utf-8")
     assert sync_order.extract_includes_from_file(f) == set()
 
+def test_extract_includes_body_form_path_attr_takes_precedence(tmp_path):
+    """`<include path="X">Y</include>` must resolve to X, matching the preprocessor.
+
+    ``pdd.preprocess.process_include_tags`` does ``attrs.get('path') or content.strip()``
+    so the attribute wins when both are present. Mirror that here so downstream
+    consumers (notably the agentic-update scope guard) see the same include graph
+    the preprocessor would actually load.
+    """
+    f = tmp_path / "test.prompt"
+    f.write_text(
+        '<include path="docs/source.md">fallback.md</include>',
+        encoding="utf-8",
+    )
+
+    includes = sync_order.extract_includes_from_file(f)
+    assert includes == {"docs/source.md"}
+
+def test_extract_includes_body_form_no_path_attr_uses_body(tmp_path):
+    """Attributed body include without ``path=`` falls back to the body text."""
+    f = tmp_path / "test.prompt"
+    f.write_text(
+        '<include optional>docs/source.md</include>',
+        encoding="utf-8",
+    )
+
+    includes = sync_order.extract_includes_from_file(f)
+    assert includes == {"docs/source.md"}
+
 # ==============================================================================
 # Unit Tests: extract_module_from_include
 # ==============================================================================
@@ -533,6 +561,30 @@ def test_topological_sort_non_cyclic_remaining_ordered():
     ind_idx = sorted_list.index("independent")
     leaf_idx = sorted_list.index("leaf")
     assert ind_idx < leaf_idx, "independent should be processed before leaf"
+
+
+# ==============================================================================
+# compute_sccs determinism
+# ==============================================================================
+
+def test_compute_sccs_deterministic_regardless_of_dep_order():
+    """SCC output must depend only on graph structure, not dep-list ordering.
+
+    Two equivalent graphs whose adjacency lists differ only by sibling order
+    must produce identical SCC output. The simple ``a->b, b->a, a->c`` case
+    happens to come out the same regardless of sorting; a graph with more
+    than one peer sink reveals Tarjan's discovery-order dependence.
+    """
+    # Simple case: still must be equal.
+    g_simple_1 = {"a": ["b", "c"], "b": ["a"], "c": []}
+    g_simple_2 = {"a": ["c", "b"], "b": ["a"], "c": []}
+    assert sync_order.compute_sccs(g_simple_1) == sync_order.compute_sccs(g_simple_2)
+
+    # Stronger case: ``a`` has multiple sink neighbours; DFS-discovery order
+    # changes the SCC list order without the per-adjacency sort.
+    g_multi_1 = {"a": ["b", "c", "d"], "b": ["a"], "c": [], "d": []}
+    g_multi_2 = {"a": ["d", "c", "b"], "b": ["a"], "c": [], "d": []}
+    assert sync_order.compute_sccs(g_multi_1) == sync_order.compute_sccs(g_multi_2)
 
 
 # ==============================================================================

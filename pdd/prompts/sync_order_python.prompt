@@ -16,11 +16,11 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
      - bare body:        `<include>path</include>`
      - attributed body:  `<include query="...">path</include>` (or any other attribute — discovery doesn't inspect them, just allows them on the opening tag)
      - self-closing:     `<include path="..." />`
-   - Body-form regex: `r'<include(?:\s+[^>]*?)?(?<!/)>(.*?)</include>'` with `re.DOTALL`. The `(?<!/)>` negative lookbehind is required so a self-closing `<include path="..." />` is NOT picked up by the body-form regex (without it, the body-form would absorb everything between the self-closing tag and the next `</include>`, dropping inner includes entirely).
+   - Body-form regex: `r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>'` with `re.DOTALL`, capturing the optional attribute string so the parser can honor a `path=` attribute on attributed body includes. The `(?<!/)>` negative lookbehind is required so a self-closing `<include path="..." />` is NOT picked up by the body-form regex (without it, the body-form would absorb everything between the self-closing tag and the next `</include>`, dropping inner includes entirely).
    - Self-closing regex: `r'<include\s+([^>]*?)\s*/>'` with `re.DOTALL`, then extract the `path` attribute via `r'path\s*=\s*["\']([^"\']+)["\']'` from the captured attrs.
    - `<include-many>` body regex: `r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>'` (attributes optional on the opening tag).
    - For `<include-many>` payload, mirror `pdd.preprocess.process_include_many_tags`: split on newlines first, then on commas within each line, strip each piece, drop empties. Both separators must be supported because real prompts write the list either inline (`<include-many>a, b, c</include-many>`) or one-per-line (`<include-many>\na\nb\nc\n</include-many>`).
-   - Return set of included paths (whitespace-stripped). Self-closing payloads contribute the value of `path="..."`; body-form contributes the inner text.
+   - Return set of included paths (whitespace-stripped). Self-closing payloads contribute the value of `path="..."`. For body-form includes, mirror `pdd.preprocess.process_include_tags` (see preprocess.py ~line 501): use `attrs.get("path") or body.strip()` — i.e. honor a `path="..."` attribute when present and fall back to the inner body text otherwise. Without this, an attributed body include like `<include path="docs/source.md">fallback.md</include>` would be discovered as `fallback.md` here while the preprocessor actually resolves it as `docs/source.md`, causing the scope guard's allowlist to diverge from the real include graph.
    - Return empty set if file doesn't exist or can't be read.
    - Rationale (preprocessor parity): the Step 5 docs-discovery prompt promises to traverse the include graph. A single-tag, bare, or comma-only extractor silently garbles documents declared via attributed bodies, self-closing tags, or the multiline `<include-many>` form the preprocessor already supports — which means real PDD prompts would slip past #739's safety net.
 
@@ -46,6 +46,14 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - sorted_list: modules in dependency order (dependencies come before dependents)
    - cycles_detected: list of cycles found (each cycle is a list of module names)
    - If cycles exist, sorted_list contains all non-cyclic modules in order
+
+4a. Function: compute_sccs(graph: Dict[str, List[str]]) -> List[List[str]]
+   - Compute strongly connected components of a directed dependency graph using an iterative Tarjan's algorithm (no recursion — deep cycle chains must not blow the Python recursion limit).
+   - Normalize the input graph so every node referenced as a dependency is also present as a key (mirrors topological_sort).
+   - With the input convention `graph[A] == [B]` meaning *A depends on B*, return SCCs in deps-first order: an SCC's external dependencies are emitted before the SCC itself. This is Tarjan's natural emission order (the reverse of a depender-first topological sort of the condensation).
+   - Within each SCC, sort node names alphabetically for determinism.
+   - Trivial SCCs (single node, no self-loop) are returned as single-element lists. A self-loop on a node is its own SCC and must be distinguishable from a non-self-loop singleton by inspecting `graph[node]` (callers detect self-loops via `node in graph.get(node, [])`).
+   - Sort each adjacency list before Tarjan's DFS so the discovery order depends only on graph structure, not the caller's dep-list ordering. The SCC set is invariant to neighbour order, but the order they're emitted in is not.
 
 5. Function: get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]
    - Given modified modules, find all modules that transitively depend on them

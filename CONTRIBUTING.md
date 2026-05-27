@@ -114,7 +114,7 @@ Artifacts appear in `dist/`.
 
 ## Tools for Contributors
 - IDEs: Cursor (great prompt autocomplete) or VS Code (PDD extension for syntax highlighting).
-- CLIs: Kodex CLI and other LLM CLIs (e.g., Gemini); use what works for you.
+- CLIs: Kodex CLI and other LLM CLIs (e.g., Antigravity `agy` preferred, legacy Gemini `gemini` as rollback ahead of Google's 2026-06-18 consumer-tier cutoff); use what works for you.
 - Docker: for reproducible bug reports and dev environments.
 
 ## Key PDD CLI Parameters
@@ -148,23 +148,25 @@ Artifacts appear in `dist/`.
 - Participate in meetups and related community events when possible.
 
 ## Publishing a Release (Maintainers)
-1. Ensure build artifacts are up‑to‑date (see Building the Package).
-2. Install Twine if needed:
-   ```bash
-   pip install twine
-   ```
-3. Upload to PyPI with credentials:
-   ```bash
-   twine upload dist/*
-   ```
+
+The version is derived from `v*` git tags via setuptools-scm — no static version in `pyproject.toml`, no bump commit. To cut a release, on a clean `main`:
+
+```bash
+make release              # patch bump (default)
+make release BUMP=minor   # minor bump
+make release BUMP=major   # major bump
+```
+
+`make release` fetches tags, computes the next `vX.Y.Z`, tags HEAD, and pushes the tag. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+
+`make publish` is a local twine fallback that requires HEAD to be at a released tag that exists on origin.
 
 ## Pull Request Process
 1. Remove stray build/install artifacts before committing.
 2. Update `README.md` if you change the interface (env vars, commands, parameters, examples).
-3. Bump the version in `pyproject.toml` (SemVer) when appropriate; reflect changes in `README.md` as needed.
-4. Include tests in `tests/` that demonstrate the issue/feature and verify the behavior.
-5. Aim to include dev‑unit elements (prompt/code/example/tests) when applicable.
-6. **Make sure CI passes (unit tests).** If your change affects modules that have integration/LLM tests, run those locally for the impacted areas before marking your PR ready. You do not need to run the full integration suite -- maintainers will do that before merging.
-7. Seek two maintainer reviews prior to merge, or request a reviewer to merge if you lack permissions.
+3. Include tests in `tests/` that demonstrate the issue/feature and verify the behavior.
+4. Aim to include dev‑unit elements (prompt/code/example/tests) when applicable.
+5. **Make sure CI passes (unit tests).** If your change affects modules that have integration/LLM tests, run those locally for the impacted areas before marking your PR ready. You do not need to run the full integration suite -- maintainers will do that before merging.
+6. Seek two maintainer reviews prior to merge, or request a reviewer to merge if you lack permissions.
 
 Thank you for your contributions!

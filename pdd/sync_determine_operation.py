@@ -549,6 +549,10 @@ class SyncDecision:
     prerequisites: Optional[List[str]] = None  # List of operations that should be completed first, default None
 
 
+COMPLETED_VERIFY_COMMANDS = {'verify', 'test', 'fix', 'update'}
+COMPLETED_TEST_COMMANDS = {'test', 'fix', 'update'}
+
+
 class SyncLock:
     """Context manager for handling file-descriptor based locking."""
     
@@ -1376,7 +1380,7 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
-_INCLUDE_PATTERN = re.compile(r'<include>(.*?)</include>')
+_INCLUDE_PATTERN = re.compile(r'<include\b[^>]*>(.*?)</include>')
 _BACKTICK_INCLUDE_PATTERN = re.compile(r'```<([^>]*?)>```')
 
 
@@ -1791,6 +1795,9 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
     if not all(paths[f].exists() for f in required_files):
         return False
 
+    if skip_tests and skip_verify:
+        return True
+
     # Also check that run_report exists and code works (exit_code == 0)
     # Without this, newly generated code would incorrectly be marked as "complete"
     if basename and language:
@@ -1863,7 +1870,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                 # If command starts with 'skip:', the operation was skipped, not completed
                 if fingerprint.command.startswith('skip:'):
                     return False
-                if fingerprint.command not in ['verify', 'test', 'fix', 'update']:
+                if fingerprint.command not in COMPLETED_VERIFY_COMMANDS:
                     return False
 
         # CRITICAL FIX: Check tests have been run (unless skip_tests)
@@ -1876,7 +1883,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                 # If command starts with 'skip:', the operation was skipped, not completed
                 if fp.command.startswith('skip:'):
                     return False
-                if fp.command not in ['test', 'fix', 'update']:
+                if fp.command not in COMPLETED_TEST_COMMANDS:
                     return False
 
     return True

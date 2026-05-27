@@ -437,7 +437,9 @@ class TestCliFlags:
     def test_intent_flag_has_choices(self):
         from pdd.commands.modify import split as split_cmd
         intent_param = next(p for p in split_cmd.params if p.name == "intent")
-        assert intent_param.type.choices == [
+        # Click 8.2+ stores choices as a tuple; earlier versions used a list.
+        # Compare via list() to be agnostic to the underlying container type.
+        assert list(intent_param.type.choices) == [
             "reduce", "parallel", "reuse", "tests",
         ]
 

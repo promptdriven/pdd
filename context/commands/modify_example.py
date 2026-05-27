@@ -1,784 +1,348 @@
 #!/usr/bin/env python
 """
-Example usage of the modify module (split, change, update commands).
+Example usage of pdd.commands.modify (split, change, update).
 
-This script demonstrates how to use the three modify commands from the pdd CLI:
-1. split - Split large prompt files into smaller, more manageable ones
-2. change - Modify prompts based on change instructions
-3. update - Update prompts based on code changes
+This script demonstrates how to invoke the three Click commands exported
+by `pdd.commands.modify` using Click's CliRunner. External dependencies
+(split_main, change_main, agentic runners, update_main) are mocked so the
+script runs offline, without API keys or a real git repository.
 
-The commands are Click-based CLI commands that wrap underlying *_main functions.
-Each command uses the @track_cost decorator to track LLM usage costs.
+Commands:
+  - split:  Split large dev units. Agentic mode (default) takes 1 arg
+            (TARGET_FILE). Legacy mode (--legacy) takes 3 args
+            (INPUT_PROMPT, INPUT_CODE, EXAMPLE_CODE).
+  - change: Modify a prompt based on a change prompt or issue. Agentic
+            mode (default) takes 1 arg (ISSUE_URL). Manual mode (--manual)
+            takes 3 args (CHANGE_PROMPT, INPUT_CODE, INPUT_PROMPT), or
+            with --csv takes 2 args (CSV_FILE, CODE_DIRECTORY).
+  - update: Update a prompt based on code changes. Repo mode (no args,
+            or --all). Regeneration mode (1 arg: MODIFIED_CODE). Git mode
+            (2 args + --git: PROMPT, MODIFIED_CODE). Manual mode (3 args:
+            PROMPT, MODIFIED_CODE, ORIGINAL_CODE).
 
-Directory structure (relative to project root):
-    ./output/                    # All generated files go here
-    ./output/prompts/            # Prompt files
-    ./output/src/                # Code files
-    ./output/examples/           # Example code files
+Each command uses the @track_cost decorator and (when successful) returns
+a 3-tuple: (result_data, total_cost_usd, model_name).
 
-Prerequisites:
-    - The pdd package is installed and importable
-    - Required API keys are set (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY)
-    - PDD_PATH environment variable is set
+Run from anywhere:
+    python context/commands/modify_example.py
 """
 
+from __future__ import annotations
+
 import os
+import sys
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
+
+# Make `pdd` importable regardless of cwd.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 import click
 from click.testing import CliRunner
 
-# Import the commands from the modify module
 from pdd.commands.modify import split, change, update
 
 
-def setup_output_directories() -> None:
-    """Create the output directory structure for the examples."""
-    directories = [
-        "./output",
-        "./output/prompts",
-        "./output/src",
-        "./output/examples",
-        "./output/modified",
-    ]
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
-
-
-def create_sample_files_for_split() -> dict:
-    """
-    Create sample files needed for the split command example.
-    
-    Returns:
-        dict: Paths to the created files with keys:
-            - input_prompt: Path to the large prompt file to split
-            - input_code: Path to the code generated from the prompt
-            - example_code: Path to example code showing interface usage
-    """
-    # Create a large prompt file that could be split
-    input_prompt_path = "./output/prompts/data_pipeline_python.prompt"
-    input_prompt_content = """% Data Processing Pipeline Module
-
-This module implements a comprehensive data processing pipeline with the following components:
-
-## Data Loading
-- Load data from CSV, JSON, and Parquet files
-- Support for streaming large files
-- Automatic schema detection
-
-## Data Transformation
-- Filter rows based on conditions
-- Map/transform columns
-- Aggregate data with groupby operations
-- Join multiple datasets
-
-## Data Validation
-- Schema validation
-- Data type checking
-- Null value handling
-- Range validation for numeric fields
-
-## Data Export
-- Export to multiple formats (CSV, JSON, Parquet)
-- Compression support
-- Partitioning by column values
-
-The pipeline should be modular and allow chaining of operations.
-"""
-    with open(input_prompt_path, "w") as f:
-        f.write(input_prompt_content)
-
-    # Create the corresponding code file
-    input_code_path = "./output/src/data_pipeline.py"
-    input_code_content = '''"""Data processing pipeline implementation."""
-from typing import Any, Dict, List, Optional
-import json
-
-
-class DataPipeline:
-    """Main pipeline class for data processing."""
-    
-    def __init__(self):
-        self.data = []
-        self.transformations = []
-    
-    def load_csv(self, filepath: str) -> "DataPipeline":
-        """Load data from a CSV file."""
-        # Implementation here
-        return self
-    
-    def load_json(self, filepath: str) -> "DataPipeline":
-        """Load data from a JSON file."""
-        with open(filepath, "r") as f:
-            self.data = json.load(f)
-        return self
-    
-    def filter(self, condition: callable) -> "DataPipeline":
-        """Filter rows based on a condition function."""
-        self.data = [row for row in self.data if condition(row)]
-        return self
-    
-    def transform(self, column: str, func: callable) -> "DataPipeline":
-        """Transform a column using a function."""
-        for row in self.data:
-            if column in row:
-                row[column] = func(row[column])
-        return self
-    
-    def validate_schema(self, schema: Dict[str, type]) -> bool:
-        """Validate data against a schema."""
-        for row in self.data:
-            for key, expected_type in schema.items():
-                if key in row and not isinstance(row[key], expected_type):
-                    return False
-        return True
-    
-    def export_json(self, filepath: str) -> None:
-        """Export data to a JSON file."""
-        with open(filepath, "w") as f:
-            json.dump(self.data, f, indent=2)
-    
-    def get_data(self) -> List[Dict[str, Any]]:
-        """Return the current data."""
-        return self.data
-'''
-    with open(input_code_path, "w") as f:
-        f.write(input_code_content)
-
-    # Create an example code file showing interface usage
-    example_code_path = "./output/examples/pipeline_example.py"
-    example_code_content = '''"""Example usage of the DataPipeline class."""
-from data_pipeline import DataPipeline
-
-
-def main():
-    # Create a pipeline and chain operations
-    pipeline = DataPipeline()
-    
-    # Load, transform, and export
-    pipeline.load_json("input.json")
-    pipeline.filter(lambda row: row.get("active", False))
-    pipeline.transform("name", str.upper)
-    pipeline.export_json("output.json")
-
-
-if __name__ == "__main__":
-    main()
-'''
-    with open(example_code_path, "w") as f:
-        f.write(example_code_content)
-
-    return {
-        "input_prompt": input_prompt_path,
-        "input_code": input_code_path,
-        "example_code": example_code_path,
-    }
-
-
-def create_sample_files_for_change() -> dict:
-    """
-    Create sample files needed for the change command example.
-    
-    Returns:
-        dict: Paths to the created files with keys:
-            - change_prompt: Path to file with change instructions
-            - input_code: Path to the existing code file
-            - input_prompt: Path to the prompt to be modified
-    """
-    # Create a change prompt with modification instructions
-    change_prompt_path = "./output/prompts/add_logging.prompt"
-    change_prompt_content = """Add comprehensive logging to all functions.
-
-Requirements:
-- Use Python's logging module
-- Log function entry with parameters
-- Log function exit with return values
-- Log any exceptions that occur
-- Use appropriate log levels (DEBUG, INFO, WARNING, ERROR)
-"""
-    with open(change_prompt_path, "w") as f:
-        f.write(change_prompt_content)
-
-    # Create the input code file
-    input_code_path = "./output/src/calculator.py"
-    input_code_content = '''"""Simple calculator module."""
-
-
-def add(a: float, b: float) -> float:
-    """Add two numbers."""
-    return a + b
-
-
-def subtract(a: float, b: float) -> float:
-    """Subtract b from a."""
-    return a - b
-
-
-def multiply(a: float, b: float) -> float:
-    """Multiply two numbers."""
-    return a * b
-
-
-def divide(a: float, b: float) -> float:
-    """Divide a by b."""
-    if b == 0:
-        raise ValueError("Cannot divide by zero")
-    return a / b
-'''
-    with open(input_code_path, "w") as f:
-        f.write(input_code_content)
-
-    # Create the input prompt file
-    input_prompt_path = "./output/prompts/calculator_python.prompt"
-    input_prompt_content = """% Calculator Module
-
-Create a simple calculator module with the following functions:
-
-## Functions
-- add(a, b): Add two numbers and return the result
-- subtract(a, b): Subtract b from a and return the result
-- multiply(a, b): Multiply two numbers and return the result
-- divide(a, b): Divide a by b, raising ValueError if b is zero
-
-All functions should:
-- Accept float parameters
-- Return float results
-- Include docstrings
-"""
-    with open(input_prompt_path, "w") as f:
-        f.write(input_prompt_content)
-
-    return {
-        "change_prompt": change_prompt_path,
-        "input_code": input_code_path,
-        "input_prompt": input_prompt_path,
-    }
-
-
-def create_sample_files_for_change_csv() -> dict:
-    """
-    Create sample files needed for the change command with CSV batch mode.
-    
-    Returns:
-        dict: Paths to the created files with keys:
-            - csv_file: Path to the CSV file with batch changes
-            - code_dir: Path to directory containing code files
-    """
-    code_dir = "./output/src/batch"
-    os.makedirs(code_dir, exist_ok=True)
-
-    # Create prompt files
-    prompt1_path = os.path.join(code_dir, "utils_python.prompt")
-    prompt1_content = """% Utility Functions
-
-Create utility functions for string manipulation:
-- capitalize_words: Capitalize first letter of each word
-- reverse_string: Reverse a string
-"""
-    with open(prompt1_path, "w") as f:
-        f.write(prompt1_content)
-
-    prompt2_path = os.path.join(code_dir, "helpers_python.prompt")
-    prompt2_content = """% Helper Functions
-
-Create helper functions for list operations:
-- flatten_list: Flatten nested lists
-- unique_items: Return unique items from a list
-"""
-    with open(prompt2_path, "w") as f:
-        f.write(prompt2_content)
-
-    # Create corresponding code files
-    code1_path = os.path.join(code_dir, "utils.py")
-    code1_content = '''"""String utility functions."""
-
-
-def capitalize_words(text: str) -> str:
-    """Capitalize first letter of each word."""
-    return " ".join(word.capitalize() for word in text.split())
-
-
-def reverse_string(text: str) -> str:
-    """Reverse a string."""
-    return text[::-1]
-'''
-    with open(code1_path, "w") as f:
-        f.write(code1_content)
-
-    code2_path = os.path.join(code_dir, "helpers.py")
-    code2_content = '''"""List helper functions."""
-from typing import Any, List
-
-
-def flatten_list(nested: List[Any]) -> List[Any]:
-    """Flatten nested lists."""
-    result = []
-    for item in nested:
-        if isinstance(item, list):
-            result.extend(flatten_list(item))
-        else:
-            result.append(item)
-    return result
-
-
-def unique_items(items: List[Any]) -> List[Any]:
-    """Return unique items from a list, preserving order."""
-    seen = set()
-    result = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
-'''
-    with open(code2_path, "w") as f:
-        f.write(code2_content)
-
-    # Create CSV file with batch changes
-    csv_path = "./output/batch_changes.csv"
-    csv_content = f"""prompt_name,change_instructions
-{prompt1_path},Add type hints and improve docstrings with examples
-{prompt2_path},Add error handling for invalid inputs
-"""
-    with open(csv_path, "w") as f:
-        f.write(csv_content)
-
-    return {
-        "csv_file": csv_path,
-        "code_dir": code_dir,
-    }
-
-
-def create_sample_files_for_update() -> dict:
-    """
-    Create sample files needed for the update command example.
-    
-    Returns:
-        dict: Paths to the created files with keys:
-            - input_prompt: Path to the original prompt file
-            - modified_code: Path to the modified code file
-            - original_code: Path to the original code file
-    """
-    # Create the original prompt
-    input_prompt_path = "./output/prompts/greeter_python.prompt"
-    input_prompt_content = """% Greeter Module
-
-Create a simple greeter module with:
-- greet(name): Return a greeting message for the given name
-- farewell(name): Return a farewell message for the given name
-"""
-    with open(input_prompt_path, "w") as f:
-        f.write(input_prompt_content)
-
-    # Create the original code
-    original_code_path = "./output/src/greeter_original.py"
-    original_code_content = '''"""Simple greeter module."""
-
-
-def greet(name: str) -> str:
-    """Return a greeting message."""
-    return f"Hello, {name}!"
-
-
-def farewell(name: str) -> str:
-    """Return a farewell message."""
-    return f"Goodbye, {name}!"
-'''
-    with open(original_code_path, "w") as f:
-        f.write(original_code_content)
-
-    # Create the modified code (with additional features)
-    modified_code_path = "./output/src/greeter_modified.py"
-    modified_code_content = '''"""Enhanced greeter module with time-based greetings."""
-from datetime import datetime
-
-
-def greet(name: str, formal: bool = False) -> str:
-    """
-    Return a greeting message.
-    
-    Args:
-        name: The name to greet
-        formal: If True, use formal greeting
-    
-    Returns:
-        A greeting string
-    """
-    hour = datetime.now().hour
-    if formal:
-        if hour < 12:
-            return f"Good morning, {name}."
-        elif hour < 18:
-            return f"Good afternoon, {name}."
-        else:
-            return f"Good evening, {name}."
-    return f"Hello, {name}!"
-
-
-def farewell(name: str, formal: bool = False) -> str:
-    """
-    Return a farewell message.
-    
-    Args:
-        name: The name to bid farewell
-        formal: If True, use formal farewell
-    
-    Returns:
-        A farewell string
-    """
-    if formal:
-        return f"It was a pleasure, {name}. Until we meet again."
-    return f"Goodbye, {name}!"
-
-
-def get_time_of_day() -> str:
-    """Return the current time of day as a string."""
-    hour = datetime.now().hour
-    if hour < 12:
-        return "morning"
-    elif hour < 18:
-        return "afternoon"
-    else:
-        return "evening"
-'''
-    with open(modified_code_path, "w") as f:
-        f.write(modified_code_content)
-
-    return {
-        "input_prompt": input_prompt_path,
-        "modified_code": modified_code_path,
-        "original_code": original_code_path,
-    }
-
-
-def example_split_command():
-    """
-    Demonstrate the legacy split command.
-
-    The default `pdd split` is now agentic and takes a single TARGET_FILE.
-    This example exercises the legacy path via `--legacy`, which takes a
-    large prompt file and splits it into:
-    - A sub-prompt file containing extracted functionality
-    - A modified prompt file with the extracted parts replaced by references
-
-    Command signature (legacy):
-        pdd split --legacy INPUT_PROMPT INPUT_CODE EXAMPLE_CODE [OPTIONS]
-    
-    Arguments:
-        INPUT_PROMPT: Path to the large prompt file to split (must exist)
-        INPUT_CODE: Path to code generated from the prompt (must exist)
-        EXAMPLE_CODE: Path to example code showing interface usage (must exist)
-    
-    Options:
-        --output-sub: Where to save the sub-prompt file
-        --output-modified: Where to save the modified prompt file
-    
-    Returns via @track_cost decorator:
-        Tuple[Dict[str, str], float, str]:
-            - result_data: Dictionary with keys:
-                - 'sub_prompt_content': Content of the generated sub-prompt
-                - 'modified_prompt_content': Content of the modified prompt
-                - 'output_sub': Path where sub-prompt was saved
-                - 'output_modified': Path where modified prompt was saved
-            - total_cost: Cost of the operation in USD
-            - model_name: Name of the LLM model used
-    """
-    print("\n" + "=" * 60)
-    print("SPLIT COMMAND EXAMPLE")
+def _print_result(label: str, result) -> None:
+    """Print a CliRunner result in a compact form."""
+    print(f"--- {label} ---")
+    print(f"  exit_code: {result.exit_code}")
+    out = (result.output or "").strip()
+    if out:
+        for line in out.splitlines():
+            print(f"  | {line}")
+    if result.exception is not None and not isinstance(result.exception, SystemExit):
+        print(f"  exception: {type(result.exception).__name__}: {result.exception}")
+    print()
+
+
+def example_split_legacy() -> None:
+    """`pdd split --legacy PROMPT CODE EXAMPLE` delegates to split_main."""
     print("=" * 60)
-    
-    files = create_sample_files_for_split()
-    
-    # Create a CLI group to hold the command
-    @click.group()
-    @click.pass_context
-    def cli(ctx):
-        ctx.ensure_object(dict)
+    print("Example 1: split (legacy mode)")
+    print("=" * 60)
 
-    cli.add_command(split)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt = tmp_path / "prompt.txt"
+        code = tmp_path / "code.py"
+        example = tmp_path / "example.py"
+        for p in (prompt, code, example):
+            p.write_text("placeholder\n", encoding="utf-8")
+
+        with patch("pdd.commands.modify.split_main") as mock_split_main:
+            # split_main contract: (result_data, total_cost_usd, model_name)
+            mock_split_main.return_value = (
+                {"sub_prompt_content": "sub", "modified_prompt_content": "mod"},
+                0.01,
+                "mock-model",
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(
+                split,
+                [
+                    "--legacy",
+                    str(prompt),
+                    str(code),
+                    str(example),
+                    "--output-sub",
+                    str(tmp_path / "sub.prompt"),
+                    "--output-modified",
+                    str(tmp_path / "mod.prompt"),
+                ],
+                catch_exceptions=False,
+            )
+
+        _print_result("legacy split", result)
+        print(f"  split_main called: {mock_split_main.called}")
+        kwargs = mock_split_main.call_args.kwargs
+        print(f"  forwarded input_prompt_file: {kwargs['input_prompt_file'] == str(prompt)}")
+        print(f"  forwarded output_sub:        {kwargs['output_sub'].endswith('sub.prompt')}")
+        print()
+
+
+def example_split_agentic() -> None:
+    """`pdd split TARGET_FILE` (agentic, default) delegates to run_agentic_split."""
+    print("=" * 60)
+    print("Example 2: split (agentic mode, default)")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "target.py"
+        target.write_text("def f():\n    return 1\n", encoding="utf-8")
+
+        with patch("pdd.commands.modify.run_agentic_split") as mock_agentic:
+            # run_agentic_split contract:
+            #   (success, message, cost_usd, model, changed_files)
+            mock_agentic.return_value = (
+                True,
+                "Split complete",
+                0.1234,
+                "mock-model",
+                [str(target)],
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(
+                split,
+                [str(target), "--intent", "reduce", "--no-phase-extraction"],
+                catch_exceptions=False,
+            )
+
+        _print_result("agentic split", result)
+        kwargs = mock_agentic.call_args.kwargs
+        print(f"  intent forwarded:              {kwargs['intent']!r}")
+        print(f"  no_phase_extraction forwarded: {kwargs['no_phase_extraction']}")
+        print(f"  use_github_state default True: {kwargs['use_github_state']}")
+        print()
+
+
+def example_change_manual_standard() -> None:
+    """`pdd change --manual CHANGE CODE PROMPT` (3 args) delegates to change_main."""
+    print("=" * 60)
+    print("Example 3: change (manual standard mode)")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        change_file = tmp_path / "change.prompt"
+        code_file = tmp_path / "code.py"
+        prompt_file = tmp_path / "input.prompt"
+        for p in (change_file, code_file, prompt_file):
+            p.write_text("placeholder\n", encoding="utf-8")
+
+        with patch("pdd.commands.modify.change_main") as mock_change_main:
+            mock_change_main.return_value = ("modified prompt body", 0.02, "mock-model")
+
+            runner = CliRunner()
+            result = runner.invoke(
+                change,
+                [
+                    "--manual",
+                    str(change_file),
+                    str(code_file),
+                    str(prompt_file),
+                ],
+                catch_exceptions=False,
+            )
+
+        _print_result("manual standard change", result)
+        kwargs = mock_change_main.call_args.kwargs
+        print(f"  use_csv: {kwargs['use_csv']}")
+        print(f"  budget:  {kwargs['budget']}  (default 5.0)")
+        print()
+
+
+def example_change_manual_csv() -> None:
+    """`pdd change --manual --csv CSV_FILE CODE_DIR` (2 args)."""
+    print("=" * 60)
+    print("Example 4: change (manual CSV batch mode)")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        csv_file = tmp_path / "batch.csv"
+        csv_file.write_text("prompt_name,change_instructions\n", encoding="utf-8")
+        code_dir = tmp_path / "src"
+        code_dir.mkdir()
+
+        with patch("pdd.commands.modify.change_main") as mock_change_main:
+            mock_change_main.return_value = ("batch result", 0.04, "mock-model")
+
+            runner = CliRunner()
+            result = runner.invoke(
+                change,
+                ["--manual", "--csv", str(csv_file), str(code_dir)],
+                catch_exceptions=False,
+            )
+
+        _print_result("manual CSV change", result)
+        kwargs = mock_change_main.call_args.kwargs
+        print(f"  use_csv: {kwargs['use_csv']}")
+        print()
+
+
+def example_change_agentic() -> None:
+    """`pdd change ISSUE_URL` (agentic, default) delegates to run_agentic_change."""
+    print("=" * 60)
+    print("Example 5: change (agentic mode, default)")
+    print("=" * 60)
+
+    issue_url = "https://github.com/example/repo/issues/42"
+
+    with patch("pdd.commands.modify.run_agentic_change") as mock_agentic:
+        # run_agentic_change contract:
+        #   (success, message, cost_usd, model, changed_files)
+        mock_agentic.return_value = (
+            True,
+            "Change complete",
+            0.5678,
+            "mock-model",
+            ["prompts/foo_python.prompt"],
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            change,
+            [issue_url, "--no-github-state"],
+            catch_exceptions=False,
+        )
+
+    _print_result("agentic change", result)
+    kwargs = mock_agentic.call_args.kwargs
+    print(f"  issue_url forwarded:    {kwargs['issue_url'] == issue_url}")
+    print(f"  use_github_state=False: {kwargs['use_github_state'] is False}")
+    print()
+
+
+def example_update_repo_mode() -> None:
+    """`pdd update` (no args) runs repo-wide update_main."""
+    print("=" * 60)
+    print("Example 6: update (repo-wide mode)")
+    print("=" * 60)
+
+    with patch("pdd.commands.modify.update_main") as mock_update_main:
+        mock_update_main.return_value = ("repo updated", 0.0, "mock-model")
+
+        runner = CliRunner()
+        result = runner.invoke(update, [], catch_exceptions=False)
+
+    _print_result("repo update", result)
+    kwargs = mock_update_main.call_args.kwargs
+    print(f"  repo:                {kwargs['repo']}")
+    print(f"  input_prompt_file:   {kwargs['input_prompt_file']!r}")
+    print(f"  modified_code_file:  {kwargs['modified_code_file']!r}")
+    print(f"  base_branch default: {kwargs['base_branch']!r}")
+    print(f"  sync_metadata:       {kwargs['sync_metadata']}")
+    print()
+
+
+def example_update_regeneration() -> None:
+    """`pdd update CODE_FILE` (1 arg) runs regeneration mode."""
+    print("=" * 60)
+    print("Example 7: update (regeneration, 1 arg)")
+    print("=" * 60)
+
+    with patch("pdd.commands.modify.update_main") as mock_update_main:
+        mock_update_main.return_value = ("regenerated prompt", 0.03, "mock-model")
+
+        runner = CliRunner()
+        result = runner.invoke(update, ["src/foo.py", "--sync-metadata"], catch_exceptions=False)
+
+    _print_result("regeneration update", result)
+    kwargs = mock_update_main.call_args.kwargs
+    print(f"  repo:               {kwargs['repo']}")
+    print(f"  modified_code_file: {kwargs['modified_code_file']!r}")
+    print(f"  sync_metadata:      {kwargs['sync_metadata']}")
+    print()
+
+
+def example_update_git() -> None:
+    """`pdd update --git PROMPT CODE` (2 args + --git)."""
+    print("=" * 60)
+    print("Example 8: update (git mode, 2 args + --git)")
+    print("=" * 60)
+
+    with patch("pdd.commands.modify.update_main") as mock_update_main:
+        mock_update_main.return_value = ("git-updated prompt", 0.05, "mock-model")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            update,
+            ["--git", "prompts/foo_python.prompt", "src/foo.py"],
+            catch_exceptions=False,
+        )
+
+    _print_result("git update", result)
+    kwargs = mock_update_main.call_args.kwargs
+    print(f"  use_git:             {kwargs['use_git']}")
+    print(f"  input_prompt_file:   {kwargs['input_prompt_file']!r}")
+    print(f"  modified_code_file:  {kwargs['modified_code_file']!r}")
+    print(f"  input_code_file:     {kwargs['input_code_file']!r}")
+    print()
+
+
+def example_update_validation_errors() -> None:
+    """Demonstrate update's pre-try validation (UsageError surfaces as exit code 2)."""
+    print("=" * 60)
+    print("Example 9: update validation errors (no LLM calls)")
+    print("=" * 60)
 
     runner = CliRunner()
 
-    # Run the legacy split command (the default split is now agentic and
-    # takes a single TARGET_FILE — see `pdd split --help`).
-    result = runner.invoke(
-        cli,
-        [
-            "split",
-            "--legacy",
-            files["input_prompt"],
-            files["input_code"],
-            files["example_code"],
-            "--output-sub", "./output/modified/data_loading_python.prompt",
-            "--output-modified", "./output/modified/data_pipeline_modified_python.prompt",
-        ],
-        catch_exceptions=False,
-    )
+    # 2 args without --git is invalid.
+    result_a = runner.invoke(update, ["prompts/foo.prompt", "src/foo.py"])
+    print(f"  '2 args without --git'  -> exit_code={result_a.exit_code} (expect 2)")
 
-    print(f"\nCommand: pdd split --legacy {files['input_prompt']} {files['input_code']} {files['example_code']}")
-    print(f"Exit code: {result.exit_code}")
-    print(f"Output:\n{result.output}")
+    # 3 args with --git is invalid.
+    result_b = runner.invoke(update, ["--git", "p", "m", "o"])
+    print(f"  '3 args with --git'     -> exit_code={result_b.exit_code} (expect 2)")
 
-    # Check if output files were created
-    if os.path.exists("./output/modified/data_loading_python.prompt"):
-        print("\nSub-prompt file created successfully!")
-        with open("./output/modified/data_loading_python.prompt", "r") as f:
-            content = f.read()
-            print(f"Sub-prompt preview (first 200 chars):\n{content[:200]}...")
+    # --all combined with paths is invalid.
+    result_c = runner.invoke(update, ["--all", "src/foo.py"])
+    print(f"  '--all + file path'     -> exit_code={result_c.exit_code} (expect 2)")
 
-    return result
+    # --budget <= 0 is invalid.
+    result_d = runner.invoke(update, ["--budget", "0"])
+    print(f"  '--budget 0'            -> exit_code={result_d.exit_code} (expect 2)")
+    print()
 
 
-def example_change_command():
-    """
-    Demonstrate the change command in manual mode.
-
-    The change command modifies an existing prompt based on change instructions.
-    It supports two modes: agentic (default) and manual.
-
-    Command signatures:
-        Agentic mode: pdd change ISSUE_URL [OPTIONS]
-        Manual mode:  pdd change --manual CHANGE_PROMPT INPUT_CODE INPUT_PROMPT [OPTIONS]
-
-    Arguments (manual mode):
-        CHANGE_PROMPT: Path to file containing change instructions (must exist)
-        INPUT_CODE: Path to existing code file (must exist)
-        INPUT_PROMPT: Path to prompt file to modify (must exist)
-
-    Options:
-        --manual: Use legacy manual mode instead of agentic mode
-        --output: Where to save the modified prompt (default: overwrites input)
-        --csv: Enable CSV batch mode (use with --manual)
-
-    Returns via @track_cost decorator:
-        Tuple[Dict[str, str], float, str]:
-            - result_data: Dictionary with keys:
-                - 'modified_prompt_content': The modified prompt content
-                - 'output_path': Path where the modified prompt was saved
-            - total_cost: Cost of the operation in USD
-            - model_name: Name of the LLM model used
-    """
-    print("\n" + "=" * 60)
-    print("CHANGE COMMAND EXAMPLE")
-    print("=" * 60)
-    
-    files = create_sample_files_for_change()
-    
-    @click.group()
-    @click.pass_context
-    def cli(ctx):
-        ctx.ensure_object(dict)
-    
-    cli.add_command(change)
-    
-    runner = CliRunner()
-    
-    # Run the change command in manual mode
-    result = runner.invoke(
-        cli,
-        [
-            "change",
-            "--manual",
-            files["change_prompt"],
-            files["input_code"],
-            files["input_prompt"],
-            "--output", "./output/modified/calculator_with_logging_python.prompt",
-        ],
-        catch_exceptions=False,
-    )
-    
-    print(f"\nCommand: pdd change {files['change_prompt']} {files['input_code']} {files['input_prompt']}")
-    print(f"Exit code: {result.exit_code}")
-    print(f"Output:\n{result.output}")
-    
-    # Check if output file was created
-    if os.path.exists("./output/modified/calculator_with_logging_python.prompt"):
-        print("\nModified prompt file created successfully!")
-        with open("./output/modified/calculator_with_logging_python.prompt", "r") as f:
-            content = f.read()
-            print(f"Modified prompt preview (first 300 chars):\n{content[:300]}...")
-    
-    return result
-
-
-def example_change_command_csv_batch():
-    """
-    Demonstrate the change command in manual CSV batch mode.
-
-    When using --csv with --manual, the change command processes multiple prompts
-    based on instructions in a CSV file.
-
-    CSV file format:
-        prompt_name,change_instructions
-        path/to/prompt1.prompt,Instructions for first prompt
-        path/to/prompt2.prompt,Instructions for second prompt
-
-    Command signature:
-        pdd change --manual --csv CSV_FILE CODE_DIRECTORY
-
-    Arguments:
-        CSV_FILE: Path to CSV file with batch change instructions
-        CODE_DIRECTORY: Directory containing code files referenced by prompts
-
-    Options:
-        --manual: Required for CSV batch mode
-        --csv: Enable CSV batch processing
-
-    Returns via @track_cost decorator:
-        Tuple[Dict[str, Any], float, str]:
-            - result_data: Dictionary with keys:
-                - 'processed_count': Number of prompts processed
-                - 'results': List of individual results
-            - total_cost: Total cost of all operations in USD
-            - model_name: Name of the LLM model used
-    """
-    print("\n" + "=" * 60)
-    print("CHANGE COMMAND (CSV BATCH MODE) EXAMPLE")
-    print("=" * 60)
-    
-    files = create_sample_files_for_change_csv()
-    
-    @click.group()
-    @click.pass_context
-    def cli(ctx):
-        ctx.ensure_object(dict)
-    
-    cli.add_command(change)
-    
-    runner = CliRunner()
-    
-    # Run the change command in manual CSV batch mode
-    result = runner.invoke(
-        cli,
-        [
-            "change",
-            "--manual",
-            "--csv",
-            files["csv_file"],
-            files["code_dir"],
-        ],
-        catch_exceptions=False,
-    )
-    
-    print(f"\nCommand: pdd change --csv {files['csv_file']}")
-    print(f"Exit code: {result.exit_code}")
-    print(f"Output:\n{result.output}")
-    
-    return result
-
-
-def example_update_command():
-    """
-    Demonstrate the update command.
-
-    The update command updates a prompt based on changes made to the code.
-    It analyzes the modified code file and updates the corresponding prompt
-    to reflect the changes.
-
-    Command signature:
-        Repo-wide mode: pdd update [OPTIONS]
-        Single-file mode: pdd update MODIFIED_CODE [OPTIONS]
-
-    Arguments:
-        MODIFIED_CODE: Path to the modified code file (single-file mode)
-
-    Options:
-        --git: Use git history for original code comparison
-        --output: Where to save the updated prompt (default: overwrites input)
-        --simple: Use legacy 2-stage LLM update instead of agentic mode
-
-    Returns via @track_cost decorator:
-        Tuple[Dict[str, str], float, str]:
-            - result_data: Dictionary with keys:
-                - 'updated_prompt_content': The updated prompt content
-                - 'output_path': Path where the updated prompt was saved
-                - 'changes_detected': Summary of detected code changes
-            - total_cost: Cost of the operation in USD
-            - model_name: Name of the LLM model used
-    """
-    print("\n" + "=" * 60)
-    print("UPDATE COMMAND EXAMPLE")
-    print("=" * 60)
-    
-    files = create_sample_files_for_update()
-    
-    @click.group()
-    @click.pass_context
-    def cli(ctx):
-        ctx.ensure_object(dict)
-    
-    cli.add_command(update)
-    
-    runner = CliRunner()
-    
-    # Run the update command in simple mode (legacy mode without git history)
-    result = runner.invoke(
-        cli,
-        [
-            "update",
-            "--simple",
-            files["modified_code"],
-            "--output", "./output/modified/greeter_updated_python.prompt",
-        ],
-        catch_exceptions=False,
-    )
-
-    print(f"\nCommand: pdd update --simple {files['modified_code']}")
-    print(f"Exit code: {result.exit_code}")
-    print(f"Output:\n{result.output}")
-    
-    # Check if output file was created
-    if os.path.exists("./output/modified/greeter_updated_python.prompt"):
-        print("\nUpdated prompt file created successfully!")
-        with open("./output/modified/greeter_updated_python.prompt", "r") as f:
-            content = f.read()
-            print(f"Updated prompt preview (first 400 chars):\n{content[:400]}...")
-    
-    return result
-
-
-def main():
-    """
-    Run all modify command examples.
-    
-    This demonstrates the three modify commands:
-    1. split - Split large prompts into smaller ones
-    2. change - Modify prompts based on change instructions
-    3. update - Update prompts based on code changes
-    
-    Each command uses the @track_cost decorator which returns:
-        Tuple[result_data, total_cost, model_name]
-    
-    Where:
-        - result_data: Command-specific dictionary with results
-        - total_cost: Cost in USD (dollars per operation)
-        - model_name: The LLM model used (e.g., "gpt-4", "claude-3-opus")
-    """
-    # Setup output directories
-    setup_output_directories()
-    
-    print("=" * 60)
-    print("PDD MODIFY COMMANDS EXAMPLES")
-    print("=" * 60)
-    print("\nThis script demonstrates the three modify commands:")
-    print("  1. split  - Split large prompt files into smaller ones")
-    print("  2. change - Modify prompts based on change instructions")
-    print("  3. update - Update prompts based on code changes")
-    print("\nAll output files will be saved to ./output/")
-    
-    # Run examples
-    example_split_command()
-    example_change_command()
-    example_change_command_csv_batch()
-    example_update_command()
-    
-    print("\n" + "=" * 60)
-    print("ALL EXAMPLES COMPLETED")
-    print("=" * 60)
-    print("\nGenerated files can be found in:")
-    print("  - ./output/prompts/     (input prompt files)")
-    print("  - ./output/src/         (code files)")
-    print("  - ./output/examples/    (example code files)")
-    print("  - ./output/modified/    (modified/updated prompts)")
+def main() -> None:
+    print("pdd.commands.modify -- Usage Examples")
+    print()
+    example_split_legacy()
+    example_split_agentic()
+    example_change_manual_standard()
+    example_change_manual_csv()
+    example_change_agentic()
+    example_update_repo_mode()
+    example_update_regeneration()
+    example_update_git()
+    example_update_validation_errors()
+    print("All examples completed successfully.")
 
 
 if __name__ == "__main__":

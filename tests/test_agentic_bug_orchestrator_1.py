@@ -52,6 +52,7 @@ def mock_dependencies():
          patch("pdd.agentic_bug_orchestrator._get_git_root") as mock_git_root, \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_progress, \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress, \
+         patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True), \
          patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
 
         # Default behavior: return a template string that can be formatted

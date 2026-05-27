@@ -4,6 +4,10 @@ import os
 from unittest.mock import patch, MagicMock, ANY, call
 from pathlib import Path
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(600)
+
 from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
@@ -155,9 +159,19 @@ def mock_env():
     # don't depend on the developer's `~/.local/share/opencode/auth.json` or
     # `~/.config/opencode/opencode.json`. Environment-variable signals (which
     # tests do set explicitly) are still honored by `_has_opencode_credentials`.
+    # PR #1153 round-3: ``get_available_agents`` now pairs the resolved
+    # Google CLI binary (agy / gemini) with the matching OAuth file via the
+    # per-binary predicates rather than the combined helper. Mock all three
+    # so a developer's real ``~/.gemini/oauth_creds.json`` does not leak
+    # availability into tests that explicitly assume "no OAuth".
     with (
         patch.dict(os.environ, {}, clear=True),
         patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=False),
+        patch("pdd.agentic_common._has_agy_oauth_credentials", return_value=False),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=False,
+        ),
         patch("pdd.agentic_common._opencode_auth_file_has_credentials", return_value=False),
         patch("pdd.agentic_common._iter_opencode_config_texts", return_value=[]),
     ):
@@ -216,7 +230,9 @@ def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock
     """Test when all agents are available."""
     mock_shutil_which.return_value = "/usr/bin/fake"
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-    os.environ["GEMINI_API_KEY"] = "AIza..."
+    # GOOGLE_API_KEY is accepted by both agy and legacy gemini, so google is
+    # available regardless of which binary auto-mode selects.
+    os.environ["GOOGLE_API_KEY"] = "AIza..."
     os.environ["OPENAI_API_KEY"] = "sk-..."
 
     agents = get_available_agents()
@@ -531,18 +547,23 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert abs(cost - 7.50) < 0.0001
 
     # Verify command - now uses full path from _find_cli_binary
-    args, _ = mock_subprocess.call_args
+    args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     assert cmd[0] == "/bin/codex"  # Uses discovered path, not hardcoded name
     assert "--sandbox" in cmd
     assert "danger-full-access" in cmd
     assert "--json" in cmd
+    assert cmd[-1] == "-"
+    assert kwargs["input"] is not None
+    assert "instruction" in kwargs["input"]
 
 def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test fallback from Anthropic (failure) to Google (success)."""
     # Setup availability for both
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["GEMINI_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini; safe to use here
+    # regardless of which Google binary auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     
     # Setup subprocess responses
     # First call (Anthropic) fails
@@ -646,7 +667,7 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
     Specific test for Gemini cached token logic.
     Flash Pricing: Input $0.35, Cached Multiplier 0.5 (so $0.175 effective).
     """
-    mock_shutil_which.return_value = "/bin/gemini"
+    mock_shutil_which.side_effect = lambda name: "/bin/gemini" if name == "gemini" else None
     os.environ["GEMINI_API_KEY"] = "key"
     # Force only google to be available
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["google"]):
@@ -920,9 +941,10 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     This test verifies that such false positives are rejected and that the
     system falls back to a provider that performs real work.
     """
-    mock_shutil_which.return_value = "/bin/exe"
+    mock_shutil_which.side_effect = lambda name: "/bin/exe" if name in ("claude", "gemini") else None
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
+    os.environ["PDD_GOOGLE_CLI"] = "gemini"
 
     # First provider (Anthropic): Returns "success" with $0.00 cost and minimal output
     # This is a false positive - no work was actually done
@@ -944,15 +966,11 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     google_real_success.stderr = ""
 
     def run_side_effect(cmd, **kwargs):
-        # Check if CLI path contains the provider name (e.g., /bin/exe contains "exe")
-        # Since _find_cli_binary is mocked to return "/bin/exe", we need a different approach
-        # Check the command path or any element for provider identification
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        if "anthropic" in str(kwargs.get('env', {}).get('_provider', '')) or cmd == ["/bin/exe", "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]:
+        if "--dangerously-skip-permissions" in cmd:
             # Anthropic command pattern
-            if "--dangerously-skip-permissions" in cmd:
-                return anthropic_false_positive
-        if "--yolo" in cmd:  # Gemini command pattern
+            return anthropic_false_positive
+        if "--yolo" in cmd or "--print" in cmd:
+            # Legacy Gemini CLI (--yolo) or Antigravity CLI (--print)
             return google_real_success
         return MagicMock(returncode=1)
 
@@ -1008,7 +1026,17 @@ def test_get_available_agents_google_gemini_cli_oauth(
     """Gemini CLI stored OAuth credentials are sufficient for Google provider."""
     mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
 
-    with patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True):
+    # PR #1153 round-3: availability now pairs the resolved binary with the
+    # matching per-binary OAuth predicate. The resolved binary here is the
+    # legacy ``gemini``, so the legacy OAuth predicate is what gates the
+    # signal; patch both helpers to keep the combined one consistent.
+    with (
+        patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=True,
+        ),
+    ):
         agents = get_available_agents()
 
     assert "google" in agents
@@ -1067,8 +1095,10 @@ def test_get_available_agents_google_vertex_ai_adc_auth(mock_shutil_which, mock_
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
-    mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini binaries, ensuring
+    # google is available regardless of which one auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
 
     agents = get_available_agents()
@@ -1347,8 +1377,9 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     Should trigger fallback.
     """
     # Setup availability for Anthropic and Google
-    mock_shutil_which.return_value = "/bin/cmd"
+    mock_shutil_which.side_effect = lambda name: "/bin/cmd" if name in ("claude", "gemini") else None
     mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["PDD_GOOGLE_CLI"] = "gemini"
     
     # 1. Anthropic: Success but suspicious (0 cost, short output)
     suspicious_response = MagicMock()
@@ -1393,7 +1424,9 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     _, kwargs = mock_subprocess_run.call_args
     stdin_content = kwargs.get("input", "")
     assert "Instruction" in stdin_content
-    assert ".agentic_prompt_" in stdin_content  # Self-referential instruction is in content
+    assert "You have full file access" in stdin_content
+    assert "Read the file" not in stdin_content
+    assert ".agentic_prompt_" not in stdin_content
 
     # Verify no temp files remain in tmp_path
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
@@ -1686,6 +1719,7 @@ def _prepend_cli_path(monkeypatch, cli_name: str, path_to_prepend) -> None:
     monkeypatch.setitem(_COMMON_CLI_PATHS, cli_name, [path_to_prepend] + original_paths)
 
 
+@pytest.mark.uses_real_cli_detector
 class TestCliDiscoveryBug:
     """
     Tests for CLI binary discovery bug.
@@ -1819,11 +1853,25 @@ class TestCliDiscoveryBug:
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
         monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+        # PR #1153 round-3: `get_available_agents` now pairs the resolved
+        # binary with the matching OAuth predicate. This test installs only
+        # the legacy `gemini` binary, so the legacy OAuth predicate is the
+        # one that gates availability; the combined helper is patched too
+        # for backward-compat with any caller that still reads it.
         monkeypatch.setattr(
             "pdd.agentic_common._has_gemini_oauth_credentials",
             lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_agy_oauth_credentials",
+            lambda: False,
         )
 
         npm_bin = tmp_path / ".npm-global" / "bin"
@@ -1840,6 +1888,7 @@ class TestCliDiscoveryBug:
         )
 
 
+@pytest.mark.uses_real_cli_detector
 class TestCliDiscovery:
     """
     Tests for the CLI discovery fix implementation.
@@ -2967,6 +3016,11 @@ class TestFindStateCommentPagination:
                 f"Without it, GitHub API only returns first 30 comments. "
                 f"Command was: {args}"
             )
+            assert "--slurp" in args, (
+                f"gh api command missing --slurp flag. "
+                f"Without it, paginated REST pages may be emitted as multiple JSON documents. "
+                f"Command was: {args}"
+            )
 
     # ---- Test 2: Behavioral — state comment beyond 30 is found ----
 
@@ -2994,10 +3048,34 @@ class TestFindStateCommentPagination:
             assert comment_id == 1035  # 1000 + 35
             assert state["last_completed_step"] == 35
 
+    def test_find_state_comment_flattens_slurped_pages(self, tmp_path):
+        """``gh api --paginate --slurp`` wraps REST pages in an outer list."""
+        mock_comments = _make_mock_comments(42, state_positions=[35])
+        pages = [mock_comments[:30], mock_comments[30:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(pages),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            assert result is not None
+            comment_id, state = result
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
+
     # ---- Test 3: Returns first matching state comment ----
 
-    def test_find_state_comment_returns_first_match(self, tmp_path):
-        """When multiple state comments exist, returns the first one found."""
+    def test_find_state_comment_returns_highest_id_match(self, tmp_path):
+        """When multiple state comments exist, returns the one with the highest id.
+
+        GitHub assigns monotonically increasing comment ids. Under a duplicate-
+        marker hazard (two workers both POST a state comment, or an old run's
+        comment was never cleared) the highest id corresponds to the most recently
+        written state, which is what a normal resume should load.
+        """
         mock_comments = _make_mock_comments(42, state_positions=[10, 35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
@@ -3010,9 +3088,9 @@ class TestFindStateCommentPagination:
 
             assert result is not None
             comment_id, state = result
-            # Should return the first match (position 10), not the later one
-            assert comment_id == 1010
-            assert state["last_completed_step"] == 10
+            # Should return the highest-id match (position 35 → id 1035), not first
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
 
     # ---- Test 4: No state comment exists ----
 
@@ -3574,6 +3652,47 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
         f"Expected agent_message text in output, got: {output!r}"
     )
     assert "auth" in output and "payments" in output
+
+
+def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
+    """Codex positional prompt must be '-' so it receives the prompt body."""
+    from pdd.agentic_common import _run_with_provider
+
+    with patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "test-key", "CODEX_MODEL": "test-model"},
+        clear=False,
+    ), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "type": "result",
+                "output": "ok",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "cached_input_tokens": 0,
+                },
+            }),
+            stderr="",
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt body")
+
+        success, output, _cost, _model = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert output == "ok"
+    args, kwargs = mock_run.call_args
+    cmd = args[0]
+    assert cmd[cmd.index("--json") + 1] == "-"
+    assert cmd[cmd.index("--model") + 1] == "test-model"
+    assert str(prompt_file) not in cmd
+    assert kwargs["input"] == "test prompt body"
 
 
 def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
@@ -4852,6 +4971,140 @@ class TestIssue1072PermanentErrors:
         assert _is_permanent_error("Rate limit exceeded") is False
         assert _is_permanent_error("Timeout expired") is False
         assert _is_permanent_error("Connection reset by peer") is False
+
+
+class TestCredentialLimitClassification:
+    """Issue (this PR): Claude Code subscription-tier weekly-limit
+    classification.
+
+    The fixer subprocess inside ``pdd checkup --pr`` can return a
+    ``{"api_error_status":429,"result":"You've hit your limit · resets May
+    18, 11pm (UTC)","duration_api_ms":0,"total_cost_usd":0}`` envelope when
+    the user's Claude Code subscription weekly cap fires. ``duration_api_ms:0``
+    + ``total_cost_usd:0`` is the tell that the local CLI rejected before any
+    API call — this is the subscription-tier weekly limit, NOT a transient
+    API 429. The previous ``_is_rate_limited`` short-circuit treated it as
+    transient and burned 3 × 60 s retries; this classification lets the
+    cloud OAuth-token waterfall rotate to a different credential.
+    """
+
+    from pdd.agentic_common import _classify_permanent_error
+
+    EXACT_BUG_ERROR = (
+        'Exit code 1: {"type":"result","subtype":"success","is_error":true,'
+        '"api_error_status":429,"duration_ms":658,"duration_api_ms":0,'
+        '"num_turns":1,"result":"You\'ve hit your limit · resets May 18, '
+        '11pm (UTC)","stop_reason":"stop_sequence","total_cost_usd":0,'
+        '"service_tier":"standard"}'
+    )
+
+    def test_classify_credential_limit_from_claude_subscription_429(self):
+        """The exact JSON envelope from the bug report must classify as
+        ``credential-limit`` — not as the transient rate-limit class. This is
+        the load-bearing assertion: without it, ``run_agentic_task`` retries
+        on the 60s rate-limit floor and the fixer dead-stops the checkup loop.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(self.EXACT_BUG_ERROR) == "credential-limit"
+        ), (
+            "Subscription weekly-limit error misclassified as transient — "
+            "expected stable token 'credential-limit' so pdd_cloud's OAuth "
+            "waterfall can rotate credentials"
+        )
+
+    def test_credential_limit_is_permanent(self):
+        """``_is_permanent_error`` is the public wrapper used by callers
+        outside the classification module."""
+        assert _is_permanent_error(self.EXACT_BUG_ERROR) is True
+
+    def test_generic_429_still_transient(self):
+        """Regression guard for #1384: a generic API-tier 429 without the
+        "hit your limit · resets" anchor MUST stay transient so
+        ``RATE_LIMIT_BACKOFF_FLOOR`` still applies. Without this, every
+        provider 429 would be marked permanent and a recoverable
+        rate-limit window would be reported as a hard failure.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(
+                "Error: api_error_status: 429 rate limit exceeded"
+            )
+            is None
+        )
+        assert (
+            _classify_permanent_error('{"api_error_status":429,"result":"Too many requests"}')
+            is None
+        )
+
+    def test_credential_limit_phrase_alone_does_not_false_positive(self):
+        """The pattern MUST require BOTH "hit your limit" AND "reset(s)"
+        anchors. A reviewer/fixer that happens to say "User hit your limit
+        of 10 items" in summary prose (no "resets") must NOT be classified
+        as credential-limit — that would silently kill the retry path for
+        unrelated text.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert _classify_permanent_error("User hit your limit of 10 items") != "credential-limit"
+        # And without any other strong/transient signal, it falls all the way
+        # through to None (no false-permanent classification).
+        assert _classify_permanent_error("User hit your limit of 10 items") is None
+
+    def test_credential_limit_does_not_match_prose_with_substrings_apart(self):
+        """Reviewer finding bodies embedded in subprocess stdout can contain
+        BOTH anchors in prose — e.g. a reviewer describing this very bug —
+        with no time-token between them. The pattern must require proximity
+        plus a time-token after ``resets`` so distant-substring prose does
+        NOT classify as ``credential-limit`` (which would short-circuit the
+        rate-limit retry path on benign text).
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(
+                "if you hit your limit, nothing resets automatically"
+            )
+            is None
+        ), (
+            "Loose ``hit your limit.*?resets?`` greedy pattern is matching "
+            "unrelated prose. Tighten the regex to require a time-token after "
+            "``resets`` and cap proximity between the anchors."
+        )
+
+    def test_credential_limit_matches_subscription_envelope_with_full_date(self):
+        """The exact Claude Code envelope with a full date after ``resets``
+        — e.g. ``You've hit your limit · resets May 18, 11pm (UTC)`` — MUST
+        classify as ``credential-limit``. This is the load-bearing case the
+        regex tightening must not regress.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            'Exit code 1: {"api_error_status":429,'
+            '"result":"You\'ve hit your limit · resets May 18, '
+            '11pm (UTC)"}'
+        )
+        assert (
+            _classify_permanent_error(envelope) == "credential-limit"
+        )
+
+    def test_credential_limit_matches_subscription_envelope_with_time_only(self):
+        """Same envelope but with only a time-of-day after ``resets`` —
+        the regex must still match when a time token follows the anchor
+        even without a date prefix.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            'Exit code 1: {"api_error_status":429,'
+            '"result":"You\'ve hit your limit · resets 11pm (UTC)"}'
+        )
+        assert (
+            _classify_permanent_error(envelope) == "credential-limit"
+        )
 
 
 class TestIssue1072FailureLogging:
@@ -6389,3 +6642,1129 @@ class TestRateLimitBackoffFloor:
         from pdd.agentic_common import RATE_LIMIT_BACKOFF_FLOOR
         high_backoff = 90.0
         assert max(high_backoff, RATE_LIMIT_BACKOFF_FLOOR) == 90.0
+
+
+# ---------------------------------------------------------------------------
+# Issue #814: credit-balance / billing 400s as permanent errors
+# ---------------------------------------------------------------------------
+
+
+class TestIssue814BillingErrorsPermanent:
+    """Anthropic billing/credit-balance 400 bodies must classify as permanent.
+
+    Spec section 14 (Error Classification) requires that
+    `_is_permanent_error()` matches:
+      - "credit balance is too low"
+      - "plans & billing"
+      - "insufficient credit" / "insufficient balance" / "insufficient funds"
+
+    so the orchestrator advances to the next provider in
+    `PDD_AGENTIC_PROVIDER` order instead of burning all retries on the same
+    provider.
+    """
+
+    def test_credit_balance_is_too_low_is_permanent(self):
+        # Verbatim shape from Anthropic 400 body
+        body = (
+            'Exit code 1: {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"Your credit balance is too low to access the Anthropic API."}}'
+        )
+        assert _is_permanent_error(body) is True
+
+    def test_plans_and_billing_phrase_is_permanent(self):
+        body = "Please go to Plans & Billing to upgrade or purchase credits."
+        assert _is_permanent_error(body) is True
+
+    def test_insufficient_credit_is_permanent(self):
+        assert _is_permanent_error("insufficient credit on account") is True
+
+    def test_insufficient_balance_is_permanent(self):
+        assert _is_permanent_error("insufficient balance to complete request") is True
+
+    def test_insufficient_funds_is_permanent(self):
+        assert _is_permanent_error("insufficient funds for this operation") is True
+
+    def test_billing_error_is_case_insensitive(self):
+        # _is_permanent_error lowercases its input first; ensure mixed-case bodies match.
+        assert _is_permanent_error("Your CREDIT BALANCE is TOO LOW.") is True
+        assert _is_permanent_error("Plans & Billing") is True
+
+    def test_unrelated_billing_word_does_not_match(self):
+        # Random use of "billing" without the documented phrase must not flag
+        # a transient error as permanent.
+        assert _is_permanent_error("billing pipeline timed out") is False
+
+    def test_rate_limited_429_with_billing_hint_is_not_permanent(self):
+        # Issue #814: a 429/rate-limit message that happens to point users at
+        # the Plans & Billing page must stay TRANSIENT so run_agentic_task's
+        # extended (RATE_LIMIT_BACKOFF_FLOOR) retry path still fires, instead
+        # of falling through to the permanent branch.
+        from pdd.agentic_common import _is_rate_limited
+
+        body = (
+            "HTTP 429: rate limit exceeded. "
+            "Visit Plans & Billing to increase your rate limits."
+        )
+        assert _is_rate_limited(body) is True
+        assert _is_permanent_error(body) is False
+
+        api_error = '{"api_error_status": 429, "detail": "see Plans & Billing"}'
+        assert _is_rate_limited(api_error) is True
+        assert _is_permanent_error(api_error) is False
+
+    def test_auth_or_config_with_rate_limit_text_stays_permanent(self):
+        # Codex iteration-3: when an auth/config error happens to contain a
+        # generic "rate limit" or "429" token (e.g. a help-link snippet), the
+        # rate-limit short-circuit must NOT preempt the strong-permanent
+        # patterns or run_agentic_task will retry a non-recoverable provider.
+        from pdd.agentic_common import _is_rate_limited
+
+        bodies = [
+            "401 Unauthorized — see https://example.com/docs/rate-limit",
+            "invalid api key (refer to rate limit policy)",
+            "provider not configured; visit our rate limit docs",
+            "model not found; consult the 429 troubleshooting guide",
+            "Authentication failed — too many requests reference link",
+            "Not logged in — please run /login. See our rate limit page.",
+        ]
+        for body in bodies:
+            assert _is_rate_limited(body), (
+                f"sanity: {body!r} should look 429-like to _is_rate_limited"
+            )
+            assert _is_permanent_error(body), (
+                f"strong-permanent must outrank rate-limit short-circuit: {body!r}"
+            )
+
+    def test_parse_provider_json_preserves_api_error_status_for_classifier(self):
+        # Codex iter-13: when Claude Code exits 0 but returns an error
+        # envelope, `_parse_provider_json` strips top-level fields and
+        # returns only `data["result"]`. If a transient 429 envelope's
+        # result body is just "Please go to Plans & Billing...", the weak
+        # billing-page classifier would misclassify it as permanent and
+        # bypass the rate-limit retry path. Verify that the parser
+        # preserves `api_error_status` in the returned text so the
+        # downstream classifier sees the 429 marker.
+        from pdd.agentic_common import (
+            _classify_permanent_error,
+            _is_rate_limited,
+            _parse_provider_json,
+        )
+
+        # 429 with a billing-page hint must stay TRANSIENT after parsing.
+        transient_429 = {
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 429,
+            "result": "Please go to Plans & Billing to upgrade.",
+        }
+        success, text, *_ = _parse_provider_json("anthropic", transient_429)
+        assert success is False
+        assert "429" in text, (
+            f"Parser must keep api_error_status visible to classifier, got: {text!r}"
+        )
+        assert _is_rate_limited(text), (
+            f"_is_rate_limited must see the preserved 429, got text={text!r}"
+        )
+        assert _classify_permanent_error(text) is None, (
+            "Transient 429 with billing hint must classify as transient, "
+            f"got classification for text={text!r}"
+        )
+
+        # 400 with a credit-balance body stays PERMANENT.
+        permanent_400 = {
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 400,
+            "result": (
+                "Your credit balance is too low to access the Anthropic API. "
+                "Please go to Plans & Billing to upgrade or purchase credits."
+            ),
+        }
+        success, text, *_ = _parse_provider_json("anthropic", permanent_400)
+        assert success is False
+        assert "400" in text
+        assert _classify_permanent_error(text) == "billing/credit-exhaustion"
+
+        # No api_error_status: fall back to bare result text, no prefix.
+        no_status = {
+            "type": "result",
+            "is_error": True,
+            "result": "Authentication failed",
+        }
+        success, text, *_ = _parse_provider_json("anthropic", no_status)
+        assert success is False
+        assert text == "Authentication failed", (
+            f"Parser must omit prefix when api_error_status is absent, got: {text!r}"
+        )
+
+    def test_quota_exhaustion_with_429_stays_permanent(self):
+        # Issue #1072 + Issue #814: when a provider returns BOTH a 429-like
+        # status and a hard-exhaustion marker (daily quota, quota exhausted,
+        # TerminalQuotaError, credit balance too low, insufficient credit/
+        # balance/funds), the result must remain PERMANENT — looping with the
+        # 60s rate-limit floor on a non-recoverable quota burns the budget
+        # instead of advancing to the next provider.
+        from pdd.agentic_common import _is_rate_limited
+
+        for body in (
+            "HTTP 429: daily quota exceeded for project foo",
+            "rate limit hit — quota exhausted, please upgrade",
+            '{"api_error_status": 429, "detail": "TerminalQuotaError"}',
+            "429 Too Many Requests — credit balance is too low",
+            "429 — insufficient credit on account",
+        ):
+            assert _is_rate_limited(body), f"sanity: {body!r} should look 429-like"
+            assert _is_permanent_error(body), (
+                f"hard exhaustion must win over 429 short-circuit: {body!r}"
+            )
+
+    def test_classify_permanent_error_returns_stable_classification(self):
+        # Issue #814: diagnostics derived from provider stderr land in CI/
+        # stdout. To avoid leaking credentials echoed by the provider, the
+        # default-mode line interpolates a STABLE classification token, not
+        # the raw provider body. This test pins those token names so the
+        # diagnostic stays predictable across refactors.
+        from pdd.agentic_common import _classify_permanent_error
+
+        cases = {
+            "Authentication failed: invalid api key": "auth",
+            "HTTP 401 Unauthorized": "auth",
+            "Access denied for caller": "auth",
+            "invalid parameter: temperature out of range": "invalid-parameter",
+            "model not found": "invalid-parameter",
+            "daily quota exceeded": "quota",
+            "TerminalQuotaError: quota exhausted": "quota",
+            "Credit balance is too low to access the Anthropic API": (
+                "billing/credit-exhaustion"
+            ),
+            "insufficient credit on account": "billing/credit-exhaustion",
+            "Please go to Plans & Billing to upgrade": "billing/credit-exhaustion",
+            "Not logged in - Please run /login": "oauth/login",
+            "provider not configured for OPENCODE_MODEL": "provider-config",
+            # Codex iteration-9 regression: the generic "model not found"
+            # pattern in `invalid-parameter` must NOT preempt the OpenCode-
+            # specific "model not found in provider" classification.
+            "OpenCode error: model not found in provider": "provider-config",
+        }
+        for body, expected in cases.items():
+            assert _classify_permanent_error(body) == expected, (
+                f"{body!r} should classify as {expected!r}, got "
+                f"{_classify_permanent_error(body)!r}"
+            )
+        # Transient inputs return None
+        assert _classify_permanent_error("connection refused") is None
+        assert _classify_permanent_error("HTTP 429 rate limit") is None
+        assert (
+            _classify_permanent_error(
+                "HTTP 429: rate limit exceeded. Visit Plans & Billing to "
+                "increase your rate limits."
+            )
+            is None
+        )
+
+    def test_credit_balance_error_skips_retries_and_falls_back(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """User workflow: exhausted Anthropic credits should not burn retries."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, msg, cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+
+        assert success is True
+        assert provider == "google"
+        assert "Google success" in msg
+        assert mock_subprocess_run.call_count == 2
+        sleep_mock.assert_not_called()
+
+    def test_permanent_error_emits_default_mode_diagnostic(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        mock_console,
+        tmp_path,
+    ):
+        """Issue #814 (second half): surface a clear diagnostic in default
+        (non-verbose) mode so the user sees which provider was skipped and a
+        snippet of the error, instead of the workflow silently advancing."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep"):
+            success, *_ = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+        assert success is True
+
+        printed = [
+            str(call.args[0])
+            for call in mock_console.print.call_args_list
+            if call.args
+        ]
+        permanent_lines = [line for line in printed if "permanent error" in line.lower()]
+        assert permanent_lines, (
+            "Expected a default-mode permanent-error diagnostic, got: " f"{printed}"
+        )
+        # The diagnostic emits a stable classification token rather than a
+        # slice of the provider's raw stderr (which could echo credentials).
+        # The exact token for a credit-balance/Plans & Billing body is
+        # ``billing/credit-exhaustion``.
+        assert any(
+            "billing/credit-exhaustion" in line.lower() for line in permanent_lines
+        ), (
+            "Diagnostic must name the permanent-error classification: "
+            f"{permanent_lines}"
+        )
+        # Untrusted provider stderr must NOT be echoed (credential-leak risk).
+        assert not any("credit balance" in line.lower() for line in permanent_lines), (
+            "Diagnostic must not echo raw provider stderr: " f"{permanent_lines}"
+        )
+        assert any("--verbose" in line for line in permanent_lines), (
+            "Diagnostic should advise --verbose for full provider output: "
+            f"{permanent_lines}"
+        )
+
+    def test_permanent_error_diagnostic_suppressed_under_quiet(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        mock_console,
+        tmp_path,
+    ):
+        """Issue #814 (codex follow-up): the default-mode permanent-error
+        diagnostic must honor the quiet contract — callers passing
+        quiet=True must see no stdout for the permanent-error skip, while
+        fallback still succeeds."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, _output, _cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5, quiet=True
+            )
+        assert success is True
+        # Permanent-error classification must break out of retries on the
+        # first attempt and advance to the fallback provider, not silently
+        # retry anthropic. Without these assertions the test could pass for
+        # the wrong reason — e.g. anthropic retried twice and consumed the
+        # google_success mock as a retry.
+        assert provider == "google", (
+            f"Expected fallback to google after anthropic permanent error, "
+            f"got provider={provider!r}"
+        )
+        assert mock_subprocess_run.call_count == 2, (
+            "Permanent error must skip retries — expected exactly one "
+            "anthropic attempt + one google attempt, got "
+            f"{mock_subprocess_run.call_count} subprocess calls"
+        )
+        sleep_mock.assert_not_called()
+
+        printed = [
+            str(call.args[0])
+            for call in mock_console.print.call_args_list
+            if call.args
+        ]
+        permanent_lines = [line for line in printed if "permanent error" in line.lower()]
+        assert not permanent_lines, (
+            "quiet=True must suppress the permanent-error diagnostic, got: "
+            f"{permanent_lines}"
+        )
+
+    def test_permanent_error_diagnostic_does_not_echo_untrusted_stderr(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """Issue #814 (codex iter-5..8 follow-up): the default-mode permanent-
+        error diagnostic MUST NOT echo any slice of the provider's raw stderr.
+
+        Earlier iterations sliced the first line of provider output into the
+        diagnostic and tried to redact secrets with a regex. That kept finding
+        new credential shapes that slipped through. The robust fix is to not
+        echo untrusted text at all: the line carries only the provider name
+        and a stable classification token. Verify that even when the failing
+        body contains a fake credential and Rich-markup metacharacters,
+        neither survives into the rendered diagnostic line, and that the
+        diagnostic does not raise `MarkupError` (which would abort fallback
+        before the next provider is tried).
+        """
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        # Body carries: (1) a permanent-error classification trigger
+        # ("credit balance is too low"); (2) a fake credential the diagnostic
+        # must not echo; (3) literal Rich tags that would crash
+        # console.print(f"[yellow]...{raw}[/yellow]") if interpolated as-is.
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = (
+            "Credit balance is too low [/yellow] [bold]boom[/bold] "
+            "GOOGLE_API_KEY=AIzaSyFAKEcredential012345"
+        )
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        from io import StringIO
+        from rich.console import Console as RealConsole
+        capture = StringIO()
+        real_console = RealConsole(file=capture, force_terminal=False, no_color=True)
+
+        with patch("pdd.agentic_common.console", real_console), \
+                patch("pdd.agentic_common.time.sleep"):
+            success, _output, _cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+        assert success is True
+        assert provider == "google"
+        out = capture.getvalue()
+        # Classification token IS in the diagnostic line.
+        assert "billing/credit-exhaustion" in out, (
+            f"Expected classification token in rendered diagnostic, got: {out!r}"
+        )
+        # Untrusted slices of provider stderr are NOT echoed.
+        for needle in (
+            "credit balance",  # raw stderr fragment
+            "boom",            # raw stderr fragment after markup tags
+            "AIzaSyFAKEcredential012345",  # fake credential
+            "GOOGLE_API_KEY",  # env-style key name
+        ):
+            assert needle.lower() not in out.lower(), (
+                f"Diagnostic must not echo untrusted stderr fragment "
+                f"{needle!r}, got: {out!r}"
+            )
+
+    def test_anthropic_is_error_json_envelope_skips_retries(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """Issue #814 end-to-end repro: the exact JSON envelope the original
+        reporter captured in `.pdd/agentic-logs/session_*.jsonl`.
+
+        Claude Code CLI exits 0 but returns `is_error: true` + an
+        `api_error_status: 400` + a result body containing "Credit balance is
+        too low". `_parse_provider_json` extracts `data["result"]` as the
+        output and propagates `success=False`. `_run_with_provider`'s caller
+        in `run_agentic_task` then calls `_is_permanent_error(output)` —
+        which must match the billing pattern and break out of the retry
+        loop, allowing the orchestrator to advance to the next provider.
+
+        Without the Issue #814 fix the orchestrator burns 3 retries on the
+        same anthropic 400 before moving on; with the fix it advances on
+        the first failure.
+        """
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        # Exact body shape captured in issue #814 (513-byte response).
+        # Claude Code exits 0 with this JSON in stdout when the API itself
+        # returns a billing-class 400.
+        anthropic_400 = MagicMock()
+        anthropic_400.returncode = 0
+        anthropic_400.stdout = json.dumps({
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 400,
+            "result": (
+                "Your credit balance is too low to access the Anthropic API. "
+                "Please go to Plans & Billing to upgrade or purchase credits."
+            ),
+            "total_cost_usd": 0.0,
+            "session_id": "abc-123",
+        })
+        anthropic_400.stderr = ""
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_400, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, msg, cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+
+        # End-to-end assertions matching the original reporter's expected fix:
+        # 1. Workflow succeeds via the fallback provider
+        assert success is True, f"Expected fallback success, got msg={msg!r}"
+        assert provider == "google"
+        # 2. Exactly 2 subprocess calls — one anthropic (permanent error), one google (success)
+        #    NOT 4+ (which would mean retries on anthropic burned the budget)
+        assert mock_subprocess_run.call_count == 2, (
+            f"Expected single anthropic attempt + single google attempt; got "
+            f"{mock_subprocess_run.call_count}. Pre-fix this would be 4 "
+            f"(3 anthropic retries + 1 google)."
+        )
+        # 3. No backoff sleep — permanent errors must NOT delay the fallback
+        sleep_mock.assert_not_called()
+
+
+# =========================================================================
+# Issue #1080: porcelain-rename handling in _revert_out_of_scope_changes
+# =========================================================================
+
+
+class TestRevertOutOfScopeChangesRename1080:
+    """Issue #1080: ``_revert_out_of_scope_changes`` must handle staged
+    renames via the structured ``--porcelain=v1 -z`` parser, never
+    constructing a fake ``"old -> new"`` literal path.
+    """
+
+    @staticmethod
+    def _git_env() -> dict:
+        return {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+        }
+
+    def _init_repo(self, repo: Path, files: dict) -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        env = self._git_env()
+        _subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                       check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                       check=True, capture_output=True, env=env)
+        for rel, content in files.items():
+            tgt = repo / rel
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            tgt.write_text(content)
+        _subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                       check=True, capture_output=True, env=env)
+
+    def _git(self, repo: Path, *args: str) -> None:
+        _subprocess.run(["git", "-C", str(repo), *args], check=True,
+                       capture_output=True, text=True, env=self._git_env())
+
+    def test_reverts_out_of_scope_staged_rename(self, tmp_path):
+        """An out-of-scope staged rename must be reverted on disk and
+        the returned list must not contain a ``Path("old -> new")``
+        literal produced by the buggy ``line[3:]`` parser."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        self._init_repo(proj, {
+            "code.py": "def main(): pass\n",
+            "unrelated.py": "def other(): pass\n",
+        })
+        self._git(proj, "mv", "unrelated.py", "renamed_unrelated.py")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").exists(), (
+            "Out-of-scope rename survived: old-side file not restored"
+        )
+        assert not (proj / "renamed_unrelated.py").exists(), (
+            "Out-of-scope rename survived: new-side file still exists"
+        )
+        for p in reverted:
+            assert " -> " not in str(p), (
+                f"Fake combined path leaked into return value: {p!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment helpers
+#
+# Orchestrators own per-step `## Step N/T:` comments via trusted PDD
+# credentials. Step prompts emit `<step_report>...</step_report>` blocks; the
+# orchestrator extracts them, sanitizes/truncates, and posts via
+# `gh issue comment`. Three public helpers form the contract.
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStepReport:
+    """Public helper: extract_step_report(text) -> Optional[str]."""
+
+    def test_returns_inner_block_trimmed(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = (
+            "preamble\n<step_report>\n## Step 1/8: Discovery\n\n"
+            "Details here.\n</step_report>\nFILES_MODIFIED: x.py"
+        )
+        assert extract_step_report(body) == "## Step 1/8: Discovery\n\nDetails here."
+
+    def test_returns_none_when_block_missing(self):
+        from pdd.agentic_common import extract_step_report
+
+        assert extract_step_report("just some text no markers") is None
+
+    def test_returns_none_on_empty_or_none(self):
+        from pdd.agentic_common import extract_step_report
+
+        assert extract_step_report(None) is None
+        assert extract_step_report("") is None
+
+    def test_returns_last_block_when_multiple(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = (
+            "<step_report>first</step_report>\n"
+            "middle text\n"
+            "<step_report>second body</step_report>"
+        )
+        assert extract_step_report(body) == "second body"
+
+    def test_case_insensitive(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = "<STEP_REPORT>UPPERCASE</STEP_REPORT>"
+        assert extract_step_report(body) == "UPPERCASE"
+
+    def test_multiline_dotall(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = "<step_report>line1\nline2\nline3</step_report>"
+        assert extract_step_report(body) == "line1\nline2\nline3"
+
+
+class TestNormalizeStepCommentsState:
+    """Public helper: normalize_step_comments_state(raw) -> Set[int]."""
+
+    def test_none_returns_empty_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        result = normalize_step_comments_state(None)
+        assert result == set()
+        assert isinstance(result, set)
+
+    def test_list_of_ints_returns_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state([1, 2, 3]) == {1, 2, 3}
+
+    def test_tuple_of_ints_returns_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state((4, 5, 6)) == {4, 5, 6}
+
+    def test_set_returns_set_copy(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        src = {1, 2}
+        result = normalize_step_comments_state(src)
+        assert result == {1, 2}
+        result.add(99)
+        assert 99 not in src
+
+    def test_list_of_int_strings_coerces(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state(["1", "2", "3"]) == {1, 2, 3}
+
+    def test_legacy_dict_with_posted_flag_returns_set_of_int_keys(self):
+        """The legacy bug-orchestrator persisted step_comments as a dict:
+        ``{"1": {"posted": True}, "2": {"posted": False}}``. Coerce that
+        into the Set[int] shape, treating both ``posted`` and
+        ``failed_posted`` as signals that GitHub received a comment.
+        """
+        from pdd.agentic_common import normalize_step_comments_state
+
+        legacy = {
+            "1": {"posted": True},
+            "2": {"posted": True, "fallback": True},
+            "3": {"posted": False, "fallback_pending": True},
+            "4": {"failed_posted": True, "failed_pending": False},
+        }
+        result = normalize_step_comments_state(legacy)
+        assert result == {1, 2, 4}
+
+    def test_legacy_dict_with_true_value(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state({"5": True, "6": False}) == {5}
+
+    def test_malformed_entries_are_skipped(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        garbage = ["not-an-int", None, 5, "7", 9.5, True, {"posted": True}]
+        result = normalize_step_comments_state(garbage)
+        assert 5 in result
+        assert 7 in result
+        assert 9 not in result
+        assert "not-an-int" not in result
+        assert all(isinstance(v, int) for v in result)
+
+    def test_empty_collections(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state([]) == set()
+        assert normalize_step_comments_state({}) == set()
+        assert normalize_step_comments_state(set()) == set()
+
+    def test_garbage_input_returns_empty_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state(42) == set()
+        assert normalize_step_comments_state("string") == set()
+
+    def test_frozenset_input(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state(frozenset({7, 8})) == {7, 8}
+
+
+class TestPostStepCommentOnce:
+    """Public helper: post_step_comment_once(*, repo_owner, repo_name,
+    issue_number, step_num, body, posted_steps, cwd) -> bool.
+
+    Idempotent: returns True immediately if step_num is already in
+    posted_steps. On success, mutates posted_steps in place.
+    """
+
+    def test_idempotent_skip_when_already_posted(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = {1, 2, 3}
+        with patch("pdd.agentic_common.subprocess.run") as mock_run:
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=2,
+                body="some report body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is True
+            assert mock_run.call_count == 0
+        assert posted == {1, 2, 3}
+
+    def test_posts_via_gh_and_mutates_set_on_success(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = {1}
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="## Step 5/8: Test\n\nAll green.",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is True
+            assert 5 in posted
+            assert mock_run.call_count == 1
+            args, kwargs = mock_run.call_args
+            assert args[0][:4] == ["gh", "issue", "comment", "42"]
+            assert "--repo" in args[0]
+            assert "owner/repo" in args[0]
+            body_index = args[0].index("--body")
+            assert "## Step 5/8: Test" in args[0][body_index + 1]
+
+    def test_returns_false_and_does_not_mutate_on_gh_failure(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = {1}
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="rate limited")
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is False
+            assert 5 not in posted
+
+    def test_returns_false_when_gh_missing(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = set()
+        with patch("pdd.agentic_common._find_cli_binary", return_value=None):
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is False
+            assert posted == set()
+
+    def test_redacts_known_secret_formats(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        secret_body = (
+            "GH_TOKEN=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "google: AIzaSyA-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "openai: sk-aaaaaaaaaaaaaaaaaaaaaaaa\n"
+        )
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                step_num=1,
+                body=secret_body,
+                posted_steps=set(),
+                cwd=tmp_path,
+            )
+            sent = mock_run.call_args[0][0]
+            body_index = sent.index("--body")
+            posted_body = sent[body_index + 1]
+            assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaa" not in posted_body
+            assert "AIzaSyA-aaaaaaaaaaaaaaaaaaaa" not in posted_body
+            assert "sk-aaaaaaaaaaaaaaaaaaaaaaaa" not in posted_body
+            assert "[REDACTED" in posted_body
+
+    def test_truncates_oversized_body(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        oversized = "A" * 200_000
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                step_num=1,
+                body=oversized,
+                posted_steps=set(),
+                cwd=tmp_path,
+            )
+            sent = mock_run.call_args[0][0]
+            body_index = sent.index("--body")
+            posted_body = sent[body_index + 1]
+            assert len(posted_body) < 100_000
+            assert "truncated" in posted_body.lower()
+
+    def test_exception_does_not_raise(self, tmp_path):
+        """Any subprocess exception is logged and surfaced as False."""
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = set()
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run", side_effect=OSError("boom")):
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                step_num=1,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is False
+            assert posted == set()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate state-marker hazard — issue #1149 round 2
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    _find_all_state_comments,
+    github_clear_state,
+    github_save_state,
+)
+
+
+class TestDuplicateStateCommentHandling:
+    """Verify that the dedupe path closes the race window where two
+    valid state comments coexist (e.g. a concurrent worker re-created
+    one in the gap between a clean-restart pre-clear and our first
+    save). The legacy ``_find_state_comment`` returns only the first
+    match; a future normal resume picking it can silently load stale
+    step outputs from the older marker."""
+
+    def test_find_all_returns_every_matching_marker_id(self, tmp_path):
+        """``_find_all_state_comments`` MUST return every comment id
+        whose body carries the workflow's state marker, not just the
+        first. This is what makes the dedupe sweep / clear-all possible.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(mock_comments))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007], (
+            f"Expected every matching id [1002, 1005, 1007]; got {ids!r}"
+        )
+
+    def test_find_all_flattens_slurped_pages(self, tmp_path):
+        """The duplicate-marker sweep must see matches on every slurped page."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+        pages = [mock_comments[:4], mock_comments[4:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(pages))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007]
+
+    def test_github_clear_state_deletes_all_matching_markers(self, tmp_path):
+        """``github_clear_state`` must DELETE every comment carrying
+        the marker — leaving any one behind reintroduces the silent
+        stale-state hazard."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        deletes: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0)
+            if cmd[:2] == ["gh", "api"] and "-X" in cmd and cmd[cmd.index("-X") + 1] == "DELETE":
+                deletes.append(cmd[2])  # capture the issues/comments/<id> path
+                return m
+            # The LIST call (no -X DELETE) — return the mock comments
+            m.stdout = json.dumps(mock_comments)
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            ok = github_clear_state("owner", "repo", 481, "bug", tmp_path)
+
+        assert ok is True
+        deleted_ids = sorted(
+            int(p.rsplit("/", 1)[-1]) for p in deletes
+        )
+        assert deleted_ids == [1002, 1005, 1007], (
+            f"Expected DELETE for all three marker comments; "
+            f"saw {deleted_ids!r} from {deletes!r}"
+        )
+
+    def test_github_save_state_dedupe_adopts_newest_and_deletes_rest(self, tmp_path):
+        """When ``dedupe=True`` and ``comment_id is None`` and multiple
+        existing state markers are found, ``github_save_state`` must
+        (1) PATCH the highest-id marker in place with the new state and
+        (2) DELETE the older markers — converging to exactly one state
+        comment regardless of prior races."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        actions: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            # LIST call: no -X PATCH/DELETE/POST → return comments
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            # Capture the comment-id from the URL when present
+            target = next((p for p in cmd if "/comments/" in p), None)
+            cid = int(target.rsplit("/", 1)[-1]) if target else None
+            actions.append((verb, cid))
+            if verb == "POST":
+                # POST shouldn't happen in this scenario — flag it loudly
+                m.stdout = json.dumps({"id": 9999})
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 7, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # Adopted the highest-id existing marker (1007).
+        assert returned_id == 1007, (
+            f"Expected dedupe to adopt the most-recent marker (1007); got {returned_id!r}"
+        )
+        verbs = [v for v, _ in actions]
+        assert "POST" not in verbs, (
+            f"Expected dedupe to adopt-and-PATCH, not POST a new marker; saw verbs={verbs!r}"
+        )
+        patched = [cid for v, cid in actions if v == "PATCH"]
+        deleted = [cid for v, cid in actions if v == "DELETE"]
+        assert patched == [1007], f"PATCH should hit 1007 only; got {patched!r}"
+        assert sorted(deleted) == [1002, 1005], (
+            f"DELETE should hit the two older markers (1002, 1005); got {sorted(deleted)!r}"
+        )
+
+    def test_github_save_state_dedupe_false_skips_find_all(self, tmp_path):
+        """``dedupe=False`` (the default) MUST preserve the original
+        behavior: blind POST with no list-comments side effect. We pay
+        the find-all cost only when the caller opts in."""
+        listed: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout=json.dumps({"id": 5000}))
+            # The LIST call has no -X (it's a GET to /comments)
+            if "-X" not in cmd and "/issues/" in " ".join(cmd) and "/comments" in " ".join(cmd):
+                listed.append(cmd)
+                m.stdout = json.dumps([])
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 1, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=False,
+            )
+
+        assert listed == [], (
+            f"dedupe=False should NOT list comments; saw {len(listed)} list calls"
+        )
+
+    def test_github_save_state_dedupe_logs_warning_on_delete_failure(self, tmp_path):
+        """When ``dedupe=True`` and stale comments cannot be deleted, the
+        function must log a warning to stderr and still return ``keep_id``.
+
+        The PATCH to the highest-id comment succeeded, so the new state is
+        durably written. The warning lets operators diagnose residual stale
+        markers without treating a cleanup hiccup as a save failure.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[3, 6])
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            if verb == "DELETE":
+                m.returncode = 1  # Simulate delete failure
+            return m
+
+        import io
+        stderr_capture = io.StringIO()
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect), \
+             patch("sys.stderr", stderr_capture):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 6, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # PATCH succeeded → keep_id returned even though delete failed
+        assert returned_id == 1006, (
+            f"Expected keep_id=1006 despite delete failure; got {returned_id!r}"
+        )
+        warning_text = stderr_capture.getvalue()
+        assert "could not be deleted" in warning_text, (
+            f"Expected delete-failure warning on stderr; got: {warning_text!r}"
+        )
+        assert "1003" in warning_text, (
+            f"Expected stale id 1003 named in warning; got: {warning_text!r}"
+        )

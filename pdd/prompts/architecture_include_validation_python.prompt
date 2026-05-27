@@ -4,7 +4,8 @@
 % prompts the LLM actually pulls in via <include>.
 
 % Dependencies (imported from sibling modules):
-%   - .architecture_registry: extract_modules, find_architecture_for_project, find_project_root
+%   - .architecture_registry: BUNDLED_SAMPLE_TOPLEVEL_DIRS, extract_modules,
+%     find_architecture_for_project, find_project_root
 %   - .sync_order: extract_includes_from_file, extract_module_from_include
 %   - .architecture_sync: parse_prompt_tags
 
@@ -49,13 +50,12 @@
 %   - Uses extract_module_from_include from sync_order.
 
 % _BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str]
-%   - Top-level directories in the PDD repo that ship sample architecture (not app code).
-%   - Value: frozenset({"examples", "example_project", "example_workspace", "staging"})
-
-% _arch_path_under_skipped_sample_tree(arch_path, project_root, skip_roots) -> bool
-%   - Returns True if arch_path is under one of the skip_roots directories
-%     (at least 2 parts in relative path, first part in skip_roots).
-%   - Returns False if skip_roots is empty or arch_path is not relative to project_root.
+%   - Re-exported from architecture_registry.BUNDLED_SAMPLE_TOPLEVEL_DIRS for
+%     back-compat with external imports. The actual skip is enforced inside
+%     find_architecture_for_project via the skip_bundled_sample_arch kwarg
+%     (default True). The validator forwards skip_bundled_sample_arch=not strict
+%     when iterating discovery results; no local post-filter helper exists in this
+%     module any more.
 
 % _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
 %   - Resolve architecture filename to an on-disk path under the project.

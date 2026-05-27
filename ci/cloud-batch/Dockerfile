@@ -30,7 +30,7 @@ RUN git config --global user.email "ci@pdd.dev" && \
 WORKDIR /app
 COPY requirements.txt pyproject.toml ./
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir pytest-xdist pytest-mock pytest-asyncio httpx build
+    pip install --no-cache-dir pytest-xdist pytest-mock pytest-asyncio pytest-timeout httpx build
 
 # Entrypoint script
 COPY ci/cloud-batch/entrypoint.sh /entrypoint.sh

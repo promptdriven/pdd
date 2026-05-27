@@ -15,9 +15,18 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Top-level directories in the PDD repo that ship sample architecture (not app code).
+# Routine sync/discovery skips these so a root-level scan does not flatten example
+# modules into the project's own architecture. Opt back in with
+# ``skip_bundled_sample_arch=False`` (used by strict validator runs and by tooling
+# explicitly operating inside an example project).
+BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str] = frozenset(
+    {"examples", "example_project", "example_workspace", "staging"}
+)
 
 
 def extract_modules(data: Any) -> List[Dict[str, Any]]:
@@ -214,8 +223,23 @@ def _renumber_priorities(arch: List[dict]) -> None:
     arch[:] = sorted_entries
 
 
-def find_architecture_for_project(project_root: Path) -> List[Path]:
+def find_architecture_for_project(
+    project_root: Path,
+    *,
+    skip_bundled_sample_arch: bool = True,
+) -> List[Path]:
     """Discover all architecture.json files (root + subdirs).
+
+    When ``skip_bundled_sample_arch`` is True (default), top-level trees that
+    ship bundled examples (``examples/``, ``example_project/``,
+    ``example_workspace/``, ``staging/``) are excluded so a root-level scan
+    does not flatten sample modules into the project's own architecture.
+
+    Pass ``skip_bundled_sample_arch=False`` to opt in to those trees (used by
+    ``pdd checkup --validate-arch-includes --strict`` and by tooling explicitly
+    operating inside a bundled example project — the skip is a no-op when
+    ``project_root`` is itself the example root because relative paths under it
+    do not start with one of the sample directory names).
 
     Returns paths sorted with root first, then alphabetically by subdir.
     """
@@ -229,6 +253,9 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     # Recursively scan subdirectories (bounded depth)
     max_depth = 4
     excluded = {"node_modules", "__pycache__", ".git", "venv", ".venv", "env"}
+    skip_roots: FrozenSet[str] = (
+        BUNDLED_SAMPLE_TOPLEVEL_DIRS if skip_bundled_sample_arch else frozenset()
+    )
     try:
         for dirpath, dirnames, filenames in os.walk(project_root):
             # Enforce depth limit
@@ -237,6 +264,10 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
             if depth >= max_depth:
                 dirnames.clear()
                 continue
+            # Prune bundled-sample trees at the top level before descending so
+            # nothing under them is discovered (independent of depth).
+            if depth == 0 and skip_roots:
+                dirnames[:] = [d for d in dirnames if d not in skip_roots]
             dirnames[:] = sorted(
                 d for d in dirnames
                 if not d.startswith(".") and d not in excluded
@@ -361,14 +392,22 @@ def find_git_toplevel(start: Optional[Path] = None) -> Optional[Path]:
 
 def load_combined_architecture_data(
     project_root: Path,
+    *,
+    skip_bundled_sample_arch: bool = True,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
     """Load and merge all architecture.json lists under ``project_root`` (root + subdirs).
+
+    ``skip_bundled_sample_arch`` is forwarded to
+    :func:`find_architecture_for_project` and defaults to True so routine
+    sync/discovery does not pull in sample modules.
 
     Returns:
         ``(combined_entries_or_none, primary_arch_path)`` where primary is the first
         file found (typically root ``architecture.json``).
     """
-    arch_files = find_architecture_for_project(project_root)
+    arch_files = find_architecture_for_project(
+        project_root, skip_bundled_sample_arch=skip_bundled_sample_arch
+    )
     if not arch_files:
         return None, project_root / "architecture.json"
 

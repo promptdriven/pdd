@@ -4,6 +4,11 @@ import copy
 import pytest
 import os
 import pandas as pd
+
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(600)
+
 import json # Added for Pydantic parsing tests
 import stat
 from pathlib import Path
@@ -1555,6 +1560,558 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert isinstance(response['result'], SampleOutputModel)
                     assert response['result'].field1 == "test_value"
                     assert response['result'].field2 == 42
+
+
+def test_llm_invoke_accumulates_attempted_models_across_calls_in_ctx_obj(
+    mock_set_llm_cache,
+):
+    """Regression for issue #897 / PR #1056.
+
+    A single tracked CLI command (e.g. `pdd generate`) can invoke
+    `llm_invoke` multiple times — for example code generation followed by
+    postprocess, or trace + extract. Each `llm_invoke` call must ACCUMULATE
+    its model attempts onto the running `ctx.obj['attempted_models']` list
+    rather than overwrite it, so the resulting `cost.csv` reflects every
+    fallback that happened during the command, not just the last call's
+    history.
+    """
+    import click
+
+    # Custom mock data: every model uses the LiteLLM completion path
+    # (structured_output=False) so we can drive the test with a single
+    # `litellm.completion` mock without dragging in the Responses-API path.
+    mock_data = [
+        MockModelInfoData(  # Base model at strength=0.5
+            provider='Anthropic', model='claude-3', input=0.025, output=0.035,
+            coding_arena_elo=1500, structured_output=False, base_url="",
+            api_key="ANTHROPIC_API_KEY", max_tokens="", max_completion_tokens="",
+            reasoning_type='none', max_reasoning_tokens=0,
+        ),
+        MockModelInfoData(  # Fallback candidate
+            provider='Google', model='gemini-pro', input=0.015, output=0.025,
+            coding_arena_elo=1400, structured_output=False, base_url="",
+            api_key="GOOGLE_API_KEY", max_tokens="", max_completion_tokens="",
+            reasoning_type='none', max_reasoning_tokens=0,
+        ),
+    ]
+    mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+    numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                    'max_completion_tokens', 'max_reasoning_tokens']
+    for col in numeric_cols:
+        if col in mock_df.columns:
+            mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+    mock_df['input'] = mock_df['input'].fillna(0.0)
+    mock_df['output'] = mock_df['output'].fillna(0.0)
+    mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+    mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+    mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+    mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+    mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+    mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+        "PDD_FORCE_LOCAL": "1",
+    }
+
+    # Stand-alone Click context — at runtime `track_cost` provides this with
+    # an empty `attempted_models` slot; we let llm_invoke fill it via
+    # `click.get_current_context(silent=True)`.
+    cmd = click.Command(name="generate")
+    ctx = click.Context(cmd, obj={})
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=mock_df), \
+         patch.dict(os.environ, all_keys), \
+         ctx:
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # Call 1: first model raises AuthenticationError -> fallback to next.
+            call1_first_error = openai.AuthenticationError(
+                message="Mocked auth failure on claude-3",
+                response=httpx.Response(
+                    status_code=401,
+                    request=httpx.Request("POST", "http://test"),
+                ),
+                body=None,
+            )
+            call1_second_response = create_mock_litellm_response(
+                "fallback ok", model_name='gemini-pro',
+            )
+            # Call 2: single-attempt success on claude-3 (the base model).
+            call2_response = create_mock_litellm_response(
+                "ok", model_name='claude-3',
+            )
+
+            mock_completion.side_effect = [
+                call1_first_error,
+                call1_second_response,
+                call2_response,
+            ]
+
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                       {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                first = llm_invoke(
+                    prompt="First {topic}",
+                    input_json={"topic": "a"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+                second = llm_invoke(
+                    prompt="Second {topic}",
+                    input_json={"topic": "b"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+
+    # Each call's return dict carries its own local history (this still works).
+    assert first['attempted_models'][-1] == first['model_name']
+    assert second['attempted_models'] == [second['model_name']]
+    assert len(first['attempted_models']) >= 2, (
+        f"First call should have at least 2 attempts (failed + retry), got: "
+        f"{first['attempted_models']!r}"
+    )
+
+    # The ctx.obj history is what `track_cost` reads to populate the
+    # `attempted_models` CSV column. It must contain BOTH calls' attempts in
+    # chronological order — overwriting it would hide call 1's fallback.
+    accumulated = ctx.obj.get('attempted_models')
+    assert isinstance(accumulated, list), (
+        f"ctx.obj['attempted_models'] should be a list after llm_invoke, "
+        f"got {accumulated!r}"
+    )
+
+    expected_minimum_length = len(first['attempted_models']) + len(second['attempted_models'])
+    assert len(accumulated) >= expected_minimum_length, (
+        f"Expected ctx.obj['attempted_models'] to accumulate >= "
+        f"{expected_minimum_length} entries across both calls, got "
+        f"{len(accumulated)}: {accumulated!r}"
+    )
+
+    # First call's local history must be a prefix of the accumulated list.
+    first_len = len(first['attempted_models'])
+    assert accumulated[:first_len] == first['attempted_models'], (
+        f"First call's attempts must come first in the accumulated history; "
+        f"prefix was {accumulated[:first_len]!r}, expected "
+        f"{first['attempted_models']!r}"
+    )
+
+    # Second call's local history must be the suffix.
+    second_len = len(second['attempted_models'])
+    assert accumulated[-second_len:] == second['attempted_models'], (
+        f"Second call's attempts must come last in the accumulated history; "
+        f"suffix was {accumulated[-second_len:]!r}, expected "
+        f"{second['attempted_models']!r}"
+    )
+
+
+def test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14 regression (PR #1056 7th-round review) — SUPERSEDES round-4 F7.
+
+    Issue #897 wants `attempted_models` to record "models that were
+    attempted and then abandoned." Rounds 4-6 added a rewind on terminal
+    failure to defend a since-relaxed "ends with model column" invariant;
+    round 7 surfaced that the rewind silently drops the very rows users
+    asked for when an outer caller (e.g. `auto_include` catching the
+    final auto_include_LLM error) recovers with a different model. Round
+    7 removes the rewind entirely.
+
+    Contract now: terminal RuntimeError must LEAVE the failed attempts on
+    `ctx.obj['attempted_models']` (appended to whatever prior history
+    existed) AND attach the per-call attempts to the exception so worker
+    threads that can't see ctx.obj still recover them via getattr.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="auto_include_LLM_caller")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised_exception: Optional[RuntimeError] = None
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="terminal failure",
+                       request=mock_request,
+                   )):
+            try:
+                llm_invoke(
+                    prompt="some prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+            except RuntimeError as exc:
+                raised_exception = exc
+
+    assert raised_exception is not None, (
+        "llm_invoke must raise RuntimeError when all candidates are exhausted"
+    )
+    published = ctx.obj.get('attempted_models')
+    assert isinstance(published, list), (
+        f"ctx.obj['attempted_models'] should remain a list after terminal "
+        f"failure, got {published!r}"
+    )
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must be preserved at the head of the audit log. "
+        f"Expected prefix {prior_attempts!r}, got {published!r}"
+    )
+    assert len(published) > len(prior_attempts), (
+        f"Failed attempts from this call must remain appended to ctx.obj — "
+        f"that's the whole point of `attempted_models` per issue #897. "
+        f"Got {published!r}"
+    )
+    # The failed attempts are also attached to the exception for worker
+    # threads (Click context is thread-local; workers can't read ctx.obj).
+    exc_attempts = getattr(raised_exception, "attempted_models", None)
+    assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
+        f"Failed attempts must remain on the exception's attempted_models "
+        f"attribute for worker-thread recovery. Got: {exc_attempts!r}"
+    )
+
+
+def test_llm_invoke_insufficient_credits_preserves_cloud_attempt_in_ctx_obj(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14/F15 regression (PR #1056 7th-round review) — SUPERSEDES F10.
+
+    Round 5 added a rewind on `InsufficientCreditsError` re-raise to
+    defend the since-relaxed "ends with model column" invariant. Round 7
+    surfaced that the rewind silently deletes the cloud attempt the user
+    explicitly wants to see ("models that were attempted and then
+    abandoned" per issue #897). With invariant relaxed, the rewind has
+    no purpose and is removed.
+
+    Contract now: `InsufficientCreditsError` LEAVES the cloud placeholder
+    on `ctx.obj['attempted_models']` so a caller that recovers (e.g.
+    `auto_include` returning `summary_model`) still has the audit trail
+    of the cloud attempt. The exception also carries the attempts as an
+    attribute for worker-thread recovery (parity with terminal
+    RuntimeError).
+
+    NOTE: Use `pdd.llm_invoke` references dynamically (not the top-of-
+    file `from ... import ...` aliases) because an earlier test
+    (`test_llm_invoke_csv_path_hierarchy`) calls `importlib.reload` on
+    the module. After reload, the file-scope aliases become stale —
+    the `except InsufficientCreditsError:` inside the reloaded
+    llm_invoke checks against the NEW class, so an OLD-class instance
+    sails right past it.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="caller_using_cloud")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.InsufficientCreditsError("HTTP 402 from cloud"),
+        ):
+            try:
+                _llm_mod.llm_invoke(
+                    prompt="hi",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                    use_cloud=True,
+                )
+            except _llm_mod.InsufficientCreditsError as exc:
+                raised = exc
+
+    assert isinstance(raised, _llm_mod.InsufficientCreditsError), (
+        "llm_invoke must propagate InsufficientCreditsError so callers know"
+    )
+    published = ctx.obj.get('attempted_models') or []
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must remain at the head of the audit log. "
+        f"Got: {published!r}"
+    )
+    assert len(published) > len(prior_attempts), (
+        f"Cloud placeholder must remain in ctx.obj after credit error so "
+        f"recovered callers can record the abandoned attempt. Got: "
+        f"{published!r}"
+    )
+    assert any('cloud' in str(m) for m in published[len(prior_attempts):]), (
+        f"Appended entries should include the cloud placeholder. Got: "
+        f"{published!r}"
+    )
+
+
+def test_llm_invoke_model_loading_failure_preserves_cloud_attempt_and_attaches(
+    mock_set_llm_cache,
+):
+    """F15 regression (PR #1056 7th-round review) — SUPERSEDES round-6 F13.
+
+    Round 6 added a try/finally rewind to clear ctx.obj on bare-raise
+    paths. Round 7 surfaced that the rewind drops audit-log data the
+    user explicitly wants; the rewind is now removed entirely.
+
+    What MUST remain true: when cloud fails recoverably (CloudFallbackError
+    falls through to local) and then `_load_model_data` raises, the
+    cloud placeholder recorded before the cloud request stays on
+    ctx.obj — the recovered caller can still see "PDD tried cloud
+    first" in the cost.csv audit log. Additionally, the raised
+    exception now carries `attempted_models` as an attribute so worker
+    threads (which can't read ctx.obj) recover the same history via
+    getattr.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="caller_with_model_loading_failure")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.CloudFallbackError("cloud unavailable"),
+        ):
+            with patch.object(
+                _llm_mod, "_load_model_data",
+                side_effect=FileNotFoundError("simulated missing CSV"),
+            ):
+                try:
+                    _llm_mod.llm_invoke(
+                        prompt="hi",
+                        input_json={"x": "y"},
+                        strength=0.5,
+                        temperature=0.0,
+                        use_cloud=True,  # Triggers cloud placeholder
+                                         # recording BEFORE model loading
+                                         # is attempted.
+                    )
+                except FileNotFoundError as exc:
+                    raised = exc
+
+    assert isinstance(raised, FileNotFoundError), (
+        "Model-loading failure must propagate FileNotFoundError"
+    )
+    published = ctx.obj.get('attempted_models') or []
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must remain at head of audit log. Got: {published!r}"
+    )
+    assert any('cloud' in str(m) for m in published[len(prior_attempts):]), (
+        f"Cloud placeholder must remain visible in ctx.obj after the "
+        f"cloud-fallback-then-load-failure sequence so a recovered caller "
+        f"can audit the cloud attempt. Got: {published!r}"
+    )
+    # Worker-thread recovery channel: the raised exception carries the
+    # attempts as an attribute, parity with terminal RuntimeError and
+    # InsufficientCreditsError.
+    exc_attempts = getattr(raised, "attempted_models", None)
+    assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
+        f"Model-loading raise must attach attempted_models to the "
+        f"exception (F15) so worker threads can recover via getattr. "
+        f"Got: {exc_attempts!r}"
+    )
+
+
+def test_llm_invoke_insufficient_credits_attaches_attempts_to_exception(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F12 regression (PR #1056 6th-round review).
+
+    The terminal RuntimeError path has always done
+    ``setattr(exc, "attempted_models", list(attempted_models))`` so worker
+    threads can recover the per-call attempt history via getattr (Click
+    context is thread-local; workers can't read ctx.obj). The
+    InsufficientCreditsError re-raise was missing this — workers caught
+    the credit error and got nothing back, silently dropping the
+    fallback record.
+
+    After F12: InsufficientCreditsError carries the same attribute,
+    parity with the terminal-RuntimeError path.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    cmd = click.Command(name="caller_for_credit_check")
+    ctx = click.Context(cmd, obj={})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.InsufficientCreditsError("HTTP 402"),
+        ):
+            try:
+                _llm_mod.llm_invoke(
+                    prompt="hi",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                    use_cloud=True,
+                )
+            except _llm_mod.InsufficientCreditsError as exc:
+                raised = exc
+
+    assert raised is not None
+    attached = getattr(raised, "attempted_models", None)
+    assert isinstance(attached, list) and len(attached) > 0, (
+        f"InsufficientCreditsError must carry the per-call attempts as "
+        f"an `attempted_models` attribute (parity with terminal "
+        f"RuntimeError) so worker threads can recover the history via "
+        f"getattr. Got: {attached!r}"
+    )
+    assert any('cloud' in str(m) for m in attached), (
+        f"Attached attempts should include the cloud placeholder that "
+        f"was recorded before the cloud request. Got: {attached!r}"
+    )
+
+
+def test_llm_invoke_terminal_failure_populates_ctx_obj_when_no_prior_key(
+    mock_load_models, mock_set_llm_cache,
+):
+    """When the `attempted_models` KEY did not exist on ctx.obj before
+    the failing `llm_invoke` call, the failure path must POPULATE the
+    key with this call's attempts — not leave it absent. The audit log
+    is the whole point of the feature; a missing key after a failed
+    call would be the same data loss as the round-6 rewind we backed
+    out.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    cmd = click.Command(name="standalone_caller")
+    ctx = click.Context(cmd, obj={})  # No attempted_models key
+
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="terminal failure",
+                       request=mock_request,
+                   )):
+            with pytest.raises(RuntimeError):
+                llm_invoke(
+                    prompt="some prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+
+    published = ctx.obj.get('attempted_models')
+    assert isinstance(published, list) and len(published) > 0, (
+        f"Terminal failure with no prior key must populate ctx.obj with "
+        f"this call's attempts so the audit log reaches track_cost. "
+        f"Got ctx.obj: {ctx.obj!r}"
+    )
+
+
+def test_failed_substep_attempts_visible_to_recovered_caller(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14 contract pin (PR #1056 7th-round review).
+
+    The round-7 deletion of the rewind machinery is justified by issue
+    #897's intent: `attempted_models` is an audit log of "models that
+    were attempted and then abandoned." Concretely, this means a caller
+    pattern like `auto_include` — which catches a final auto_include_LLM
+    terminal failure and recovers by returning `summary_model` — must
+    leave the failed selector-stage attempts visible to the outer
+    `track_cost`, even though the `model` column will end up being the
+    summary model. This test simulates that pattern directly.
+
+    If a round-8 ever reintroduces a rewind under any name, this test
+    should fail loudly.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    # Simulate `summarize_directory` having already pushed its
+    # successful summary-stage attempts onto ctx.obj before the failing
+    # selector-stage call runs.
+    summary_attempts = ['summarize-fallback-1', 'summary-success']
+    cmd = click.Command(name="auto_include_LLM_caller")
+    ctx = click.Context(cmd, obj={'attempted_models': list(summary_attempts)})
+
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="selector-stage exhausted",
+                       request=mock_request,
+                   )):
+            # Outer caller behaves like auto_include: catches the
+            # terminal failure and recovers with summary_model. We just
+            # want the audit-log entries to survive that recovery.
+            try:
+                llm_invoke(
+                    prompt="selector prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+            except RuntimeError:
+                pass  # Recovered.
+
+    published = ctx.obj.get('attempted_models') or []
+    # Summary attempts must still be present at the head.
+    assert published[:len(summary_attempts)] == summary_attempts, (
+        f"Earlier successful summary-stage attempts must remain at the "
+        f"head of the audit log. Got: {published!r}"
+    )
+    # Failed selector-stage attempts must be appended afterward.
+    assert len(published) > len(summary_attempts), (
+        f"Failed selector-stage attempts were dropped from ctx.obj — "
+        f"that's the round-7 regression (rewind reintroduced). Audit "
+        f"log: {published!r}"
+    )
+
+
+def test_llm_invoke_responses_api_returns_attempted_models(mock_load_models, mock_set_llm_cache):
+    """The OpenAI Responses API success path must include `attempted_models`
+    in the returned dict and the last entry must equal `model_name`."""
+    model_key_name = "OPENAI_API_KEY"
+
+    valid_json = '{"field1": "test_value", "field2": 42}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        mock_responses_return = create_mock_openai_responses_api_response(valid_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return):
+            with patch('pdd.llm_invoke.litellm.completion'):
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel,
+                    )
+
+                    assert 'attempted_models' in response, \
+                        "Responses API success path must include 'attempted_models' in the return dict"
+                    attempted = response['attempted_models']
+                    assert isinstance(attempted, list) and attempted, \
+                        f"'attempted_models' must be a non-empty list, got: {attempted!r}"
+                    assert attempted[-1] == response['model_name'], \
+                        f"Last attempted model {attempted[-1]!r} must equal model_name {response['model_name']!r}"
 
 
 # --- Tests for Multi-Credential Provider (Vertex AI) ---
@@ -4158,7 +4715,9 @@ class TestLoadModelData:
         df = llm_mod._load_model_data(csv_path)
         assert len(df) == 3
         assert "avg_cost" in df.columns
-        assert df["api_key"].dtype == object  # string type
+        # pandas 3+ string-inference may produce a dedicated str dtype rather
+        # than object; accept either via the public string-dtype predicate.
+        assert pd.api.types.is_string_dtype(df["api_key"])
 
     def test_missing_column_raises(self, llm_mod, tmp_path):
         content = "provider,model,input\nopenai,gpt-4,30\n"
@@ -4258,6 +4817,27 @@ class TestSelectModelCandidates:
         df = self._make_df(llm_mod, tmp_path)
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
+
+    def test_strength_05_fallbacks_sorted_by_closest_elo_to_base(self, llm_mod, tmp_path):
+        # Regression for #1197: at strength == 0.5, fallbacks must be sorted by
+        # closest ELO to base, not by highest ELO. Base is "mid" (ELO 1300);
+        # the closer-ELO model ("near", 1310) must rank above "high" (1500).
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "openai,mid,30,60,1300,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+            "openai,near,30,60,1310,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+            "openai,high,30,60,1500,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+        )
+        csv_path = tmp_path / "models_elo.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        candidates = llm_mod._select_model_candidates(0.5, "mid", df)
+        names = [c["model"] for c in candidates]
+        assert names == ["mid", "near", "high"], (
+            f"expected base first then closest-ELO ordering, got {names}"
+        )
 
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
@@ -5325,6 +5905,86 @@ class TestReasoningParameters:
         assert "reasoning_effort" in captured_kwargs
         assert captured_kwargs["reasoning_effort"] == "high"
 
+    def test_adaptive_reasoning_anthropic(self, llm_mod, tmp_path, monkeypatch):
+        """`reasoning_type=adaptive` on an Anthropic row must send the new
+        thinking shape (`type: "adaptive"`, `display: "summarized"`) plus
+        `reasoning_effort` so LiteLLM populates `output_config.effort`."""
+        csv_path = self._make_csv_with_reasoning(tmp_path, "adaptive", "anthropic", "claude-opus-4-7")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-opus-4-7")
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        assert "thinking" in captured_kwargs, (
+            "adaptive branch must set thinking; got kwargs=" f"{sorted(captured_kwargs)}"
+        )
+        assert captured_kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert captured_kwargs.get("reasoning_effort") == "medium"
+        # Legacy budget_tokens must not leak through
+        assert "budget_tokens" not in captured_kwargs.get("thinking", {})
+
+    def test_adaptive_reasoning_non_anthropic_provider_skipped(self, llm_mod, tmp_path, monkeypatch):
+        """`reasoning_type=adaptive` on a non-Anthropic provider must warn and
+        skip the reasoning payload — adaptive thinking is currently an
+        Anthropic-only API and we don't want to silently misroute."""
+        csv_path = self._make_csv_with_reasoning(tmp_path, "adaptive", "openai", "gpt-4")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-4")
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        # Neither `thinking` nor `reasoning_effort` should be sent for non-Anthropic.
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+
     def test_no_reasoning_when_time_zero(self, llm_mod, tmp_path, monkeypatch):
         csv_path = self._make_csv_with_reasoning(tmp_path, "budget", "anthropic", "claude-3")
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
@@ -5924,3 +6584,1025 @@ class TestIssue796TypeScriptPythonValidation:
             "_has_invalid_python_code() should return True for a CodeFix containing "
             "TypeScript code, because TypeScript looks like Python but fails ast.parse()"
         )
+
+
+# ============================================================================
+# TESTS: Gemini 3 temperature clamp (litellm warning prevention)
+# ============================================================================
+#
+# litellm emits the following warning when a Gemini 3 model is invoked with
+# temperature < 1.0:
+#
+#   Warning: Setting temperature < 1.0 for Gemini 3 models
+#   (gemini-3-flash-preview) can cause infinite loops, degraded reasoning
+#   performance, and failure on complex tasks. Strongly recommended to use
+#   temperature = 1.0 (default).
+#
+# PDD passes temperature=0.1 by default (see llm_invoke signature) and many
+# call sites pass temperature=0.0. These default flows triggered the warning
+# during Path C validation of PR #899 / issue #1405. The documented failure
+# modes (infinite loops, degraded reasoning) are real production risks, so
+# PDD clamps the temperature to 1.0 before handing it to litellm whenever
+# the resolved model is in the Gemini 3 family.
+#
+# The override is intentionally narrow: only Gemini 3 (gemini-3 / gemini-3.x)
+# is affected, never Gemini 2.x / Gemini 1.5 / non-Gemini models.
+
+class TestGemini3TemperatureClamp:
+    """Pre-flight clamp: Gemini 3 models receive temperature=1.0 regardless of
+    the user-supplied temperature, because temperature < 1.0 is documented to
+    cause infinite loops and degraded reasoning."""
+
+    def _make_csv(self, tmp_path, provider, model_name, reasoning_type='none'):
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            f"{provider},{model_name},1,2,1437,TEST_KEY,True,{reasoning_type},"
+            f"4096,4096,0\n"
+        )
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(content)
+        return csv_path
+
+    def _make_mock_response(self):
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+        return mock_response
+
+    # ------------------------------------------------------------------
+    # Helper: _is_gemini_3_model classifier
+    # ------------------------------------------------------------------
+    def test_is_gemini_3_model_classifier(self, llm_mod):
+        """The helper should match the Gemini 3 family and ONLY the Gemini 3
+        family. This test pins the regex contract."""
+        is_g3 = llm_mod._is_gemini_3_model
+
+        # Positive cases — Gemini 3.x family
+        assert is_g3("gemini-3-flash-preview") is True
+        assert is_g3("gemini-3-pro-preview") is True
+        assert is_g3("gemini/gemini-3-flash-preview") is True
+        assert is_g3("gemini/gemini-3-pro-preview") is True
+        assert is_g3("vertex_ai/gemini-3-flash-preview") is True
+        assert is_g3("vertex_ai/gemini-3-pro-preview") is True
+        # Bare Vertex AI form (no provider prefix) — see llm_model.csv
+        assert is_g3("gemini-3.1-pro-preview") is True
+        assert is_g3("gemini-3.1-pro-preview-customtools") is True
+        assert is_g3("gemini/gemini-3.1-pro-preview") is True
+        # GMI / GitHub Copilot routes
+        assert is_g3("gmi/google/gemini-3-pro-preview") is True
+        assert is_g3("gmi/google/gemini-3-flash-preview") is True
+        assert is_g3("github_copilot/gemini-3-pro-preview") is True
+        # Hypothetical Gemini 3.5 / 3.x — match too
+        assert is_g3("gemini-3.5-flash") is True
+        # Case-insensitive
+        assert is_g3("GEMINI-3-FLASH-PREVIEW") is True
+
+        # Negative cases — non-Gemini-3 models must NOT match
+        assert is_g3("gemini-2.5-flash") is False
+        assert is_g3("gemini/gemini-2.5-flash") is False
+        assert is_g3("gemini-1.5-pro") is False
+        assert is_g3("gemini-pro") is False
+        assert is_g3("claude-3") is False  # "3" is in claude-3 but not gemini-3
+        assert is_g3("vertex_ai/claude-opus-4-7") is False
+        assert is_g3("gpt-5") is False
+        assert is_g3("o1-preview") is False
+        # Edge case: "gemini-30-..." (hypothetical, not a real family) must NOT
+        # match — boundary-aware regex
+        assert is_g3("gemini-30-something") is False
+        # Defensive: None / empty
+        assert is_g3("") is False
+        assert is_g3(None) is False
+
+    # ------------------------------------------------------------------
+    # Helper polish: PR #900 follow-up — non-string types and empty
+    # strings must be rejected explicitly, not via str() coercion.
+    # See https://github.com/promptdriven/pdd/pull/900 reviewer minors.
+    # ------------------------------------------------------------------
+    def test_is_gemini_3_model_rejects_non_string_types(self, llm_mod):
+        """Reviewer minor (PR #900): ``str(model_name)`` coercion lets a
+        list / dict containing a Gemini 3 string falsely match. The helper
+        must require an actual string and return False for every other
+        type, so future routing layers that accidentally hand off a list
+        or dict do NOT trigger the clamp."""
+        is_g3 = llm_mod._is_gemini_3_model
+
+        # The bug the reviewer flagged: list[str] becomes
+        # "['gemini-3-flash']" under str() coercion, which the regex
+        # matches. After the fix this must be False.
+        assert is_g3(["gemini-3-flash"]) is False, (
+            "list containing a Gemini 3 string must NOT match — "
+            "str() coercion was the bug the reviewer flagged"
+        )
+        assert is_g3(["gemini-3-pro-preview", "gpt-5"]) is False
+        # dict — values may contain the family name but the helper must
+        # not introspect arbitrary container types.
+        assert is_g3({"model": "gemini-3-flash"}) is False
+        assert is_g3({"gemini-3-flash": True}) is False
+        # tuple — same family of container coercion bugs.
+        assert is_g3(("gemini-3-flash",)) is False
+        # Numeric — str(3) == "3" already wouldn't match, but pin it.
+        assert is_g3(3) is False
+        assert is_g3(3.1) is False
+        # Bool — Python treats bool as int, but coercion would still be
+        # unsafe in principle. Pin explicit False return.
+        assert is_g3(True) is False
+        assert is_g3(False) is False
+        # Bytes — not a str, must be rejected even if decoded value would
+        # match.
+        assert is_g3(b"gemini-3-flash") is False
+
+    def test_is_gemini_3_model_empty_string_explicit_guard(self, llm_mod):
+        """Reviewer minor (PR #900): empty string currently returns False
+        only because ``re.search`` happens to return None. Pin the
+        explicit-guard behavior so a future regex change cannot
+        accidentally make ``""`` truthy."""
+        is_g3 = llm_mod._is_gemini_3_model
+        assert is_g3("") is False
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Gemini 3 Flash with low temperature
+    # ------------------------------------------------------------------
+    def test_gemini_3_flash_low_temperature_clamped_to_1(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """gemini/gemini-3-flash-preview with temperature=0.1 must be clamped
+        to temperature=1.0 before reaching litellm."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Gemini", "gemini/gemini-3-flash-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini/gemini-3-flash-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            "Gemini 3 Flash with temperature=0.1 must be clamped to "
+            f"temperature=1, got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Vertex AI Gemini 3 Flash with temperature=0
+    # ------------------------------------------------------------------
+    def test_vertex_ai_gemini_3_flash_zero_temperature_clamped_to_1(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """vertex_ai/gemini-3-flash-preview with temperature=0.0 must be
+        clamped to temperature=1.0. This reproduces the Path C validation
+        scenario for issue #1405 Fix B."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Vertex AI", "vertex_ai/gemini-3-flash-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3-flash-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.0,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            "Vertex AI Gemini 3 Flash with temperature=0.0 must be clamped "
+            f"to 1, got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Bare gemini-3.1-pro-preview
+    # ------------------------------------------------------------------
+    def test_gemini_3_1_pro_bare_name_temperature_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """gemini-3.1-pro-preview (bare Vertex AI name in CSV) with
+        temperature=0.7 must be clamped to 1.0."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Vertex AI", "gemini-3.1-pro-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini-3.1-pro-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.7,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            f"Bare gemini-3.1-pro-preview must be clamped to 1, "
+            f"got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: explicit temperature=1.0 is a no-op
+    # ------------------------------------------------------------------
+    def test_gemini_3_explicit_temperature_1_is_no_op(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """When the caller already passes temperature=1.0, the clamp is a
+        no-op — the value stays 1.0."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Gemini", "gemini/gemini-3-pro-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini/gemini-3-pro-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=1.0,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1
+        # And specifically: it didn't drift below 1 in some weird way
+        assert captured_kwargs.get("temperature") >= 1
+
+    # ------------------------------------------------------------------
+    # Negative: Gemini 2.5 must NOT be clamped
+    # ------------------------------------------------------------------
+    def test_gemini_2_5_temperature_NOT_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """gemini/gemini-2.5-flash must KEEP the user-supplied temperature.
+        Only Gemini 3 has the documented infinite-loop failure mode."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Gemini", "gemini/gemini-2.5-flash"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini/gemini-2.5-flash"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 0.1, (
+            f"Gemini 2.5 must NOT be clamped (only Gemini 3 has the "
+            f"infinite-loop failure mode), got "
+            f"{captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Negative: non-Gemini model must NOT be clamped
+    # ------------------------------------------------------------------
+    def test_non_gemini_model_temperature_NOT_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A non-Gemini model with the same low temperature must keep its
+        temperature — this rule is Gemini-3-specific."""
+        csv_path = self._make_csv(
+            tmp_path, "OpenAI", "gpt-4o-mini"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-4o-mini")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 0.1, (
+            f"Non-Gemini-3 model must NOT be clamped, got "
+            f"{captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Batch mode: Gemini 3 must also be clamped in batch_completion path
+    # ------------------------------------------------------------------
+    def test_gemini_3_batch_mode_temperature_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """The batch_completion path (use_batch_mode=True) must also clamp
+        the temperature. Without this, callers that use batch mode bypass
+        the protection."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Vertex AI", "vertex_ai/gemini-3-flash-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3-flash-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_batch_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            # batch_completion returns a list of response items
+            return [self._make_mock_response()]
+
+        with patch.object(
+            llm_mod.litellm,
+            "batch_completion",
+            side_effect=capture_batch_completion,
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json=[{"topic": "physics"}],
+                strength=0.5,
+                temperature=0.0,
+                time=0.0,
+                use_batch_mode=True,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            "Gemini 3 in batch mode must also be clamped to temperature=1, "
+            f"got {captured_kwargs.get('temperature')}"
+        )
+
+
+# ==============================================================================
+# Regression tests: github_copilot token-file existence check (no PDD_FORCE gate)
+#
+# Bug context: prior to this change, the token-file existence guard in
+# ``_ensure_api_key`` was gated on ``os.environ.get('PDD_FORCE')``. Server
+# contexts (Cloud Run) don't set PDD_FORCE, so github_copilot/* candidate
+# rows passed the check, triggered litellm's device-flow OAuth, and hung
+# for minutes waiting for human authorization that would never come.
+# After the fix, the check fires unconditionally: missing token → skip
+# with a clear hint; token present → proceed as before.
+# ==============================================================================
+
+
+def test_github_copilot_skipped_when_token_missing_no_pdd_force(tmp_path, monkeypatch):
+    """Server context (no PDD_FORCE) with no OAuth token file should skip
+    the model instead of hanging on litellm device-flow."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    token_dir = tmp_path / "no_token_here"
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is False
+
+
+def test_github_copilot_allowed_when_token_present_no_pdd_force(tmp_path, monkeypatch):
+    """Authenticated CLI user (no PDD_FORCE) with a valid token file should
+    proceed normally. This protects existing Copilot users."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    token_dir = tmp_path / "token_dir"
+    token_dir.mkdir(parents=True)
+    (token_dir / "api-key.json").write_text("{\"fake\": \"token\"}")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is True
+
+
+def test_github_copilot_skipped_with_pdd_force_when_token_missing(tmp_path, monkeypatch):
+    """Preserves behavior for PDD_FORCE-set callers (CLI --force mode and
+    server subprocesses): the existing check still fires after the gate
+    is removed, just unconditionally."""
+    from pdd.llm_invoke import _ensure_api_key
+
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "missing"))
+
+    model_info = {
+        "model": "github_copilot/gpt-5",
+        "provider": "Github Copilot",
+        "api_key": "",
+    }
+    newly_acquired_keys = {}
+
+    result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+    assert result is False
+
+
+# ==============================================================================
+# Regression tests: _is_permanent_invalid_request_error classifier + fast-fail
+#
+# Background: Anthropic enforced thinking.type.adaptive for Opus 4.7 on
+# 2026-05-23. The legacy thinking.type.enabled shape now produces a 400
+# "is not supported for this model" — and pdd-cli was cascading through
+# every Anthropic-relay provider (Vertex/Bedrock/Azure/OpenRouter/
+# Perplexity) sending the same wrong shape and getting the same 400 from
+# each, before hitting github_copilot device-flow which hung for minutes.
+# These tests cover the classifier that fast-fails such cases.
+# ==============================================================================
+
+
+class _FakeBadRequest(Exception):
+    """Stand-in for litellm.BadRequestError that doesn't require importing
+    litellm at test-collection time (some test envs don't have it)."""
+
+
+def test_is_permanent_invalid_request_error_flags_unsupported_parameter():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    # Real BadRequestError instance with the canonical Anthropic Opus-4.7
+    # rejection message. Use whatever constructor litellm expects.
+    try:
+        exc = litellm.BadRequestError(
+            message='AnthropicException - {"error":{"type":"invalid_request_error",'
+                    '"message":"\\"thinking.type.enabled\\" is not supported for this model."}}',
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        # constructor signature may vary across litellm versions; fall back
+        exc = litellm.BadRequestError("thinking.type.enabled is not supported for this model")
+    assert _is_permanent_invalid_request_error(exc) is True
+
+
+def test_is_permanent_invalid_request_error_does_not_flag_context_window():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    ctx_err_cls = getattr(litellm.exceptions, "ContextWindowExceededError", None)
+    if ctx_err_cls is None:
+        import pytest
+        pytest.skip("litellm has no ContextWindowExceededError")
+    try:
+        exc = ctx_err_cls(
+            message="This model's maximum context length is 200000 tokens",
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        exc = ctx_err_cls("context length exceeded")
+    # Context-window IS retryable (try a model with bigger context)
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_is_permanent_invalid_request_error_ignores_non_bad_request():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    # Generic exception — not a BadRequestError, should not be classified
+    # as permanent (let existing retry logic handle it).
+    assert _is_permanent_invalid_request_error(RuntimeError("transient blip")) is False
+    assert _is_permanent_invalid_request_error(TimeoutError()) is False
+
+
+def test_is_permanent_invalid_request_error_ignores_rate_limit_error():
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    rate_err_cls = getattr(litellm.exceptions, "RateLimitError", None)
+    if rate_err_cls is None:
+        import pytest
+        pytest.skip("litellm has no RateLimitError")
+    try:
+        exc = rate_err_cls(
+            message="rate_limit_exceeded",
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        exc = rate_err_cls("rate_limit_exceeded")
+    # Rate limits are transient — retry path should run
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_is_permanent_invalid_request_error_flags_unsupported_parameter_phrase():
+    """Cover other allow-listed phrases beyond the specific Anthropic shape."""
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    for phrase in (
+        "unsupported parameter 'foo'",
+        "output_config.effort is invalid",
+        "thinking.type must be one of: adaptive",
+    ):
+        try:
+            exc = litellm.BadRequestError(
+                message=phrase,
+                model="claude-opus-4-7",
+                llm_provider="anthropic",
+            )
+        except TypeError:
+            exc = litellm.BadRequestError(phrase)
+        assert _is_permanent_invalid_request_error(exc) is True, (
+            f"Expected phrase to flag as permanent: {phrase!r}"
+        )
+
+
+def test_is_permanent_invalid_request_error_ignores_unrelated_bad_request():
+    """BadRequestError with a message NOT in the allow-list should fall
+    through to existing retry logic (return False)."""
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    try:
+        exc = litellm.BadRequestError(
+            message="Some transient validation hiccup",
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        exc = litellm.BadRequestError("Some transient validation hiccup")
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_llm_invoke_fast_fails_on_permanent_invalid_request_error(
+    mock_load_models, mock_set_llm_cache
+):
+    """Integration test: when litellm.completion raises a permanent
+    invalid_request_error, llm_invoke() must re-raise immediately rather
+    than cascade through every remaining candidate model. This proves the
+    fast-fail wiring at the call site actually fires, not just that the
+    classifier returns the right boolean in isolation."""
+    import litellm
+
+    try:
+        permanent_exc = litellm.BadRequestError(
+            message=(
+                'AnthropicException - {"type":"error","error":'
+                '{"type":"invalid_request_error","message":'
+                '"\\"thinking.type.enabled\\" is not supported for this model. '
+                'Use \\"thinking.type.adaptive\\""}}'
+            ),
+            model="claude-opus-4-7",
+            llm_provider="anthropic",
+        )
+    except TypeError:
+        permanent_exc = litellm.BadRequestError(
+            "thinking.type.enabled is not supported for this model"
+        )
+
+    first_model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_completion.side_effect = permanent_exc
+
+            # llm_invoke() must propagate the permanent BadRequestError
+            # instead of returning "all_candidate_models_failed" / a
+            # RuntimeError after walking the full candidate list.
+            with pytest.raises(litellm.BadRequestError):
+                llm_invoke(
+                    "Valid prompt about {topic}",
+                    {"topic": "cats"},
+                    0.5,
+                    0.7,
+                    False,
+                )
+
+            # And only the first candidate should have been attempted —
+            # the fast-fail prevents cascading. Three candidates exist in
+            # the mock model list, so anything > 1 means the cascade ran.
+            assert mock_completion.call_count == 1, (
+                f"fast-fail did not trigger: litellm.completion was called "
+                f"{mock_completion.call_count} times, expected 1"
+            )
+
+
+# ==============================================================================
+# Regression test: LiteLLM AnthropicConfig._is_claude_opus_4_5 monkey-patch
+#
+# Importing pdd.llm_invoke must extend LiteLLM's "is this an adaptive-thinking
+# Opus" predicate to match opus-4-7. Without this, Vertex AI / Azure / Bedrock
+# Anthropic adapters (all inherit AnthropicConfig) send the legacy
+# thinking.type.enabled shape for Opus 4.7 and the provider 400s with
+# "is not supported for this model".
+# ==============================================================================
+
+
+def test_anthropic_config_is_opus_4_5_matches_opus_4_7():
+    """`import pdd.llm_invoke` must extend LiteLLM's adaptive-thinking
+    predicate to match opus-4-7, so every Anthropic-relay provider (direct,
+    Vertex, Bedrock) routes Opus 4.7 to the new shape.
+
+    LiteLLM renamed this helper between 1.80.x (`_is_claude_opus_4_5`) and
+    1.82.x (`_is_claude_4_6_model`). The patch covers whichever exists;
+    the test asserts the patch took effect on the predicate that exists
+    in the installed version."""
+    import pdd.llm_invoke  # noqa: F401 — import is the action under test
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    cfg = AnthropicConfig()
+    pred = (
+        getattr(cfg, "_is_claude_opus_4_5", None)
+        or getattr(cfg, "_is_claude_4_6_model", None)
+    )
+    assert pred is not None, (
+        "LiteLLM exposes neither _is_claude_opus_4_5 (1.80.x) nor "
+        "_is_claude_4_6_model (1.82.x); patch needs a new code path."
+    )
+    # The patched predicate must match opus-4-7 across naming variants —
+    # hyphen + dot aliases — to mirror LiteLLM's own naming convention.
+    assert pred("claude-opus-4-7") is True
+    assert pred("vertex_ai/claude-opus-4-7") is True
+    assert pred("anthropic.claude-opus-4-7") is True
+    assert pred("claude-opus-4.7") is True
+    assert pred("vertex_ai/claude-opus-4.7") is True
+    # Opus 4.5 must continue matching even on 1.82.x — LiteLLM upstream
+    # dropped 4.5 from `_is_claude_4_6_model`, so our extension restores
+    # that path so custom CSV rows pointing at 4.5 don't regress to the
+    # legacy enabled shape.
+    assert pred("claude-opus-4-5") is True
+    assert pred("claude-opus-4.5") is True
+    # Unrelated models must still NOT match.
+    assert pred("gpt-5") is False
+
+
+def test_anthropic_config_opus_patch_covers_vertex_subclass():
+    """VertexAIAnthropicConfig inherits the predicate from AnthropicConfig;
+    the patch must propagate to the subclass so the Vertex AI Anthropic
+    adapter also picks the adaptive shape."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+    cfg = VertexAIAnthropicConfig()
+    pred = (
+        getattr(cfg, "_is_claude_opus_4_5", None)
+        or getattr(cfg, "_is_claude_4_6_model", None)
+    )
+    assert pred is not None
+    assert pred("vertex_ai/claude-opus-4-7") is True
+
+
+# ------------------------------------------------------------------------------
+# Transform-level shape assertions
+#
+# Predicate alone isn't enough: LiteLLM's map_openai_params also unconditionally
+# overwrites optional_params["thinking"] with the legacy enabled shape when
+# `reasoning_effort` is passed — even when _is_claude_opus_4_5 matches. The
+# wrap fixes the final shape Vertex sees. These tests pin the actual
+# transformed kwargs, not just the predicate result.
+# ------------------------------------------------------------------------------
+
+
+def _map_thinking_kwargs(non_default, model):
+    """Run AnthropicConfig.map_openai_params with the pdd.llm_invoke patch
+    applied. Returns (thinking, output_config) from the result."""
+    import pdd.llm_invoke  # noqa: F401 — ensures the wrap is installed
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    cfg = AnthropicConfig()
+    result = cfg.map_openai_params(
+        non_default_params=non_default,
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    return result.get("thinking"), result.get("output_config")
+
+
+def test_map_openai_params_vertex_opus_47_effort_only_emits_adaptive_shape():
+    """The vertex_ai/claude-opus-4-7 CSV row carries reasoning_type=effort,
+    so pdd hands LiteLLM only `reasoning_effort`. Pre-patch, LiteLLM
+    produced thinking.type.enabled (rejected by Vertex). Post-patch, the
+    final shape must be thinking.type.adaptive + output_config.effort —
+    for both hyphen and dot naming variants."""
+    for model in ("vertex_ai/claude-opus-4-7", "vertex_ai/claude-opus-4.7"):
+        thinking, output_config = _map_thinking_kwargs(
+            {"reasoning_effort": "high"}, model
+        )
+        assert thinking == {"type": "adaptive"}, (model, thinking)
+        assert output_config == {"effort": "high"}, (model, output_config)
+
+
+def test_map_openai_params_bedrock_opus_47_effort_only_emits_adaptive_shape():
+    """Bedrock anthropic.claude-opus-4-7 row is also reasoning_type=effort
+    in the CSV — same code path, must produce the same adaptive shape."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "anthropic.claude-opus-4-7"
+    )
+    assert thinking == {"type": "adaptive"}, thinking
+    assert output_config == {"effort": "high"}, output_config
+
+
+def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
+    """The Anthropic,claude-opus-4-7 row is reasoning_type=adaptive — pdd
+    sends both thinking={adaptive, display=summarized} and
+    reasoning_effort. The wrap must preserve the caller's richer adaptive
+    payload (display field) instead of stripping it back to bare
+    {type: adaptive}."""
+    thinking, output_config = _map_thinking_kwargs(
+        {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "reasoning_effort": "medium",
+        },
+        "claude-opus-4-7",
+    )
+    assert thinking == {"type": "adaptive", "display": "summarized"}, thinking
+    assert output_config == {"effort": "medium"}, output_config
+
+
+def test_map_openai_params_unrelated_model_unchanged():
+    """The patch is gated on opus-4-7 substring (and pre-existing predicates).
+    GPT-5 must not be affected by any patch layer — LiteLLM drops Anthropic-
+    only params for it via drop_params, so neither `thinking` nor
+    `output_config` should appear in the mapped kwargs."""
+    thinking, output_config = _map_thinking_kwargs(
+        {"reasoning_effort": "high"}, "gpt-5"
+    )
+    # GPT-5 routed through AnthropicConfig is nonsense, but the assertion
+    # is: our patch does not inject adaptive/output_config for it.
+    assert not (isinstance(thinking, dict) and thinking.get("type") == "adaptive"), thinking
+    assert output_config is None, output_config
+
+
+# ------------------------------------------------------------------------------
+# Bedrock-adapter coverage: invoke (AmazonAnthropicClaudeConfig) inherits from
+# AnthropicConfig and is reached by the AnthropicConfig wrap above. Converse
+# (AmazonConverseConfig) does NOT inherit and needs its own wrap. These tests
+# exercise the actual LiteLLM Bedrock classes — not the AnthropicConfig stand-
+# in used above — so a regression that breaks the Converse code path can't
+# slip through.
+# ------------------------------------------------------------------------------
+
+
+def test_bedrock_invoke_adapter_opus_47_adaptive_via_inheritance():
+    """AmazonAnthropicClaudeConfig inherits map_openai_params + the
+    _is_claude_opus_4_5 predicate from AnthropicConfig. With the
+    pdd.llm_invoke wrap in place, Bedrock invoke-style Opus 4.7 must
+    produce the adaptive shape + output_config."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonAnthropicClaudeConfig in this env")
+    cfg = AmazonAnthropicClaudeConfig()
+    result = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="bedrock/anthropic.claude-opus-4-7",
+        drop_params=True,
+    )
+    assert result.get("thinking") == {"type": "adaptive"}, result.get("thinking")
+    assert result.get("output_config") == {"effort": "high"}, result.get("output_config")
+
+
+def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
+    """AmazonConverseConfig is a separate class that doesn't inherit from
+    AnthropicConfig — needs its own wrap. The Converse map_openai_params
+    builds thinking={type:enabled} via AnthropicConfig._map_reasoning_effort
+    with no Opus 4.5/4.7 branch. The wrap rewrites it to adaptive for
+    opus-4-7 model names so the AWS API doesn't 400, and carries the
+    reasoning_effort hint into the flattened thinking dict (Converse
+    doesn't expose an output_config sibling like the direct Anthropic API)."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-opus-4-7",
+        "bedrock/converse/anthropic.claude-opus-4-7",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
+
+
+def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
+    """When the caller already supplied thinking={type: adaptive, ...}, the
+    wrap must preserve their richer payload (e.g. display=summarized) and
+    only fill in effort if they didn't set it themselves."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    result = cfg.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive", "display": "summarized", "effort": "low"},
+            "reasoning_effort": "high",
+        },
+        optional_params={},
+        model="bedrock/anthropic.claude-opus-4-7",
+        drop_params=True,
+    )
+    # Caller's explicit effort wins over the reasoning_effort hint.
+    assert result.get("thinking") == {
+        "type": "adaptive",
+        "display": "summarized",
+        "effort": "low",
+    }, result.get("thinking")
+
+
+def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_47():
+    """LiteLLM 1.82.6's VertexAIAnthropicConfig.transform_request unconditionally
+    pops `output_config` from the request body (comment: "VertexAI doesn't
+    support output_config"). That assumption is wrong for Opus 4.7: the Vertex
+    API explicitly requires `output_config.effort` alongside
+    `thinking.type.adaptive` — the error message itself instructs callers to
+    use both. The patch wraps transform_request to restore output_config on
+    the wire for opus-4-7 model names."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    optional_params = {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+    body = cfg.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert body.get("thinking") == {"type": "adaptive"}, body
+    assert body.get("output_config") == {"effort": "high"}, body
+
+
+def test_vertex_anthropic_transform_request_no_op_for_unrelated_models():
+    """The wrap only restores output_config on opus-4-7. For non-opus-4-7,
+    the wrap is a no-op — the body LiteLLM produces is whatever the
+    un-patched version would produce (varies by LiteLLM version: 1.80.x
+    doesn't strip output_config at all; 1.82.x strips it for everything).
+    What matters is the wrap doesn't *interfere*: a wrap that mutates
+    non-opus-4-7 output would silently corrupt other callers."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    optional_params = {
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+        "output_config": {"effort": "high"},
+    }
+    body = cfg.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    # The wrap's only mutation is on opus-4-7. For sonnet-4-6 the body
+    # must match whatever LiteLLM would have produced without our wrap.
+    # Thinking is always preserved across versions (not stripped).
+    assert body.get("thinking") == {"type": "enabled", "budget_tokens": 4096}, body
+
+
+def test_bedrock_converse_adapter_unrelated_models_unchanged():
+    """The Converse wrap is gated on opus-4-7 substring — non-opus-4-7
+    models must pass through unchanged. LiteLLM's native behavior for
+    these varies by version (1.80.x emits enabled, 1.82.x emits adaptive
+    for sonnet-4-6 + opus-4-6), so the assertion is just that the patch
+    didn't *add* an `effort` field that wasn't already there."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-sonnet-4-6",
+        "bedrock/anthropic.claude-opus-4-5",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        thinking = result.get("thinking")
+        # The pdd patch's effort-injection is the only modification it makes
+        # to the Converse output; for non-opus-4-7 models it must not fire.
+        assert not (isinstance(thinking, dict) and "effort" in thinking), (model, thinking)

@@ -79,21 +79,15 @@ This project uses Prompt-Driven Development (PDD). In PDD:
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Pick exactly ONE of the three templates below and place it inside the tags.
 
 **For Code Bug (most common):**
-```markdown
+<step_report>
 ## Step 7: Prompt Classification
 
 **Classification:** Code Bug
-
-DEFECT_TYPE: code
 
 ### Analysis
 [Brief explanation of why this is a code bug - the code doesn't match the prompt]
@@ -108,16 +102,18 @@ The code does not correctly implement the prompt specification. Proceeding with 
 
 ---
 *Proceeding to Step 8: Test Plan*
+</step_report>
+
+After the `</step_report>` closing tag, emit the orchestrator marker on its own line (parsed from raw output — MUST live OUTSIDE the report block):
+```
+DEFECT_TYPE: code
 ```
 
 **For Prompt Defect:**
-```markdown
+<step_report>
 ## Step 7: Prompt Classification
 
 **Classification:** Prompt Defect
-
-DEFECT_TYPE: prompt
-PROMPT_FIXED: prompts/module_name_python.prompt
 
 ### Analysis
 [Brief explanation of why the prompt itself is defective]
@@ -145,15 +141,19 @@ The prompt specification was incorrect. The prompt has been fixed. Proceeding wi
 
 ---
 *Proceeding to Step 8: Test Plan*
+</step_report>
+
+After the `</step_report>` closing tag, emit BOTH orchestrator markers on their own lines (parsed from raw output — MUST live OUTSIDE the report block):
+```
+DEFECT_TYPE: prompt
+PROMPT_FIXED: prompts/module_name_python.prompt
 ```
 
 **For Ambiguous Cases (hard stop):**
-```markdown
+<step_report>
 ## Step 7: Prompt Classification
 
 **Classification:** Needs Human Review
-
-PROMPT_REVIEW: [reason for uncertainty]
 
 ### Analysis
 [Explanation of the ambiguity]
@@ -173,6 +173,11 @@ Please clarify in the issue:
 
 ---
 *Investigation paused - awaiting clarification on whether this is a prompt defect or code bug.*
+</step_report>
+
+After the `</step_report>` closing tag, emit the orchestrator marker on its own line (parsed from raw output — MUST live OUTSIDE the report block):
+```
+PROMPT_REVIEW: [reason for uncertainty]
 ```
 
 % Important
@@ -180,6 +185,6 @@ Please clarify in the issue:
 - Default to "Code Bug" when uncertain - this preserves backward compatibility
 - Only modify prompt files, never code files
 - When fixing a prompt, make minimal changes to address the specific defect
-- Always include the `DEFECT_TYPE:` marker in your output (either `code` or `prompt`)
-- If you fix a prompt, include the `PROMPT_FIXED:` marker with the file path
-- Always post your findings as a GitHub comment before completing
+- Always include the `DEFECT_TYPE:` marker AFTER the `</step_report>` tag (either `code` or `prompt`) so the orchestrator can parse it
+- If you fix a prompt, include the `PROMPT_FIXED:` marker (also outside the report block) with the file path
+- Place your narrative findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you.

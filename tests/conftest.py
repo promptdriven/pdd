@@ -1,16 +1,54 @@
 """Project-level pytest configuration hooks."""
 
-import os
 import sys
 from pathlib import Path
+project_root = str(Path(__file__).resolve().parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+import atexit
+import os
+import shutil
+import tempfile
 from typing import Any
+
+# =============================================================================
+# HOME isolation (MUST happen before ANY pdd.* import)
+# =============================================================================
+# Pin HOME (and CODEX_HOME) to a per-pytest-session sandbox tempdir BEFORE any
+# pdd.* module is imported below. Two production modules compute paths via
+# ``Path.home()`` at *import time* — ``pdd/auth_service.py:20`` and
+# ``pdd/get_jwt_token.py:74`` both define
+# ``JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"`` — and
+# ``_save_api_key()`` in ``pdd/cli_detector.py:463-491`` writes to
+# ``~/.pdd/api-env.{shell}`` and appends to ``~/.bashrc`` / ``~/.zshrc`` /
+# ``~/.config/fish/config.fish``. Without HOME pinning before those modules
+# load, the constants capture the developer's real home and any test that
+# exercises the write paths (directly or transitively via CLI bootstrap)
+# would overwrite real shell rc / token cache files.
+#
+# A parallel fix shipped in promptdriven/pdd_cloud#1486 for the same class of
+# bug — a test fixture overwrote ~/.codex/auth.json with a placeholder token
+# and broke the developer's Codex CLI until they re-ran ``codex login``.
+# ``tests/test_home_isolation.py`` pins these invariants.
+_PYTEST_FAKE_HOME = tempfile.mkdtemp(prefix="pdd-pytest-home-")
+atexit.register(shutil.rmtree, _PYTEST_FAKE_HOME, ignore_errors=True)
+os.environ["HOME"] = _PYTEST_FAKE_HOME
+os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
+
+# Prevent outer agentic/checkup controls from changing test behavior. Tests that
+# cover these knobs set them explicitly with monkeypatch or patch.dict.
+for _PDD_ENV_VAR in ("PDD_AGENTIC_PROVIDER", "PDD_GOOGLE_CLI", "PDD_AUTO_UPDATE"):
+    os.environ.pop(_PDD_ENV_VAR, None)
 
 import pytest
 from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError
 
 
-# Load environment variables from .env early in collection
+# Load environment variables from .env early in collection.
+# Note: python-dotenv's default ``override=False`` won't clobber the HOME /
+# CODEX_HOME values we just pinned above.
 load_dotenv()
 
 # Store the original PDD_PATH at module load time for restoration
@@ -42,6 +80,44 @@ _E2E_FIX_ATTRS_TO_RESTORE = (
     "_run_step11_code_cleanup",
     "run_ci_validation_loop",
 )
+
+
+@pytest.fixture(autouse=True)
+def _normalize_cli_test_env(monkeypatch, request):
+    """Keep unit tests independent of developer shell/.env overrides.
+
+    Many CLI tests assert that ``auto_update()`` runs once per invocation.
+    Developers often export ``PDD_AUTO_UPDATE=false`` locally; force it on
+    for the test process unless a test explicitly patches the flag off.
+    """
+    monkeypatch.setenv("PDD_AUTO_UPDATE", "true")
+
+
+@pytest.fixture(autouse=True)
+def _enforce_isolated_home(monkeypatch):
+    """Per-test re-assertion of HOME/CODEX_HOME isolation.
+
+    The module-level pinning at the top of this file handles
+    import-time path resolution. This fixture defends against tests that
+    explicitly mutate HOME (e.g. ``os.environ["HOME"] = "..."``) by
+    restoring the sandbox before the next test runs.
+    """
+    monkeypatch.setenv("HOME", _PYTEST_FAKE_HOME)
+    monkeypatch.setenv("CODEX_HOME", os.path.join(_PYTEST_FAKE_HOME, ".codex"))
+
+
+@pytest.fixture(scope="session")
+def sandbox_home() -> Path:
+    """Expose the session-scoped fake HOME pinned at conftest import time.
+
+    Regression tests in ``tests/test_home_isolation.py`` assert that
+    HOME / CODEX_HOME / ``Path.home()`` / module-level JWT_CACHE_FILE
+    constants all resolve to exactly this path. Asserting equality
+    against this fixture (rather than a hard-coded temp-root whitelist
+    like ``/tmp/``) keeps the invariant robust against CI/dev
+    environments with a custom ``TMPDIR``.
+    """
+    return Path(_PYTEST_FAKE_HOME)
 
 
 @pytest.fixture(autouse=True)
@@ -105,9 +181,159 @@ def preserve_git_work_tree():
 
 @pytest.fixture(autouse=True)
 def isolate_cloud_only_overrides(monkeypatch):
-    """Clear developer cloud-only env flags unless a test sets them."""
+    """Clear developer cloud-only env flags unless a test sets them.
+
+    PDD_QUIET is also cleared: it suppresses ``console.print`` in
+    ``pdd.preprocess`` and a handful of other modules. Tests that
+    exercise the ``pdd --quiet`` CLI (e.g. ``tests/test_quiet_flag.py``)
+    leak the flag globally because the CLI group callback writes
+    ``os.environ["PDD_QUIET"] = "1"`` and does not unwind it; subsequent
+    tests in the same pytest process that assert on stdout warnings
+    (e.g. ``test_preprocess.py::test_unresolved_include_*``) then see
+    no output and fail. The leak only surfaces when those tests land
+    in the same shard, which depends on bin-packing — exposed when
+    ``balance-chunks.py`` started splitting heavy files across chunks.
+    """
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+    monkeypatch.delenv("PDD_QUIET", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_env(monkeypatch):
+    """Clear every provider credential env var the OpenCode code path consults.
+
+    Fix C of ``promptdriven/pdd_cloud#1405``: the autonomous-solve PR
+    ``promptdriven/pdd#858`` shipped tests that passed in the verifier's
+    minimal worker container but failed on any developer machine that had
+    real provider keys exported (``XAI_API_KEY``,
+    ``GOOGLE_APPLICATION_CREDENTIALS``, ``VERTEXAI_PROJECT``, ...). The
+    tests silently assumed "this env var happens to be unset"; this
+    fixture makes that assumption explicit by always clearing the
+    canonical key set before each test runs.
+
+    Canonical source
+    ----------------
+    The key set is sourced from
+    ``pdd.agentic_common._opencode_provider_env_keys()`` — the same helper
+    the production code path uses to decide whether to trust an OpenCode
+    credential signal. Using the runtime helper (not the smaller 26-key
+    ``_OPENCODE_PROVIDER_ENV_KEYS_FALLBACK`` constant) means every provider
+    row added to ``pdd/data/llm_model.csv`` is automatically covered, and
+    the Fix B static-analysis detector
+    (``promptdriven/pdd#899``) does not flag this fixture as drift.
+
+    Opt-back-in
+    -----------
+    Tests that need a credential set (most ``test_agentic_common.py``
+    "has credentials" cases, every Issue #813 ``_isolated_env`` test)
+    populate it explicitly via ``monkeypatch.setenv`` or
+    ``patch.dict(os.environ, {...})``. Because pytest tears down fixtures
+    in reverse order, an inner ``patch.dict`` undoes before this fixture's
+    teardown, so neither path sees the developer's real env leak in.
+
+    Why this fixture also imports lazily
+    -------------------------------------
+    Importing ``pdd.agentic_common`` at conftest import time would pull
+    in litellm and other heavy modules even for trivial test sessions.
+    The import is deferred to first-fixture-use, which keeps test
+    collection fast and matches the lazy-import pattern already used by
+    ``_isolate_claude_oauth_probe``.
+    """
+    # Lazy import: avoid pulling litellm into conftest's import graph.
+    # See module docstring for the rationale.
+    from pdd.agentic_common import _opencode_provider_env_keys
+
+    for key in _opencode_provider_env_keys():
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_binary_presence(request, monkeypatch):
+    """Default every agentic CLI binary to "not installed" and the OpenCode
+    filesystem credential signals to "absent" before each test.
+
+    Fix A-prime of ``promptdriven/pdd_cloud#1405``: the autonomous-solve PR
+    ``promptdriven/pdd#858`` shipped 4 tests in ``test_agentic_common.py``
+    that silently passed only because the verifier's minimal worker
+    container had no agentic CLIs installed under ``~/.local/bin`` and
+    no OpenCode auth file at ``~/.local/share/opencode/auth.json``. On a
+    developer machine where the user had ``npm install -g opencode-ai``'d
+    the CLI or run ``opencode auth login``, those tests would have leaked
+    real filesystem state — passing for the wrong reason or failing
+    surprisingly. Fix B (``promptdriven/pdd#899``) and Fix C
+    (``promptdriven/pdd#902``) cover the env-var-leak shape; this fixture
+    covers the CLI-binary-presence + auth-file shape.
+
+    Canonical source
+    ----------------
+    The agentic-CLI name set is sourced from
+    ``pdd.cli_detector.CLI_PREFERENCE`` — the same ordered list the
+    production CLI-detection path consults. Using the public constant
+    (not a duplicate hardcoded literal) means a new agentic CLI added
+    to the codebase is automatically isolated and the Fix B static-
+    analysis detector does not flag this fixture as drift.
+
+    What gets isolated
+    -------------------
+    1. ``pdd.agentic_common._find_cli_binary(name)`` returns ``None`` for
+       every name in ``CLI_PREFERENCE``. Non-agentic names (``git``,
+       ``sh``, ...) pass through to the real implementation so legitimate
+       subprocess tests are unaffected.
+    2. ``pdd.agentic_common._opencode_auth_file_has_credentials`` returns
+       ``False`` unconditionally.
+    3. ``pdd.agentic_common._iter_opencode_config_texts`` yields an empty
+       iterable unconditionally.
+
+    Opt-back-in
+    -----------
+    Tests that need a CLI to be "installed" or credentials to be present
+    override these via ``monkeypatch.setattr`` after the autouse fixture
+    runs, or use the existing per-test fixtures in
+    ``test_agentic_common.py`` (``mock_shutil_which`` patches
+    ``_find_cli_binary``; ``mock_env`` patches the credential helpers).
+    Both compose correctly with this autouse fixture — explicit per-test
+    patches replace our defaults and unwind before our teardown.
+
+    Why this fixture imports lazily
+    --------------------------------
+    Importing ``pdd.agentic_common`` and ``pdd.cli_detector`` at conftest
+    collection time would pull in litellm and other heavy modules even
+    for trivial test sessions. The imports are deferred to first-fixture-
+    use, matching the lazy-import pattern of ``_isolate_provider_env``
+    and ``_isolate_claude_oauth_probe``.
+
+    Opt-out via marker
+    ------------------
+    Tests that exercise ``_find_cli_binary`` itself (the production
+    CLI-detection function — see ``TestCliDiscovery`` / ``TestCliDiscoveryBug``)
+    must be able to run the real function with their own mocks underneath.
+    Mark such tests/classes with ``@pytest.mark.uses_real_cli_detector``
+    to skip the autouse isolation. The marker is registered via
+    ``pytest_configure`` below.
+    """
+    if request.node.get_closest_marker("uses_real_cli_detector"):
+        return  # explicit opt-out for tests that exercise the real CLI detector
+    # Lazy imports: avoid pulling agentic_common / cli_detector into
+    # conftest's import graph. See docstring for rationale.
+    import pdd.agentic_common as ac
+    from pdd.cli_detector import CLI_PREFERENCE
+
+    agentic_clis = frozenset(CLI_PREFERENCE)
+    real_find = ac._find_cli_binary
+
+    def _isolated_find(name, *args, **kwargs):
+        if name in agentic_clis:
+            return None
+        return real_find(name, *args, **kwargs)
+
+    monkeypatch.setattr(ac, "_find_cli_binary", _isolated_find, raising=True)
+    monkeypatch.setattr(
+        ac, "_opencode_auth_file_has_credentials", lambda path: False, raising=True
+    )
+    monkeypatch.setattr(
+        ac, "_iter_opencode_config_texts", lambda cwd=None: iter(()), raising=True
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -217,6 +443,16 @@ def pytest_configure(config: pytest.Config) -> None:
     else:
         os.environ.setdefault("PDD_RUN_ALL_TESTS", "0")
 
+    # Fix A-prime (promptdriven/pdd_cloud#1405): register the opt-out marker
+    # for tests that exercise the real CLI-detection path with their own
+    # mocks underneath (TestCliDiscovery / TestCliDiscoveryBug). See the
+    # ``_isolate_cli_binary_presence`` fixture docstring for context.
+    config.addinivalue_line(
+        "markers",
+        "uses_real_cli_detector: skip the Fix A-prime autouse CLI-binary "
+        "isolation fixture; for tests that test _find_cli_binary itself.",
+    )
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call):
@@ -242,6 +478,8 @@ def pytest_runtest_makereport(item: pytest.Item, call):
 collect_ignore_glob = [
     "csv/*",
     "fixtures/*",
+    "*_fixed.py",
+    "**/*_fixed.py",
 ]
 
 

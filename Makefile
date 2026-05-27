@@ -58,7 +58,8 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
-	@echo "  make release                 - Bump version, tag, and upload to PyPI (public origin only)"
+	@echo "  make release                 - On main: tag HEAD with next vN.N.N and push (BUMP=patch|minor|major; default patch)"
+	@echo "                                  Actions publishes to PyPI via OIDC after gltanaka approval"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -538,7 +539,7 @@ CLOUD_BATCH_DIR := ci/cloud-batch
 GCP_PROJECT_ID := prompt-driven-development-stg
 GCP_REGION ?= us-central1
 GCS_BUCKET ?= pdd-stg-ci-results
-AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test:latest
+AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test
 
 # Files baked into the Docker image — changes to these require a rebuild
 CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/Dockerfile
@@ -616,7 +617,36 @@ upload-pypi:
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
 publish:
-	@echo "Building and uploading package to PyPI"
+	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree is dirty; refusing to publish."; \
+		echo "python -m build reads files from the working tree, not from the commit,"; \
+		echo "so uncommitted edits would be baked into the wheel. Commit or stash first."; \
+		git status --short; \
+		exit 1; \
+	fi; \
+	HEAD_SHA=$$(git rev-parse HEAD); \
+	TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	if [ -z "$$TAG" ]; then \
+		echo "Error: HEAD has no release tag (vN.N.N) pointing at it; refusing to publish."; \
+		echo "Run 'make release' to create and push a tag instead."; \
+		exit 1; \
+	fi; \
+	echo "Verifying $$TAG exists on origin at HEAD"; \
+	git fetch --tags --prune origin; \
+	REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG^{}" "refs/tags/$$TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+	fi; \
+	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+		echo "Error: tag $$TAG is local-only; push it first ('git push origin $$TAG') or use 'make release'."; \
+		exit 1; \
+	fi; \
+	if [ "$$REMOTE_TAG_COMMIT" != "$$HEAD_SHA" ]; then \
+		echo "Error: origin's $$TAG points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
+		exit 1; \
+	fi; \
+	echo "Tag $$TAG verified on origin at HEAD. Building and uploading to PyPI."
 	@$(MAKE) build
 	@$(MAKE) upload-pypi
 
@@ -667,7 +697,8 @@ check-release-remote:
 	echo "Release remote verified: $$PUSH_URL"
 
 check-release-branch:
-	@BRANCH=$$(git branch --show-current); \
+	@set -e; \
+	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Error: release must run from branch main, not '$$BRANCH'."; \
 		exit 1; \
@@ -693,19 +724,73 @@ check-release-clean:
 release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
 	@echo "Preparing release"
 	@set -e; \
-	CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
-	CURRENT_TAG="v$$CURRENT_VERSION"; \
-	if git tag --points-at HEAD | grep -qx "$$CURRENT_TAG"; then \
-		echo "HEAD already at $$CURRENT_TAG; publishing current version to PyPI."; \
-		$(MAKE) publish; \
-	else \
-		echo "Bumping version with commitizen"; \
-		python -m commitizen bump --increment PATCH --yes --check-consistency; \
-		echo "Pushing release commit and tags to origin"; \
-		git push origin main --tags; \
-		echo "Publishing new version to PyPI"; \
-		$(MAKE) publish; \
-	fi
+	echo "Fetching tags from origin"; \
+	git fetch --tags --prune origin; \
+	HEAD_SHA=$$(git rev-parse HEAD); \
+	EXISTING_TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
+	if [ -n "$$EXISTING_TAG" ]; then \
+		echo "HEAD is already tagged as $$EXISTING_TAG."; \
+		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+			REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+		fi; \
+		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+			echo "Local tag $$EXISTING_TAG not on origin; pushing."; \
+			git push origin "$$EXISTING_TAG"; \
+			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
+		elif [ "$$REMOTE_TAG_COMMIT" = "$$HEAD_SHA" ]; then \
+			echo "Tag $$EXISTING_TAG already on origin at HEAD."; \
+			RECOVERY_FAILED=0; \
+			if command -v gh >/dev/null 2>&1; then \
+				if ! gh release view "$$EXISTING_TAG" >/dev/null 2>&1; then \
+					echo "GitHub Release for $$EXISTING_TAG is missing. Creating it idempotently."; \
+					gh release create "$$EXISTING_TAG" --generate-notes --verify-tag --target main \
+						|| { echo "(could not create GitHub Release; check gh auth and permissions)"; RECOVERY_FAILED=1; }; \
+				else \
+					echo "GitHub Release for $$EXISTING_TAG exists."; \
+				fi; \
+				LATEST_RUN_STATUS=$$(gh run list --workflow release.yml --limit 20 --json status,conclusion,headSha --jq ".[] | select(.headSha==\"$$HEAD_SHA\") | \"\(.status):\(.conclusion)\"" 2>/dev/null | head -1); \
+				if [ -z "$$LATEST_RUN_STATUS" ]; then \
+					echo "No release.yml run found for HEAD ($$HEAD_SHA); the workflow may not have started yet."; \
+				else \
+					case "$$LATEST_RUN_STATUS" in \
+						completed:success) echo "release.yml run for this tag: success.";; \
+						completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'."; RECOVERY_FAILED=1;; \
+						*) echo "release.yml run for this tag status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
+					esac; \
+				fi; \
+			else \
+				echo "(install 'gh' CLI to auto-check release status)"; \
+			fi; \
+			if [ "$$RECOVERY_FAILED" = "1" ]; then exit 1; fi; \
+		else \
+			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
+			exit 1; \
+		fi; \
+		exit 0; \
+	fi; \
+	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	if [ -z "$$LATEST_TAG" ]; then LATEST_TAG="v0.0.0"; fi; \
+	CURRENT_VERSION=$${LATEST_TAG#v}; \
+	BUMP=$${BUMP:-patch}; \
+	case "$$BUMP" in \
+		major|minor|patch) ;; \
+		*) echo "Error: BUMP must be one of: major, minor, patch (got: '$$BUMP')"; exit 1 ;; \
+	esac; \
+	NEW_VERSION=$$(python -c "v=[int(x) for x in '$$CURRENT_VERSION'.split('.')]; i={'major':0,'minor':1,'patch':2}['$$BUMP']; v[i]+=1; [v.__setitem__(j,0) for j in range(i+1,3)]; print('.'.join(map(str,v)))"); \
+	NEW_TAG="v$$NEW_VERSION"; \
+	echo "Releasing $$LATEST_TAG → $$NEW_TAG at $$HEAD_SHA"; \
+	if git rev-parse --verify --quiet "refs/tags/$$NEW_TAG" >/dev/null; then \
+		echo "Error: tag $$NEW_TAG exists locally at a different commit than HEAD."; \
+		exit 1; \
+	fi; \
+	if git ls-remote --exit-code --tags origin "$$NEW_TAG" >/dev/null 2>&1; then \
+		echo "Error: tag $$NEW_TAG already exists on origin."; \
+		exit 1; \
+	fi; \
+	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
+	git push origin "$$NEW_TAG"; \
+	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."
 	@# Post-release cleanup check (Issue #186)
 	@$(MAKE) check-suspicious-files
 
@@ -773,8 +858,12 @@ publish-public:
 		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && \
 		if ! git diff --cached --quiet; then \
 			git commit -m "Bump version" && \
-			CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
-			(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
+			CURR_VER=$$(git describe --tags --abbrev=0 --match='v*' 2>/dev/null | sed 's/^v//') && \
+			if [ -z "$$CURR_VER" ] || ! echo "$$CURR_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+				echo "Skip tagging: no valid release tag found in public repo (got: '$$CURR_VER')"; \
+			else \
+				(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true); \
+			fi && \
 			git push && git push --tags; \
 		else \
 			echo "No changes to commit in public repo — skipping push"; \

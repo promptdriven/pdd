@@ -9,6 +9,7 @@ from click.testing import CliRunner
 import click
 
 from pdd import __version__, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
+from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 # Import necessary components from pdd.core.cli for testing
 from pdd.core.cli import _strip_ansi_codes, OutputCapture, PDDCLI, cli as cli_command, process_commands
 import pdd.core.cli as core_cli_module
@@ -179,6 +180,8 @@ def test_cli_help(runner):
     result = runner.invoke(cli_command, ["--help"])
     assert result.exit_code == 0
     assert "Usage: cli [OPTIONS] COMMAND" in result.output
+    assert PDD_FULL_TAGLINE in result.output
+    assert PDD_POSITIONING in result.output
     assert "generate" in result.output
     assert "fix" in result.output
     assert "install-completion" in result.output
@@ -365,6 +368,28 @@ def test_cli_result_callback_single_tuple_normalization():
     summary = "\n".join(lines)
     assert "Command Execution Summary" in summary
     assert f"Step 1 (generate):[/info] Cost: ${0.0040675:.6f}, Model: gpt-5.1-codex-mini" in summary
+
+
+@pytest.mark.parametrize("model_name", ["", "unknown", "Unknown", "N/A", "n/a", "none", "skipped"])
+def test_cli_summary_suppresses_blank_or_placeholder_model(model_name):
+    """#1103: zero-cost no-ops (e.g. an all_synced sync) return an empty or
+    placeholder model name; the summary must not render a trailing blank
+    'Model: ' label or a meaningless 'Model: unknown' string."""
+    lines = _capture_summary(['sync'], ('aggregated', 0.0, model_name))
+    summary = "\n".join(lines)
+    assert "Step 1 (sync):[/info] Cost: $0.000000" in summary
+    # Whichever placeholder model is returned must be suppressed entirely.
+    assert f"Model: {model_name}" not in summary
+    # And we must not emit a trailing-space "Model: " literal either.
+    assert "Model: \n" not in summary
+    assert not any(line.rstrip().endswith("Model:") for line in lines)
+
+
+def test_cli_summary_renders_real_model_name():
+    """Sanity guard for the suppression rule: a real model name still renders."""
+    lines = _capture_summary(['generate'], ('generated', 0.05, 'claude-opus-4-7'))
+    summary = "\n".join(lines)
+    assert "Cost: $0.050000, Model: claude-opus-4-7" in summary
 
 def test_cli_result_callback_non_tuple_result_warning():
     lines = _capture_summary(['generate'], "unexpected string result")
@@ -555,6 +580,8 @@ def test_pddcli_format_help_includes_suite():
     formatter = click.HelpFormatter()
     group.format_help(ctx, formatter)
     output = formatter.getvalue()
+    assert PDD_FULL_TAGLINE in output
+    assert PDD_POSITIONING in output
     assert "Generate Suite (related commands)" in output
     assert "generate" in output
 

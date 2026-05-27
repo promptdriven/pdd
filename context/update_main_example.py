@@ -359,6 +359,77 @@ def example_update_main_repo_mode() -> None:
         print()
 
 
+def example_update_main_sync_metadata() -> None:
+    """``--sync-metadata`` opt-in: orchestrate prompt tags, architecture,
+    run-report cleanup, and fingerprint finalization after a single-file
+    update so all metadata layers land consistently (PR #920 / issue #871).
+
+    The orchestrator (`pdd.metadata_sync.run_metadata_sync`) is called for
+    the (prompt, code) pair after `update_prompt` writes the new prompt.
+    Failed stages are surfaced via Rich console output; the caller does NOT
+    have to chain `sync-architecture` / fingerprint commands manually.
+    """
+    print("=" * 60)
+    print("Example 8: update_main -- sync_metadata=True (single-file)")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+
+            code_file = tmp_path / "src" / "handler.py"
+            code_file.parent.mkdir(parents=True)
+            code_file.write_text("def handle(): pass\n")
+            prompt_file = tmp_path / "prompts" / "handler_python.prompt"
+            prompt_file.parent.mkdir(parents=True)
+            prompt_file.write_text("<pdd-reason>Demo</pdd-reason>\n% body\n")
+
+            ctx = click.Context(click.Command("update"))
+            ctx.obj = {
+                "strength": 0.5,
+                "temperature": 0.0,
+                "verbose": False,
+                "quiet": True,
+                "time": 0.25,
+                "force": True,
+                "context": None,
+                "confirm_callback": None,
+            }
+
+            # Mock the LLM update + agentic routing so this example runs offline.
+            with patch("pdd.update_main.get_available_agents", return_value=[]), \
+                 patch("pdd.update_main.update_prompt",
+                       return_value=("updated prompt", 0.05, "test-model")), \
+                 patch("pdd.update_main.construct_paths",
+                       return_value=({}, {
+                           "input_prompt_file": prompt_file.read_text(),
+                           "modified_code_file": code_file.read_text(),
+                           "input_code_file": "def handle(): pass\n",
+                       }, {"output": str(prompt_file)}, None)), \
+                 patch("pdd.update_main._run_single_file_metadata_sync") as mock_orchestrator:
+                result = update_main(
+                    ctx=ctx,
+                    input_prompt_file=str(prompt_file),
+                    modified_code_file=str(code_file),
+                    input_code_file=str(code_file),
+                    output=None,
+                    use_git=False,
+                    sync_metadata=True,
+                )
+
+            print(f"  Result: {result is not None}")
+            print(f"  Metadata orchestrator called: {mock_orchestrator.called}")
+            if mock_orchestrator.called:
+                args, _ = mock_orchestrator.call_args
+                print(f"  Orchestrator received: prompt={args[0].name}, code={args[1].name}")
+        finally:
+            os.chdir(original_cwd)
+
+        print()
+
+
 def main() -> None:
     """Run all examples demonstrating update_main functionality."""
     print("pdd.update_main -- Usage Examples")
@@ -372,6 +443,7 @@ def main() -> None:
     example_update_main_regeneration()
     example_update_main_true_update()
     example_update_main_repo_mode()
+    example_update_main_sync_metadata()
 
     print("All examples completed successfully.")
 

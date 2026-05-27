@@ -12,6 +12,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(450)
+
 from pdd.agentic_sync_runner import (
     GITHUB_COMMENT_BODY_LIMIT,
     MAX_WORKERS,
@@ -21,6 +25,8 @@ from pdd.agentic_sync_runner import (
     _BOX_CHARS_RE,
     _format_duration,
     _parse_conformance_failure,
+    _parse_public_surface_failure,
+    _parse_test_churn_failure,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
@@ -210,6 +216,339 @@ class TestGetBlockedModules:
         runner.module_states["a"].status = "failed"
         blocked = runner._get_blocked_modules()
         assert blocked == ["b", "c"]
+
+    def test_cycle_with_external_failed_dep_blocks_all_cycle_members(self):
+        """Every member of an SCC must be reported blocked when the SCC has a
+        failed cross-SCC dep, regardless of which member is visited first.
+
+        Graph: 3-cycle A->B->C->A; A also depends on external failed module X.
+        All of A, B, C are pending, X is failed.
+        The DFS-with-cache implementation previously cached False on the
+        cycle re-entry, leaving B and C wrongly unblocked.
+        """
+        runner = AsyncSyncRunner(
+            basenames=["A", "B", "C", "X"],
+            dep_graph={"A": ["B", "X"], "B": ["C"], "C": ["A"], "X": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["X"].status = "failed"
+        blocked = runner._get_blocked_modules()
+        assert set(blocked) == {"A", "B", "C"}, (
+            f"All cycle members must be blocked, got {blocked}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner scheduling with cyclic dep graphs
+# ---------------------------------------------------------------------------
+
+class TestCycleScheduling:
+    """Scheduling tests for dep graphs containing cycles.
+
+    ``pdd sync`` previously deadlocked when the target set contained a
+    legitimate dependency cycle (e.g.
+    ``agentic_checkup_orchestrator <-> checkup_review_loop``). The runner must
+    treat intra-SCC edges as soft (so cycle members can still be picked) while
+    serializing execution within an SCC (only one member running at a time)
+    and preserving cross-SCC ordering.
+    """
+
+    def _make_runner(self, basenames, dep_graph, states=None):
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph,
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        if states:
+            for name, status in states.items():
+                runner.module_states[name].status = status
+        return runner
+
+    def test_cycle_two_modules_no_state_picks_one_ready(self):
+        """A<->B cycle: exactly one member is ready in the first pass."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+        )
+        ready = runner._get_ready_modules()
+        assert ready == ["a"], (
+            f"Expected exactly the first basename of the cycle, got {ready}"
+        )
+
+    def test_cycle_two_modules_running_blocks_peer(self):
+        """While one cycle member is running, the other must not be scheduled."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+            states={"a": "running"},
+        )
+        ready = runner._get_ready_modules()
+        assert "b" not in ready
+        assert ready == []
+
+    def test_cycle_two_modules_one_success_unblocks_peer(self):
+        """Once one cycle member succeeds, the other becomes ready."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+            states={"a": "success"},
+        )
+        ready = runner._get_ready_modules()
+        assert ready == ["b"]
+
+    def test_cycle_two_modules_one_failed_blocks_peer(self):
+        """If one cycle member fails, the other is reported blocked, not ready."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["b"], "b": ["a"]},
+            states={"a": "failed"},
+        )
+        ready = runner._get_ready_modules()
+        blocked = runner._get_blocked_modules()
+        assert ready == []
+        assert blocked == ["b"]
+
+    def test_three_cycle_with_external_dependent(self):
+        """Three-module graph with a 2-cycle plus an external dependent.
+
+        ``agentic_checkup`` depends on the 2-cycle pair. The first pass must
+        pick exactly one cycle member (by basenames order), never the dependent.
+        As cycle members succeed, the next becomes ready, then finally the
+        external dependent.
+        """
+        basenames = [
+            "agentic_checkup_orchestrator",
+            "checkup_review_loop",
+            "agentic_checkup",
+        ]
+        dep_graph = {
+            "agentic_checkup_orchestrator": ["checkup_review_loop"],
+            "checkup_review_loop": ["agentic_checkup_orchestrator"],
+            "agentic_checkup": ["checkup_review_loop"],
+        }
+        runner = self._make_runner(basenames, dep_graph)
+
+        ready1 = runner._get_ready_modules()
+        assert ready1 == ["agentic_checkup_orchestrator"], (
+            f"First pass should yield exactly the first cycle member, got {ready1}"
+        )
+
+        runner.module_states["agentic_checkup_orchestrator"].status = "success"
+        ready2 = runner._get_ready_modules()
+        assert ready2 == ["checkup_review_loop"], (
+            f"After first cycle member succeeds, peer must be ready (without "
+            f"the external dependent yet), got {ready2}"
+        )
+
+        runner.module_states["checkup_review_loop"].status = "success"
+        ready3 = runner._get_ready_modules()
+        assert ready3 == ["agentic_checkup"], (
+            f"With both cycle members succeeded, the external dependent must "
+            f"now be ready, got {ready3}"
+        )
+
+    def test_acyclic_graph_unaffected(self):
+        """Regression guard: an acyclic 3-module graph schedules unchanged."""
+        runner = self._make_runner(
+            ["a", "b", "c"],
+            {"a": [], "b": ["a"], "c": ["b"]},
+        )
+        ready = runner._get_ready_modules()
+        assert ready == ["a"]
+
+        runner.module_states["a"].status = "success"
+        ready = runner._get_ready_modules()
+        assert ready == ["b"]
+
+        runner.module_states["b"].status = "success"
+        ready = runner._get_ready_modules()
+        assert ready == ["c"]
+
+    def test_self_loop_does_not_deadlock(self):
+        """A 1-node SCC formed by a self-loop is still a cyclic SCC. The
+        runner must treat the self dep as a soft edge, otherwise the module
+        deadlocks waiting for itself.
+        """
+        runner = self._make_runner(["a"], {"a": ["a"]})
+        ready = runner._get_ready_modules()
+        assert ready == ["a"], (
+            f"Self-loop must not block readiness, got {ready}"
+        )
+
+    def test_self_loop_with_external_dep_waits_for_external(self):
+        """A self-loop SCC also has cross-SCC deps; those gate normally."""
+        runner = self._make_runner(
+            ["a", "b"],
+            {"a": ["a", "b"], "b": []},
+        )
+        # b is the only initial ready; a waits because self-loop is soft but
+        # b is cross-SCC pending.
+        assert sorted(runner._get_ready_modules()) == ["b"]
+        runner.module_states["b"].status = "success"
+        # Now a can run; self-loop dep is soft, b's success satisfies the
+        # cross-SCC edge.
+        assert runner._get_ready_modules() == ["a"]
+
+    def test_external_consumer_waits_for_whole_cycle_scc(self):
+        """A consumer outside an SCC must wait until every cycle member is
+        success, not just its directly-named dep."""
+        runner = self._make_runner(
+            ["a", "b", "m"],
+            {"a": ["b"], "b": ["a"], "m": ["a"]},
+        )
+        # Initially: a/b serialize, m must wait for both
+        ready = runner._get_ready_modules()
+        # First SCC member becomes ready; m must NOT be in ready.
+        assert "m" not in ready
+        assert ready == ["a"]
+        runner.module_states["a"].status = "success"
+        # Now b is the only un-success cycle peer; m still must wait.
+        ready = runner._get_ready_modules()
+        assert ready == ["b"], (
+            f"m must not be ready while b is still pending; got {ready}"
+        )
+        runner.module_states["b"].status = "success"
+        # Whole SCC done -> m becomes ready
+        assert runner._get_ready_modules() == ["m"]
+
+    def test_external_consumer_blocked_when_cycle_peer_fails(self):
+        """If any cycle member fails, downstream consumers must be blocked."""
+        runner = self._make_runner(
+            ["a", "b", "m"],
+            {"a": ["b"], "b": ["a"], "m": ["a"]},
+        )
+        runner.module_states["a"].status = "success"
+        runner.module_states["b"].status = "failed"
+        # m's only direct dep (a) is success — but a's SCC has a failed peer
+        # (b). m must therefore be reported as blocked.
+        assert runner._get_blocked_modules() == ["m"]
+
+    def test_cycle_member_waits_for_peers_external_dep(self):
+        """A cycle member must wait for any external dep reached through
+        another cycle peer. Graph: a->b, b->[a,x], x->[]. SCC {a,b} effectively
+        depends on x (via b), so neither cycle member is ready until x is.
+        """
+        runner = self._make_runner(
+            ["a", "b", "x"],
+            {"a": ["b"], "b": ["a", "x"], "x": []},
+        )
+        ready = runner._get_ready_modules()
+        # Only x has no deps and is not in a cycle; cycle members must wait
+        # for x to succeed before either can start.
+        assert ready == ["x"], (
+            f"cycle members must not be ready while x is pending; got {ready}"
+        )
+        runner.module_states["x"].status = "success"
+        ready = runner._get_ready_modules()
+        # SCC {a,b} is now unblocked; pick one (basenames order -> a) and
+        # serialize the other.
+        assert ready == ["a"], f"expected ['a'], got {ready}"
+        runner.module_states["a"].status = "success"
+        assert runner._get_ready_modules() == ["b"]
+
+    def test_cycle_member_blocked_by_peers_external_failed_dep(self):
+        """If a cycle peer's external dep failed, no cycle member may run.
+        Graph: a->b, b->[a,x], x failed. {a,b} is blocked via b->x; neither
+        cycle member must be reported as ready.
+        """
+        runner = self._make_runner(
+            ["a", "b", "x"],
+            {"a": ["b"], "b": ["a", "x"], "x": []},
+        )
+        runner.module_states["x"].status = "failed"
+        ready = runner._get_ready_modules()
+        assert ready == [], (
+            f"cycle members must be blocked when a peer's external dep is "
+            f"failed; got ready={ready}"
+        )
+        blocked = runner._get_blocked_modules()
+        assert sorted(blocked) == ["a", "b"], (
+            f"both cycle members must be classified blocked; got {blocked}"
+        )
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_run_completes_with_cycle(self, mock_comment, mock_sync):
+        """Full run() with a 3-module cycle-bearing graph must succeed end-to-end."""
+        mock_sync.return_value = (True, 0.0, "")
+
+        basenames = [
+            "agentic_checkup_orchestrator",
+            "checkup_review_loop",
+            "agentic_checkup",
+        ]
+        dep_graph = {
+            "agentic_checkup_orchestrator": ["checkup_review_loop"],
+            "checkup_review_loop": ["agentic_checkup_orchestrator"],
+            "agentic_checkup": ["checkup_review_loop"],
+        }
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph,
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+        assert success, f"Expected success but got msg={msg!r}"
+        assert msg == "All 3 modules synced successfully"
+        assert cost == pytest.approx(0.0)
+        # Every basename must have been synced exactly once.
+        synced = sorted(c.args[0] for c in mock_sync.call_args_list)
+        assert synced == sorted(basenames)
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_run_with_cycle_one_failure(self, mock_comment, mock_sync):
+        """If one cycle member fails, the peer + downstream are blocked, not lost."""
+        def fake_sync(basename):
+            if basename == "agentic_checkup_orchestrator":
+                return (False, 0.0, "boom")
+            return (True, 0.0, "")
+
+        mock_sync.side_effect = fake_sync
+
+        basenames = [
+            "agentic_checkup_orchestrator",
+            "checkup_review_loop",
+            "agentic_checkup",
+        ]
+        dep_graph = {
+            "agentic_checkup_orchestrator": ["checkup_review_loop"],
+            "checkup_review_loop": ["agentic_checkup_orchestrator"],
+            "agentic_checkup": ["checkup_review_loop"],
+        }
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph=dep_graph,
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+        assert not success
+        assert (
+            runner.module_states["agentic_checkup_orchestrator"].status
+            == "failed"
+        )
+        assert runner.module_states["checkup_review_loop"].status == "pending"
+        assert runner.module_states["agentic_checkup"].status == "pending"
+        assert "Failed: ['agentic_checkup_orchestrator']" in msg
+        # Both the cycle peer and the external dependent must be reported as
+        # blocked — not silently dropped as "not run".
+        assert (
+            "Skipped (blocked): ['agentic_checkup', 'checkup_review_loop']"
+            in msg
+            or "Skipped (blocked): ['checkup_review_loop', 'agentic_checkup']"
+            in msg
+        )
+        assert "Skipped (not run):" not in msg
 
 
 # ---------------------------------------------------------------------------
@@ -1005,6 +1344,468 @@ class TestSyncOneModule:
 
         assert _parse_conformance_failure("", stderr) is None
 
+    def test_parse_conformance_failure_pdd_interface_param_shape(self):
+        # New shape emitted by code_generator_main._verify_pdd_interface_signatures
+        # when the prompt's <pdd-interface> declares a parameter the generated
+        # code is missing (#928). The conformance parser must recognize this
+        # so _sync_one_module retries with the repair directive.
+        stderr = (
+            "Architecture conformance error for update_main_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main.sync_metadata. "
+            "Output: pdd/update_main.py."
+        )
+
+        parsed = _parse_conformance_failure("", stderr)
+
+        assert parsed is not None, "new <pdd-interface> shape must be parseable"
+        repair_directive, missing_symbols = parsed
+        assert missing_symbols == ("update_main.sync_metadata",)
+        # Directive must target ``update_main`` as the function to fix, not
+        # ask the model to add an export named ``update_main.sync_metadata``.
+        assert "On `update_main`" in repair_directive
+        assert "`sync_metadata`" in repair_directive
+
+    def test_parse_conformance_failure_pdd_interface_multiple_params(self):
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: foo.bar, foo.baz. "
+            "Output: pdd/foo.py."
+        )
+
+        parsed = _parse_conformance_failure("", stderr)
+
+        assert parsed is not None
+        _, missing_symbols = parsed
+        assert missing_symbols == ("foo.bar", "foo.baz")
+
+    def test_parse_conformance_failure_pdd_interface_directive_targets_params(self):
+        """The repair directive for pdd-interface failures must tell the model
+        to add a *parameter* to a *function*, not to add an export named
+        ``func.param``. The previous generic 'Required missing exports'
+        directive was misleading the LLM into creating top-level exports
+        named ``update_main.sync_metadata`` instead of adding the kwarg.
+        """
+        stderr = (
+            "Architecture conformance error for update_main_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main.sync_metadata. "
+            "Output: pdd/update_main.py."
+        )
+
+        directive, _ = _parse_conformance_failure("", stderr)
+
+        assert "Required missing exports" not in directive
+        assert "On `update_main`" in directive
+        assert "missing parameter(s)" in directive
+        assert "`sync_metadata`" in directive
+
+    def test_parse_conformance_failure_pdd_interface_directive_dotted_method(self):
+        """Dotted method names like ``ContentSelector.select.mode`` must be
+        regrouped via rsplit so the directive targets
+        ``ContentSelector.select`` with parameter ``mode``, not
+        ``ContentSelector`` with parameter ``select.mode``.
+        """
+        stderr = (
+            "Architecture conformance error for content_selector_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: ContentSelector.select.mode. "
+            "Output: pdd/content_selector.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        assert missing == ("ContentSelector.select.mode",)
+        assert "On `ContentSelector.select`" in directive
+        assert "`mode`" in directive
+        assert "select.mode" not in directive.replace("ContentSelector.select.mode", "")
+
+    def test_parse_conformance_failure_pdd_interface_directive_bare_function(self):
+        """A bare missing function name (no dot) must surface as a missing
+        function directive, not a parameter directive — the prompt-only
+        missing-function path emits these.
+        """
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main. "
+            "Output: pdd/foo.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        assert missing == ("update_main",)
+        assert "missing function(s)/method(s)" in directive
+        assert "`update_main`" in directive
+
+    def test_parse_conformance_failure_pdd_interface_bare_dotted_missing_method(self):
+        """A bare dotted method name (``ContentSelector.select``) emitted by
+        the missing-function shape MUST NOT be split into
+        ("ContentSelector", "select") under the parameter directive. The
+        previous implementation routed any dotted symbol to the parameter
+        bucket and rpartition'd it, producing 'On ContentSelector, add
+        parameter select' — which is wrong for a missing method.
+        """
+        stderr = (
+            "Architecture conformance error for content_selector_python.prompt: "
+            "the prompt's <pdd-interface> declares function(s)/method(s) "
+            "missing from the generated code: ContentSelector.select. "
+            "Output: pdd/content_selector.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        assert missing == ("ContentSelector.select",)
+        assert "missing function(s)/method(s)" in directive
+        assert "`ContentSelector.select`" in directive
+        # Must NOT split into a class+parameter directive.
+        assert "On `ContentSelector`," not in directive
+        assert "parameter(s) to the signature" not in directive
+
+    def test_parse_conformance_failure_pdd_interface_signature_drift(self):
+        """Annotation/default drift entries carry their parenthesised
+        diagnostic verbatim and route to an 'update parameter' directive.
+        Issue #928's 'type drift' acceptance case.
+        """
+        stderr = (
+            "Architecture conformance error for update_main_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) whose "
+            "signature drifted in the generated code: "
+            "update_main.sync_metadata (annotation: declared `bool`, "
+            "found `str`), update_main.sync_metadata "
+            "(default: declared `False`, found `True`). "
+            "Output: pdd/update_main.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        # ``missing`` is the canonical dotted symbol used for the short-
+        # circuit comparison, so the parenthesised drift diagnostic is
+        # stripped from the missing-symbol set.
+        assert "update_main.sync_metadata" in missing
+        assert "Update the generated code so parameter" in directive
+        assert "annotation: declared `bool`, found `str`" in directive
+        assert "default: declared `False`, found `True`" in directive
+
+    def test_parse_conformance_failure_mixed_legacy_and_pdd_interface(self):
+        """When both legacy-export and pdd-interface shapes appear in the
+        output, the directive must contain both sections so the model gets
+        both kinds of repair instructions in one retry attempt.
+        """
+        combined = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: SomeClass. "
+            "Output: pdd/foo.py.\n"
+            "Architecture conformance error for foo_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main.sync_metadata. "
+            "Output: pdd/foo.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", combined)
+
+        assert "SomeClass" in missing
+        assert "update_main.sync_metadata" in missing
+        assert "Required missing exports" in directive
+        assert "On `update_main`" in directive
+
+    def test_parse_public_surface_failure(self):
+        stderr = (
+            "Public surface regression for update_main_Python.prompt: "
+            "removed public symbols: calculate_sha256, git. "
+            "Output: pdd/update_main.py. "
+            "Pre surface size: 12. Post surface size: 10."
+        )
+
+        directive, signature = _parse_public_surface_failure("", stderr)
+
+        assert signature == ("removed:calculate_sha256", "removed:git")
+        assert "- calculate_sha256" in directive
+        assert "BREAKING-CHANGE:" in directive
+
+    def test_parse_public_surface_failure_reads_signature_changes(self):
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: calculate\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+        )
+
+        directive, signature = _parse_public_surface_failure("", stderr)
+
+        assert signature == ("signature_changed:calculate",)
+        assert "Restore compatible signatures" in directive
+
+    def test_public_surface_hard_failure_separates_signature_changes(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: calculate\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+        )
+
+        block = runner._build_public_surface_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "removed: <none>" in block
+        assert "signature_changed: calculate" in block
+        assert "removed: sig:calculate" not in block
+
+    def test_parse_test_churn_failure(self):
+        stderr = (
+            "Test churn threshold exceeded for test_update_main_Python.prompt: "
+            "churn ratio 0.82 exceeds threshold 0.40. "
+            "Output: tests/test_update_main.py. Pre lines: 100. Post lines: 95."
+        )
+
+        directive, signature = _parse_test_churn_failure("", stderr)
+
+        assert signature == ("ratio=0.82", "pre_lines=100")
+        assert "Reduce churn below threshold 0.40" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_hard_failure_reads_structured_line_counts(self, _mock_env):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for test_update_main_Python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_update_main.py\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 95\n"
+        )
+
+        block = runner._build_test_churn_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "=== test churn threshold exceeded ===" in block
+        assert "churn ratio: 0.82" in block
+        assert "threshold: 0.40" in block
+        assert "pre lines: 100" in block
+        assert "post lines: 95" in block
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Medium 2 (iter-3): the parsers MUST recover
+    # the retry directive and signature tuple from the EXACT block
+    # emitted by `build_public_surface_hard_failure_from_error` and
+    # `build_test_churn_hard_failure_from_error`. The existing
+    # parse-only tests use ad-hoc stderr fragments; these round-trip
+    # tests prevent a builder field rename from silently breaking the
+    # subprocess-level retry path.
+    # -----------------------------------------------------------------
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_public_surface_round_trip_through_parser(self, _mock_env):
+        """Build the hard-failure block from a typed error, feed it back
+        through `_parse_public_surface_failure`, and assert the parser
+        recovers a usable retry directive and the (removed, changed)
+        signature tuple exactly as the next-attempt loop expects.
+        """
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import (
+            build_public_surface_hard_failure_from_error,
+        )
+
+        exc = PublicSurfaceRegressionError(
+            prompt_name="update_main_Python.prompt",
+            output_path="pdd/update_main.py",
+            removed_symbols=["calculate_sha256", "git_helper"],
+            changed_signatures=["resolve_prompt_code_pair"],
+            pre_surface_size=12,
+            post_surface_size=10,
+        )
+
+        # The builder emits `str(exc)` first, which itself carries the
+        # `Public surface regression for ...` prefix the parser keys on
+        # — plus the structured `=== public surface regression ===`
+        # block with `removed:` / `signature_changed:` fields.
+        block = build_public_surface_hard_failure_from_error(exc, "update_main")
+
+        parsed = _parse_public_surface_failure("", block)
+        assert parsed is not None
+        directive, signature = parsed
+
+        # Signature tuple is sorted removals first, then sorted signature
+        # changes (matches the parser contract used by the retry loop).
+        assert signature == (
+            "removed:calculate_sha256",
+            "removed:git_helper",
+            "signature_changed:resolve_prompt_code_pair",
+        )
+
+        # Retry directive carries the actionable bullets the next
+        # generation attempt needs (under PDD_REPAIR_DIRECTIVE).
+        assert "Restore these public symbols" in directive
+        assert "- calculate_sha256" in directive
+        assert "- git_helper" in directive
+        assert "Restore compatible signatures" in directive
+        assert "- resolve_prompt_code_pair" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_round_trip_through_parser(self, _mock_env):
+        """Build the hard-failure block from a typed `TestChurnError`,
+        feed it back through `_parse_test_churn_failure`, and assert
+        the parser recovers the retry directive and signature tuple
+        the next-attempt loop expects.
+        """
+        from pdd.code_generator_main import TestChurnError
+        from pdd.agentic_sync_runner import (
+            build_test_churn_hard_failure_from_error,
+        )
+
+        exc = TestChurnError(
+            prompt_name="test_update_main_Python.prompt",
+            output_path="tests/test_update_main.py",
+            churn_ratio=0.82,
+            threshold=0.40,
+            pre_line_count=100,
+            post_line_count=95,
+        )
+
+        block = build_test_churn_hard_failure_from_error(exc, "update_main")
+
+        parsed = _parse_test_churn_failure("", block)
+        assert parsed is not None
+        directive, signature = parsed
+
+        # Signature tuple mirrors what the helper short-circuits on:
+        # `(ratio=..., pre_lines=...)`. Both come from the structured
+        # fields the builder writes.
+        assert signature == ("ratio=0.82", "pre_lines=100")
+
+        # Retry directive carries the documented opt-out instructions.
+        assert "Reduce churn below threshold 0.40" in directive
+        assert "current churn is 0.82" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_public_surface_hard_failure_includes_breaking_change_note(
+        self, _mock_env
+    ):
+        """The structured hard-failure block MUST tell reviewers how to
+        opt the prompt out of the gate — ``agentic_sync_runner_python.prompt``
+        item 9d requires the ``BREAKING-CHANGE:`` directive instruction
+        to ride along with the diagnostics block."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import (
+            build_public_surface_hard_failure_from_error,
+        )
+
+        exc = PublicSurfaceRegressionError(
+            prompt_name="update_main_Python.prompt",
+            output_path="pdd/update_main.py",
+            removed_symbols=["calculate_sha256"],
+            changed_signatures=[],
+            pre_surface_size=10,
+            post_surface_size=9,
+        )
+
+        block = build_public_surface_hard_failure_from_error(exc, "update_main")
+        assert "BREAKING-CHANGE:" in block
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_hard_failure_includes_breaking_change_note(
+        self, _mock_env
+    ):
+        """The structured test-churn hard-failure block MUST include the
+        ``BREAKING-CHANGE: rewrite tests`` directive instruction so the
+        reviewer learns how to opt out of the gate from the failure
+        diagnostics alone."""
+        from pdd.code_generator_main import TestChurnError
+        from pdd.agentic_sync_runner import (
+            build_test_churn_hard_failure_from_error,
+        )
+
+        exc = TestChurnError(
+            prompt_name="test_update_main_Python.prompt",
+            output_path="tests/test_update_main.py",
+            churn_ratio=0.75,
+            threshold=0.40,
+            pre_line_count=120,
+            post_line_count=80,
+        )
+
+        block = build_test_churn_hard_failure_from_error(exc, "update_main")
+        assert "BREAKING-CHANGE:" in block
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015, iter-5): the subprocess hard-failure
+    # path uses the AsyncSyncRunner's INTERNAL builders
+    # (`_build_public_surface_hard_failure` /
+    # `_build_test_churn_hard_failure`), not the importable ones above.
+    # End users see THESE blocks, so they MUST carry the same
+    # ``BREAKING-CHANGE:`` opt-out instruction.
+    # -----------------------------------------------------------------
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_runner_public_surface_hard_block_includes_breaking_change(
+        self, _mock_env
+    ):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: calculate_sha256\n"
+            "signature_changed: <none>\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 10\n"
+            "post_surface_size: 9\n"
+        )
+
+        block = runner._build_public_surface_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "BREAKING-CHANGE:" in block
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_runner_test_churn_hard_block_includes_breaking_change(
+        self, _mock_env
+    ):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for test_foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"
+            "pre_line_count: 120\n"
+            "post_line_count: 80\n"
+        )
+
+        block = runner._build_test_churn_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "BREAKING-CHANGE:" in block
+
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
             basenames=["foo"],
@@ -1067,6 +1868,45 @@ class TestSyncOneModule:
         second_env = mock_popen.call_args_list[1].kwargs["env"]
         assert "PDD_REPAIR_DIRECTIVE" not in first_env
         assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_failure_retries_once_with_repair_directive(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 95\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success
+        assert cost == pytest.approx(0.0)
+        assert error == ""
+        assert mock_popen.call_count == 2
+        first_env = mock_popen.call_args_list[0].kwargs["env"]
+        second_env = mock_popen.call_args_list[1].kwargs["env"]
+        assert "PDD_REPAIR_DIRECTIVE" not in first_env
+        assert "Test churn repair required" in second_env["PDD_REPAIR_DIRECTIVE"]
+        assert "Reduce churn below threshold 0.40; current churn is 0.82" in second_env["PDD_REPAIR_DIRECTIVE"]
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
@@ -1198,6 +2038,47 @@ class TestSyncOneModule:
         cmd = mock_popen.call_args[0][0]
         assert cmd[:4] == ["/usr/bin/pdd", "--force", "--local", "sync"]
         assert cmd[4] == "foo"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_model_and_context_options_are_forwarded_to_child_sync(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Repair retries must not re-resolve context/model knobs differently."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={
+                "context": "backend",
+                "strength": 0.7,
+                "temperature": 0.2,
+            },
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, _ = runner._sync_one_module("foo")
+
+        assert success
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[:8] == [
+            "/usr/bin/pdd",
+            "--force",
+            "--context",
+            "backend",
+            "--strength",
+            "0.7",
+            "--temperature",
+            "0.2",
+        ]
+        assert cmd[8] == "sync"
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
@@ -2346,6 +3227,38 @@ class TestModuleCwds:
         runner._sync_one_module("foo")
         popen_kwargs = mock_popen.call_args[1]
         assert popen_kwargs["cwd"] == str(runner.project_root)
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_module_targets_map_display_key_to_sync_basename(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Scoped global-sync keys should execute the plain basename in the scoped cwd."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        custom_cwd = Path("/project/examples/prompts_linter")
+        runner = AsyncSyncRunner(
+            basenames=["examples/prompts_linter:report"],
+            dep_graph={"examples/prompts_linter:report": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_cwds={"examples/prompts_linter:report": custom_cwd},
+            module_targets={"examples/prompts_linter:report": "report"},
+        )
+
+        runner._sync_one_module("examples/prompts_linter:report")
+
+        cmd = mock_popen.call_args[0][0]
+        popen_kwargs = mock_popen.call_args[1]
+        assert cmd[-1] == "report"
+        assert "examples/prompts_linter:report" not in cmd
+        assert popen_kwargs["cwd"] == str(custom_cwd)
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,44 @@ def tmp_dir():
     shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_metadata_finalization(request):
+    """
+    Prevent tests in this module from writing real fingerprint/run-report
+    files into the repository's ``.pdd/meta`` directory. Tests that need to
+    assert on these calls explicitly patch them at the test scope, which
+    overrides this fixture's stubs for the duration of that test.
+
+    A test that needs to exercise the *real* ``save_fingerprint`` and
+    ``clear_run_report`` helpers (e.g. an integration-style readback of the
+    on-disk fingerprint JSON) opts out by requesting the
+    ``use_real_finalization`` fixture, which redirects ``META_DIR`` to a
+    temp location.
+    """
+    if "use_real_finalization" in request.fixturenames:
+        yield
+        return
+    with patch("pdd.auto_deps_main.save_fingerprint"), \
+         patch("pdd.auto_deps_main.clear_run_report"):
+        yield
+
+
+@pytest.fixture
+def use_real_finalization(tmp_path, monkeypatch):
+    """
+    Opt-in fixture for tests that want to exercise the *real* metadata
+    finalization helpers. Redirects ``pdd.operation_log.META_DIR`` to a
+    temporary directory so the repository's ``.pdd/meta`` is never touched,
+    and signals the autouse fixture to skip its protective mocks.
+
+    Yields the temp META_DIR as a ``Path``.
+    """
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("pdd.operation_log.META_DIR", str(meta_dir))
+    yield meta_dir
+
+
 def _make_construct_paths_return(output_path, csv_path, prompt_content="Prompt content"):
     """Build a standard construct_paths return value."""
     return (
@@ -492,8 +530,12 @@ def test_auto_deps_default_csv_path_fallback(
     mock_construct_paths,
     mock_ctx,
     tmp_dir,
+    monkeypatch,
 ):
     """When output_file_paths has no 'csv' key, default to 'project_dependencies.csv'."""
+    # Run inside tmp_dir so the relative-default CSV write doesn't clobber the
+    # repository's real ``project_dependencies.csv`` cache.
+    monkeypatch.chdir(tmp_dir)
     output_path = os.path.join(tmp_dir, "output.prompt")
     mock_construct_paths.return_value = (
         {},
@@ -704,3 +746,493 @@ def test_auto_deps_main_updates_architecture_json_after_write(
     assert row["dependencies"] == ["parent_Python.prompt"]
     assert total_cost == 0.01
     assert model_name == "test-model"
+
+
+# ---------------------------------------------------------------------------
+# 18a. Metadata finalization: when the default output is a separate
+#      ``*_with_deps.prompt`` file, finalization must still run (issue #989
+#      requires every mutated prompt file to have an up-to-date fingerprint),
+#      keyed off the *output* file's identity rather than the canonical
+#      prompt's. The fingerprint records the derivative under its own
+#      ``(basename, language)`` so canonical metadata stays untouched.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.save_fingerprint")
+@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main.infer_module_identity")
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_infer_identity,
+    mock_clear_run_report,
+    mock_save_fingerprint,
+    mock_ctx,
+    tmp_path: Path,
+):
+    prompt_file = str(tmp_path / "child_python.prompt")
+    output_path = str(tmp_path / "child_python_with_deps.prompt")
+    csv_path = str(tmp_path / "deps.csv")
+    Path(prompt_file).write_text("orig", encoding="utf-8")
+
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path
+    )
+    mock_insert_includes.return_value = _make_insert_includes_return()
+    # The output file is the *with_deps* derivative; identity is derived from
+    # *its* name (issue #989).
+    mock_infer_identity.return_value = ("child_python_with", "deps")
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=prompt_file,
+        directory_path="context/",
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    # Identity is inferred from the *output* path, not the input prompt.
+    mock_infer_identity.assert_called_once_with(Path(output_path))
+    mock_clear_run_report.assert_called_once_with("child_python_with", "deps")
+
+    mock_save_fingerprint.assert_called_once()
+    fp_kwargs = mock_save_fingerprint.call_args.kwargs
+    assert fp_kwargs["basename"] == "child_python_with"
+    assert fp_kwargs["language"] == "deps"
+    assert fp_kwargs["operation"] == "auto-deps"
+    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
+
+
+# ---------------------------------------------------------------------------
+# 18b. Metadata finalization: when the output path resolves to the *same*
+#      file as the input prompt (the in-place ``pdd sync`` write-back case
+#      or an explicit ``--output PROMPT_FILE``), identity is inferred from
+#      the output path — which is canonical here — and both
+#      ``clear_run_report`` and ``save_fingerprint`` run with that canonical
+#      identity.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.save_fingerprint")
+@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main.infer_module_identity")
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_infer_identity,
+    mock_clear_run_report,
+    mock_save_fingerprint,
+    mock_ctx,
+    tmp_path: Path,
+):
+    prompt_file = str(tmp_path / "child_python.prompt")
+    Path(prompt_file).write_text("orig", encoding="utf-8")
+    output_path = prompt_file  # in-place overwrite (sync mode)
+    csv_path = str(tmp_path / "deps.csv")
+
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path
+    )
+    mock_insert_includes.return_value = _make_insert_includes_return()
+    mock_infer_identity.return_value = ("child", "python")
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=prompt_file,
+        directory_path="context/",
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    # Identity is inferred from the output path. In in-place mode the
+    # output path equals ``prompt_file``, so this resolves to the canonical
+    # ``(basename, language)``.
+    mock_infer_identity.assert_called_once_with(Path(output_path))
+
+    # Stale per-module run report cleared with the canonical identity.
+    mock_clear_run_report.assert_called_once_with("child", "python")
+
+    # Fingerprint persisted with the canonical identity and the cleaned
+    # output prompt path (which equals the original prompt in this case).
+    mock_save_fingerprint.assert_called_once()
+    fp_kwargs = mock_save_fingerprint.call_args.kwargs
+    assert fp_kwargs["basename"] == "child"
+    assert fp_kwargs["language"] == "python"
+    assert fp_kwargs["operation"] == "auto-deps"
+    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
+    assert fp_kwargs["model"] == "test-model"
+    assert fp_kwargs["cost"] == pytest.approx(0.123456)
+
+
+# ---------------------------------------------------------------------------
+# 19. Metadata finalization is skipped when identity cannot be inferred,
+#     i.e. ``infer_module_identity`` returns ``(None, None)``.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.save_fingerprint")
+@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main.infer_module_identity")
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_metadata_skipped_on_unknown_identity(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_infer_identity,
+    mock_clear_run_report,
+    mock_save_fingerprint,
+    mock_ctx,
+    tmp_path: Path,
+):
+    """
+    ``infer_module_identity`` returns ``(None, None)`` (a tuple, not None)
+    for unrecognized prompt names. The finalization block must handle that
+    explicitly and skip both ``clear_run_report`` and ``save_fingerprint``
+    rather than crash. Use an in-place overwrite so finalization is actually
+    attempted (otherwise the differing-output guard would short-circuit it).
+    """
+    prompt_file = str(tmp_path / "weird_name_no_language.prompt")
+    Path(prompt_file).write_text("orig", encoding="utf-8")
+    output_path = prompt_file  # in-place overwrite
+    csv_path = str(tmp_path / "deps.csv")
+
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path
+    )
+    mock_insert_includes.return_value = _make_insert_includes_return()
+    mock_infer_identity.return_value = (None, None)
+
+    modified_prompt, total_cost, model_name = auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=prompt_file,
+        directory_path="context/",
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    mock_clear_run_report.assert_not_called()
+    mock_save_fingerprint.assert_not_called()
+    # Auto-deps still returns its successful result.
+    assert modified_prompt == "Modified prompt with includes"
+    assert total_cost == pytest.approx(0.123456)
+    assert model_name == "test-model"
+
+
+# ---------------------------------------------------------------------------
+# 20. Metadata finalization: clear_run_report failure must not abort the
+#     subsequent fingerprint save.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.save_fingerprint")
+@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main.infer_module_identity")
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_infer_identity,
+    mock_clear_run_report,
+    mock_save_fingerprint,
+    mock_ctx,
+    tmp_path: Path,
+):
+    """If clearing the stale run report fails, the fingerprint must still be saved.
+
+    Uses an in-place overwrite (``output == prompt_file``) so finalization
+    is actually attempted — the differing-output guard would otherwise skip
+    both calls regardless of ``clear_run_report``'s behavior.
+    """
+    prompt_file = str(tmp_path / "child_python.prompt")
+    Path(prompt_file).write_text("orig", encoding="utf-8")
+    output_path = prompt_file  # in-place overwrite
+    csv_path = str(tmp_path / "deps.csv")
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path
+    )
+    mock_insert_includes.return_value = _make_insert_includes_return()
+    mock_infer_identity.return_value = ("child", "python")
+    mock_clear_run_report.side_effect = OSError("permission denied")
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=prompt_file,
+        directory_path="context/",
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    mock_clear_run_report.assert_called_once_with("child", "python")
+    mock_save_fingerprint.assert_called_once()
+    fp_kwargs = mock_save_fingerprint.call_args.kwargs
+    assert fp_kwargs["basename"] == "child"
+    assert fp_kwargs["language"] == "python"
+
+
+# ---------------------------------------------------------------------------
+# 21. Integration: with the REAL ``save_fingerprint``/``clear_run_report``
+#     helpers (autouse mocks bypassed via ``use_real_finalization``), an
+#     in-place ``auto-deps`` run on a prompt containing ``<include>`` must
+#     produce a fingerprint JSON on disk whose ``include_deps`` reflects
+#     the included file *and* must remove any pre-existing ``_run.json``.
+#     This verifies the end-to-end on-disk contract instead of merely
+#     proving the helper was called.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_finalization_writes_include_deps_and_clears_run_report(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+    use_real_finalization,
+):
+    meta_dir = use_real_finalization
+
+    # Resolve tmp_path so symlinked /tmp prefixes (e.g. /var → /private/var on
+    # macOS) don't break the cwd-relative include path computed by
+    # ``extract_include_deps``.
+    work_dir = tmp_path.resolve()
+    monkeypatch.chdir(work_dir)
+
+    # Original prompt with naming that yields identity ("child", "python").
+    prompt_file = work_dir / "child_python.prompt"
+    prompt_file.write_text("original prompt body\n", encoding="utf-8")
+
+    # Real dependency file referenced by an ``<include>`` directive in the
+    # modified prompt below. ``extract_include_deps`` resolves the reference
+    # against the prompt's directory and hashes the file's contents.
+    dep_file = work_dir / "parent.py"
+    dep_file.write_text("# parent helper\n", encoding="utf-8")
+
+    modified_prompt = (
+        "original prompt body\n<include>parent.py</include>\n"
+    )
+    csv_path = work_dir / "deps.csv"
+
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": prompt_file.read_text(encoding="utf-8")},
+        # In-place overwrite (``pdd sync`` write-back semantics) so the
+        # finalization branch actually runs.
+        {"output": str(prompt_file), "csv": str(csv_path)},
+        None,
+    )
+    mock_insert_includes.return_value = (
+        modified_prompt,
+        "",      # no CSV output
+        0.01,    # cost
+        "test-model",
+    )
+
+    # Pre-existing stale run report that finalization must remove.
+    run_report = meta_dir / "child_python_run.json"
+    run_report.write_text(json.dumps({"stale": True}), encoding="utf-8")
+    assert run_report.exists()
+
+    returned_prompt, total_cost, model_name = auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(prompt_file),
+        directory_path=str(work_dir),
+        auto_deps_csv_path=str(csv_path),
+        output=str(prompt_file),  # explicit in-place overwrite
+        force_scan=False,
+    )
+
+    assert returned_prompt == modified_prompt
+    assert total_cost == 0.01
+    assert model_name == "test-model"
+
+    # Fingerprint JSON was actually written to disk under the canonical
+    # ``<basename>_<language>.json`` identity.
+    fingerprint_path = meta_dir / "child_python.json"
+    assert fingerprint_path.exists(), (
+        f"fingerprint JSON missing at {fingerprint_path}"
+    )
+    fp = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+
+    assert fp["command"] == "auto-deps"
+    assert fp["prompt_hash"], "prompt_hash should be populated"
+
+    # ``include_deps`` must reflect the real ``<include>`` dependency on
+    # ``parent.py``: a non-empty mapping keyed by the cwd-relative path with
+    # a 64-char SHA-256 hex hash as the value.
+    include_deps = fp.get("include_deps")
+    assert isinstance(include_deps, dict) and include_deps, (
+        f"include_deps should be a non-empty dict, got {include_deps!r}"
+    )
+    assert "parent.py" in include_deps, (
+        f"expected 'parent.py' key in include_deps, got {list(include_deps)}"
+    )
+    assert len(include_deps["parent.py"]) == 64, (
+        "include_deps hash should be a SHA-256 hex digest"
+    )
+
+    # The stale per-module run report must have been cleared.
+    assert not run_report.exists(), (
+        "_run.json should have been removed by clear_run_report"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: ``pdd sync`` invokes ``auto_deps_main`` with
+# ``_skip_finalization=True`` and a temp ``<basename>_<language>_with_deps``
+# output that it then moves onto the canonical prompt. ``auto_deps_main`` must
+# NOT write its own ``.pdd/meta/*_with_deps.json`` fingerprint in that flow —
+# otherwise the move leaves orphan metadata for a file that no longer exists.
+# Sync owns the canonical fingerprint write and the canonical run-report
+# clear; the auto-deps finalizer must stay out of the way.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_skip_finalization_writes_no_metadata(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+    use_real_finalization,
+):
+    meta_dir = use_real_finalization
+    work_dir = tmp_path.resolve()
+    monkeypatch.chdir(work_dir)
+
+    prompt_file = work_dir / "child_python.prompt"
+    prompt_file.write_text("original prompt body\n", encoding="utf-8")
+    temp_output = work_dir / "child_python_with_deps.prompt"
+    csv_path = work_dir / "deps.csv"
+
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": prompt_file.read_text(encoding="utf-8")},
+        {"output": str(temp_output), "csv": str(csv_path)},
+        None,
+    )
+    mock_insert_includes.return_value = (
+        "original prompt body\n<include>parent.py</include>\n",
+        "",
+        0.01,
+        "test-model",
+    )
+
+    # Pre-existing canonical run report — sync clears this itself after the
+    # ``shutil.move``; auto_deps_main must NOT touch it under
+    # ``_skip_finalization=True``.
+    canonical_run_report = meta_dir / "child_python_run.json"
+    canonical_run_report.write_text(json.dumps({"stale": True}), encoding="utf-8")
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(prompt_file),
+        directory_path=str(work_dir),
+        auto_deps_csv_path=str(csv_path),
+        output=str(temp_output),  # different from prompt_file
+        force_scan=False,
+        _skip_finalization=True,
+    )
+
+    # No fingerprint should have been written for either the derivative or
+    # the canonical identity.
+    derivative_fp = meta_dir / "child_python_with_deps.json"
+    canonical_fp = meta_dir / "child_python.json"
+    assert not derivative_fp.exists(), (
+        f"_skip_finalization=True must not write derivative metadata; "
+        f"found {derivative_fp}"
+    )
+    assert not canonical_fp.exists(), (
+        f"_skip_finalization=True must not write canonical metadata; "
+        f"found {canonical_fp}"
+    )
+
+    # Canonical run-report must still exist — sync owns that clear after the
+    # move, not auto_deps_main.
+    assert canonical_run_report.exists(), (
+        "_skip_finalization=True must not clear canonical _run.json; "
+        "that is sync's responsibility post-move."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: auto_include emits attributed ``<include select="...">`` and
+# ``<include query="...">`` directives (pdd/auto_include.py:148). The
+# finalization path persists include dep hashes via ``save_fingerprint``,
+# which reads them through ``extract_include_deps``. If that extractor only
+# matched bare ``<include>...</include>``, attributed deps would silently
+# vanish from the fingerprint and downstream sync would miss real changes.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "include_directive",
+    [
+        '<include select="def:parent_helper">parent.py</include>',
+        '<include query="parent module helpers">parent.py</include>',
+    ],
+    ids=["select-attr", "query-attr"],
+)
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_finalization_captures_attributed_include_deps(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+    use_real_finalization,
+    include_directive,
+):
+    meta_dir = use_real_finalization
+    work_dir = tmp_path.resolve()
+    monkeypatch.chdir(work_dir)
+
+    prompt_file = work_dir / "child_python.prompt"
+    prompt_file.write_text("original prompt body\n", encoding="utf-8")
+
+    # ``parent.py`` must define ``parent_helper`` so the
+    # ``select="def:parent_helper"`` variant's selector validator (run by
+    # ``sanitize_prompt_output``) resolves successfully and the attributed
+    # include survives to reach ``extract_include_deps``.
+    dep_file = work_dir / "parent.py"
+    dep_file.write_text("def parent_helper():\n    return 1\n", encoding="utf-8")
+
+    modified_prompt = f"original prompt body\n{include_directive}\n"
+    csv_path = work_dir / "deps.csv"
+
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": prompt_file.read_text(encoding="utf-8")},
+        {"output": str(prompt_file), "csv": str(csv_path)},
+        None,
+    )
+    mock_insert_includes.return_value = (
+        modified_prompt,
+        "",
+        0.01,
+        "test-model",
+    )
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(prompt_file),
+        directory_path=str(work_dir),
+        auto_deps_csv_path=str(csv_path),
+        output=str(prompt_file),
+        force_scan=False,
+    )
+
+    fingerprint_path = meta_dir / "child_python.json"
+    assert fingerprint_path.exists(), (
+        f"fingerprint JSON missing at {fingerprint_path}"
+    )
+    fp = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+
+    include_deps = fp.get("include_deps")
+    assert isinstance(include_deps, dict) and include_deps, (
+        f"include_deps should capture attributed includes, got {include_deps!r}"
+    )
+    assert "parent.py" in include_deps, (
+        f"expected 'parent.py' key in include_deps, got {list(include_deps)}"
+    )
+    assert len(include_deps["parent.py"]) == 64, (
+        "include_deps hash should be a SHA-256 hex digest"
+    )

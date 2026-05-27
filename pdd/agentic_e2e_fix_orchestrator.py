@@ -30,12 +30,15 @@ from .agentic_common import (
     GITHUB_STATE_MARKER_START,
     GITHUB_STATE_MARKER_END,
     _revert_out_of_scope_changes,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
-from .ci_validation import run_ci_validation_loop
+from .ci_validation import _find_open_pr_number, run_ci_validation_loop
 
 # Constants
 STEP_NAMES = {
@@ -262,6 +265,70 @@ def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[st
     return None
 
 
+def _resolve_cached_step9_output(step_outputs: Dict[str, str]) -> str:
+    """Return the authoritative Step 9 output for resume token resolution.
+
+    Step 9 may run twice in one cycle: the initial pass, plus a retry when the
+    initial pass emits no recognizable loop-control token. The retry output is
+    stored under ``step_outputs["9_retry"]`` (see the retry persistence site
+    in the inner loop); the initial output is ``step_outputs["9"]``. The retry
+    output is the authoritative one when it ran — if the retry succeeded with
+    ``ALL_TESTS_PASS`` but the workflow was interrupted before the next pause,
+    reading only ``"9"`` (which can be tokenless) would let resume fall
+    through to ``CONTINUE_CYCLE`` and silently advance into a fresh cycle even
+    though Step 9 actually succeeded. Prefer the retry output when present
+    and non-empty (#1001).
+    """
+    retry_out = step_outputs.get("9_retry", "")
+    if retry_out:
+        return retry_out
+    return step_outputs.get("9", "")
+
+
+def _post_step9_resume_action(
+    step9_output: str,
+    current_cycle: int,
+    max_cycles: int,
+    console: Console,
+) -> str:
+    """Decide what resume should do when last_completed_step >= 9 (Issue #1001).
+
+    The prior buggy code unconditionally advanced the cycle whenever
+    `last_completed_step >= 9` on resume, ignoring what Step 9 actually
+    emitted. This helper inspects the cached Step 9 output and branches:
+
+    - "SUCCESS_FALL_THROUGH" — Step 9 declared success (ALL_TESTS_PASS,
+      LOCAL_TESTS_PASS, or NOT_A_BUG). Caller must keep `current_cycle`,
+      `last_completed_step`, and `step_outputs` intact and fall through
+      to Step 11 cleanup + Step 10 CI validation.
+    - "ADVANCE_CYCLE" — Step 9 wants another cycle and budget remains.
+    - "MAX_CYCLES_REACHED" — Either Step 9 explicitly emitted
+      MAX_CYCLES_REACHED (resolved via the tier-1–3 classifier in
+      `_classify_step_output` or the tier-4 LLM fallback in
+      `_resolve_step9_loop_token`), or Step 9 wants another cycle but
+      the cycle budget is exhausted. In both cases the caller must
+      surface this as a non-success exit, reusing the same path Step 9
+      uses when emitting MAX_CYCLES_REACHED directly (see
+      `_apply_step9_resolved_token` MAX_CYCLES_REACHED handler).
+    """
+    # Defensive NOT_A_BUG check: Step 9 normally doesn't emit NOT_A_BUG
+    # (that's Step 3), but if the cached output surfaces it, treat as
+    # success — Step 3 would already have determined no bug exists.
+    if "NOT_A_BUG" in step9_output:
+        return "SUCCESS_FALL_THROUGH"
+    tok = _resolve_step9_loop_token(step9_output, console)
+    if tok in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+        return "SUCCESS_FALL_THROUGH"
+    # Explicit terminal token from Step 9 (tier-1–3 detect_control_token
+    # or tier-4 LLM classifier) must NOT be overridden by the budget
+    # check below — Step 9 already declared the loop terminal.
+    if tok == "MAX_CYCLES_REACHED":
+        return "MAX_CYCLES_REACHED"
+    if current_cycle < max_cycles:
+        return "ADVANCE_CYCLE"
+    return "MAX_CYCLES_REACHED"
+
+
 class _Step9TokenApplyResult(NamedTuple):
     """Outcome of applying a resolved Step 9 loop token (shared initial + retry paths)."""
 
@@ -477,6 +544,7 @@ def _is_intermediate_file(filepath: str) -> bool:
     - *.bak, *.backup, *.orig, *.tmp extensions
     - error_output*.txt (e.g., error_output.txt, error_output_models.txt)
     - .pdd/** (any file under .pdd/ directory — backups, core_dumps, etc.)
+    - .gh-wrapper/** (executor `gh` wrapper artifacts — Issue #1001)
     - *_errors.txt, *_fix_errors.txt (e.g., waitlist_fix_errors.txt)
     - step*_output.md (e.g., step9_output.md)
     - test_issue_*_reproduction.py (e.g., test_issue_824_reproduction.py)
@@ -490,6 +558,13 @@ def _is_intermediate_file(filepath: str) -> bool:
     path = Path(filepath)
     stem = path.stem  # filename without extension
     suffix = path.suffix  # extension including dot
+
+    # Issue #1001: filter executor wrapper artifacts.
+    # Anchor on the directory boundary so legitimate paths like
+    # "gh-wrapper-docs.md" or "tools/gh_wrapper.py" are not over-filtered.
+    normalized_gh = str(filepath).replace("\\", "/")
+    if normalized_gh.startswith(".gh-wrapper/") or "/.gh-wrapper/" in normalized_gh:
+        return True
 
     # Check for backup extensions (e.g., foo.py.bak, foo.py.backup)
     if suffix in _BACKUP_EXTENSIONS:
@@ -1024,6 +1099,177 @@ def _detect_meaningful_changes(cwd: Path, initial_file_hashes: Dict[str, Optiona
     return [p for p in _detect_changed_files(cwd, initial_file_hashes) if not _is_noise_path(p)]
 
 
+# Sentinel returned by ``_reevaluate_step3_not_a_bug_on_resume`` to signal that
+# the resume-time cycle-waste-breaker condition holds (cached NOT_A_BUG,
+# direct edits, no fixed units, current_cycle > 1). The caller treats this as a
+# terminal-success short-circuit equivalent to the inline Step 3 cycle-waste
+# breaker (Issue #1034) — it MUST NOT be written into ``step_outputs``.
+NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME = "NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME"
+NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE = (
+    "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining "
+    "state as not a bug."
+)
+
+
+def _reevaluate_step3_not_a_bug_on_resume(
+    cached_output: str,
+    *,
+    dev_unit_states: Dict[str, Any],
+    initial_file_hashes: Optional[Dict[str, Optional[str]]],
+    cwd: Path,
+    quiet: bool = False,
+    source: str = "step_outputs",
+    current_cycle: Optional[int] = None,
+    cycle_start_hashes: Optional[Dict[str, Optional[str]]] = None,
+) -> str:
+    """Re-evaluate a cached Step 3 ``NOT_A_BUG`` token on workflow resume.
+
+    Implements the resume-time guard described in
+    ``pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt`` (Issue #1034):
+    when the cached entry classifies as ``NOT_A_BUG``, re-run the same
+    direct-edit + ``dev_unit_states`` + cycle-waste-breaker checks that the
+    inline Step 3 path applies. If any guard would have suppressed the token,
+    demote the cached output to
+    ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>`` so the existing
+    ``FAILED:`` rewind in :func:`validate_cached_state` reruns Step 3.
+
+    The raw cached token MUST NOT be trusted on resume. Both
+    ``step_outputs["3"]`` and ``bug_step_outputs["3"]`` callers route through
+    this helper for symmetry.
+
+    Cycle-waste-breaker terminal-success path: when ``current_cycle > 1`` and
+    direct edits exist with no FIXED dev units, mirror the inline Step 3
+    cycle-waste-breaker (lines 2127-2134 of the inner loop) by returning the
+    :data:`NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME` sentinel instead of demoting.
+    The caller is expected to translate that sentinel into a terminal-success
+    workflow exit so the orchestrator does NOT spend another Step 3 LLM call
+    when the prior-cycle direct-edit fix is already terminal — but ONLY when
+    we can prove no in-cycle progress was made since the cycle's start
+    snapshot. Without that proof, conservatively demote and rerun Step 3.
+
+    Args:
+        cached_output: The cached Step 3 output text.
+        dev_unit_states: Restored ``dev_unit_states`` from workflow state.
+        initial_file_hashes: Restored workflow-start file hash snapshot. If
+            ``None``, the direct-edit check is skipped (fail open).
+        cwd: Repo working directory used for direct-edit detection.
+        quiet: Suppress console messages when True.
+        source: Diagnostic label (``"step_outputs"`` or ``"bug_step_outputs"``).
+        current_cycle: Restored cycle counter from workflow state. When
+            ``current_cycle > 1`` and the direct-edit guard would otherwise
+            fire with no FIXED units AND ``cycle_start_hashes`` proves no
+            in-cycle progress, return the terminal-success sentinel instead
+            of the FAILED demotion token. When ``None``, the cycle-waste-
+            breaker terminal-success path is disabled (backwards compatible
+            with helper-only test callers).
+        cycle_start_hashes: Restored snapshot of file hashes captured at the
+            start of the current cycle. Required to prove the cycle has made
+            no in-cycle progress before authorizing terminal-success on
+            resume. If ``None`` (legacy state or stale post-cycle save), the
+            terminal-success branch conservatively demotes to ``FAILED:
+            NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits`` instead.
+
+    Returns:
+        The original ``cached_output`` if the token should still be trusted,
+        a ``"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>"`` token if a
+        guard demotes it, or :data:`NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME` when
+        the cycle-waste-breaker terminal-success path applies.
+    """
+    if not cached_output or str(cached_output).startswith("FAILED:"):
+        return cached_output
+    if _classify_step_output(cached_output, step_num=3) != "NOT_A_BUG":
+        return cached_output
+
+    # Guard 1: dev_unit_states with any FIXED unit suppresses NOT_A_BUG.
+    # Per the prompt's cycle-waste-breaker rule on resume (no cycle_start_hashes
+    # available), has_fixed_units True is treated as terminal-for-cycle and
+    # suppresses the cached token.
+    has_fixed_units = any(
+        isinstance(s, dict) and s.get("fixed") for s in (dev_unit_states or {}).values()
+    )
+    if has_fixed_units:
+        if not quiet:
+            console.print(
+                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
+                f"because dev_unit_states has FIXED units. Demoting to "
+                f"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:dev_unit_states.[/yellow]"
+            )
+        return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:dev_unit_states"
+
+    # Guard 2: direct-edit detection using restored initial_file_hashes.
+    # If the snapshot is missing, fail open (do not suppress) per the prompt.
+    if initial_file_hashes is not None:
+        try:
+            direct_edits = _detect_meaningful_changes(cwd, initial_file_hashes)
+        except Exception:
+            direct_edits = []
+        if direct_edits:
+            # Cycle-waste-breaker terminal success on resume (Issue #1034):
+            # mirror the inline Step 3 path at lines 2127-2134 — when
+            # current_cycle > 1, direct edits exist, no FIXED dev units exist,
+            # AND we can prove no in-cycle progress has been made (via the
+            # restored ``cycle_start_hashes`` snapshot), the prior-cycle
+            # direct-edit fix is treated as terminal and the workflow exits
+            # successfully instead of rerunning Step 3.
+            #
+            # Without ``cycle_start_hashes`` we CANNOT trust the assumption
+            # that the resumed cycle made no progress: Step 1 inside the
+            # resumed cycle can run ``pdd fix`` and write meaningful edits
+            # BEFORE Step 3 is reached (``dev_unit_states`` is only updated
+            # at Step 8). So when ``cycle_start_hashes`` is missing or shows
+            # any in-cycle progress, conservatively demote to FAILED so
+            # Step 3 reruns instead of silently exiting as terminal-success.
+            if current_cycle is not None and current_cycle > 1:
+                cycle_progress: List[str] = []
+                if cycle_start_hashes is not None:
+                    try:
+                        cycle_progress = _detect_meaningful_changes(
+                            cwd, cycle_start_hashes
+                        )
+                    except Exception:
+                        cycle_progress = []
+                if cycle_start_hashes is None or cycle_progress:
+                    if not quiet:
+                        if cycle_start_hashes is None:
+                            console.print(
+                                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in "
+                                f"{source} cannot terminal-success on resume — "
+                                f"cycle_start_hashes is missing (legacy state). "
+                                f"Conservatively demoting to FAILED: "
+                                f"NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits "
+                                f"so Step 3 reruns.[/yellow]"
+                            )
+                        else:
+                            console.print(
+                                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in "
+                                f"{source} cannot terminal-success on resume — "
+                                f"current cycle has in-cycle progress "
+                                f"({len(cycle_progress)} file(s) changed since "
+                                f"cycle_start_hashes). Demoting to FAILED: "
+                                f"NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits "
+                                f"so Step 3 reruns.[/yellow]"
+                            )
+                    return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits"
+                if not quiet:
+                    console.print(
+                        f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} "
+                        f"matches cycle-waste-breaker (current_cycle={current_cycle}, "
+                        f"direct edits present, no FIXED dev units, no in-cycle "
+                        f"progress vs cycle_start_hashes). Treating prior direct-edit "
+                        f"fix as terminal success instead of rerunning Step 3.[/yellow]"
+                    )
+                return NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME
+            if not quiet:
+                console.print(
+                    f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
+                    f"because direct edits exist on disk relative to initial_file_hashes. "
+                    f"Demoting to FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits.[/yellow]"
+                )
+            return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits"
+
+    return cached_output
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -1038,6 +1284,20 @@ def _has_unpushed_commits(cwd: Path) -> bool:
     return False
 
 
+def _push_unpushed_commits_or_report_noop(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Push ahead commits if present; otherwise treat the commit step as a no-op."""
+    if _has_unpushed_commits(cwd):
+        push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
+        if push_ok:
+            return True, "Pushed existing commits"
+        return False, f"Push failed: {push_err}"
+    return True, "No changes to commit"
+
+
 def push_with_retry(
     cwd: Path,
     *,
@@ -1046,6 +1306,7 @@ def push_with_retry(
     remote: str = "origin",
     refspec: str = "HEAD",
     set_upstream: bool = True,
+    force_with_lease_on_non_fast_forward: bool = True,
 ) -> Tuple[bool, str]:
     """Push to a git remote with shared non-fast-forward and token-refresh retries.
 
@@ -1055,8 +1316,10 @@ def push_with_retry(
 
     Behaviour:
     - First attempt: ``git push [-u] <remote> <refspec>``.
-    - Non-fast-forward: retry with ``--force-with-lease`` (safe — only
-      overwrites the remote if it still matches what we last fetched).
+    - Non-fast-forward: by default, retry with ``--force-with-lease`` (safe —
+      only overwrites the remote if it still matches what we last fetched).
+      Callers that push to a shared PR head can disable this and handle the
+      rejection by fetching/rebasing instead.
     - Auth failure (``Authentication failed``, ``HTTP 401``,
       ``could not read Username``, ``HTTP Basic: Access denied``): read a
       token from a non-empty ``PDD_GH_TOKEN_FILE`` or fall back to
@@ -1086,6 +1349,8 @@ def push_with_retry(
     is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
 
     if is_non_fast_forward:
+        if not force_with_lease_on_non_fast_forward:
+            return False, stderr
         console.print(
             "[yellow]WARNING: Push rejected (non-fast-forward). "
             "Retrying with --force-with-lease...[/yellow]"
@@ -1268,15 +1533,8 @@ def _commit_and_push(
         fallback_files = [f for f in fallback_files if not _is_intermediate_file(f)]
         if fallback_files:
             files_to_commit = list(fallback_files)
-        elif _has_unpushed_commits(cwd):
-            # Check if there are unpushed commits to push
-            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
-            if push_ok:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_err}"
         else:
-            return True, "No changes to commit"
+            return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
 
     # Stage only workflow-changed files
     for filepath in files_to_commit:
@@ -1301,12 +1559,12 @@ def _commit_and_push(
         # Commit may fail with "nothing to commit" when fallback files were
         # already committed on the branch (merge-base diff includes them).
         # In that case, push any unpushed commits instead of failing.
-        if _has_unpushed_commits(cwd):
-            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
-            if push_ok:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_err}"
+        commit_output = f"{commit_result.stdout}\n{commit_result.stderr}".lower()
+        if (
+            "nothing to commit" in commit_output
+            or "no changes added to commit" in commit_output
+        ):
+            return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
         return False, f"Failed to commit: {commit_result.stderr}"
 
     # Push to remote with retry on auth failure
@@ -1316,6 +1574,223 @@ def _commit_and_push(
         return True, f"Committed and pushed {len(files_to_commit)} file(s)"
     else:
         return False, f"Push failed: {push_err}"
+
+
+def _fetch_pr_head_sha(repo_owner: str, repo_name: str, pr_number: int) -> str:
+    """Best-effort fetch of the PR's remote head SHA. Empty string on failure."""
+    try:
+        from .checkup_review_loop import _fetch_pr_metadata  # pylint: disable=import-outside-toplevel
+        metadata = _fetch_pr_metadata(repo_owner, repo_name, pr_number)
+    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
+        return ""
+    return str(metadata.get("head_sha", "") or "")
+
+
+def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
+    """Read HEAD SHA of the PR-mode checkup worktree.
+
+    The checkup orchestrator creates ``.pdd/worktrees/checkup-pr-{N}/``
+    under the repository's git root and runs Step 7 verification (plus
+    any rebased push) against that worktree. After ``run_agentic_checkup``
+    returns, the worktree's HEAD is the *exact* SHA the checkup's verdict
+    and push apply to.
+
+    Comparing this SHA to the live PR remote head SHA is what
+    distinguishes "checkup pushed" from "external party pushed during
+    checkup". On equality, the checkup's verdict covers the current PR
+    head; on divergence, the PR advanced past what was verified and
+    pdd-issue must NOT green-light it.
+
+    Returns the worktree HEAD SHA or empty string on any failure.
+    """
+    try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if toplevel.returncode != 0:
+        return ""
+    git_root = Path(toplevel.stdout.strip())
+
+    worktree = git_root / ".pdd" / "worktrees" / f"checkup-pr-{pr_number}"
+    if not worktree.exists():
+        return ""
+
+    try:
+        rev = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if rev.returncode != 0:
+        return ""
+    return rev.stdout.strip()
+
+
+def _run_final_checkup_on_pr(
+    *,
+    issue_url: str,
+    issue_number: int,
+    repo_owner: str,
+    repo_name: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    timeout_adder: float,
+    use_github_state: bool,
+    reasoning_time: Optional[float],
+    ci_step_template: str,
+    ci_validation_timeout: float,
+) -> Tuple[bool, str, float, str]:
+    """Run full PR-mode checkup against the current branch's open PR.
+
+    Closes the post-CI mutation hole: the final checkup gate runs with
+    ``no_fix=False`` and may push generated fixes to the PR head. CI passed
+    against the head SHA we observed before this call, so any push advances
+    the PR to code that has not been CI-validated. We snapshot the PR head
+    SHA before and after; if it advanced, we re-run ``run_ci_validation_loop``
+    with ``max_retries=0`` (verify-only — no further fixing on top of fixes).
+    """
+    pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
+    if pr_number is None:
+        return (
+            True,
+            "No open PR found for current branch; skipping final checkup",
+            0.0,
+            "",
+        )
+
+    pre_checkup_head_sha = _fetch_pr_head_sha(repo_owner, repo_name, pr_number)
+
+    pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}"
+    from .agentic_checkup import run_agentic_checkup
+
+    checkup_success, checkup_message, checkup_cost, checkup_model = run_agentic_checkup(
+        issue_url=issue_url,
+        verbose=verbose,
+        quiet=quiet,
+        no_fix=False,
+        timeout_adder=timeout_adder,
+        use_github_state=use_github_state,
+        reasoning_time=reasoning_time,
+        pr_url=pr_url,
+        cwd=cwd,
+    )
+
+    if not checkup_success:
+        return checkup_success, checkup_message, checkup_cost, checkup_model
+
+    if not pre_checkup_head_sha:
+        # Fail closed: without the pre-checkup SHA we cannot tell whether the
+        # checkup pushed new commits on top of the CI-validated head. Returning
+        # success here would re-introduce the post-CI mutation hole.
+        return (
+            False,
+            (
+                "Final checkup completed but the pre-checkup PR head SHA was "
+                "unavailable; cannot verify whether checkup pushed new commits "
+                "that bypass CI. Re-run after confirming gh access."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+
+    post_checkup_head_sha = _fetch_pr_head_sha(repo_owner, repo_name, pr_number)
+    if not post_checkup_head_sha:
+        return (
+            False,
+            (
+                "Final checkup completed but the post-checkup PR head SHA was "
+                "unavailable; cannot verify whether checkup pushed new commits "
+                "that bypass CI. Re-run after confirming gh access."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+
+    if post_checkup_head_sha == pre_checkup_head_sha:
+        return checkup_success, checkup_message, checkup_cost, checkup_model
+
+    # Round-5 finding: the PR head can advance externally during the
+    # final checkup (maintainer push, another bot, etc.). Treating EVERY
+    # SHA delta as a checkup push would re-validate CI on code that
+    # Step 7 never saw, green-lighting an unverified head. The checkup
+    # worktree's HEAD is the authoritative "last verified/pushed" SHA;
+    # if it differs from the remote PR head, an external push raced us.
+    checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
+    if not checkup_worktree_head_sha:
+        return (
+            False,
+            (
+                "Final checkup completed but the checkup worktree HEAD SHA "
+                "was unavailable; cannot prove the PR remote head matches "
+                "what was verified. Failing closed to avoid green-lighting "
+                "an unverified head."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+    if checkup_worktree_head_sha != post_checkup_head_sha:
+        return (
+            False,
+            (
+                f"PR head advanced to {post_checkup_head_sha[:8]} during "
+                f"final checkup but the checkup worktree last verified "
+                f"{checkup_worktree_head_sha[:8]}. External push during "
+                f"checkup detected — re-run pdd-issue so the new head is "
+                f"verified by Step 7 before CI re-validation."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+
+    if not quiet:
+        console.print(
+            f"[yellow]Final checkup pushed to PR head "
+            f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}, "
+            f"verified by checkup worktree); re-validating CI on new "
+            f"head...[/yellow]"
+        )
+
+    # The checkup pushes from its OWN worktree (.pdd/worktrees/checkup-pr-N),
+    # so ``cwd``'s local HEAD is stale relative to the PR remote. Without the
+    # override below, ``run_ci_validation_loop`` would use ``_get_head_sha(cwd)``
+    # as the expected head and burn the poll timeout waiting for the remote
+    # to match a SHA it will never reach.
+    revalidate_success, revalidate_message, revalidate_cost = run_ci_validation_loop(
+        cwd=cwd,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        max_retries=0,
+        step_template=ci_step_template,
+        run_agentic_task_fn=run_agentic_task,
+        timeout=ci_validation_timeout,
+        quiet=quiet,
+        expected_head_sha_override=post_checkup_head_sha,
+    )
+
+    total_cost = checkup_cost + revalidate_cost
+    if not revalidate_success:
+        return (
+            False,
+            (
+                f"Final checkup pushed fixes ({pre_checkup_head_sha[:8]}->"
+                f"{post_checkup_head_sha[:8]}) but post-push CI re-validation "
+                f"failed: {revalidate_message}"
+            ),
+            total_cost,
+            checkup_model,
+        )
+    return True, checkup_message, total_cost, checkup_model
 
 
 def _run_step11_code_cleanup(
@@ -1488,6 +1963,75 @@ def _run_step11_code_cleanup(
     return total_cost, changed_files
 
 
+def _build_post_loop_state(
+    *,
+    workflow_name: str,
+    issue_url: str,
+    issue_number: int,
+    current_cycle: int,
+    last_completed_step: int,
+    step_outputs: Dict[str, str],
+    dev_unit_states: Dict[str, Any],
+    skipped_steps: Dict[int, str],
+    total_cost: float,
+    model_used: str,
+    changed_files: List[str],
+    github_comment_id: Optional[int],
+    step_comments_set: Set[int],
+    initial_file_hashes: Optional[Dict[str, Optional[str]]],
+    initial_sha: Optional[str],
+    clean_restart: bool = False,
+) -> Dict[str, Any]:
+    """Build a workflow-state dict from function-scope locals only.
+
+    The orchestrator's main ``state_data`` dict is first assigned inside the
+    inner ``for step_num in range(1, 10)`` loop. The
+    SUCCESS_FALL_THROUGH / resume-terminal-success resume paths skip that
+    loop entirely (Step 9 already declared success on the prior run, so
+    control flows directly into the post-loop cleanup + CI sites). On
+    those paths, any reference to the inner-loop ``state_data`` raises
+    ``UnboundLocalError`` and the broad ``try/except`` around the
+    post-loop Step 10/11 trusted-comment saves swallows it as a
+    ``post_step_comment_once failed`` warning, leaving the composite key
+    unpersisted. A later resume would then re-post the same Step 10/11
+    visible comment.
+
+    This helper assembles the same shape as the inner-loop save using
+    only locals that are unconditionally initialized at function entry
+    (``step_outputs``, ``step_comments_set``, ``changed_files``, etc.) so
+    the post-loop saves work identically on the linear-execution path,
+    the SUCCESS_FALL_THROUGH resume path, and the
+    resume-terminal-success path.
+
+    Snapshot fields (``initial_file_hashes``, ``initial_sha``) accept
+    ``None`` so callers can pass through the resume-time restored values
+    without normalizing first.
+    """
+    return {
+        "workflow": workflow_name,
+        "issue_url": issue_url,
+        "issue_number": issue_number,
+        "current_cycle": current_cycle,
+        "last_completed_step": last_completed_step,
+        "step_outputs": dict(step_outputs),
+        "dev_unit_states": dict(dev_unit_states),
+        "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+        "total_cost": total_cost,
+        "model_used": model_used,
+        "changed_files": list(changed_files) if changed_files else [],
+        "last_saved_at": datetime.now().isoformat(),
+        "github_comment_id": github_comment_id,
+        "step_comments": sorted(step_comments_set),
+        "initial_file_hashes": (
+            dict(initial_file_hashes)
+            if isinstance(initial_file_hashes, dict)
+            else None
+        ),
+        "initial_sha": initial_sha if isinstance(initial_sha, str) else None,
+        "clean_restart": clean_restart,
+    }
+
+
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -1509,6 +2053,7 @@ def run_agentic_e2e_fix_orchestrator(
     skip_ci: bool = False,
     skip_cleanup: bool = False,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrator for the 11-step agentic e2e fix workflow.
@@ -1530,17 +2075,48 @@ def run_agentic_e2e_fix_orchestrator(
     dev_unit_states: Dict[str, Any] = {}
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
+    step_comments_set: Set[int] = set()
+    resumed_from_state = False
     # On resume, restore the workflow-start file snapshot so guards that diff
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
     resumed_initial_file_hashes: Optional[Dict[str, Optional[str]]] = None
     resumed_initial_sha: Optional[str] = None
+    # Issue #1001: deferred action computed during resume that must be applied
+    # after `success`/`final_message` are initialized below. Default: no-op.
+    _resume_deferred_action: Optional[str] = None
+    _cached_step9_resume_action: Optional[str] = None
+    # On resume, restore the current cycle's start snapshot so the resume-time
+    # cycle-waste-breaker can prove no in-cycle progress before authorizing
+    # terminal success. None when the saved state is legacy (no snapshot) or
+    # was saved after Step 9 completed (the snapshot is stale across cycles).
+    resumed_cycle_start_hashes: Optional[Dict[str, Optional[str]]] = None
+    # Set by the resume-time Step 3 re-evaluation if the cycle-waste-breaker
+    # terminal-success condition holds (Issue #1034). Skips the inner workflow.
+    resume_terminal_success = False
+    # Issue #1034 follow-up: True when the resumed cycle was mid-flight
+    # (last_completed_step > 0, current_cycle > 1) but no cycle_start_hashes
+    # was persisted (legacy state file or pre-snapshot interrupt). The outer
+    # loop will capture a fresh post-edit snapshot at the cycle-entry point,
+    # which would make `_detect_meaningful_changes(cwd, cycle_start_hashes)`
+    # falsely report "no in-cycle progress" and let the inline cycle-waste-
+    # breaker terminal-success on a baseline it cannot verify. This flag is
+    # consulted in the inline cycle-waste-breaker and cleared at the next
+    # legitimate cycle rollover.
+    cycle_baseline_unverified = False
+    effective_clean_restart = clean_restart
 
     # Resume Logic
-    if resume:
+    if resume and not clean_restart:
         loaded_state, gh_id = load_workflow_state(
             cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state
         )
         if loaded_state:
+            persisted_clean_restart = loaded_state.get("clean_restart", False)
+            effective_clean_restart = persisted_clean_restart is True or (
+                isinstance(persisted_clean_restart, str)
+                and persisted_clean_restart.lower() == "true"
+            )
+            resumed_from_state = True
             console.print(f"[blue]Resuming from cycle {loaded_state.get('current_cycle', 1)} step {loaded_state.get('last_completed_step', 0)}...[/blue]")
             current_cycle = loaded_state.get("current_cycle", 0)
             last_completed_step = loaded_state.get("last_completed_step", 0)
@@ -1562,6 +2138,86 @@ def run_agentic_e2e_fix_orchestrator(
             if isinstance(saved_sha, str) and saved_sha:
                 resumed_initial_sha = saved_sha
 
+            step_comments_set = normalize_step_comments_state(
+                loaded_state.get("step_comments")
+            )
+
+            # Issue #1034 (codex P2 follow-up): restore the current cycle's
+            # start snapshot so the resume-time cycle-waste-breaker can prove
+            # no in-cycle progress before authorizing terminal success.
+            #
+            # Restore the snapshot UNCONDITIONALLY here — the cached Step 3
+            # NOT_A_BUG demotion below depends on the in-cycle-progress proof,
+            # and a stale-snapshot guard cannot run until AFTER
+            # ``validate_cached_state`` has had a chance to rewind
+            # ``last_completed_step`` (FAILED-rewind from 9 → 2 keeps us in
+            # the same cycle). The cycle-rollover branch below
+            # (``if last_completed_step >= 9: ...``) is the only place that
+            # legitimately invalidates the restored snapshot — when it fires
+            # we null the local so the next cycle's body recaptures.
+            saved_cycle_start_hashes = loaded_state.get("cycle_start_hashes")
+            if isinstance(saved_cycle_start_hashes, dict):
+                resumed_cycle_start_hashes = saved_cycle_start_hashes
+            else:
+                resumed_cycle_start_hashes = None
+                # Legacy state file or pre-snapshot-save interrupt: we have
+                # no proof of where the cycle started. If we're mid-cycle
+                # (last_completed_step > 0) past cycle 1, the inline
+                # cycle-waste-breaker MUST be blocked from terminal-success
+                # because the fresh capture it gets at outer-loop entry will
+                # be post-edits and falsely report "no in-cycle progress".
+                if last_completed_step > 0 and current_cycle > 1:
+                    cycle_baseline_unverified = True
+
+            # Issue #1034: Re-evaluate cached Step 3 NOT_A_BUG before trusting
+            # last_completed_step. If guards (direct edits or FIXED dev_unit_states)
+            # would have suppressed NOT_A_BUG, demote the cached entry to
+            # "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>" so the existing
+            # validate_cached_state FAILED-rewind reruns Step 3.
+            # If the cycle-waste-breaker condition holds on resume (cached
+            # NOT_A_BUG + direct edits + no FIXED units + current_cycle > 1),
+            # the helper returns NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME to signal
+            # the inline cycle-waste-breaker terminal-success path (mirrors
+            # lines 2127-2134 of the inner loop) instead of a demotion.
+            has_cached_failed_output = any(
+                isinstance(output, str) and output.startswith("FAILED:")
+                for output in step_outputs.values()
+            )
+            if last_completed_step >= 9 and not has_cached_failed_output:
+                step9_cached = _resolve_cached_step9_output(step_outputs)
+                _cached_step9_resume_action = _post_step9_resume_action(
+                    step9_cached, current_cycle, max_cycles, console
+                )
+
+            cached_step3 = step_outputs.get("3")
+            # A cached Step 9 success is authoritative for a completed inner
+            # loop. Step 3's cached raw output was already guarded during the
+            # original run, and demoting it here would rewind last_completed_step
+            # before the Step 9 success branch can re-verify and fall through.
+            skip_step3_resume_reeval = (
+                _cached_step9_resume_action == "SUCCESS_FALL_THROUGH"
+            )
+            if cached_step3 and not skip_step3_resume_reeval:
+                demoted = _reevaluate_step3_not_a_bug_on_resume(
+                    cached_step3,
+                    dev_unit_states=dev_unit_states,
+                    initial_file_hashes=resumed_initial_file_hashes,
+                    cwd=cwd,
+                    quiet=quiet,
+                    source="step_outputs",
+                    current_cycle=current_cycle,
+                    cycle_start_hashes=resumed_cycle_start_hashes,
+                )
+                if demoted == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME:
+                    # Honor the inline cycle-waste-breaker terminal-success
+                    # path on resume. The cached cycle counter and step
+                    # outputs are left untouched (we are about to exit) so the
+                    # post-success commit/cleanup/CI branch sees the same
+                    # state it would after an inline break.
+                    resume_terminal_success = True
+                elif demoted is not cached_step3 and demoted != cached_step3:
+                    step_outputs["3"] = demoted
+
             # Issue #467: Validate cached state — correct last_completed_step
             # if any cached step outputs have "FAILED:" prefix.
             last_completed_step = validate_cached_state(
@@ -1570,16 +2226,68 @@ def run_agentic_e2e_fix_orchestrator(
 
             _check_staleness(loaded_state, cwd)
 
-            # If we finished a cycle but didn't exit, prepare for next cycle
+            # Issue #1001: If Step 9 was the last completed step, branch on its
+            # cached output rather than unconditionally advancing the cycle.
+            # Prefer the retry output (stored under "9_retry") when present —
+            # otherwise a retry that emitted ALL_TESTS_PASS but was interrupted
+            # before the post-Step-9 pause could be misread as a tokenless "9"
+            # and silently advance into a fresh cycle.
             if last_completed_step >= 9:
-                current_cycle += 1
-                last_completed_step = 0
-                step_outputs = {} # Clear outputs for new cycle
+                if _cached_step9_resume_action is not None:
+                    resume_action = _cached_step9_resume_action
+                else:
+                    step9_cached = _resolve_cached_step9_output(step_outputs)
+                    resume_action = _post_step9_resume_action(
+                        step9_cached, current_cycle, max_cycles, console
+                    )
+                if resume_action == "ADVANCE_CYCLE":
+                    current_cycle += 1
+                    last_completed_step = 0
+                    step_outputs = {}  # Clear outputs for new cycle
+                    # Cycle rollover invalidates the restored snapshot; it
+                    # belongs to the just-completed cycle. Null it so the new
+                    # cycle body recaptures fresh hashes.
+                    resumed_cycle_start_hashes = None
+                    cycle_baseline_unverified = False
+                elif resume_action == "MAX_CYCLES_REACHED":
+                    # Defer surfacing the failure until after `success` and
+                    # `final_message` are initialized below — mirrors the
+                    # path used by _apply_step9_resolved_token's
+                    # MAX_CYCLES_REACHED handler (final_message set, outer
+                    # loop skipped, post-loop failure handler runs).
+                    _resume_deferred_action = "MAX_CYCLES_REACHED"
+                elif resume_action == "SUCCESS_FALL_THROUGH":
+                    # Step 9 already declared success but workflow was
+                    # interrupted before commit/Step 11/Step 10. Defer
+                    # setting `success=True` until after its initialization
+                    # so we fall through to the success path (commit, code
+                    # cleanup, CI validation).
+                    _resume_deferred_action = "SUCCESS_FALL_THROUGH"
         else:
             # No state found, start fresh
             clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
     else:
         clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
+
+    if clean_restart:
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=0,
+                body=(
+                    "## Step 0/11: Workflow Startup\n\n"
+                    "- **Mode**: Clean restart\n"
+                    f"- **Model**: {model_used}\n"
+                    "- **Command**: pdd fix"
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(f"[yellow]Workflow startup comment failed: {exc}[/yellow]")
 
     console.print(f"Fixing e2e tests for issue #{issue_number}: \"{issue_title}\"")
 
@@ -1592,26 +2300,30 @@ def run_agentic_e2e_fix_orchestrator(
         cwd / ".pdd" / "state" / f"bug_state_{issue_number}.json",
         cwd / ".pdd" / "bug-state" / f"bug_state_{issue_number}.json",
     ]
-    for bug_state_file in _bug_state_candidates:
-        if bug_state_file.exists():
-            try:
-                with open(bug_state_file, "r") as f:
-                    bug_state = json.load(f)
-                bug_outputs = bug_state.get("step_outputs", {})
-                # Reuse step 2 and 3 outputs if they completed successfully
-                for s in ("2", "3"):
-                    if s in bug_outputs and not bug_outputs[s].startswith("FAILED:"):
-                        bug_step_outputs[s] = bug_outputs[s]
-                if bug_step_outputs:
-                    console.print(f"[blue]Reusing pdd-bug analysis for steps {', '.join(sorted(bug_step_outputs.keys()))}[/blue]")
-                    # Pre-populate step_outputs so subsequent steps can reference them
-                    for s, output in bug_step_outputs.items():
-                        if s not in step_outputs:
-                            step_outputs[s] = output
-                break
-            except (OSError, json.JSONDecodeError, KeyError) as e:
-                console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
-                continue  # Try next candidate
+    if effective_clean_restart:
+        if not quiet:
+            console.print("[blue]Clean restart: ignoring prior pdd-bug analysis state.[/blue]")
+    else:
+        for bug_state_file in _bug_state_candidates:
+            if bug_state_file.exists():
+                try:
+                    with open(bug_state_file, "r") as f:
+                        bug_state = json.load(f)
+                    bug_outputs = bug_state.get("step_outputs", {})
+                    # Reuse step 2 and 3 outputs if they completed successfully
+                    for s in ("2", "3"):
+                        if s in bug_outputs and not bug_outputs[s].startswith("FAILED:"):
+                            bug_step_outputs[s] = bug_outputs[s]
+                    if bug_step_outputs:
+                        console.print(f"[blue]Reusing pdd-bug analysis for steps {', '.join(sorted(bug_step_outputs.keys()))}[/blue]")
+                        # Pre-populate step_outputs so subsequent steps can reference them
+                        for s, output in bug_step_outputs.items():
+                            if s not in step_outputs:
+                                step_outputs[s] = output
+                    break
+                except (OSError, json.JSONDecodeError, KeyError) as e:
+                    console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
+                    continue  # Try next candidate
 
     # Snapshot file state before workflow (for hash-based commit detection).
     # On resume, prefer the snapshot saved with the workflow state — recapturing
@@ -1637,16 +2349,204 @@ def run_agentic_e2e_fix_orchestrator(
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
+    def _persist_resume_reverification_state() -> None:
+        nonlocal github_comment_id
+
+        state_data_resume = {
+            "workflow": workflow_name,
+            "issue_url": issue_url,
+            "issue_number": issue_number,
+            "current_cycle": current_cycle,
+            "last_completed_step": last_completed_step,
+            "step_outputs": step_outputs.copy(),
+            "dev_unit_states": dev_unit_states.copy(),
+            "total_cost": total_cost,
+            "model_used": model_used,
+            "changed_files": changed_files.copy(),
+            "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+            "last_saved_at": datetime.now().isoformat(),
+            "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
+            "initial_file_hashes": dict(initial_file_hashes),
+            "initial_sha": initial_sha,
+            "clean_restart": effective_clean_restart,
+            # Persist None when the resumed cycle's baseline is unverified
+            # (legacy state / pre-snapshot interrupt) — otherwise the next
+            # resume would trust the fresh post-edit snapshot and immediately
+            # terminal-success.
+            "cycle_start_hashes": (
+                None if cycle_baseline_unverified
+                else (
+                    dict(resumed_cycle_start_hashes)
+                    if isinstance(resumed_cycle_start_hashes, dict)
+                    else None
+                )
+            ),
+        }
+        try:
+            new_gh_id = save_workflow_state(
+                cwd,
+                issue_number,
+                workflow_name,
+                state_data_resume,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if new_gh_id:
+                github_comment_id = new_gh_id
+        except Exception as save_exc:
+            logger.debug(
+                "Best-effort resume-reverify state save failed: %s",
+                save_exc,
+                exc_info=True,
+            )
+
+    # Issue #1033: a prior run can persist Step 2's raw ALL_TESTS_PASS before
+    # independent verification. Re-check cached pass tokens before the resume
+    # skip at the top of the inner loop can trust them.
+    if resumed_from_state and last_completed_step >= 2:
+        step2_cached_token = _classify_step_output(
+            step_outputs.get("2", ""), step_num=2
+        )
+        if step2_cached_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+            test_files = _extract_test_files(
+                issue_content, changed_files, cwd, initial_file_hashes
+            )
+            verified = False
+            verify_output = "no test files found for independent verification"
+            if test_files:
+                verified, verify_output = _verify_tests_independently(test_files, cwd)
+                if _fallback_scan_was_capped and verified:
+                    verified = False
+                    verify_output += (
+                        f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                        "hundreds of test files were verified; cannot confirm full "
+                        "suite pass."
+                    )
+            else:
+                console.print(
+                    "[bold red]No test files found for cached Step 2 resume "
+                    "verification. Cannot trust cached pass.[/bold red]"
+                )
+
+            if verified:
+                console.print("[green]Cached Step 2 pass verified on resume.[/green]")
+                if last_completed_step == 2 and _resume_deferred_action is None:
+                    success = True
+                    final_message = (
+                        "All tests passed (cached Step 2 pass independently "
+                        "verified on resume)."
+                    )
+            else:
+                console.print(
+                    "[bold red]Cached Step 2 pass failed independent "
+                    "verification on resume.[/bold red]"
+                )
+                step_outputs["2"] = (
+                    f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+                last_completed_step = 1
+                _resume_deferred_action = None
+                _persist_resume_reverification_state()
+
+    # Issue #1001 round 11: save-before-verify race.
+    # The inner-loop state save at line ~2049 persists step_outputs["9"] with
+    # the LLM's raw output BEFORE the independent verification at line ~2061 /
+    # _apply_step9_resolved_token at line ~2154 runs. A process pause in that
+    # window can leave disk state with ALL_TESTS_PASS even though verification
+    # would have failed. Re-run _verify_tests_independently on resume to close
+    # the race BEFORE treating the cycle as terminal. On failure, demote the
+    # resume action to ADVANCE_CYCLE (or MAX_CYCLES_REACHED if budget
+    # exhausted) and overwrite step_outputs["9"] with a
+    # FAILED: VERIFICATION_FAILED_ON_RESUME: prefix so the cached state
+    # reflects reality.
+    if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
+        test_files = _extract_test_files(
+            issue_content, changed_files, cwd, initial_file_hashes
+        )
+        if test_files:
+            verified, verify_output = _verify_tests_independently(test_files, cwd)
+            # Mirror the cap-downgrade in _apply_step9_resolved_token for
+            # symmetry with the initial Step 9 verification path.
+            if _fallback_scan_was_capped and verified:
+                verified = False
+                verify_output += (
+                    f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                    "hundreds of test files were verified; cannot confirm full "
+                    "suite pass."
+                )
+            if not verified:
+                console.print(
+                    "[yellow]Resume re-verification: cached Step 9 success no "
+                    "longer verified by independent pytest run; advancing "
+                    "cycle.[/yellow]"
+                )
+                step_outputs["9"] = (
+                    f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+
+                _persist_resume_reverification_state()
+
+                if current_cycle < max_cycles:
+                    current_cycle += 1
+                    last_completed_step = 0
+                    step_outputs = {}  # ADVANCE_CYCLE: clear for new cycle
+                    resumed_cycle_start_hashes = None
+                    cycle_baseline_unverified = False
+                    _resume_deferred_action = None
+                else:
+                    _resume_deferred_action = "MAX_CYCLES_REACHED"
+        # else: no test files — match the initial-flow fallback (no
+        # independent verification possible). Trust the cached token, fall
+        # through to the existing SUCCESS_FALL_THROUGH handling below.
+
+    # Issue #1001: Apply deferred resume action now that `success` and
+    # `final_message` exist. Mirrors how the in-cycle Step 9 handler
+    # surfaces these tokens via _apply_step9_resolved_token.
+    if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
+        success = True
+        final_message = "All tests passed after fixes (resumed)."
+    elif _resume_deferred_action == "MAX_CYCLES_REACHED":
+        final_message = "Max cycles reached."
+
+    # Resume-time cycle-waste-breaker terminal success (Issue #1034): if the
+    # resume guard detected the inline cycle-waste-breaker condition for the
+    # cached Step 3 NOT_A_BUG, skip the inner workflow and fall straight into
+    # the success branch (commit, Step 11 cleanup, CI) just like the inline
+    # path at lines 2127-2134.
+    if resume_terminal_success:
+        success = True
+        final_message = NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE
+        if not quiet:
+            console.print(
+                f"[yellow]NOT_A_BUG with prior direct edits and no new progress "
+                f"this cycle (resumed cycle {current_cycle}) — treating prior fix "
+                f"as terminal.[/yellow]"
+            )
+
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
 
-        while current_cycle <= max_cycles:
+        while current_cycle <= max_cycles and not success:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
 
-            # Snapshot file hashes at cycle start for convergence detection (5b)
-            cycle_start_hashes = _get_file_hashes(cwd)
+            # Snapshot file hashes at cycle start for convergence detection (5b).
+            # Issue #1034 (codex P2 follow-up): on resume, reuse the restored
+            # snapshot so the in-cycle progress check sees what the prior
+            # session captured. Only the FIRST iteration of the outer loop
+            # consumes the resumed snapshot — subsequent cycles must
+            # recapture fresh hashes (otherwise cycles 3, 4, ... would diff
+            # against the stale cycle-2 snapshot).
+            if resumed_cycle_start_hashes is not None:
+                cycle_start_hashes = resumed_cycle_start_hashes
+                resumed_cycle_start_hashes = None
+            else:
+                cycle_start_hashes = _get_file_hashes(cwd)
             
             # Inner Loop (Steps 1-9)
             for step_num in range(1, 10):
@@ -1706,11 +2606,46 @@ def run_agentic_e2e_fix_orchestrator(
 
                     continue
 
-                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
+                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830).
+                # Issue #1034: Re-evaluate any cached Step 3 NOT_A_BUG token from
+                # bug_step_outputs symmetrically with the resume-time step_outputs
+                # guard, before short-circuiting Step 3.
                 if str(step_num) in bug_step_outputs and current_cycle == 1:
-                    console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
-                    last_completed_step = step_num
-                    continue
+                    if step_num == 3:
+                        cached_bug3 = bug_step_outputs.get("3", "")
+                        # This branch only runs at current_cycle==1, so the
+                        # cycle-waste-breaker terminal-success path inside the
+                        # helper (which requires current_cycle > 1) is
+                        # irrelevant here. Pass current_cycle=None and
+                        # cycle_start_hashes=None explicitly to keep the helper
+                        # signature consistent and avoid trusting an
+                        # unrelated outer-loop snapshot.
+                        demoted_bug3 = _reevaluate_step3_not_a_bug_on_resume(
+                            cached_bug3,
+                            dev_unit_states=dev_unit_states,
+                            initial_file_hashes=initial_file_hashes,
+                            cwd=cwd,
+                            quiet=quiet,
+                            source="bug_step_outputs",
+                            current_cycle=None,
+                            cycle_start_hashes=None,
+                        )
+                        if demoted_bug3 != cached_bug3:
+                            # Drop the suppressed entry from both caches and fall
+                            # through to run Step 3 fresh.
+                            bug_step_outputs.pop("3", None)
+                            # If we pre-populated step_outputs["3"] from this stale
+                            # bug-state entry, clear it so the step actually runs.
+                            if step_outputs.get("3") == cached_bug3:
+                                step_outputs.pop("3", None)
+                        else:
+                            console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
+                            last_completed_step = step_num
+                            continue
+                    else:
+                        console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
+                        last_completed_step = step_num
+                        continue
 
                 step_name = STEP_NAMES[step_num]
                 description = STEP_DESCRIPTIONS[step_num]
@@ -1865,6 +2800,29 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_success:
                     step_outputs[str(step_num)] = step_output
                     last_completed_step = step_num
+                    try:
+                        _report_body = extract_step_report(step_output)
+                        if not _report_body:
+                            _report_body = (
+                                f"_Step {step_num} completed; no `<step_report>` "
+                                "block returned by agent. Raw output retained in "
+                                "workflow state._"
+                            )
+                        _step_desc = STEP_DESCRIPTIONS.get(step_num, "")
+                        _comment_body = (
+                            f"## Step {step_num}/11: {_step_desc}\n\n{_report_body}"
+                        )
+                        post_step_comment_once(
+                            repo_owner=repo_owner,
+                            repo_name=repo_name,
+                            issue_number=issue_number,
+                            step_num=current_cycle * 10000 + step_num,
+                            body=_comment_body,
+                            posted_steps=step_comments_set,
+                            cwd=cwd,
+                        )
+                    except Exception as _exc:  # pylint: disable=broad-except
+                        console.print(f"[yellow]post_step_comment_once failed: {_exc}[/yellow]")
                 else:
                     step_outputs[str(step_num)] = f"FAILED: {step_output}"
                     # Don't update last_completed_step - keep it at previous value
@@ -1927,10 +2885,36 @@ def run_agentic_e2e_fix_orchestrator(
                     "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id,
+                    "step_comments": sorted(step_comments_set),
+                    "clean_restart": effective_clean_restart,
                     # Workflow-start snapshot — restored on resume so direct-edit
                     # detection survives interruption.
                     "initial_file_hashes": dict(initial_file_hashes),
                     "initial_sha": initial_sha,
+                    # Current-cycle start snapshot (Issue #1034 codex P2 follow-up):
+                    # persisted so the resume-time cycle-waste-breaker can prove
+                    # no in-cycle progress before authorizing terminal success.
+                    # NOTE: distinguish `{}` (clean-tree baseline; any file
+                    # present later in the cycle is in-cycle progress) from
+                    # `None` (truly missing / post-rollover sentinel). The
+                    # truthy check `if cycle_start_hashes else None` would
+                    # collapse `{}` to `None` and trick resume into thinking
+                    # the baseline is missing, recapturing the post-edit tree
+                    # and mis-reporting no progress.
+                    # Persist None when the resumed cycle's baseline is
+                    # unverified (legacy state / pre-snapshot interrupt) —
+                    # the in-memory cycle_start_hashes was either restored
+                    # from a stale prior session save or freshly captured
+                    # post-edit; either way the next resume must not trust
+                    # it.
+                    "cycle_start_hashes": (
+                        None if cycle_baseline_unverified
+                        else (
+                            dict(cycle_start_hashes)
+                            if isinstance(cycle_start_hashes, dict)
+                            else None
+                        )
+                    ),
                 }
                 
                 new_gh_id = save_workflow_state(
@@ -1998,7 +2982,13 @@ def run_agentic_e2e_fix_orchestrator(
                         has_cycle_progress = bool(
                             _detect_meaningful_changes(cwd, cycle_start_hashes)
                         )
-                        if has_direct_edits and not has_fixed_units and not has_cycle_progress and current_cycle > 1:
+                        if (
+                            has_direct_edits
+                            and not has_fixed_units
+                            and not has_cycle_progress
+                            and current_cycle > 1
+                            and not cycle_baseline_unverified
+                        ):
                             console.print(
                                 "[yellow]NOT_A_BUG with prior direct edits and no new progress "
                                 "this cycle — treating prior fix as terminal.[/yellow]"
@@ -2006,6 +2996,11 @@ def run_agentic_e2e_fix_orchestrator(
                             success = True
                             final_message = "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining state as not a bug."
                             break
+                        if cycle_baseline_unverified:
+                            console.print(
+                                "[yellow]Resumed cycle baseline unverified (no saved cycle_start_hashes); "
+                                "refusing terminal-success and falling through to continue the cycle.[/yellow]"
+                            )
                         console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
                     else:
                         console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
@@ -2154,16 +3149,40 @@ def run_agentic_e2e_fix_orchestrator(
             if final_message:
                 break
             
-            # Prepare for next cycle
+            # Prepare for next cycle.
+            # Issue #1034 (codex P2 follow-up): null the local snapshot
+            # BEFORE mutating cycle counters. An interrupt that lands
+            # after current_cycle/last_completed_step are advanced but
+            # before this assignment would otherwise be saved by the
+            # KeyboardInterrupt/Exception handlers (which read locals())
+            # as the new cycle's snapshot — stale, and the resume-time
+            # rollover guard (which only discards when
+            # last_completed_step >= 9) would not catch it because
+            # last_completed_step is already 0 by then. The next
+            # iteration's recapture (line ~1905) is the authoritative
+            # source for the new cycle.
+            cycle_start_hashes = None
             current_cycle += 1
             last_completed_step = 0
             step_outputs = {} # Clear outputs for next cycle
-            
+            # The next cycle's body recaptures cycle_start_hashes fresh
+            # at outer-loop entry, giving the inline cycle-waste-breaker
+            # a verifiable baseline. The resume-time legacy-state flag
+            # can be cleared here.
+            cycle_baseline_unverified = False
+
             state_data["current_cycle"] = current_cycle
             state_data["last_completed_step"] = 0
             state_data["step_outputs"] = {}
             state_data["last_saved_at"] = datetime.now().isoformat()
-            
+            # Issue #1034 codex P2 follow-up: the just-completed cycle's
+            # cycle_start_hashes is stale for the next cycle. Clear it so
+            # any resume from this transitional state falls back to the
+            # conservative demote-and-rerun-Step-3 path instead of
+            # diffing against the wrong cycle's snapshot. The next cycle's
+            # body recaptures a fresh snapshot.
+            state_data["cycle_start_hashes"] = None
+
             if current_cycle <= max_cycles:
                  save_workflow_state(
                     cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
@@ -2202,6 +3221,7 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Step 11: Code Cleanup (runs BEFORE CI so cleanup is CI-validated)
             if not skip_cleanup:
+                _pre_cleanup_files = set(changed_files or [])
                 total_cost, changed_files = _run_step11_code_cleanup(
                     cwd=cwd,
                     issue_number=issue_number,
@@ -2218,6 +3238,77 @@ def run_agentic_e2e_fix_orchestrator(
                     quiet=quiet,
                     reasoning_time=reasoning_time,
                 )
+                # Round-2 of Greg's review: extend trusted step-comment
+                # coverage to the post-loop Step 11 (cleanup) path. The
+                # helper does its own console output but did not post a
+                # visible per-step comment through trusted credentials.
+                # The encoding matches the in-loop scheme:
+                # `current_cycle * 10000 + 11` so resume/dedup remains
+                # consistent across cycles.
+                try:
+                    _post_cleanup_files = set(changed_files or [])
+                    _cleanup_changed = sorted(_post_cleanup_files - _pre_cleanup_files)
+                    if _cleanup_changed:
+                        _step11_summary = (
+                            "_Step 11 cleanup pass applied changes to: "
+                            f"{', '.join(_cleanup_changed)}._"
+                        )
+                    else:
+                        _step11_summary = (
+                            "_Step 11 cleanup pass completed; no additional "
+                            "files were modified (cleanup found nothing to do "
+                            "or reverted itself when verification failed)._"
+                        )
+                    _step11_desc = STEP_DESCRIPTIONS.get(11, "Code cleanup")
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=current_cycle * 10000 + 11,
+                        body=f"## Step 11/11: {_step11_desc}\n\n{_step11_summary}",
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                    # Round-3/4 of Greg's review (idempotency across resume):
+                    # persist `step_comments` *immediately* after the post so
+                    # the composite key (`current_cycle * 10000 + 11`)
+                    # survives the failure-return paths below — specifically
+                    # the `ci_success=False` branch which returns without
+                    # touching workflow state.
+                    #
+                    # Round-4 fix: do NOT mutate the inner-loop `state_data`
+                    # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
+                    # success paths the inner `for step_num in range(1, 10)`
+                    # loop never runs, so `state_data` is never assigned in
+                    # this invocation and the mutation would raise
+                    # `UnboundLocalError` inside the broad try/except. Build
+                    # a fresh post-loop state dict from function-scope
+                    # locals so the save works on every entry path.
+                    save_workflow_state(
+                        cwd, issue_number, workflow_name,
+                        _build_post_loop_state(
+                            workflow_name=workflow_name,
+                            issue_url=issue_url,
+                            issue_number=issue_number,
+                            current_cycle=current_cycle,
+                            last_completed_step=last_completed_step,
+                            step_outputs=step_outputs,
+                            dev_unit_states=dev_unit_states,
+                            skipped_steps=skipped_steps,
+                            total_cost=total_cost,
+                            model_used=model_used,
+                            changed_files=changed_files,
+                            github_comment_id=github_comment_id,
+                            step_comments_set=step_comments_set,
+                            initial_file_hashes=initial_file_hashes,
+                            initial_sha=initial_sha,
+                            clean_restart=effective_clean_restart,
+                        ),
+                        state_dir, repo_owner, repo_name,
+                        use_github_state, github_comment_id,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed (step 11): {_exc}[/yellow]")
 
             if skip_ci:
                 if not quiet:
@@ -2243,12 +3334,99 @@ def run_agentic_e2e_fix_orchestrator(
             )
             total_cost += ci_cost
             changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
+            # Round-2 of Greg's review: extend trusted step-comment coverage
+            # past the linear `range(1, 10)` loop. Step 10 (CI validation)
+            # runs outside the loop and must also post a visible per-step
+            # comment via trusted PDD credentials, keyed by
+            # `current_cycle * 10000 + 10` so the composite-key scheme matches
+            # the in-loop encoding and dedup survives resume/retry.
             if ci_success:
+                try:
+                    _step10_desc = STEP_DESCRIPTIONS.get(10, "CI validation")
+                    _step10_body = (
+                        f"## Step 10/11: {_step10_desc}\n\n"
+                        f"_Step 10 completed; CI validation finished: {ci_message}_"
+                    )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=current_cycle * 10000 + 10,
+                        body=_step10_body,
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                    # Round-3/4 of Greg's review (idempotency across resume):
+                    # persist `step_comments` *immediately* after the post so
+                    # the composite key (`current_cycle * 10000 + 10`)
+                    # survives the failure-return path below — specifically
+                    # when `_run_final_checkup_on_pr` returns
+                    # `checkup_success=False` and the orchestrator returns
+                    # without clearing or saving state.
+                    #
+                    # Round-4 fix: do NOT mutate the inner-loop `state_data`
+                    # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
+                    # success paths the inner step loop never runs, so
+                    # `state_data` is never assigned and the mutation would
+                    # raise UnboundLocalError. Build a fresh post-loop state
+                    # dict from function-scope locals so the save works on
+                    # every entry path.
+                    save_workflow_state(
+                        cwd, issue_number, workflow_name,
+                        _build_post_loop_state(
+                            workflow_name=workflow_name,
+                            issue_url=issue_url,
+                            issue_number=issue_number,
+                            current_cycle=current_cycle,
+                            last_completed_step=last_completed_step,
+                            step_outputs=step_outputs,
+                            dev_unit_states=dev_unit_states,
+                            skipped_steps=skipped_steps,
+                            total_cost=total_cost,
+                            model_used=model_used,
+                            changed_files=changed_files,
+                            github_comment_id=github_comment_id,
+                            step_comments_set=step_comments_set,
+                            initial_file_hashes=initial_file_hashes,
+                            initial_sha=initial_sha,
+                            clean_restart=effective_clean_restart,
+                        ),
+                        state_dir, repo_owner, repo_name,
+                        use_github_state, github_comment_id,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed (step 10): {_exc}[/yellow]")
                 if ci_message not in {
                     "No open PR found for current branch; skipping CI validation",
                     "No CI checks detected",
                 }:
                     final_message = ci_message
+
+                checkup_success, checkup_message, checkup_cost, checkup_model = (
+                    _run_final_checkup_on_pr(
+                        issue_url=issue_url,
+                        issue_number=issue_number,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout_adder=timeout_adder,
+                        use_github_state=use_github_state,
+                        reasoning_time=reasoning_time,
+                        ci_step_template=step10_template,
+                        ci_validation_timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
+                    )
+                )
+                total_cost += checkup_cost
+                if checkup_model:
+                    model_used = checkup_model
+                if not checkup_success:
+                    return False, checkup_message, total_cost, model_used, changed_files
+                if checkup_message not in {
+                    "No open PR found for current branch; skipping final checkup",
+                }:
+                    final_message = checkup_message
 
                 clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
                 return True, final_message, total_cost, model_used, changed_files
@@ -2282,6 +3460,12 @@ def run_agentic_e2e_fix_orchestrator(
 
     except KeyboardInterrupt:
         console.print("\n[bold red]Interrupted by user. Saving state...[/bold red]")
+        # Capture the workflow-start snapshot and current-cycle snapshot if
+        # they were initialized; an interrupt before initialization leaves
+        # these as locals that may not exist, so guard with locals().get().
+        _interrupt_initial_hashes = locals().get("initial_file_hashes")
+        _interrupt_initial_sha = locals().get("initial_sha")
+        _interrupt_cycle_start_hashes = locals().get("cycle_start_hashes")
         state_data = {
             "workflow": workflow_name,
             "issue_url": issue_url,
@@ -2295,7 +3479,31 @@ def run_agentic_e2e_fix_orchestrator(
             "model_used": model_used,
             "changed_files": changed_files,
             "last_saved_at": datetime.now().isoformat(),
-            "github_comment_id": github_comment_id
+            "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
+            "clean_restart": effective_clean_restart,
+            # Issue #1034 codex P2 follow-up: persist workflow-start and
+            # cycle-start snapshots so resume after an interrupt still has
+            # the data needed for direct-edit detection and the cycle-waste-
+            # breaker in-cycle-progress proof.
+            "initial_file_hashes": (
+                dict(_interrupt_initial_hashes)
+                if isinstance(_interrupt_initial_hashes, dict)
+                else None
+            ),
+            "initial_sha": _interrupt_initial_sha if isinstance(_interrupt_initial_sha, str) else None,
+            # If the cycle was running on an unverified baseline, save None
+            # so the next resume re-detects "unverified" via the missing-
+            # snapshot path rather than trusting a stale post-edit local.
+            "cycle_start_hashes": (
+                None
+                if locals().get("cycle_baseline_unverified", False)
+                else (
+                    dict(_interrupt_cycle_start_hashes)
+                    if isinstance(_interrupt_cycle_start_hashes, dict)
+                    else None
+                )
+            ),
         }
         save_workflow_state(
             cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
@@ -2305,6 +3513,12 @@ def run_agentic_e2e_fix_orchestrator(
     except Exception as e:
         console.print(f"\n[bold red]Fatal error: {e}[/bold red]")
         try:
+            # Same locals().get() guard as the KeyboardInterrupt handler:
+            # the exception may fire before initial_file_hashes etc. are
+            # initialized.
+            _exc_initial_hashes = locals().get("initial_file_hashes")
+            _exc_initial_sha = locals().get("initial_sha")
+            _exc_cycle_start_hashes = locals().get("cycle_start_hashes")
             state_data = {
                 "workflow": workflow_name,
                 "issue_url": issue_url,
@@ -2318,7 +3532,32 @@ def run_agentic_e2e_fix_orchestrator(
                 "model_used": model_used,
                 "changed_files": changed_files,
                 "last_saved_at": datetime.now().isoformat(),
-                "github_comment_id": github_comment_id
+                "github_comment_id": github_comment_id,
+                "step_comments": sorted(step_comments_set),
+                "clean_restart": effective_clean_restart,
+                # Issue #1034 codex P2 follow-up: persist workflow-start and
+                # cycle-start snapshots so resume after a fatal exception
+                # still has the data needed for direct-edit detection and
+                # the cycle-waste-breaker in-cycle-progress proof.
+                "initial_file_hashes": (
+                    dict(_exc_initial_hashes)
+                    if isinstance(_exc_initial_hashes, dict)
+                    else None
+                ),
+                "initial_sha": _exc_initial_sha if isinstance(_exc_initial_sha, str) else None,
+                # If the cycle was running on an unverified baseline, save
+                # None so the next resume re-detects "unverified" via the
+                # missing-snapshot path rather than trusting a stale post-
+                # edit local.
+                "cycle_start_hashes": (
+                    None
+                    if locals().get("cycle_baseline_unverified", False)
+                    else (
+                        dict(_exc_cycle_start_hashes)
+                        if isinstance(_exc_cycle_start_hashes, dict)
+                        else None
+                    )
+                ),
             }
             save_workflow_state(
                 cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id

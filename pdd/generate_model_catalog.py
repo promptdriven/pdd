@@ -561,13 +561,40 @@ def _has_region(model_id: str) -> bool:
     return bool(_REGION_RE.match(model_id))
 
 
+# Anthropic models that require the new adaptive thinking API
+# (thinking={"type":"adaptive"} + output_config.effort) instead of the
+# legacy budget shape. Direct-Anthropic-provider routes enforce this;
+# Azure AI / Bedrock / Vertex relays do not yet (as of 2026-05-24) — keep
+# those on budget/effort until separately audited.
+_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7"}
+
+
+def _is_adaptive_anthropic_model(model_id: str, litellm_provider: str) -> bool:
+    """Return True for direct-Anthropic-provider Opus 4.7+ rows.
+
+    Only emit ``reasoning_type='adaptive'`` for the Anthropic provider, not
+    Azure AI — adaptive serialization in ``llm_invoke.py`` is gated on
+    ``provider_lower == 'anthropic'`` (line ~3556), so flipping Azure AI
+    rows would silently send no thinking parameter at all rather than the
+    correct adaptive shape.
+    """
+    root = _get_provider_root(litellm_provider)
+    if root != "anthropic":
+        return False
+    base = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
+    return base in _ADAPTIVE_ANTHROPIC_MODELS
+
+
 def _infer_reasoning_type(model_id: str, litellm_provider: str, entry: dict) -> str:
     supports_reasoning = entry.get("supports_reasoning", False)
     if not supports_reasoning:
         return "none"
     root = _get_provider_root(litellm_provider)
-    # Anthropic (and Azure AI hosting Claude) use "budget" reasoning tokens
+    # Anthropic (and Azure AI hosting Claude) use "budget" reasoning tokens,
+    # except for newer Opus models that require the adaptive thinking API.
     if root in _ANTHROPIC_PROVIDERS:
+        if _is_adaptive_anthropic_model(model_id, litellm_provider):
+            return "adaptive"
         return "budget"
     # All other providers use "effort" (low/medium/high string)
     return "effort"
@@ -578,6 +605,10 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
     if not entry.get("supports_reasoning", False):
         return 0
     if root in _ANTHROPIC_PROVIDERS:
+        if _is_adaptive_anthropic_model(model_id, litellm_provider):
+            # adaptive serialization doesn't read this value, but match the
+            # validated pdd_cloud backend CSV (backend/functions/.pdd/llm_model.csv)
+            return 16000
         return 128000
     return 0
 

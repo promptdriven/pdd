@@ -18,3 +18,10 @@
 
 % Error Handling
 - Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+
+% Preservation of Existing Comments and Docstrings (issue #926)
+- When editing or regenerating an existing file, you MUST preserve all inline comments (`# ...`) and docstrings (`"""..."""`) verbatim in any function, class, method, or code block whose behavior is not changed by this prompt edit.
+- Treat the existing file as load-bearing context: comments and docstrings frequently encode WHY-prose, root-cause analyses, and references to prior issues (e.g. `# see #813`, `# negative-lookahead because ...`). Stripping them destroys institutional memory that is not recoverable from `git blame`.
+- Do NOT "minify" or "tidy" untouched regions. Specifically: do not collapse blank lines, do not downgrade type annotations (e.g. `set[str]` to `set`), do not rewrap `import` statements in `try/except ImportError`, do not change `except Exception:` to bare `except:` or vice versa, and do not rewrite imports in regions you are not changing.
+- The user-supplied prompt is the *intent of change*; everything else in the existing file must remain byte-identical wherever possible.
+- When a region MUST be edited to satisfy the prompt, keep every still-applicable docstring sentence and inline comment verbatim, and add new ones describing only the new behavior.

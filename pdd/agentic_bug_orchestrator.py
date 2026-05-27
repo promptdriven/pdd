@@ -6,9 +6,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 from rich.markup import escape
@@ -20,6 +21,9 @@ from .agentic_common import (
     clear_workflow_state,
     set_agentic_progress,
     clear_agentic_progress,
+    post_step_comment,
+    _extract_step_report,
+    _sanitize_comment_body,
     DEFAULT_MAX_RETRIES,
 )
 from .get_test_command import get_test_command_for_file
@@ -149,7 +153,14 @@ def _resolve_main_ref(git_root: Path) -> str:
     return "HEAD"
 
 
-def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
+def _setup_worktree(
+    cwd: Path,
+    issue_number: int,
+    quiet: bool,
+    resume_existing: bool = False,
+    *,
+    clean_restart: bool = False,
+) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
     Returns (worktree_path, error_message).
@@ -161,6 +172,18 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
     branch_name = f"fix/issue-{issue_number}"
     worktree_rel_path = Path(".pdd") / "worktrees" / f"fix-issue-{issue_number}"
     worktree_path = git_root / worktree_rel_path
+
+    if clean_restart:
+        try:
+            lease_refspec = f"+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}"
+            subprocess.run(
+                ["git", "fetch", "origin", lease_refspec],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            pass
 
     # Clean up existing directory if it exists
     if worktree_path.exists():
@@ -179,10 +202,15 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
     # Clean up branch if it exists
     reset_after_attach = False
     branch_exists = _branch_exists(cwd, branch_name)
-    if branch_exists and not resume_existing:
+    if branch_exists and (clean_restart or not resume_existing):
         success, _err = _delete_branch(cwd, branch_name)
         if success:
             branch_exists = False
+        elif clean_restart:
+            return None, (
+                f"Cannot perform clean restart: local branch {branch_name!r} "
+                "could not be deleted. Remove the worktree using it, then retry."
+            )
         else:
             # Branch couldn't be deleted — will reuse with --force,
             # then reset to HEAD so old commits don't pollute the PR.
@@ -198,6 +226,12 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
             # Resolve main branch as base — avoids leaking unrelated commits
             # when user runs pdd bug from a non-main branch.
             base_ref = _resolve_main_ref(git_root)
+            if clean_restart and base_ref == "HEAD":
+                return None, (
+                    "Cannot perform clean restart: no main/master ref resolves "
+                    "(checked origin/main, origin/master, main, master). Refusing "
+                    "to base the fresh bug worktree on current HEAD."
+                )
             cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref]
         subprocess.run(
             cmd,
@@ -372,12 +406,17 @@ def _parse_expansion_items(step6_output: str) -> str:
     """Extract expansion items from Step 6's EXPANSION_ITEMS marker.
 
     Returns a deduplicated comma-separated string of expansion items, or "none"
-    if the marker is absent, empty, or explicitly "none" (SCOPE_MATCH / NO_PROPOSED_FIX).
+    if the marker is absent, empty, or explicitly "none" (PROPOSED_FIX_MATCH /
+    NO_PROPOSED_FIX).
+
+    When the orchestrator's PATTERN_SEARCH retry appends an updated
+    EXPANSION_ITEMS line, the LAST marker wins so resume re-derives the
+    merged set (PR #1210 follow-up).
     """
-    match = re.search(r"EXPANSION_ITEMS:\s*(.+)", step6_output)
-    if not match:
+    matches = list(re.finditer(r"EXPANSION_ITEMS:\s*(.+)", step6_output))
+    if not matches:
         return "none"
-    raw = match.group(1).strip()
+    raw = matches[-1].group(1).strip()
     if not raw or raw.lower() == "none":
         return "none"
     seen: set[str] = set()
@@ -390,12 +429,156 @@ def _parse_expansion_items(step6_output: str) -> str:
     return ", ".join(deduped) if deduped else "none"
 
 
+# Allowed scope-classification values (issue #1208).
+_SCOPE_CLASSIFICATIONS = {"LOCALIZED", "SIBLING_PATTERN", "CROSS_CUTTING"}
+
+
+def _parse_scope_classification(step6_output: str) -> str:
+    """Extract SCOPE_CLASSIFICATION from Step 6 output.
+
+    Returns one of LOCALIZED, SIBLING_PATTERN, CROSS_CUTTING. Defaults to
+    LOCALIZED if the marker is missing, empty, or unrecognized (backward
+    compatible with older Step 6 runs).
+    """
+    # The orchestrator may append an updated SCOPE_CLASSIFICATION line after a
+    # PATTERN_SEARCH retry promotes scope back from the auto-downgrade. The
+    # LAST marker wins so resume sees the post-retry value (PR #1210 follow-up).
+    matches = list(re.finditer(r"SCOPE_CLASSIFICATION:\s*(.+)", step6_output))
+    if not matches:
+        return "LOCALIZED"
+    value = matches[-1].group(1).strip().upper()
+    # Strip trailing punctuation/comment text after the enum token.
+    value = re.split(r"[\s|#]", value, 1)[0] if value else value
+    if value in _SCOPE_CLASSIFICATIONS:
+        return value
+    return "LOCALIZED"
+
+
+def _parse_needs_fix(step6_output: str) -> List[Tuple[str, str]]:
+    """Parse NEEDS_FIX lines from Step 6 output (issue #1208).
+
+    Each NEEDS_FIX line has the form `NEEDS_FIX: <item> | <reason>`. The item
+    may be a source path or a stable value-level sibling ID such as
+    `extension:.htm`. Returns a list of (item, reason) tuples. Lines missing a
+    `|` separator are treated as `(item, "")`. Empty items are skipped.
+    """
+    results: List[Tuple[str, str]] = []
+    for match in re.finditer(r"NEEDS_FIX:\s*(.+)", step6_output):
+        raw = match.group(1).strip()
+        if not raw:
+            continue
+        if "|" in raw:
+            path, _, reason = raw.partition("|")
+        else:
+            path, reason = raw, ""
+        path = path.strip().strip("`")
+        reason = reason.strip()
+        if path:
+            results.append((path, reason))
+    return results
+
+
+def _parse_safe_evidence(step6_output: str) -> List[Tuple[str, str, str]]:
+    """Parse SAFE_EVIDENCE lines from Step 6 output (issue #1208).
+
+    Each SAFE_EVIDENCE line has the form
+    `SAFE_EVIDENCE: <item> | <evidence location> | <reason>`. Returns
+    (item, evidence, reason) tuples. Telemetry-only; not folded into
+    EXPANSION_ITEMS.
+    """
+    results: List[Tuple[str, str, str]] = []
+    for match in re.finditer(r"SAFE_EVIDENCE:\s*(.+)", step6_output):
+        raw = match.group(1).strip()
+        if not raw:
+            continue
+        parts = [p.strip() for p in raw.split("|", 2)]
+        path = parts[0].strip("`") if parts else ""
+        line = parts[1] if len(parts) > 1 else ""
+        reason = parts[2] if len(parts) > 2 else ""
+        if path:
+            results.append((path, line, reason))
+    return results
+
+
+def _merge_needs_fix_into_expansion(
+    expansion: str,
+    needs_fix: List[Tuple[str, str]],
+) -> str:
+    """Fold NEEDS_FIX sibling paths into the EXPANSION_ITEMS string.
+
+    Each sibling is rendered as `<item>: <reason>` (or just `<item>` if no
+    reason was provided) and appended to the existing comma-separated list.
+    Entries already present in `expansion` are not duplicated. Returns "none"
+    only when both inputs are empty.
+    """
+    existing: List[str] = []
+    seen_keys: set[str] = set()
+    if expansion and expansion.lower() != "none":
+        for item in expansion.split(","):
+            cleaned = item.strip()
+            if cleaned:
+                # Split on ": " (colon-space) to separate the item token from
+                # its reason. Splitting on ":" alone miskeys value-level siblings
+                # like "extension:.htm: reason" → key would be "extension" instead
+                # of "extension:.htm", so a follow-up NEEDS_FIX for "extension:.htm"
+                # would bypass dedup and produce a duplicate entry.
+                if ": " in cleaned:
+                    key = cleaned.split(": ", 1)[0].strip().strip("`").lower()
+                else:
+                    key = cleaned.strip("`").lower()
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    existing.append(cleaned)
+    for path, reason in needs_fix:
+        key = path.strip().strip("`").lower()
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        existing.append(f"{path}: {reason}" if reason else path)
+    return ", ".join(existing) if existing else "none"
+
+
+def _apply_step6_scope_markers(step6_output: str, context: Dict[str, Any]) -> str:
+    """Parse Step 6 scope markers and update context (issue #1208).
+
+    Parses SCOPE_CLASSIFICATION, NEEDS_FIX, and SAFE_EVIDENCE markers; folds
+    NEEDS_FIX paths into ``context["step6_expansion_items"]``; deterministically
+    downgrades SIBLING_PATTERN with zero NEEDS_FIX to LOCALIZED; and exposes the
+    final value via ``context["scope_classification"]``. Returns the final
+    classification for callers that want to log it. SAFE_EVIDENCE is parsed for
+    telemetry only and never added to EXPANSION_ITEMS or FIX_LOCATIONS.
+    """
+    classification = _parse_scope_classification(step6_output)
+    needs_fix = _parse_needs_fix(step6_output)
+    safe_evidence = _parse_safe_evidence(step6_output)
+
+    if classification == "SIBLING_PATTERN" and not needs_fix:
+        logger.warning(
+            "Step 6 declared SCOPE_CLASSIFICATION: SIBLING_PATTERN but emitted "
+            "zero NEEDS_FIX lines — auto-downgrading to LOCALIZED (issue #1208)"
+        )
+        classification = "LOCALIZED"
+
+    context["scope_classification"] = classification
+    if needs_fix:
+        current = context.get("step6_expansion_items", "none")
+        context["step6_expansion_items"] = _merge_needs_fix_into_expansion(
+            current, needs_fix
+        )
+    if safe_evidence:
+        logger.info(
+            "Step 6 SAFE_EVIDENCE telemetry: %d look-alike path(s) recorded",
+            len(safe_evidence),
+        )
+    return classification
+
+
 # Maximum number of unclassified grep matches to process.
 _MAX_GREP_RESULTS = 50
 
 # Directories to exclude from grep searches.
 _GREP_EXCLUDE_DIRS = (
-    ".git", ".pdd", "node_modules", "__pycache__", ".venv", "venv",
+    ".git", ".pdd", "context", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
 )
 
@@ -657,20 +840,76 @@ def _verify_pattern_completeness(
     return unclassified_all, "".join(summary_parts)
 
 
+def _is_llm_classified(
+    fname: str,
+    needs_fix: List[str],
+    safe: List[str],
+    unclassified_filenames: List[str],
+) -> bool:
+    """Whether ``fname`` was explicitly classified by the LLM (PR #1210).
+
+    Mirrors the inner logic of :func:`_merge_fix_locations` so callers (the
+    PATTERN_SEARCH retry block in particular) can apply the same exclusion
+    semantics when folding siblings into ``step6_expansion_items``.
+
+    A file is classified when it appears in ``needs_fix`` or ``safe`` by exact
+    path, OR when the LLM emitted a *bare* basename (e.g. ``foo.py`` rather
+    than ``pdd/foo.py``) AND there is exactly one grep-discovered file with
+    that basename. Multiple files sharing a bare basename remain unclassified
+    so the conservative NEEDS_FIX default applies — otherwise a SAFE call on
+    ``pdd/foo.py`` would silently sweep ``tests/foo.py`` out of test coverage.
+    """
+    classified_paths: set[str] = set(needs_fix) | set(safe)
+    if fname in classified_paths:
+        return True
+    classified_bare_basenames: set[str] = {
+        p for p in classified_paths if "/" not in p
+    }
+    base = Path(fname).name
+    if base in classified_bare_basenames:
+        matching_unclassified = [
+            f for f in unclassified_filenames if Path(f).name == base
+        ]
+        return len(matching_unclassified) <= 1
+    return False
+
+
+def _is_fix_location_path(item: str) -> bool:
+    """Return True when a NEEDS_FIX item is a source/worktree path.
+
+    Step 6 can now emit value-level siblings such as ``extension:.htm``. Those
+    must flow into EXPANSION_ITEMS for test coverage, but they are not files and
+    must not pollute FIX_LOCATIONS.
+    """
+    cleaned = item.strip().strip("`")
+    if not cleaned:
+        return False
+    # Domain IDs use "domain:value" and have no path separator before the colon.
+    if re.match(r"^[A-Za-z][A-Za-z0-9_-]*:", cleaned):
+        return False
+    return True
+
+
 def _parse_classification_evidence(
     retry_output: str,
 ) -> Tuple[List[str], List[str]]:
     """Parse NEEDS_FIX / SAFE_EVIDENCE markers from retry LLM output.
 
     Returns:
-        (needs_fix_files, safe_files) — deduplicated lists of file paths.
+        (needs_fix_files, safe_files) — deduplicated lists of source paths or
+        value-level item IDs. Non-path NEEDS_FIX items are filtered before
+        merging into FIX_LOCATIONS but still flow into EXPANSION_ITEMS via
+        _parse_needs_fix.
     """
     needs_fix: List[str] = []
     safe: List[str] = []
     seen: set[str] = set()
 
     for match in re.finditer(r"NEEDS_FIX:\s*(.*)", retry_output):
-        filepath = match.group(1).strip().strip("`")
+        raw = match.group(1).strip()
+        # Accept both legacy bare-path form ("NEEDS_FIX: pdd/foo.py") and the
+        # Step 6 prompt's pipe-delimited form ("NEEDS_FIX: pdd/foo.py | reason").
+        filepath = raw.split("|", 1)[0].strip().strip("`")
         if filepath and filepath not in seen:
             needs_fix.append(filepath)
             seen.add(filepath)
@@ -750,45 +989,18 @@ def _merge_fix_locations(
             # is more specific and should be added alongside or instead.
         return False
 
-    # Add NEEDS_FIX files that aren't already in merged.
+    # Add NEEDS_FIX files that aren't already in merged. Value-level sibling
+    # IDs (extension:.htm, command:resume, etc.) are test-coverage expansion
+    # items, not source locations.
     for f in needs_fix:
+        if not _is_fix_location_path(f):
+            continue
         if not _in_merged(f):
             merged.append(f)
             merged_set.add(f)
 
-    # Build a set of basenames the LLM explicitly classified (needs_fix OR safe).
-    # A bare "utils.py" in this set means the LLM looked at some utils.py file,
-    # so any unclassified utils.py should NOT get the conservative default.
-    # But if there are multiple utils.py in different directories, classification
-    # of one doesn't mean the others were examined — so we track which specific
-    # full paths were classified.
-    classified_paths: set[str] = set(needs_fix) | set(safe)
-    classified_basenames: set[str] = set()
-    for p in classified_paths:
-        if "/" not in p:
-            classified_basenames.add(p)
-
-    def _is_classified(fname: str) -> bool:
-        """Check if fname was classified by the LLM."""
-        if fname in classified_paths:
-            return True
-        # If the LLM used a bare name and fname has a directory,
-        # it's a match only if exactly one file shares that basename.
-        # With multiple files sharing a basename, we can't know which
-        # one the LLM meant, so we treat them all as unclassified
-        # (conservative default applies).
-        base = Path(fname).name
-        if base in classified_basenames:
-            matching_unclassified = [
-                f for f in unclassified_filenames if Path(f).name == base
-            ]
-            # If only one file has this basename, the LLM's bare name
-            # unambiguously refers to it.
-            return len(matching_unclassified) <= 1
-        return False
-
     for fname in unclassified_filenames:
-        if not _is_classified(fname) and not _in_merged(fname):
+        if not _is_llm_classified(fname, needs_fix, safe, unclassified_filenames) and not _in_merged(fname):
             merged.append(fname)
             merged_set.add(fname)
 
@@ -833,10 +1045,56 @@ def _verify_fix_location_coverage(
             if module_path in content or path_no_ext in content or basename_re.search(content):
                 found = True
                 break
+            if _cli_test_covers_command_module(fix_loc, content, work_dir):
+                found = True
+                break
         if not found:
             uncovered.append(fix_loc)
 
     return uncovered
+
+
+def _extract_click_command_names(command_module: Path) -> List[str]:
+    """Extract Click command names declared in a command module."""
+    try:
+        content = command_module.read_text()
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    names: List[str] = []
+    for match in re.finditer(r"@click\.command\(([^)]*)\)", content):
+        args = match.group(1)
+        name_match = re.search(r"\bname\s*=\s*['\"]([^'\"]+)['\"]", args)
+        positional_match = re.match(r"\s*['\"]([^'\"]+)['\"]", args)
+        if name_match:
+            names.append(name_match.group(1))
+        elif positional_match:
+            names.append(positional_match.group(1))
+    return list(dict.fromkeys(names))
+
+
+def _cli_test_covers_command_module(
+    fix_location: str,
+    test_content: str,
+    work_dir: Path,
+) -> bool:
+    """Return True when a CliRunner test exercises a command module via pdd.cli."""
+    if not fix_location.startswith("pdd/commands/") or not fix_location.endswith(".py"):
+        return False
+    if "CliRunner" not in test_content or ".invoke(" not in test_content:
+        return False
+    if not (
+        "from pdd import cli" in test_content
+        or "import pdd.cli" in test_content
+        or "from pdd.cli import" in test_content
+    ):
+        return False
+
+    command_names = _extract_click_command_names(work_dir / fix_location)
+    return any(
+        re.search(rf"['\"]{re.escape(command_name)}['\"]", test_content)
+        for command_name in command_names
+    )
 
 
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
@@ -920,6 +1178,146 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     if step_num == 11 and "E2E_FAIL: Test does not catch bug correctly" in output:
         return "E2E test doesn't catch bug"
     return None
+
+
+def _state_safe_step_output(output: str) -> str:
+    """Redact secrets before persisting step output to resumable/GitHub state."""
+    if not isinstance(output, str):
+        return output
+    return _sanitize_comment_body(output, max_chars=max(len(output) + 1024, 25_000))
+
+
+def _parse_e2e_needed_marker(output: str) -> Optional[str]:
+    """Return the last E2E_NEEDED yes/no marker outside any step_report block."""
+    if not output:
+        return None
+    outside_report = re.sub(
+        r"<step_report>.*?</step_report>",
+        "",
+        output,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    matches = re.findall(
+        r"(?im)^\s*E2E_NEEDED:\s*(yes|no)\b",
+        outside_report,
+    )
+    return matches[-1].lower() if matches else None
+
+
+def _maybe_post_step_comment(
+    *,
+    step_success: bool,
+    step_num: Union[int, float],
+    description: str,
+    step_output: str,
+    state: Dict,
+    state_dir: Path,
+    cwd: Path,
+    issue_number: int,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool,
+    github_comment_id: Optional[str],
+) -> Optional[str]:
+    """Post a per-step visible comment via trusted credentials (issue #964).
+
+    Used by the bug orchestrator's three step-exit paths (success-continue,
+    FAST_TRACK-continue at step 3, and hard-stop early return). Resume-safe:
+    ``state["step_comments"][n]["posted"]`` gates reposts. Returns the
+    (possibly refreshed) ``github_comment_id`` so the caller can thread it.
+
+    NOTE: a literal ``</step_report>`` substring inside the model body would
+    terminate ``_extract_step_report`` early. Acceptable for v1 — models do
+    not normally emit the closing tag inside their own report body.
+    """
+    # Defensive normalization: stale/corrupted persisted state (e.g. a list, or
+    # a per-step entry that isn't a dict) would otherwise crash on `.get()`.
+    # Only a literal `True` for `posted` counts — truthy strings/ints don't.
+    raw_sc = state.get("step_comments")
+    if not isinstance(raw_sc, dict):
+        raw_sc = {}
+    state["step_comments"] = raw_sc
+    entry = raw_sc.get(str(step_num))
+    if not step_success:
+        if isinstance(entry, dict) and entry.get("failed_posted") is True:
+            return github_comment_id
+        step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+        posted = post_step_comment(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=step_num_int,
+            total_steps=12,
+            description=description,
+            output=step_output,
+            cwd=cwd,
+        )
+        state["step_comments"][str(step_num)] = {
+            "failed_posted": bool(posted),
+            "failed_pending": not bool(posted),
+        }
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+        return github_comment_id
+    if isinstance(entry, dict) and entry.get("posted") is True:
+        return github_comment_id
+    extracted = _extract_step_report(step_output)
+    is_fallback = extracted is None
+    if is_fallback:
+        body_to_post = (
+            f"_Step {step_num} completed; no `<step_report>` block "
+            f"returned by agent. Raw output retained in workflow state._"
+        )
+    else:
+        body_to_post = extracted
+    step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+    posted = post_step_comment(
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        step_num=step_num_int,
+        total_steps=12,
+        description=description,
+        output=step_output,
+        cwd=cwd,
+        body=body_to_post,
+    )
+    # Persist outcome regardless of success so the resume backfill can
+    # distinguish PR-era no-report fallback attempts (retryable) from legacy
+    # pre-PR outputs (where the agent posted comments itself and we must NOT
+    # repost). For no-report outputs the saved state is the only signal —
+    # `_extract_step_report` will return None on resume too.
+    if posted:
+        entry: Dict[str, object] = {"posted": True}
+        if is_fallback:
+            entry["fallback"] = True
+        state["step_comments"][str(step_num)] = entry
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+    elif is_fallback:
+        # Transient GitHub posting failure on a no-report step: mark it so
+        # the resume backfill knows to retry. Without this marker the backfill
+        # at the top of the orchestrator would skip the saved output (no
+        # `<step_report>` to extract) and the comment would be lost forever.
+        state["step_comments"][str(step_num)] = {
+            "posted": False,
+            "fallback_pending": True,
+        }
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+    return github_comment_id
 
 
 def _get_state_dir(cwd: Path) -> Path:
@@ -1186,8 +1584,10 @@ def _scan_step9_file_for_new_patterns(
         - pre-snapshot is a strict line-prefix of current -> pure append,
           scan only appended lines (preserves issue #990 optimisation).
         - any other change (rewrite shorter, rewrite same length, or a
-          rewrite that happens to extend the file) -> full scan, so real
-          violations introduced by the rewrite are still caught.
+          rewrite that happens to extend the file) -> full scan, then subtract
+          violation identities that already existed in the snapshot. This
+          catches real new violations without retrying just because the model
+          rewrote a file that already had a structural test.
     """
     path = Path(file_path)
 
@@ -1212,7 +1612,71 @@ def _scan_step9_file_for_new_patterns(
             str(path), start_line=len(pre_lines) + 1
         )
 
-    return detect_structural_test_patterns(str(path))
+    current_violations = detect_structural_test_patterns(str(path))
+    return _filter_preexisting_structural_violations(
+        current_violations,
+        cur_lines,
+        pre_snapshot,
+    )
+
+
+def _detect_structural_test_patterns_in_text(content: str) -> List[str]:
+    """Run the structural detector against an in-memory snapshot."""
+    if not content.strip():
+        return []
+
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        return detect_structural_test_patterns(str(tmp_path))
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def _structural_violation_identity(
+    violation: str,
+    lines: List[str],
+) -> Tuple[str, str]:
+    """Return a stable identity for a structural violation independent of line number."""
+    match = re.match(r"Line\s+(\d+):\s*(.*)", violation)
+    if not match:
+        return violation, ""
+
+    line_index = int(match.group(1)) - 1
+    source_line = lines[line_index].strip() if 0 <= line_index < len(lines) else ""
+    description = match.group(2).strip()
+    return description, source_line
+
+
+def _filter_preexisting_structural_violations(
+    current_violations: List[str],
+    current_lines: List[str],
+    pre_snapshot: str,
+) -> List[str]:
+    """Remove structural violations that were already present pre-Step 9."""
+    if not current_violations:
+        return []
+
+    pre_lines = pre_snapshot.splitlines()
+    pre_violations = _detect_structural_test_patterns_in_text(pre_snapshot)
+    preexisting = {
+        _structural_violation_identity(violation, pre_lines)
+        for violation in pre_violations
+    }
+    if not preexisting:
+        return current_violations
+
+    return [
+        violation
+        for violation in current_violations
+        if _structural_violation_identity(violation, current_lines) not in preexisting
+    ]
 
 
 def _extract_violation_snippets(
@@ -1324,9 +1788,10 @@ def run_agentic_bug_orchestrator(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 11-step agentic bug investigation workflow.
+    Orchestrates the 12-step agentic bug investigation workflow.
     
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
@@ -1340,9 +1805,27 @@ def run_agentic_bug_orchestrator(
 
     state_dir = _get_state_dir(cwd)
 
-    # Load state
-    state, loaded_gh_id = load_workflow_state(
-        cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+    if clean_restart:
+        try:
+            clear_workflow_state(
+                cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: clean_restart pre-clear failed (continuing with fresh in-memory state): {e}[/yellow]"
+                )
+        state, loaded_gh_id = None, None
+    else:
+        # Load state
+        state, loaded_gh_id = load_workflow_state(
+            cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+        )
+
+    persisted_clean_restart = (state or {}).get("clean_restart", False)
+    effective_clean_restart = clean_restart or persisted_clean_restart is True or (
+        isinstance(persisted_clean_restart, str)
+        and persisted_clean_restart.lower() == "true"
     )
 
     # Initialize variables from state or defaults
@@ -1354,6 +1837,11 @@ def run_agentic_bug_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        # Normalize the persisted `step_comments` shape early so any code path
+        # touching it (backfill sweep, `_maybe_post_step_comment`) sees a dict
+        # rather than crashing on a corrupted/legacy value (e.g. a list).
+        if not isinstance(state.get("step_comments"), dict):
+            state["step_comments"] = {}
     else:
         state = {"step_outputs": {}}
         last_completed_step = 0
@@ -1363,6 +1851,9 @@ def run_agentic_bug_orchestrator(
         github_comment_id = None
         worktree_path = None
 
+    if effective_clean_restart:
+        state["clean_restart"] = True
+
     context = {
         "issue_url": issue_url,
         "issue_content": issue_content,
@@ -1371,17 +1862,42 @@ def run_agentic_bug_orchestrator(
         "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "clean_restart": "true" if effective_clean_restart else "false",
         "step5_reproduction_tests": "",
         "fix_locations": "none",
         "step6_expansion_items": "none",
+        "scope_classification": "LOCALIZED",
         "step9_test_verification": "",
+        "planned_test_count": "all",
     }
+
+    if clean_restart:
+        startup_body = (
+            "- **Mode**: Clean restart\n"
+            f"- **Model**: {model_used}\n"
+            "- **Command**: pdd bug\n"
+        )
+        try:
+            post_step_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=0,
+                total_steps=12,
+                description="Workflow Startup",
+                output="",
+                cwd=cwd,
+                body=startup_body,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(f"[yellow]Workflow startup comment failed: {exc}[/yellow]")
     
     # Populate context with previous step outputs
     for s_key, s_out in step_outputs.items():
         context[f"step{s_key}_output"] = s_out
 
-    # Re-extract files from step 5.5/7/9 outputs if available
+    # Re-extract files from step 5/7/9/11 outputs if available
     changed_files: List[str] = []
     
     # Step 5
@@ -1391,7 +1907,7 @@ def run_agentic_bug_orchestrator(
         repro_files = _parse_changed_files(s5_out, "REPRO_FILES_CREATED")
         changed_files.extend(repro_files)
 
-    # Step 5.5
+    # Legacy fractional prompt-classification state from older resumed runs.
     if "step5.5_output" in context:
         s55_out = context["step5.5_output"]
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
@@ -1402,6 +1918,9 @@ def run_agentic_bug_orchestrator(
         fix_locs = _parse_fix_locations(context["step6_output"])
         context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
         context["step6_expansion_items"] = _parse_expansion_items(context["step6_output"])
+        # Re-apply Step 6 scope markers (issue #1208) on resume so
+        # scope_classification + folded NEEDS_FIX siblings reach Steps 8/9.
+        _apply_step6_scope_markers(context["step6_output"], context)
 
     # Step 7
     if "step7_output" in context:
@@ -1410,6 +1929,11 @@ def run_agentic_bug_orchestrator(
         created = _parse_changed_files(s7_out, "FILES_CREATED")
         modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
         changed_files.extend(prompt_fixed + created + modified)
+
+    # Step 8
+    if "step8_output" in context:
+        planned = _count_planned_tests(context["step8_output"])
+        context["planned_test_count"] = str(planned) if planned > 0 else "all"
 
     # Step 9
     if "step9_output" in context:
@@ -1430,6 +1954,27 @@ def run_agentic_bug_orchestrator(
 
     # State validation: find actual last successful step
     ordered_steps: List[Union[int, float]] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    # Codex review #5 of PR #966: legacy E2E-skip states (before we persisted
+    # a synthetic Step 11 entry) can have step_outputs with keys 1..10 + 12
+    # but no 11. The contiguous walk below would stop at 10, downgrade a
+    # completed last_completed_step from 12 → 10, miss Step 12's backfill,
+    # and rerun the side-effectful PR creation step. Heal those states by
+    # synthesizing the missing Step 11 entry in-memory when Step 10's cached
+    # output indicates E2E_NEEDED:no AND Step 12 is also cached.
+    s10_out_pre = step_outputs.get("10")
+    s12_out_pre = step_outputs.get("12")
+    if (
+        "11" not in step_outputs
+        and isinstance(s10_out_pre, str)
+        and _parse_e2e_needed_marker(s10_out_pre) == "no"
+        and isinstance(s12_out_pre, str)
+        and not s12_out_pre.startswith("FAILED:")
+    ):
+        step_outputs["11"] = (
+            "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+            "provide sufficient coverage."
+        )
+        state.setdefault("step_outputs", {})["11"] = step_outputs["11"]
     actual_last: Union[int, float] = 0
     for s in ordered_steps:
         key = str(s)
@@ -1476,9 +2021,86 @@ def run_agentic_bug_orchestrator(
 
     total_steps = len(steps_config)  # 12
 
+    # Issue #964: backfill any visible step comments missed by a prior crash
+    # or transient `gh issue comment` failure. Only retries steps whose
+    # outputs we already trust (not "FAILED:" sentinels). The helper is
+    # idempotent — successful resumes are gated by step_comments[n].posted.
+    #
+    # Gating (codex review #4 of PR #966):
+    # - Require the saved output to contain a `<step_report>` block, OR a
+    #   prior fallback attempt that failed (`fallback_pending`). Legacy pre-PR
+    #   states (where models posted comments themselves) and the synthetic
+    #   skipped-step outputs from FAST_TRACK (lines 1796-1797 below) both
+    #   lack this marker AND have no `step_comments` entry, so they're skipped
+    #   — preventing duplicate or bogus comments on resume.
+    # - Codex review #5 of PR #966: persist `fallback_pending` for no-report
+    #   outputs whose initial post failed, so we can safely retry them here
+    #   without confusing them with legacy outputs.
+    # - Normalize `step_comments` shape: a stale list / non-dict entry / non-
+    #   boolean `posted` would otherwise crash with AttributeError here.
+    # - Codex review #6 of PR #966: gate the sweep to the contiguous trusted
+    #   range. The validator above corrects `last_completed_step` down when
+    #   `step_outputs` has gaps (e.g. cached 1 and 3 but no 2). Iterating
+    #   every saved key would then publish a visible comment for stale
+    #   downstream step 3 before step 2 is rerun — leaking progress the
+    #   orchestrator has already decided is not valid. Walk `ordered_steps`
+    #   only up to `last_completed_step` (post-validation) instead.
+    if state.get("step_outputs") and last_completed_step > 0:
+        raw_sc = state.get("step_comments")
+        if not isinstance(raw_sc, dict):
+            raw_sc = {}
+        state["step_comments"] = raw_sc
+        step_outputs_map = state["step_outputs"]
+        for s_num in ordered_steps:
+            if s_num > last_completed_step:
+                break
+            s_key = str(s_num)
+            s_out = step_outputs_map.get(s_key)
+            if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
+                continue
+            entry = raw_sc.get(s_key)
+            if isinstance(entry, dict) and entry.get("posted") is True:
+                continue
+            fallback_pending = (
+                isinstance(entry, dict) and entry.get("fallback_pending") is True
+            )
+            if _extract_step_report(s_out) is None and not fallback_pending:
+                continue
+            try:
+                s_num_int = int(float(s_key))
+            except (TypeError, ValueError):
+                continue
+            desc = next(
+                (d for (n, _name, d) in steps_config if n == s_num_int),
+                str(s_key),
+            )
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=s_num_int,
+                description=desc,
+                step_output=s_out,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
+
     current_work_dir = cwd
     consecutive_failures = 0
+    terminal_step_failed: Optional[str] = None
     skip_e2e = False
+
+    # Codex review #5 of PR #966: rehydrate skip_e2e from cached Step 10
+    # output so a resume that lands on Step 11 (e.g. after a crash between
+    # Steps 10 and 11) still honors the E2E_NEEDED:no classification instead
+    # of unconditionally rerunning E2E generation.
+    cached_step10 = step_outputs.get("10")
+    if isinstance(cached_step10, str) and _parse_e2e_needed_marker(cached_step10) == "no":
+        skip_e2e = True
 
     # Worktree restoration for resume
     if start_step >= 5 and start_step <= 12:
@@ -1488,7 +2110,13 @@ def run_agentic_bug_orchestrator(
             current_work_dir = worktree_path
             context["worktree_path"] = str(worktree_path)
         else:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
+            wt_path, err = _setup_worktree(
+                cwd,
+                issue_number,
+                quiet,
+                resume_existing=True,
+                clean_restart=effective_clean_restart,
+            )
             if not wt_path:
                 return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
             worktree_path = wt_path
@@ -1527,12 +2155,18 @@ def run_agentic_bug_orchestrator(
                         text=True,
                         check=True
                     ).stdout.strip()
-                    if current_branch not in ["main", "master"] and not quiet:
+                    if not effective_clean_restart and current_branch not in ["main", "master"] and not quiet:
                         console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
 
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
+                wt_path, err = _setup_worktree(
+                    cwd,
+                    issue_number,
+                    quiet,
+                    resume_existing=False,
+                    clean_restart=effective_clean_restart,
+                )
                 if not wt_path:
                     return False, f"Failed to create worktree: {err}", total_cost, model_used, []
                 worktree_path = wt_path
@@ -1556,6 +2190,28 @@ def run_agentic_bug_orchestrator(
         if step_num == 11 and skip_e2e:
             if not quiet:
                 console.print("Skipping Step 11 (E2E): unit tests provide sufficient coverage")
+            # Codex review #5 of PR #966: persist a synthetic Step 11 skip
+            # entry. Without it, step_outputs has a gap at "11" so the resume
+            # validator (lines 1531-1543) walks contiguously, stops at 10,
+            # and silently downgrades a completed last_completed_step=12 to
+            # 10 — causing Step 12's cached body to miss backfill AND the
+            # side-effectful PR creation step to rerun on resume. The
+            # synthetic body intentionally omits <step_report> so the
+            # backfill sweep (lines 1622-1623) correctly skips posting any
+            # bogus "step 11 done" comment.
+            synthetic = (
+                "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                "provide sufficient coverage."
+            )
+            state["step_outputs"]["11"] = synthetic
+            state["last_completed_step"] = 11
+            last_completed_step = 11
+            save_result = save_workflow_state(
+                cwd, issue_number, "bug", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
             continue
 
         # Record progress so KeyboardInterrupt can report how far we got.
@@ -1682,8 +2338,24 @@ def run_agentic_bug_orchestrator(
             consecutive_failures += 1
             if consecutive_failures >= 3:
                 state["last_completed_step"] = last_completed_step
-                state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-                save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                state["step_outputs"][str(step_num)] = f"FAILED: {_state_safe_step_output(step_output)}"
+                save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                if save_result:
+                    github_comment_id = save_result
+                _maybe_post_step_comment(
+                    step_success=False,
+                    step_num=step_num,
+                    description=description,
+                    step_output=step_output,
+                    state=state,
+                    state_dir=state_dir,
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
+                    github_comment_id=github_comment_id,
+                )
                 return False, "Aborting: 3 consecutive steps failed — agent providers unavailable", total_cost, model_used, changed_files
         else:
             consecutive_failures = 0
@@ -1697,13 +2369,37 @@ def run_agentic_bug_orchestrator(
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
             context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
-            state["step_outputs"]["4"] = context["step4_output"]
-            state["step_outputs"]["5"] = context["step5_output"]
+            # Persist step 3's actual output BEFORE the synthetic 4/5 entries
+            # (codex review of PR #966 #3). Without this, the resume validator
+            # at lines 1495-1507 walks ordered_steps, finds the gap at "3", and
+            # downgrades last_completed_step to 0 — forcing a re-run of triage
+            # even though step 3's comment was already posted.
+            state["step_outputs"]["3"] = _state_safe_step_output(step_output)
+            state["step_outputs"]["4"] = _state_safe_step_output(context["step4_output"])
+            state["step_outputs"]["5"] = _state_safe_step_output(context["step5_output"])
             state["last_completed_step"] = 5
             last_completed_step = 5
             # Recalculate start_step so the loop skips 4 and 5
             start_step = 6
-            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+            # Issue #964: post the step-3 triage comment before short-circuiting,
+            # otherwise the user sees no visible signal that triage succeeded.
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=step_num,
+                description=description,
+                step_output=step_output,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
             if not quiet:
                 console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
             continue
@@ -1736,6 +2432,13 @@ def run_agentic_bug_orchestrator(
                     "Step 6 output missing EXPANSION_ITEMS marker — "
                     "scope expansion check will be skipped for downstream steps"
                 )
+
+            # Issue #1208: parse SCOPE_CLASSIFICATION + NEEDS_FIX/SAFE_EVIDENCE
+            # markers, fold confirmed siblings into step6_expansion_items, and
+            # auto-downgrade SIBLING_PATTERN with zero NEEDS_FIX to LOCALIZED.
+            scope_value = _apply_step6_scope_markers(step_output, context)
+            if not quiet:
+                console.print(f"  → Scope classification: {scope_value}")
 
             # Deterministic grep verification for repeating-pattern bugs.
             pattern_search = _parse_pattern_search(step_output)
@@ -1776,9 +2479,13 @@ def run_agentic_bug_orchestrator(
                         context_files = context_files[:_MAX_GREP_RESULTS]
                         if not quiet:
                             console.print(
-                                f"[yellow]  → Capping context extraction to "
-                                f"{_MAX_GREP_RESULTS} files ({len(overflow_files)} "
-                                f"overflow file(s) will be logged but not added)[/yellow]"
+                                f"[yellow]  → Capping LLM classification to "
+                                f"{_MAX_GREP_RESULTS} files. The remaining "
+                                f"{len(overflow_files)} overflow file(s) will be "
+                                f"recorded as PATTERN_SEARCH_OVERFLOW candidates "
+                                f"(no evidence, NOT folded into FIX_LOCATIONS or "
+                                f"step6_expansion_items — review manually if a "
+                                f"broader audit is desired)[/yellow]"
                             )
                             for of in overflow_files[:5]:
                                 console.print(f"[yellow]    (overflow) {of}[/yellow]")
@@ -1787,12 +2494,19 @@ def run_agentic_bug_orchestrator(
                                     f"[yellow]    ... and {len(overflow_files) - 5} more[/yellow]"
                                 )
                     context_file_set = set(context_files)
-                    # Only files within the cap are sent for classification.
-                    # Overflow files are NOT added to unclassified_filenames —
-                    # they bypass classification entirely, so applying the
-                    # conservative NEEDS_FIX default would poison Step 9's
-                    # coverage check with unreviewed files.
+                    # Overflow policy (PR #1210 round 6, per issue #1208 spec):
+                    # "Every expanded item has machine-readable evidence as
+                    # either NEEDS_FIX or SAFE_EVIDENCE" and "Broad analogous
+                    # audits remain opt-in rather than default behavior."
+                    # Files beyond the LLM retry cap have NO evidence (the LLM
+                    # never saw them) so they MUST NOT default into
+                    # FIX_LOCATIONS or step6_expansion_items — that would
+                    # coerce a broad audit. Instead the orchestrator emits a
+                    # PATTERN_SEARCH_OVERFLOW marker (below) so the gap is loud
+                    # rather than silent: users see N candidates exceeded the
+                    # cap and can opt-in to manual review or a broader audit.
                     unclassified_filenames = context_files
+                    overflow_unclassified: List[str] = list(overflow_files)
                     context_matches = [m for m in unclassified if m[0] in context_file_set]
 
                     # Extract surrounding code context for each match
@@ -1825,12 +2539,15 @@ def run_agentic_bug_orchestrator(
                         "2. Determine if this code has the same vulnerability as the files "
                         "already in FIX_LOCATIONS.\n"
                         "3. Output EXACTLY ONE of:\n"
-                        "   NEEDS_FIX: filepath\n"
+                        "   NEEDS_FIX: filepath | reason it shares the root cause\n"
                         "   SAFE_EVIDENCE: filepath | line_number | reason why this usage is safe\n\n"
                         "RULES:\n"
                         "- Files without explicit SAFE_EVIDENCE default to NEEDS_FIX\n"
                         "- To mark SAFE, you MUST cite a specific line that makes the usage safe\n"
                         "- Do NOT remove any files from the original FIX_LOCATIONS\n"
+                        "- Use the SAME marker format as Step 6: NEEDS_FIX takes a `<path> | <reason>`\n"
+                        "  pair so the orchestrator can fold each confirmed sibling into the\n"
+                        "  EXPANSION_ITEMS list that Step 8/9 plan tests against.\n"
                     )
 
                     retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
@@ -1848,22 +2565,55 @@ def run_agentic_bug_orchestrator(
                     state["total_cost"] = total_cost
                     state["model_used"] = model_used
 
+                    # Confirmed siblings (with reasons) that need to flow into
+                    # step6_expansion_items so Step 8/9 plan tests for them.
+                    sibling_evidence: List[Tuple[str, str]] = []
+
                     if retry_success:
                         needs_fix, safe = _parse_classification_evidence(retry_output)
 
                         # MERGE semantics: original UNION new_needs_fix UNION defaults
                         # Uses _merge_fix_locations for basename normalization so
                         # "agentic_update.py" (LLM) and "pdd/agentic_update.py" (grep)
-                        # are treated as the same file.
+                        # are treated as the same file. Pass only the cap-fitted set —
+                        # overflow files have no LLM evidence and must NOT default into
+                        # FIX_LOCATIONS (see PATTERN_SEARCH_OVERFLOW block below).
                         merged = _merge_fix_locations(
                             fix_locs, needs_fix, safe, unclassified_filenames
                         )
 
+                        # Capture (path, reason) for sibling expansion. Reuse the
+                        # main-path parser so retry output that uses the Step 6
+                        # `NEEDS_FIX: <path> | <reason>` format is handled
+                        # identically to the original Step 6 output.
+                        sibling_evidence = _parse_needs_fix(retry_output)
+                        sibling_keys = {p for p, _ in sibling_evidence}
+
+                        # Use the shared _is_llm_classified helper so the
+                        # exclusion semantics here match _merge_fix_locations.
+                        # Critical: a full-path SAFE_EVIDENCE on "pdd/foo.py"
+                        # MUST NOT mark a different full-path unclassified file
+                        # (e.g. "tests/foo.py") as classified — otherwise the
+                        # unclassified file lands in FIX_LOCATIONS but is
+                        # silently dropped from step6_expansion_items so Step
+                        # 8/9 never test it.
+                        for fname in unclassified_filenames:
+                            if fname in sibling_keys:
+                                continue
+                            if _is_llm_classified(
+                                fname, needs_fix, safe, unclassified_filenames
+                            ):
+                                # SAFE means skip; explicit NEEDS_FIX is
+                                # already in sibling_evidence above.
+                                continue
+                            sibling_evidence.append((fname, ""))
+
                         # Log which unclassified files were defaulted to NEEDS_FIX
                         if not quiet:
-                            classified_basenames = {Path(f).name for f in needs_fix} | {Path(f).name for f in safe}
                             for fname in unclassified_filenames:
-                                if Path(fname).name not in classified_basenames:
+                                if not _is_llm_classified(
+                                    fname, needs_fix, safe, unclassified_filenames
+                                ):
                                     console.print(
                                         f"[yellow]    → {fname} has no classification "
                                         f"evidence, defaulting to NEEDS_FIX[/yellow]"
@@ -1871,11 +2621,14 @@ def run_agentic_bug_orchestrator(
 
                     else:
                         # Retry failed (rate limit, network error, LLM failure).
-                        # Apply conservative default: all grep-discovered files
-                        # are added to FIX_LOCATIONS since we can't classify them.
+                        # Apply conservative default: cap-fitted grep files are
+                        # added to FIX_LOCATIONS. Overflow files are NOT — they
+                        # have no evidence and the PATTERN_SEARCH_OVERFLOW marker
+                        # is emitted below so they are loud rather than silent.
                         merged = _merge_fix_locations(
                             fix_locs, [], [], unclassified_filenames
                         )
+                        sibling_evidence = [(f, "") for f in unclassified_filenames]
                         if not quiet:
                             for fname in unclassified_filenames:
                                 console.print(
@@ -1884,12 +2637,88 @@ def run_agentic_bug_orchestrator(
                                 )
 
                     context["fix_locations"] = ", ".join(merged)
+
+                    # Fold confirmed siblings into step6_expansion_items so Step 8
+                    # (test planning) and Step 9 (test generation) emit tests for
+                    # each one — Step 8 reads {step6_expansion_items}, not
+                    # FIX_LOCATIONS, when planning sibling coverage.
+                    expansion_after_retry = context.get("step6_expansion_items", "none")
+                    if sibling_evidence:
+                        expansion_after_retry = _merge_needs_fix_into_expansion(
+                            expansion_after_retry,
+                            sibling_evidence,
+                        )
+                        context["step6_expansion_items"] = expansion_after_retry
+
+                    # If retry produced sibling evidence but scope is still
+                    # LOCALIZED, promote to SIBLING_PATTERN — Step 8 must not
+                    # receive the contradictory "LOCALIZED + non-empty expansion
+                    # items" pair. The trigger covers three Step 6 outputs:
+                    #   - explicit SIBLING_PATTERN with zero NEEDS_FIX (the
+                    #     auto-downgrade case)
+                    #   - explicit LOCALIZED that also emitted PATTERN_SEARCH
+                    #   - missing/invalid SCOPE_CLASSIFICATION (defaults to
+                    #     LOCALIZED) with PATTERN_SEARCH emitted
+                    # Sibling evidence IS the classification signal; the
+                    # original LLM marker is not load-bearing here.
+                    # CROSS_CUTTING is left alone — it represents a strictly
+                    # broader scope and should not be narrowed by promotion.
+                    promoted_scope: Optional[str] = None
+                    if sibling_evidence:
+                        current_scope = context.get("scope_classification", "LOCALIZED")
+                        if current_scope == "LOCALIZED":
+                            promoted_scope = "SIBLING_PATTERN"
+                            context["scope_classification"] = "SIBLING_PATTERN"
+                            if not quiet:
+                                console.print(
+                                    "[cyan]  → Promoting SCOPE_CLASSIFICATION to "
+                                    "SIBLING_PATTERN: retry produced sibling evidence "
+                                    "(issue #1208 follow-up)[/cyan]"
+                                )
+
                     # Preserve original root cause analysis for downstream steps (7, 8).
-                    # Append a FIX_LOCATIONS line so _parse_fix_locations picks up
-                    # the verified set on resume. _parse_fix_locations uses finditer
-                    # + dedup, so the second line's superset is handled correctly.
+                    # Append updated marker lines so a resumed run re-derives the
+                    # same merged set deterministically. The parsers for
+                    # FIX_LOCATIONS, EXPANSION_ITEMS, SCOPE_CLASSIFICATION, and
+                    # NEEDS_FIX all read the LAST matching marker (or all
+                    # NEEDS_FIX lines) so appending here is safe.
                     step_output = step_output + f"\n\n% Updated after grep verification\nFIX_LOCATIONS: {', '.join(merged)}"
+                    if sibling_evidence:
+                        step_output = step_output + f"\nEXPANSION_ITEMS: {expansion_after_retry}"
+                        # Append NEEDS_FIX lines so the resume-side
+                        # _apply_step6_scope_markers sees siblings and does not
+                        # auto-downgrade SIBLING_PATTERN back to LOCALIZED.
+                        for sib_path, sib_reason in sibling_evidence:
+                            reason_text = sib_reason if sib_reason else "from PATTERN_SEARCH retry"
+                            step_output = step_output + f"\nNEEDS_FIX: {sib_path} | {reason_text}"
+                    if promoted_scope:
+                        step_output = step_output + f"\nSCOPE_CLASSIFICATION: {promoted_scope}"
                     context["step6_output"] = step_output
+
+                    # Emit PATTERN_SEARCH_OVERFLOW so the gap is loud, not
+                    # silent. Overflow files have no LLM classification evidence
+                    # and must not auto-default into FIX_LOCATIONS or
+                    # step6_expansion_items — that would violate the spec
+                    # ("every expanded item has evidence", "broad audits
+                    # remain opt-in"). Users see exactly which candidates
+                    # exceeded the cap and can opt in to a broader audit.
+                    if overflow_unclassified:
+                        overflow_list = ", ".join(overflow_unclassified)
+                        step_output = step_output + (
+                            f"\nPATTERN_SEARCH_OVERFLOW: "
+                            f"{len(overflow_unclassified)} candidate(s) exceeded "
+                            f"the LLM retry cap ({_MAX_GREP_RESULTS}) and were "
+                            f"NOT classified; review manually if a broader audit "
+                            f"is desired: {overflow_list}"
+                        )
+                        context["step6_output"] = step_output
+                        if not quiet:
+                            console.print(
+                                f"[yellow]  → PATTERN_SEARCH_OVERFLOW: "
+                                f"{len(overflow_unclassified)} file(s) exceeded "
+                                f"retry cap — not classified, not folded into "
+                                f"FIX_LOCATIONS[/yellow]"
+                            )
 
                     if not quiet:
                         console.print(
@@ -2268,7 +3097,7 @@ def run_agentic_bug_orchestrator(
         if step_num == 10:
             # Check for E2E classification marker in step output.
             # Safe default: if marker is missing, E2E runs (backward compatible).
-            if "E2E_NEEDED: no" in step_output:
+            if _parse_e2e_needed_marker(step_output) == "no":
                 skip_e2e = True
                 if not quiet:
                     console.print("   (E2E skipped: E2E_NEEDED: no)")
@@ -2300,8 +3129,29 @@ def run_agentic_bug_orchestrator(
             if not quiet:
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
-            state["step_outputs"][str(step_num)] = step_output
-            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
+            save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+            # Issue #964: post the model's report even on hard stop. The step's
+            # WORK succeeded (e.g. detected duplicate, classified user error);
+            # the orchestrator just decided not to continue. Without this the
+            # final visible signal (Duplicate-of-X, Needs-More-Info, etc.) is
+            # lost to the user.
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=step_num,
+                description=description,
+                step_output=step_output,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
         if not step_success:
@@ -2310,15 +3160,36 @@ def run_agentic_bug_orchestrator(
 
         # Update state
         if step_success:
-            state["step_outputs"][str(step_num)] = step_output
+            state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
             state["last_completed_step"] = step_num
             last_completed_step = step_num
         else:
-            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+            state["step_outputs"][str(step_num)] = f"FAILED: {_state_safe_step_output(step_output)}"
+            if step_num == 12:
+                terminal_step_failed = step_output
 
         save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:
             github_comment_id = save_result
+
+        # Issue #964: orchestrator (not the model) owns visible step comments.
+        # Posting through trusted credentials means Gemini's sandboxed shell no
+        # longer needs GH_TOKEN passthrough. The posted-state is tracked in
+        # workflow state so a resume after an interruption does not double-post.
+        github_comment_id = _maybe_post_step_comment(
+            step_success=step_success,
+            step_num=step_num,
+            description=description,
+            step_output=step_output,
+            state=state,
+            state_dir=state_dir,
+            cwd=cwd,
+            issue_number=issue_number,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+            github_comment_id=github_comment_id,
+        )
 
         # Print step completion marker (required for credential waterfall detection)
         if not quiet:
@@ -2331,6 +3202,17 @@ def run_agentic_bug_orchestrator(
         url_match = re.search(r"https://github.com/\S+/pull/\d+", s10_out)
         if url_match:
             pr_url = url_match.group(0)
+
+    if terminal_step_failed is not None:
+        if not quiet:
+            console.print("\n[red]❌ Investigation failed[/red]")
+            console.print(f"   Total cost: ${total_cost:.4f}")
+            console.print(f"   Files changed: {', '.join(changed_files) if changed_files else 'none'}")
+            if worktree_path:
+                console.print(f"   Worktree: {worktree_path}")
+            console.print("   PR created: none")
+        detail = terminal_step_failed.strip().splitlines()[0] if terminal_step_failed.strip() else "unknown error"
+        return False, f"Investigation failed at step 12: {detail}", total_cost, model_used, changed_files
 
     if not quiet:
         console.print("\n[green]✅ Investigation complete[/green]")

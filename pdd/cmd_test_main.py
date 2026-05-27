@@ -18,6 +18,13 @@ from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeou
 from .generate_test import generate_test
 from .increase_tests import increase_tests
 from .test_result import TestResult
+from .code_generator_main import (
+    TestChurnError,
+    _env_flag_enabled,
+    _get_test_churn_threshold,
+    _prompt_allows_test_churn,
+    _verify_test_churn,
+)
 
 console = Console()
 
@@ -35,6 +42,8 @@ def cmd_test_main(
     strength: float | None = None,
     temperature: float | None = None,
     manual: bool = False,
+    *,
+    repair_directive: str | None = None,
 ) -> TestResult:
     """
     CLI wrapper for generating or enhancing unit tests.
@@ -53,6 +62,17 @@ def cmd_test_main(
         temperature: Optional override for LLM temperature.
         manual: If True, bypass agentic test generation and use the legacy
             single-LLM path for all languages (including non-Python).
+        repair_directive: Optional repair-loop instruction to inject into
+            the generation prompt inside a ``<test_repair_directive>``
+            block (#1012, F-H). Sourced explicitly from the caller's
+            loop-local state rather than ``os.environ`` so a stale
+            outer ``PDD_REPAIR_DIRECTIVE`` cannot contaminate a direct/
+            CLI/non-retry invocation. Only the retry helpers in
+            ``sync_orchestration._run_test_op_with_churn_retry`` and
+            the one-session sync pass this kwarg. ``cmd_test_main``
+            does NOT read ``PDD_REPAIR_DIRECTIVE`` from the env itself;
+            the env var remains the inheritance channel for nested
+            PDD CLI subprocesses spawned by agentic test generation.
 
     Returns:
         tuple: (generated_test_code, total_cost, model_name, agentic_success)
@@ -140,6 +160,13 @@ def cmd_test_main(
             )
 
         output_test_path = Path(output_file_paths.get("output", "test_output"))
+        prompt_content_for_churn = input_strings.get("prompt_file", "")
+        existing_test_content = ""
+        if output_test_path.exists() and output_test_path.is_file():
+            try:
+                existing_test_content = output_test_path.read_text(encoding="utf-8")
+            except OSError:
+                existing_test_content = ""
 
         generated_content, total_cost, model_name, agentic_success, agentic_error = run_agentic_test_generate(
             prompt_file=Path(prompt_file),
@@ -147,6 +174,12 @@ def cmd_test_main(
             output_test_file=output_test_path,
             verbose=verbose,
             quiet=ctx.obj.get("quiet", False),
+            # Forward the explicit repair directive (#1012, F-H) so the
+            # agentic path uses the caller-provided value instead of
+            # reading `PDD_REPAIR_DIRECTIVE` from the env. Direct CLI
+            # invocations pass None (default), so a stale outer env
+            # value cannot contaminate the agent instruction.
+            repair_directive=repair_directive,
         )
 
         # The agent writes the test file directly, but we still return the content
@@ -160,6 +193,20 @@ def cmd_test_main(
             if detected_language and detected_language.lower() == 'python':
                 from .generate_test import _inject_sys_path_preamble
                 generated_content = _inject_sys_path_preamble(generated_content)
+            try:
+                _verify_test_churn(
+                    existing_code=existing_test_content,
+                    generated_code=generated_content,
+                    prompt_name=Path(prompt_file).name,
+                    output_path=str(output_test_path),
+                    prompt_content=prompt_content_for_churn,
+                )
+            except TestChurnError as churn_err:
+                churn_err.total_cost = float(total_cost or 0.0)
+                churn_err.model_name = model_name or "unknown"
+                if existing_test_content:
+                    output_test_path.write_text(existing_test_content, encoding="utf-8")
+                raise
             # Write to sync-expected path for all languages (fix: non-Python was skipped)
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             output_test_path.write_text(generated_content, encoding="utf-8")
@@ -167,7 +214,80 @@ def cmd_test_main(
             if not ctx.obj.get("quiet", False):
                 console.print(f"[green]Agentic test generation completed.[/green]")
         else:
-            if not ctx.obj.get("quiet", False):
+            # Empty/missing generated_content with a pre-existing canonical
+            # test file is the deletion variant of test churn ONLY when the
+            # agent itself reported success (#1012, F-B). If `agentic_success`
+            # is False the agent itself errored (tool failure, provider
+            # crash, etc.) — that is NOT churn, and raising TestChurnError
+            # would mask the underlying agentic failure and mislead the
+            # retry loop into setting a churn repair directive when the
+            # real fix is to rerun the agent itself.
+            # The deletion-as-churn raise must honor the same env-flag
+            # opt-outs that `_verify_test_churn` honors internally
+            # (#1012, F-K). Either per-gate (`PDD_SKIP_TEST_CHURN_GATE`)
+            # or umbrella (`PDD_SKIP_CONFORMANCE`) disables this
+            # shortcut; if set, the empty-content branch falls through
+            # to the warning-and-return path. It must also honor the
+            # anchored prompt-side `BREAKING-CHANGE: rewrite tests`
+            # opt-out parsed by `_prompt_allows_test_churn` so a
+            # deletion is treated symmetrically with a non-empty
+            # rewrite (otherwise the opt-out works only when the agent
+            # writes *some* content, not when it empties/deletes the
+            # file).
+            churn_skip = (
+                _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+                or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                or _prompt_allows_test_churn(prompt_content_for_churn)
+            )
+            if agentic_success and existing_test_content and not churn_skip:
+                # Restore the pre-existing file before raising so the
+                # repair-loop sees the canonical content on disk.
+                output_test_path.parent.mkdir(parents=True, exist_ok=True)
+                output_test_path.write_text(existing_test_content, encoding="utf-8")
+                pre_line_count = len(existing_test_content.splitlines())
+                threshold = _get_test_churn_threshold()
+                raise TestChurnError(
+                    prompt_name=Path(prompt_file).name,
+                    output_path=str(output_test_path),
+                    churn_ratio=1.0,
+                    threshold=threshold,
+                    pre_line_count=pre_line_count,
+                    post_line_count=0,
+                    total_cost=float(total_cost or 0.0),
+                    model_name=model_name or "unknown",
+                    repair_directive=(
+                        "Test churn repair required.\n"
+                        "- The agentic test run reported success but produced "
+                        "no generated test content; the existing test file at "
+                        f"{output_test_path} has been restored.\n"
+                        "- Re-run test generation preserving the prior test "
+                        "function names and coverage; do NOT delete or empty "
+                        "the test file.\n"
+                        "- Add new tests for the prompt change without removing "
+                        "accumulated regression tests."
+                    ),
+                )
+            if not agentic_success and existing_test_content:
+                # Agent itself failed — restore the pre-existing test file
+                # defensively in case the agent partially modified it
+                # before erroring out. Do NOT raise TestChurnError; let the
+                # agentic failure (agentic_success=False, agentic_error=...)
+                # surface to the caller so the orchestration layer can
+                # diagnose the real problem rather than retrying as if it
+                # were a churn issue.
+                output_test_path.parent.mkdir(parents=True, exist_ok=True)
+                output_test_path.write_text(existing_test_content, encoding="utf-8")
+                if not ctx.obj.get("quiet", False):
+                    console.print(
+                        "[yellow]Agentic test generation failed; "
+                        "pre-existing test file restored.[/yellow]"
+                    )
+            elif not ctx.obj.get("quiet", False):
+                # First-time generation (no pre-existing canonical test file)
+                # is the documented exemption: keep the warning-and-return
+                # behavior. Also covers the (agentic_success=False, no
+                # pre-existing file) case — agent failed and there's
+                # nothing to restore, so we just warn and propagate.
                 console.print("[yellow]Warning: Agentic test generation produced no content.[/yellow]")
 
         return TestResult(generated_content, total_cost, model_name, agentic_success, agentic_error)
@@ -175,6 +295,37 @@ def cmd_test_main(
     # 4. Prepare content variables
     prompt_content = input_strings.get("prompt_file", "")
     code_content = input_strings.get("code_file", "")
+
+    # Test-generation repair directive (set by retrying callers such as
+    # sync_orchestration._run_test_op_with_churn_retry when a prior
+    # generation tripped TestChurnError). Append to the prompt inside a
+    # `<test_repair_directive>` block so the next attempt sees concrete
+    # "preserve coverage / extend rather than rewrite" instructions.
+    # Without this the subprocess retry would be an identical request
+    # and the repair loop would not actually repair anything. Mirrors
+    # the `<architecture_repair_directive>` injection in
+    # `code_generator_main` (#1012, F-A). The churn-gate parser
+    # downstream keys on anchored `BREAKING-CHANGE:` directives, so a
+    # repair directive injected here does NOT disable the gate.
+    #
+    # The directive is sourced EXPLICITLY from the `repair_directive`
+    # kwarg (#1012, F-H). cmd_test_main does NOT read
+    # `PDD_REPAIR_DIRECTIVE` from the environment because a stale
+    # outer value (set by the caller's shell, a parent orchestration
+    # layer, or a prior PDD command) would contaminate direct CLI
+    # invocations that have no active retry context. Only the retry
+    # helpers pass this kwarg, and only when THIS loop has caught a
+    # `TestChurnError`. The env var remains the inheritance channel
+    # for nested PDD CLI subprocesses spawned by agentic test
+    # generation — those subprocesses still receive
+    # `PDD_REPAIR_DIRECTIVE` via env inheritance from the retry
+    # helpers' `os.environ` write.
+    if repair_directive and repair_directive.strip():
+        prompt_content = (
+            f"{prompt_content}\n\n<test_repair_directive>\n"
+            f"{repair_directive.strip()}\n"
+            "</test_repair_directive>\n"
+        )
 
     # Handle existing tests concatenation
     concatenated_tests = None
@@ -429,12 +580,28 @@ def cmd_test_main(
             if verbose:
                 console.print(f"Merging new tests into existing file: {final_output_path}")
 
+        if write_mode == "w":
+            existing_test_content = ""
+            if final_output_path.exists() and final_output_path.is_file():
+                existing_test_content = final_output_path.read_text(encoding="utf-8")
+            _verify_test_churn(
+                existing_code=existing_test_content,
+                generated_code=content_to_write,
+                prompt_name=Path(prompt_file).name,
+                output_path=str(final_output_path),
+                prompt_content=input_strings.get("prompt_file", ""),
+            )
+
         with open(str(final_output_path), write_mode, encoding="utf-8") as f:
             f.write(content_to_write)
 
         if not ctx.obj.get("quiet", False):
             console.print(f"[green]Successfully wrote tests to {final_output_path}[/green]")
 
+    except TestChurnError as e:
+        e.total_cost = float(total_cost or 0.0)
+        e.model_name = model_name or "unknown"
+        raise
     except Exception as e:
         console.print(f"[bold red]Error writing output file: {e}[/bold red]")
         return TestResult("", 0.0, f"Error: {e}", None, str(e))

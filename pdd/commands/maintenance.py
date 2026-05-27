@@ -12,7 +12,7 @@ from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sy
 from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
-from ..core.utils import _run_setup_utility
+from ..core.utils import _run_setup_utility, echo_model_line
 
 DEFAULT_SYNC_BUDGET = 20.0
 
@@ -208,6 +208,9 @@ def sync(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            strength=ctx.obj.get("strength"),
+            temperature=ctx.obj.get("temperature"),
+            context_override=ctx.obj.get("context"),
         )
 
     if durable or durable_branch or no_resume or durable_max_parallel is not None:
@@ -255,6 +258,9 @@ def _run_agentic_sync_dispatch(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    context_override: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -281,6 +287,9 @@ def _run_agentic_sync_dispatch(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            strength=strength,
+            temperature=temperature,
+            context_override=context_override,
         )
 
         if not quiet:
@@ -288,7 +297,7 @@ def _run_agentic_sync_dispatch(
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")
             click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
+            echo_model_line(model)
 
         if not success:
             raise click.exceptions.Exit(1)
@@ -337,6 +346,9 @@ def _run_global_sync_dispatch(
             one_session=one_session,
             local=ctx.obj.get("local", False),
             timeout_adder=timeout_adder,
+            strength=ctx.obj.get("strength"),
+            temperature=ctx.obj.get("temperature"),
+            context_override=ctx.obj.get("context"),
         )
 
         if not quiet:
@@ -344,7 +356,7 @@ def _run_global_sync_dispatch(
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")
             click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
+            echo_model_line(model)
 
         if not success:
             raise click.exceptions.Exit(1)
@@ -417,6 +429,9 @@ def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> 
             click.echo(f"UPDATED {entry['filename']}")
         elif not entry.get("success"):
             click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
+
+    for filename in result.get("registered", []):
+        click.echo(f"REGISTERED {filename}")
 
     sync_errors = result.get("errors", [])
     validation = result.get("validation", {})

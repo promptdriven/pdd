@@ -1,3 +1,12 @@
+"""pdd/ci_drift_heal.py — CI script for detecting and auto-healing prompt/example drift.
+
+Detects modules with prompt/example drift, heals them via subprocess calls to
+`pdd update`/`pdd example`/`pdd auto-deps`/`pdd sync`, finalizes metadata via the
+shared `run_metadata_sync` orchestrator (with per-module rollback on failure),
+and commits and pushes the healed changes.
+
+Invoked as `python -m pdd.ci_drift_heal`.
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,90 +18,75 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 from rich.table import Table
 
 console = Console()
-_ROLLBACK_PATHS = (".pdd/meta", "project_dependencies.csv")
-_AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
-_PDD_FLAGS_WITH_VALUES = {"--strength", "--time"}
 
-# Change-magnitude gate threshold. Motivation: PR gltanaka/pdd#1187 autohealed
-# a 1-line code fix (`ad98ea17`) into a 176-line prompt rewrite — a 1:176 ratio.
-# Typical healthy prompt-update ratios sit between 1:1 and 2:1; a cap at 5×
-# catches pathological cases cleanly without blocking legitimate updates where
-# a small refactor rightly touches multiple prompt sections. Override via
-# the `PDD_HEAL_PROMPT_CHURN_MAX_RATIO` env var in CI if needed.
-_HEAL_PROMPT_CHURN_MAX_RATIO = 5.0
-
-# Optional operator override for temporarily skipping `pdd sync` paths in CI
-# auto-heal. Unset env means "skip nothing"; set
-# PDD_HEAL_SYNC_SKIP_MODULES=mod1,mod2 to opt modules out if a sync path
-# regresses and needs a short-lived operational bypass.
+_HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
+_HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT = 5.0
 
 
-def _get_git_changed_files(diff_base: str) -> set:
-    """Return the set of file paths changed between diff_base and HEAD.
+def _heal_subprocess_timeout() -> int:
+    """Resolve the per-module heal subprocess timeout in seconds.
 
-    Args:
-        diff_base: Git diff base reference (e.g. "origin/main...HEAD" or "HEAD~1").
-
-    Returns:
-        Set of changed file paths (relative to repo root), or empty set on failure.
+    Reads `PDD_HEAL_SUBPROCESS_TIMEOUT` from the environment on each call (so
+    callers and tests that mutate the env between invocations see the new
+    value). Invalid values — non-integer, non-positive, empty, or float
+    strings — fall back to `_HEAL_SUBPROCESS_TIMEOUT_DEFAULT` without raising.
     """
+    raw = os.environ.get("PDD_HEAL_SUBPROCESS_TIMEOUT")
+    if raw is None:
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    raw = raw.strip()
+    if not raw:
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
     try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", diff_base],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            return {line.strip() for line in result.stdout.splitlines() if line.strip()}
-        return set()
-    except Exception:
-        return set()
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    if value <= 0:
+        return _HEAL_SUBPROCESS_TIMEOUT_DEFAULT
+    return value
+_AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
+
+_PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
+_INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
 
 
-def _git_relative_path_candidates(path: Optional[Path], repo_root: Path) -> set:
-    """Return repo-relative path spellings that Git may report for path."""
-    if not path:
-        return set()
-
-    candidates = set()
-    try:
-        candidates.add(str(path.relative_to(repo_root)))
-    except ValueError:
-        candidates.add(str(path))
-
-    try:
-        candidates.add(str(path.resolve().relative_to(repo_root.resolve())))
-    except Exception:
-        pass
-
-    return {candidate for candidate in candidates if candidate}
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class DriftInfo:
-    """Represents a detected drift for a single module."""
+    """Per-module drift record collected during detection."""
 
     basename: str
     language: str
-    operation: str  # 'update' (prompt stale) or 'example' (example stale)
+    operation: str
     reason: str
-    code_path: Optional[str] = None  # resolved code file path for pdd update
-    prompt_path: Optional[str] = None  # resolved prompt file path for churn gate
-    example_path: Optional[str] = None  # resolved example file path for example drift policy
-    diff_base: Optional[str] = None  # git diff base, used by change-magnitude gate
+    prompt_path: Optional[str] = None
+    code_path: Optional[str] = None
+    example_path: Optional[str] = None
+    dependency_dir: Optional[str] = None
+    diff_base: Optional[str] = None
+    original_operation: Optional[str] = None
+    estimated_cost: float = 0.0
+    # Set True after `_run_metadata_sync_safe` reports a successful finalization
+    # for this module; used by `main()` to drive commit-time staging verification.
+    metadata_finalized: bool = False
+    metadata_finalization_failed: bool = False
+    metadata_finalization_error: str = ""
 
 
 @dataclass
 class HealResult:
-    """Result of a healing attempt for a single module."""
+    """Result of healing a single module."""
 
     basename: str
     success: bool
@@ -100,1175 +94,1520 @@ class HealResult:
     error: str = ""
 
 
-class PromptRevertError(RuntimeError):
-    """Raised when a failed heal cannot safely revert prompt edits."""
+class PromptRevertError(Exception):
+    """Raised when reverting a prompt to HEAD fails or leaves the file dirty."""
 
 
-def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
-    """Build environment dict for subprocess calls in CI/headless mode."""
-    env = os.environ.copy()
-    env["PDD_FORCE"] = "1"
-    env["CI"] = "1"
-    env["NO_COLOR"] = "1"
-    env["PDD_OUTPUT_COST_PATH"] = cost_csv_path
-    env["PDD_FORCE_LOCAL"] = "1"
-    # Disable local models (LM Studio) that hang connecting to localhost.
-    # Set a fake required API key so pdd's model selection skips them
-    # (empty api_key = "no auth needed" = always selected as cheapest).
-    env["PDD_SKIP_LOCAL_MODELS"] = "1"
-    # If a heal subprocess times out or fails in CI, restore tracked metadata/cache
-    # files so the repo doesn't stay stuck in a half-mutated state.
-    env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] = "1"
-    # Existing examples are reviewable artifacts. In PR auto-heal, do not spend
-    # a full LLM call rewriting them by default; missing examples still heal.
-    env.setdefault("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT", "1")
-    # Git-reclassified example drifts mean the PR already touched the reviewed
-    # prompt/code side. Leave example refresh to review instead of blocking on
-    # a best-effort LLM generation in the auto-heal gate.
-    env.setdefault("PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT", "1")
-    return env
+# ---------------------------------------------------------------------------
+# Repo / path helpers
+# ---------------------------------------------------------------------------
 
 
-def _first_pdd_subcommand(cmd: List[str]) -> Optional[str]:
-    """Return the first pdd subcommand after top-level flags."""
-    if not cmd or cmd[0] != "pdd":
+def _repo_root() -> Path:
+    """Return the repository root via `git rev-parse --show-toplevel`."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return Path(result.stdout.strip())
+    except Exception:
+        pass
+    return Path.cwd()
+
+
+def _safe_basename(basename: str) -> str:
+    """Flatten subdirectory basenames for metadata path semantics."""
+    return basename.replace("/", "_").replace("\\", "_")
+
+
+def _git_relative_path_candidates(path: Any, repo_root: Path) -> Set[str]:
+    """Return repo-relative candidate paths (POSIX) for a possibly-symlinked path."""
+    if path is None:
+        return set()
+    p = Path(path)
+    candidates: Set[str] = set()
+    if not p.is_absolute():
+        try:
+            candidates.add(p.as_posix())
+        except Exception:
+            pass
+        # Try with repo_root prefix.
+        try:
+            joined = (repo_root / p).resolve()
+            rel = joined.relative_to(repo_root.resolve())
+            candidates.add(rel.as_posix())
+        except Exception:
+            pass
+        try:
+            joined = (repo_root / p)
+            rel = joined.relative_to(repo_root)
+            candidates.add(rel.as_posix())
+        except Exception:
+            pass
+    else:
+        # Try absolute → repo-relative (preserve symlink form).
+        try:
+            rel = p.relative_to(repo_root)
+            candidates.add(rel.as_posix())
+        except Exception:
+            pass
+        # Try resolved → repo-relative (canonical form).
+        try:
+            resolved = p.resolve()
+            rel = resolved.relative_to(repo_root.resolve())
+            candidates.add(rel.as_posix())
+        except Exception:
+            pass
+    return {c for c in candidates if c}
+
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_git_changed_files(diff_base: str) -> Set[str]:
+    """Return repo-relative paths changed between diff_base and HEAD/working tree."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", diff_base],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return set()
+    if result.returncode != 0:
+        return set()
+    stdout = getattr(result, "stdout", "") or ""
+    if not isinstance(stdout, str):
+        return set()
+    return {line.strip() for line in stdout.splitlines() if line.strip()}
+
+
+def _numstat_line_counts(args: List[str]) -> Optional[Tuple[int, int]]:
+    """Run `git diff --numstat <args>` and return (added, deleted) totals."""
+    try:
+        cmd = ["git", "diff", "--numstat", *args]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception:
         return None
+    if result.returncode != 0:
+        return None
+    stdout = getattr(result, "stdout", "") or ""
+    if not isinstance(stdout, str):
+        return None
+    added = 0
+    deleted = 0
+    for line in stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        try:
+            a = int(parts[0]) if parts[0] != "-" else 0
+            d = int(parts[1]) if parts[1] != "-" else 0
+        except ValueError:
+            continue
+        added += a
+        deleted += d
+    return (added, deleted)
 
-    idx = 1
-    while idx < len(cmd):
-        token = cmd[idx]
-        if not token.startswith("--"):
-            return token
-        if "=" in token:
-            idx += 1
-        elif token in _PDD_FLAGS_WITH_VALUES:
-            idx += 2
-        else:
-            idx += 1
+
+def _git_show_prompt_at_head(prompt_path: Any) -> Optional[str]:
+    """Return the HEAD version of prompt_path, or None if unavailable."""
+    if not prompt_path:
+        return None
+    try:
+        path_str = str(prompt_path)
+        # Normalize absolute paths to repo-relative for git show.
+        repo = _repo_root()
+        rel = path_str
+        try:
+            p = Path(path_str)
+            if p.is_absolute():
+                rel = p.relative_to(repo).as_posix()
+        except Exception:
+            pass
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{rel}"],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    stdout = getattr(result, "stdout", None)
+    if not isinstance(stdout, str):
+        return None
+    return stdout
+
+
+# ---------------------------------------------------------------------------
+# Module discovery / identity (lazy import)
+# ---------------------------------------------------------------------------
+
+
+def _discover_modules() -> List[Tuple[str, str, Any]]:
+    """Discover (basename, language, prompt_path) tuples."""
+    try:
+        from pdd.user_story_tests import discover_prompt_files
+    except ImportError:
+        return []
+    try:
+        prompt_files = discover_prompt_files()
+    except Exception:
+        return []
+
+    try:
+        from pdd.operation_log import infer_module_identity
+    except ImportError:
+        return []
+
+    out: List[Tuple[str, str, Any]] = []
+    for entry in prompt_files:
+        try:
+            basename, language = infer_module_identity(str(entry))
+        except Exception:
+            continue
+        out.append((basename, language, entry))
+    return out
+
+
+def _resolve_paths(basename: str, language: str) -> Dict[str, Optional[Any]]:
+    """Resolve canonical paths via `get_pdd_file_paths`."""
+    try:
+        from pdd.sync_determine_operation import get_pdd_file_paths
+    except ImportError:
+        return {}
+    try:
+        raw = get_pdd_file_paths(basename, language)
+    except Exception:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _path_exists(path: Optional[Any]) -> bool:
+    """Return True when a path-like object exists."""
+    if path is None:
+        return False
+    try:
+        exists = getattr(path, "exists", None)
+        if callable(exists):
+            return bool(exists())
+    except Exception:
+        return False
+    try:
+        return Path(str(path)).exists()
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Drift detection
+# ---------------------------------------------------------------------------
+
+
+def _parse_modules_arg(modules: Optional[List[str]]) -> Optional[List[str]]:
+    """Accept comma- and space-separated module lists."""
+    if modules is None:
+        return None
+    out: List[str] = []
+    for m in modules:
+        for piece in m.replace(",", " ").split():
+            piece = piece.strip()
+            if piece:
+                out.append(piece)
+    return out or None
+
+
+def _extract_op(decision: Any) -> Optional[str]:
+    if decision is None:
+        return None
+    if isinstance(decision, str):
+        return decision
+    v = getattr(decision, "operation", None)
+    if isinstance(v, str):
+        return v
+    if isinstance(decision, dict):
+        v = decision.get("operation")
+        if isinstance(v, str):
+            return v
     return None
 
 
-def _capture_rollback_state(cmd: List[str], env: Dict[str, str]) -> Optional[bool]:
-    """Return True when protected paths started clean and should be restorable.
+def _extract_reason(decision: Any) -> Optional[str]:
+    if isinstance(decision, dict):
+        return decision.get("reason")
+    v = getattr(decision, "reason", None)
+    if isinstance(v, str):
+        return v
+    return None
 
-    We only attempt rollback for `pdd update` / `pdd sync` subprocesses launched by
-    the CI auto-heal wrapper, and only when `.pdd/meta` plus `project_dependencies.csv`
-    were pristine before the command started.
+
+def detect_drift(
+    modules: Optional[List[str]] = None,
+    diff_base: Optional[str] = None,
+) -> Tuple[List[DriftInfo], List[DriftInfo]]:
+    """Detect drift across modules.
+
+    Returns (prompt_drifts, example_drifts):
+      - prompt_drifts: modules with operation == 'update'
+      - example_drifts: everything else (example/auto-deps/verify/generate/test/crash)
+    """
+    parsed = _parse_modules_arg(modules)
+
+    # Single git query if diff_base given.
+    changed_files: Set[str] = set()
+    if diff_base:
+        changed_files = _get_git_changed_files(diff_base)
+
+    discovered = _discover_modules()
+    if parsed is not None:
+        wanted = set(parsed)
+        discovered = [t for t in discovered if t[0] in wanted]
+
+    try:
+        from pdd.sync_determine_operation import sync_determine_operation
+    except ImportError:
+        return [], []
+
+    prompt_drifts: List[DriftInfo] = []
+    example_drifts: List[DriftInfo] = []
+    repo_root = _repo_root()
+
+    if parsed is not None:
+        discovered_names = {basename for basename, _language, _prompt_path in discovered}
+        for basename in parsed:
+            if basename in discovered_names:
+                continue
+            language = "python"
+            paths = _resolve_paths(basename, language)
+            code_path_raw = paths.get("code")
+            prompt_path_raw = paths.get("prompt")
+            if _path_exists(code_path_raw) and not _path_exists(prompt_path_raw):
+                prompt_drifts.append(
+                    DriftInfo(
+                        basename=basename,
+                        language=language,
+                        operation="update",
+                        reason="Code exists without prompt — needs pdd update",
+                        prompt_path=None,
+                        code_path=str(code_path_raw),
+                        example_path=str(paths.get("example")) if paths.get("example") else None,
+                        dependency_dir=(
+                            str(paths.get("dependency_dir"))
+                            if paths.get("dependency_dir")
+                            else None
+                        ),
+                        diff_base=diff_base,
+                        original_operation="update",
+                    )
+                )
+
+    for basename, language, prompt_path in discovered:
+        try:
+            decision = sync_determine_operation(
+                basename, language, target_coverage=90.0, log_mode=True
+            )
+        except Exception:
+            continue
+
+        op = _extract_op(decision)
+        if not op or op in ("nothing", "synced"):
+            continue
+
+        reason = _extract_reason(decision) or "drift detected"
+        paths = _resolve_paths(basename, language)
+        code_path_raw = paths.get("code")
+        prompt_from_paths = paths.get("prompt") or prompt_path
+        example_raw = paths.get("example")
+
+        original_op = op
+
+        # Git-based reclassification (clean-CI fingerprintless flows).
+        # Only run when we successfully resolved canonical paths.
+        if diff_base and code_path_raw is not None:
+            code_in_changes = False
+            for c in _git_relative_path_candidates(code_path_raw, repo_root):
+                if c in changed_files:
+                    code_in_changes = True
+                    break
+            prompt_in_changes = False
+            if prompt_from_paths is not None:
+                for c in _git_relative_path_candidates(prompt_from_paths, repo_root):
+                    if c in changed_files:
+                        prompt_in_changes = True
+                        break
+
+            if op != "update":
+                if code_in_changes and not prompt_in_changes:
+                    op = "update"
+                    reason = "Code changed without prompt changes (git diff vs base)"
+
+            if original_op in ("auto-deps", "generate"):
+                if code_in_changes and prompt_in_changes:
+                    op = "example"
+                    reason = "Code and prompt changed together; only example refresh remains"
+                elif prompt_in_changes and not code_in_changes:
+                    op = "example"
+                    reason = "Prompt changed without code changes; only example refresh remains"
+                elif not code_in_changes and not prompt_in_changes:
+                    continue
+
+        drift = DriftInfo(
+            basename=basename,
+            language=language,
+            operation=op,
+            reason=reason,
+            prompt_path=str(prompt_from_paths) if prompt_from_paths is not None else None,
+            code_path=str(code_path_raw) if code_path_raw is not None else None,
+            example_path=str(example_raw) if example_raw is not None else None,
+            dependency_dir=str(paths.get("dependency_dir")) if paths.get("dependency_dir") else None,
+            diff_base=diff_base,
+            original_operation=original_op,
+        )
+        if op == "update":
+            prompt_drifts.append(drift)
+        else:
+            example_drifts.append(drift)
+
+    return prompt_drifts, example_drifts
+
+
+# ---------------------------------------------------------------------------
+# Subprocess invocation with protected-paths rollback
+# ---------------------------------------------------------------------------
+
+
+def _capture_rollback_state(cmd: List[str], env: Dict[str, str]) -> Optional[bool]:
+    """Capture pre-subprocess clean-state for protected paths.
+
+    Returns:
+        None if rollback isn't applicable (env disabled, non-pdd command,
+            or pdd subcommand not in {update, sync}).
+        True if protected paths are clean (eligible to restore on failure).
+        False if dirty (preserve user edits).
     """
     if env.get("PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE") != "1":
         return None
     if not cmd or cmd[0] != "pdd":
         return None
-    # Allow top-level flags like `--force --strength 0.5` before the subcommand.
-    if _first_pdd_subcommand(cmd) not in {"sync", "update"}:
+    # Skip top-level flags before the subcommand.
+    i = 1
+    while i < len(cmd):
+        tok = cmd[i]
+        if tok == "--force":
+            i += 1
+            continue
+        if tok.startswith("--strength"):
+            if "=" in tok:
+                i += 1
+            else:
+                i += 2
+            continue
+        if tok.startswith("-"):
+            # Generic value-taking flag.
+            i += 2
+            continue
+        break
+    if i >= len(cmd):
         return None
-
+    subcommand = cmd[i]
+    if subcommand not in ("update", "sync"):
+        return None
     try:
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain", "--", *_ROLLBACK_PATHS],
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", *_PROTECTED_PATHS],
             capture_output=True,
             text=True,
-            timeout=30,
         )
     except Exception:
-        return None
-
-    if status_result.returncode != 0:
-        return None
-
-    return not bool((status_result.stdout or "").strip())
-
-
-def _restore_protected_paths(rollback_state: Optional[bool], label: str) -> None:
-    """Restore tracked metadata/cache files when the heal started from a clean state."""
-    if rollback_state is not True:
-        return
-
-    try:
-        restore_result = subprocess.run(
-            ["git", "restore", "--source=HEAD", "--", *_ROLLBACK_PATHS],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if restore_result.returncode != 0:
-            # Fallback for older Git versions or unusual restore failures.
-            restore_result = subprocess.run(
-                ["git", "checkout", "--", *_ROLLBACK_PATHS],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        if restore_result.returncode == 0:
-            console.print(
-                "[yellow]↩ Restored tracked .pdd/meta and "
-                f"project_dependencies.csv after {label} failed[/yellow]"
-            )
-            return
-        stderr_snippet = (restore_result.stderr or "").strip()[-500:]
-        if stderr_snippet:
-            console.print(
-                "[yellow]⚠ Failed to restore protected files after "
-                f"{label}: {stderr_snippet}[/yellow]"
-            )
-    except Exception as exc:
-        console.print(
-            "[yellow]⚠ Failed to restore protected files after "
-            f"{label}: {exc}[/yellow]"
-        )
-
-
-def _parse_cost_from_csv(csv_path: str) -> float:
-    """Parse cumulative cost from a PDD cost CSV file.
-
-    Uses the same CSV format as pdd.agentic_sync_runner._parse_cost_from_csv.
-    Returns total cost found in the CSV, or 0.0 if file doesn't exist or is empty.
-    """
-    path = Path(csv_path)
-    if not path.exists():
-        return 0.0
-    total = 0.0
-    try:
-        with open(path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                cost_val = row.get("cost") or row.get("total_cost") or "0"
-                try:
-                    total += float(cost_val)
-                except (ValueError, TypeError):
-                    pass
-    except Exception:
-        return 0.0
-    return total
-
-
-def _get_heal_sync_skip_modules() -> set[str]:
-    """Return modules whose `pdd sync` step should be skipped in CI auto-heal.
-
-    Unset or empty env means "skip nothing".
-    """
-    raw = os.environ.get("PDD_HEAL_SYNC_SKIP_MODULES", "")
-    return {name.strip() for name in raw.split(",") if name.strip()}
-
-
-def _get_heal_sync_skip_reason(basename: str) -> Optional[str]:
-    """Return a human-readable skip reason for timeout-prone sync modules."""
-    if basename not in _get_heal_sync_skip_modules():
-        return None
-    return f"{basename} is listed in PDD_HEAL_SYNC_SKIP_MODULES"
-
-
-def _is_review_only_example_drift(drift: DriftInfo) -> bool:
-    """Return True for git-reclassified example drift already covered by PR edits."""
-    if drift.operation != "example":
         return False
-    return drift.reason.startswith(
-        (
-            "Code and prompt changed together",
-            "Prompt changed without code changes",
+    if result.returncode != 0:
+        return False
+    stdout = getattr(result, "stdout", "") or ""
+    if not isinstance(stdout, str):
+        return False
+    return not stdout.strip()
+
+
+def _restore_protected_paths() -> None:
+    """Restore protected paths from HEAD."""
+    try:
+        subprocess.run(
+            ["git", "restore", "--source=HEAD", "--", *_PROTECTED_PATHS],
+            capture_output=True,
+            text=True,
         )
-    )
-
-
-def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]:
-    """Detect prompt and example drift across PDD modules.
-
-    Args:
-        modules: Optional list of basenames to limit detection scope.
-                 If None, scans all modules discovered via discover_prompt_files().
-        diff_base: Optional git diff base (e.g. "origin/main...HEAD"). When provided,
-                   enables git-based reclassification: if sync_determine_operation returns
-                   a non-'update' operation but git shows the code file changed while the
-                   prompt didn't, the drift is reclassified as 'update' (prompt stale).
-                   This fixes detection in CI where fingerprints are absent.
-
-    Returns:
-        Tuple of (prompt_drifts, example_drifts) where each is a list of DriftInfo.
-        prompt_drifts have operation=='update', example_drifts have operation=='example'.
-    """
-    from pdd.operation_log import infer_module_identity
-    from pdd.sync_determine_operation import get_pdd_file_paths, sync_determine_operation
-    from pdd.user_story_tests import discover_prompt_files
-
-    prompt_files = discover_prompt_files()
-
-    prompt_drifts: List[DriftInfo] = []
-    example_drifts: List[DriftInfo] = []
-    seen_basenames: set = set()
-
-    # Pre-fetch git changed files once (not per-module) for reclassification
-    git_changed: Optional[set] = None
-    if diff_base:
-        git_changed = _get_git_changed_files(diff_base)
-
-    for prompt_path in prompt_files:
-        try:
-            basename, language = infer_module_identity(str(prompt_path))
-        except Exception as e:
-            console.print(
-                f"[yellow]⚠ Could not infer identity for {prompt_path}: {e}[/yellow]"
-            )
-            continue
-
-        if basename is None or language is None:
-            continue
-
-        # Scope control: skip modules not in the requested list
-        if modules is not None and basename not in modules:
-            continue
-
-        seen_basenames.add(basename)
-
-        try:
-            decision = sync_determine_operation(
-                basename, language, target_coverage=90.0, log_mode=True
-            )
-        except Exception as e:
-            console.print(
-                f"[yellow]⚠ Error analyzing {basename} ({language}): {e}[/yellow]"
-            )
-            continue
-
-        # Skip modules that are fully synced or in error state
-        if decision.operation in ("nothing", "all_synced", "error"):
-            continue
-
-        # Resolve code file path for update operations
-        code_path = None
-        if decision.operation == "update":
-            try:
-                paths = get_pdd_file_paths(basename, language)
-                code_file = paths.get("code")
-                if code_file and code_file.exists():
-                    code_path = str(code_file)
-            except Exception:
-                pass
-
-        # Git-based reclassification: In CI (clean checkout without fingerprints),
-        # sync_determine_operation always returns 'auto-deps' or 'generate' because
-        # there is no fingerprint to compare code hashes against.  When we have git
-        # history, we can detect the actual drift direction: if the code file changed
-        # but the prompt file did NOT, the code is ahead and the prompt needs updating.
-        if decision.operation != "update" and git_changed is not None:
-            try:
-                paths = get_pdd_file_paths(basename, language)
-                # get_pdd_file_paths returns absolute Path objects but git diff
-                # returns repo-relative paths.  Convert to relative for comparison.
-                repo_root = Path.cwd().resolve()
-                code_file_abs = paths.get("code")
-                prompt_file_abs = paths.get("prompt")
-
-                code_file_paths = _git_relative_path_candidates(code_file_abs, repo_root)
-                prompt_file_paths = _git_relative_path_candidates(prompt_file_abs, repo_root)
-
-                code_changed = bool(code_file_paths & git_changed)
-                prompt_changed = bool(prompt_file_paths & git_changed)
-
-                if code_changed and prompt_changed and decision.operation in {"auto-deps", "generate"}:
-                    console.print(
-                        f"[blue]↔ Reclassifying {basename}: code and prompt "
-                        "changed together → example drift[/blue]"
-                    )
-                    decision = type(decision)(
-                        operation="example",
-                        reason=(
-                            "Code and prompt changed together; regenerate example "
-                            "without re-running code generation"
-                        ),
-                        confidence=getattr(decision, "confidence", 0.85),
-                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
-                        details=getattr(decision, "details", {}),
-                    )
-                elif (
-                    prompt_changed
-                    and not code_changed
-                    and decision.operation in {"auto-deps", "generate"}
-                ):
-                    console.print(
-                        f"[blue]↔ Reclassifying {basename}: prompt changed but "
-                        "code unchanged → example drift[/blue]"
-                    )
-                    decision = type(decision)(
-                        operation="example",
-                        reason=(
-                            "Prompt changed without code changes; refresh or review "
-                            "example without re-running code generation"
-                        ),
-                        confidence=getattr(decision, "confidence", 0.85),
-                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
-                        details=getattr(decision, "details", {}),
-                    )
-                elif (
-                    not code_changed
-                    and not prompt_changed
-                    and decision.operation == "generate"
-                ):
-                    console.print(
-                        f"[blue]✓ Skipping {basename}: clean-CI generate decision "
-                        "but neither code nor prompt changed[/blue]"
-                    )
-                    continue
-                elif code_changed and not prompt_changed:
-                    console.print(
-                        f"[blue]↑ Reclassifying {basename}: code changed but prompt "
-                        f"unchanged → prompt (update) drift[/blue]"
-                    )
-                    code_path = (
-                        str(code_file_abs)
-                        if code_file_abs
-                        else next(iter(code_file_paths), "")
-                    )
-                    decision = type(decision)(
-                        operation="update",
-                        reason="Code changed but prompt unchanged (git-based detection)",
-                        confidence=getattr(decision, "confidence", 0.85),
-                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
-                        details=getattr(decision, "details", {}),
-                    )
-            except Exception as e:
-                console.print(
-                    f"[yellow]⚠ Git reclassification failed for {basename}: {e}[/yellow]"
-                )
-
-        if decision.operation == "update":
-            resolved_prompt_path: Optional[str] = None
-            try:
-                paths = get_pdd_file_paths(basename, language)
-                prompt_file_abs = paths.get("prompt")
-                if prompt_file_abs is not None:
-                    resolved_prompt_path = str(prompt_file_abs)
-            except Exception:
-                resolved_prompt_path = None
-            prompt_drifts.append(
-                DriftInfo(
-                    basename=basename,
-                    language=language,
-                    operation="update",
-                    reason=getattr(decision, "reason", "Prompt stale"),
-                    code_path=code_path,
-                    prompt_path=resolved_prompt_path,
-                    diff_base=diff_base,
-                )
-            )
-        else:
-            # Preserve the original operation so heal_module can dispatch
-            # correctly. `example` and `auto-deps` have direct, bounded
-            # command paths; generate/verify/test/crash still run through
-            # `pdd sync` so sync_determine_operation can do its smart dispatch.
-            example_prompt_path: Optional[str] = None
-            example_code_path: Optional[str] = None
-            example_file_path: Optional[str] = None
-            if decision.operation in {"example", "auto-deps"}:
-                try:
-                    paths = get_pdd_file_paths(basename, language)
-                    prompt_file_abs = paths.get("prompt")
-                    code_file_abs = paths.get("code")
-                    example_file_abs = paths.get("example")
-                    if prompt_file_abs is not None:
-                        example_prompt_path = str(prompt_file_abs)
-                    if code_file_abs is not None:
-                        example_code_path = str(code_file_abs)
-                    if example_file_abs is not None:
-                        example_file_path = str(example_file_abs)
-                except Exception:
-                    pass
-            example_drifts.append(
-                DriftInfo(
-                    basename=basename,
-                    language=language,
-                    operation=decision.operation,
-                    reason=getattr(decision, "reason", "Drift detected"),
-                    prompt_path=example_prompt_path,
-                    code_path=example_code_path,
-                    example_path=example_file_path,
-                )
-            )
-
-    # Detect code files without prompts: these need `pdd update` to generate
-    # the prompt and complete the dev unit.
-    if modules is not None:
-        _LANG_EXTENSIONS = {
-            ".py": "python", ".ts": "typescript", ".tsx": "typescript",
-            ".js": "javascript", ".jsx": "javascript", ".go": "go",
-            ".rs": "rust", ".java": "java", ".rb": "ruby",
-            ".sh": "bash", ".bash": "bash",
-        }
-        for basename in modules:
-            if basename in seen_basenames:
-                continue
-            # No prompt found for this basename — look for a code file
-            for ext, language in _LANG_EXTENSIONS.items():
-                candidates = list(Path(".").rglob(f"{basename}{ext}"))
-                # Filter out test files, examples, and hidden dirs
-                candidates = [
-                    c for c in candidates
-                    if not any(p.startswith(".") for p in c.parts)
-                    and "test" not in c.name.lower().split(basename.lower())[0]
-                    and "example" not in c.name.lower()
-                ]
-                if candidates:
-                    code_path = str(candidates[0])
-                    prompt_drifts.append(
-                        DriftInfo(
-                            basename=basename,
-                            language=language,
-                            operation="update",
-                            reason="Code exists without prompt — needs pdd update",
-                            code_path=code_path,
-                        )
-                    )
-                    seen_basenames.add(basename)
-                    break
-
-    return prompt_drifts, example_drifts
-
-
-def _print_drift_table(
-    prompt_drifts: List[DriftInfo], example_drifts: List[DriftInfo]
-) -> None:
-    """Print a summary table of detected drift."""
-    table = Table(title="Detected Drift Summary")
-    table.add_column("Module", style="cyan")
-    table.add_column("Language", style="blue")
-    table.add_column("Drift Type", style="magenta")
-    table.add_column("Reason", style="white")
-
-    for drift in prompt_drifts:
-        table.add_row(drift.basename, drift.language, "prompt (update)", drift.reason)
-    for drift in example_drifts:
-        table.add_row(drift.basename, drift.language, "example (sync)", drift.reason)
-
-    console.print(table)
+    except Exception:
+        pass
 
 
 def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
-    """Run a pdd subprocess command, returning True on success."""
-    console.print(f"[blue]⟳ {label}: {' '.join(cmd)}[/blue]")
-    rollback_state = _capture_rollback_state(cmd, env)
+    """Run a `pdd ...` subprocess with protected-paths rollback on failure."""
+    rollback_eligible = _capture_rollback_state(cmd, env)
+
+    timeout = _heal_subprocess_timeout()
     try:
-        # pdd sync summarizes every context file before healing and can route
-        # to slow-path models (e.g. Claude Opus via Vertex) on large repos.
-        # 20 min covers Opus summarization; GCB step-level timeout still caps
-        # total runaway at 30 min.
         result = subprocess.run(
             cmd,
             env=env,
             capture_output=True,
             text=True,
-            timeout=1200,
+            timeout=timeout,
         )
-        if result.returncode == 0:
-            console.print(f"[green]✓ {label} succeeded[/green]")
-            return True
-        else:
-            stderr_snippet = (result.stderr or "").strip()[-500:]
-            console.print(f"[red]✗ {label} failed (exit code {result.returncode})[/red]")
-            if stderr_snippet:
-                console.print(f"[dim]{stderr_snippet}[/dim]")
-            _restore_protected_paths(rollback_state, label)
-            return False
-    except subprocess.TimeoutExpired as e:
-        console.print(f"[red]✗ {label} timed out[/red]")
-        if e.stdout:
-            console.print(f"[dim]stdout (last 1000 chars): {e.stdout[-1000:]}[/dim]")
-        if e.stderr:
-            console.print(f"[dim]stderr (last 1000 chars): {e.stderr[-1000:]}[/dim]")
-        _restore_protected_paths(rollback_state, label)
-        return False
+        success = result.returncode == 0
+        stderr = getattr(result, "stderr", "") or ""
+    except subprocess.TimeoutExpired:
+        success = False
+        stderr = f"timeout after {timeout}s"
     except FileNotFoundError:
-        console.print(
-            "[red]✗ 'pdd' command not found. Ensure pdd is installed and on PATH.[/red]"
-        )
         return False
-    except Exception as e:
-        console.print(f"[red]✗ {label} error: {e}[/red]")
-        _restore_protected_paths(rollback_state, label)
-        return False
+    except Exception as exc:
+        success = False
+        stderr = str(exc)
+
+    if not success:
+        if rollback_eligible is True:
+            _restore_protected_paths()
+        if isinstance(stderr, str) and stderr:
+            console.print(f"[red]{label} failed: {stderr.strip()[:300]}[/red]")
+    return success
 
 
-def _numstat_line_counts(diff_args: List[str]) -> Optional[Tuple[int, int]]:
-    """Return (added, deleted) line counts from `git diff --numstat <args>`.
+# ---------------------------------------------------------------------------
+# Cost / environment helpers
+# ---------------------------------------------------------------------------
 
-    Returns None if the diff command fails or produces no rows. When multiple
-    files appear in the diff, the counts are summed. A binary-diff row
-    (indicated by "-\t-") contributes zero.
-    """
+
+def _parse_cost_from_csv(path: str) -> float:
+    """Sum the per-operation cost column (or total_cost fallback)."""
+    if not path:
+        return 0.0
+    p = Path(path)
+    if not p.exists():
+        return 0.0
     try:
-        result = subprocess.run(
-            ["git", "diff", "--numstat"] + diff_args,
+        with p.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                return 0.0
+            field = "cost" if "cost" in reader.fieldnames else (
+                "total_cost" if "total_cost" in reader.fieldnames else None
+            )
+            if field is None:
+                return 0.0
+            total = 0.0
+            for row in reader:
+                value = row.get(field, "")
+                if value in (None, ""):
+                    continue
+                try:
+                    total += float(value)
+                except (TypeError, ValueError):
+                    continue
+            return total
+    except Exception:
+        return 0.0
+
+
+def _build_ci_env(cost_path: str) -> Dict[str, str]:
+    """Build the env dict for `pdd` subprocesses."""
+    env = os.environ.copy()
+    env["PDD_FORCE"] = "1"
+    env["CI"] = "1"
+    env["PDD_NO_INTERACTIVE"] = "1"
+    env["NO_COLOR"] = "1"
+    env["PDD_OUTPUT_COST_PATH"] = cost_path
+    env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] = "1"
+    env.setdefault("PDD_FORCE_LOCAL", "1")
+    env.setdefault("PDD_SKIP_LOCAL_MODELS", "1")
+    env.setdefault("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT", "1")
+    env.setdefault("PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT", "1")
+    return env
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped metadata snapshot/restore
+# ---------------------------------------------------------------------------
+
+
+def _metadata_snapshot_paths(basename: str, language: str) -> Tuple[str, str, str]:
+    """Return repo-relative (architecture, fingerprint, run_report) paths."""
+    safe = _safe_basename(basename)
+    fingerprint = f".pdd/meta/{safe}_{language}.json"
+    run_report = f".pdd/meta/{safe}_{language}_run.json"
+    return ("architecture.json", fingerprint, run_report)
+
+
+def _snapshot_metadata_state_for(drift: Any) -> Dict[str, Optional[bytes]]:
+    """Capture per-module bytes of architecture.json + fingerprint + run-report.
+
+    Returns a dict keyed by repo-relative path; None values mean the file
+    did not exist at snapshot time.
+    """
+    repo_root = _repo_root()
+    basename = getattr(drift, "basename", "")
+    language = getattr(drift, "language", "python")
+    arch_rel, fp_rel, rr_rel = _metadata_snapshot_paths(basename, language)
+
+    snapshot: Dict[str, Optional[bytes]] = {}
+    for rel in (arch_rel, fp_rel, rr_rel):
+        full = repo_root / rel
+        if full.exists():
+            try:
+                snapshot[rel] = full.read_bytes()
+            except Exception:
+                snapshot[rel] = None
+        else:
+            snapshot[rel] = None
+    return snapshot
+
+
+def _restore_metadata_state_for(snapshot: Dict[str, Optional[bytes]]) -> None:
+    """Restore the per-module bytes captured by `_snapshot_metadata_state_for`."""
+    if not isinstance(snapshot, dict):
+        return
+    repo_root = _repo_root()
+    for rel, content in snapshot.items():
+        full = repo_root / rel
+        if content is None:
+            if full.exists():
+                try:
+                    full.unlink()
+                except Exception:
+                    pass
+        else:
+            try:
+                full.parent.mkdir(parents=True, exist_ok=True)
+                full.write_bytes(content)
+            except Exception:
+                pass
+
+
+def _cleanup_metadata_artifacts(*_args: Any, **_kwargs: Any) -> None:
+    """Legacy no-op shim retained for backward import compatibility."""
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Metadata finalization wrapper
+# ---------------------------------------------------------------------------
+
+
+def _run_metadata_sync_safe(
+    prompt_path: Optional[str],
+    code_path: Optional[str],
+) -> bool:
+    """Invoke the shared metadata-sync orchestrator. Returns True iff result.ok."""
+    if not prompt_path:
+        print("metadata finalization failed: prompt_path is unset")
+        return False
+    p = Path(prompt_path)
+    if not p.exists():
+        print(f"metadata finalization failed: prompt path {prompt_path} does not exist")
+        return False
+
+    try:
+        from pdd.metadata_sync import run_metadata_sync
+    except ImportError as exc:
+        print(f"metadata finalization failed: metadata_sync unavailable ({exc})")
+        return False
+
+    code_p = Path(code_path) if code_path else None
+    try:
+        result = run_metadata_sync(p, code_p)
+    except Exception as exc:
+        print(f"metadata finalization failed: orchestrator raised: {exc}")
+        return False
+
+    ok = bool(getattr(result, "ok", False))
+    if ok:
+        try:
+            from pdd.operation_log import infer_module_identity, save_fingerprint
+            from pdd.sync_determine_operation import get_pdd_file_paths, read_fingerprint
+
+            basename, language = infer_module_identity(str(p))
+            paths = get_pdd_file_paths(basename, language)
+            if not paths or not paths.get("prompt") or not paths.get("code"):
+                raise ValueError("authoritative prompt/code paths unavailable")
+            # Preserve the previous user-facing command so the released
+            # `sync_determine_operation._is_workflow_complete` (which only
+            # accepts verify/test/fix/update as complete) keeps recognizing
+            # the workflow as synced after this internal refresh.
+            prev_fp_for_cmd = read_fingerprint(basename, language)
+            prev_cmd = getattr(prev_fp_for_cmd, "command", None) if prev_fp_for_cmd else None
+            preserved_command = (
+                prev_cmd
+                if prev_cmd in ("verify", "test", "fix", "update")
+                else "fix"
+            )
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation=preserved_command,
+                paths=paths,
+                cost=0.0,
+                model="metadata_sync",
+            )
+            fingerprint = read_fingerprint(basename, language)
+            if (
+                fingerprint is None
+                or not fingerprint.prompt_hash
+                or not fingerprint.code_hash
+            ):
+                raise ValueError("fingerprint missing prompt/code hashes")
+            example_path = paths.get("example")
+            if isinstance(example_path, Path) and example_path.exists() and not fingerprint.example_hash:
+                raise ValueError("fingerprint missing example hash")
+            test_files = paths.get("test_files")
+            if test_files and not fingerprint.test_files:
+                raise ValueError("fingerprint missing test file hashes")
+        except Exception:
+            basename = str(prompt_path)
+            print(f"metadata finalization failed: fingerprint refresh failed for {basename}")
+            return False
+        meta_rel = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+        print(f"metadata finalized for {basename}: {meta_rel}")
+        return True
+
+    failing = getattr(result, "failing_stage", None) or "unknown"
+    detail = ""
+    stages = getattr(result, "stages", None)
+    if isinstance(stages, dict) and failing in stages:
+        s = stages[failing]
+        detail = (getattr(s, "reason", None) or getattr(s, "detail", None) or "")
+    print(f"metadata finalization failed: stage={failing} {detail}".strip())
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Prompt-content gates
+# ---------------------------------------------------------------------------
+
+
+def _revert_prompt_file(drift: Any) -> None:
+    """Restore prompt to HEAD via git checkout."""
+    prompt_path = getattr(drift, "prompt_path", None)
+    basename = getattr(drift, "basename", "<unknown>")
+    if not prompt_path:
+        raise PromptRevertError(f"{basename}: prompt_path is None")
+    repo_root = _repo_root()
+    # Compute repo-relative path.
+    try:
+        p = Path(prompt_path)
+        if p.is_absolute():
+            rel = p.relative_to(repo_root).as_posix()
+        else:
+            rel = p.as_posix()
+    except Exception:
+        rel = str(prompt_path)
+
+    try:
+        r = subprocess.run(
+            ["git", "checkout", "HEAD", "--", rel],
             capture_output=True,
             text=True,
-            timeout=30,
         )
-        if result.returncode != 0:
-            return None
-        added = 0
-        deleted = 0
-        saw_row = False
-        for line in result.stdout.splitlines():
-            parts = line.strip().split("\t")
-            if len(parts) < 2:
-                continue
-            a_str, d_str = parts[0], parts[1]
-            if a_str == "-" or d_str == "-":
-                saw_row = True
+    except Exception as exc:
+        raise PromptRevertError(f"{basename}: git checkout failed: {exc}")
+    if r.returncode != 0:
+        stderr = getattr(r, "stderr", "") or ""
+        raise PromptRevertError(f"{basename}: git checkout failed: {stderr}")
+    try:
+        s = subprocess.run(
+            ["git", "status", "--porcelain", "--", rel],
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        raise PromptRevertError(f"{basename}: git status failed: {exc}")
+    if s.returncode != 0:
+        raise PromptRevertError(f"{basename}: git status failed")
+    stdout = getattr(s, "stdout", "") or ""
+    if isinstance(stdout, str) and stdout.strip():
+        raise PromptRevertError(f"{basename}: prompt still dirty after revert: {stdout.strip()}")
+
+
+# ---------------------------------------------------------------------------
+# Scoped staging (Issue #1021): never `git add -A`. The auto-heal commit must
+# only include tracked updates plus per-module pathspecs computed from each
+# DriftInfo, so unrelated `.pdd/meta/*.json` fingerprints from out-of-scope
+# modules cannot leak into the heal commit.
+# ---------------------------------------------------------------------------
+
+
+def _operation_log_metadata_relpaths(basename: str, language: str) -> List[str]:
+    """Return the repo-relative metadata paths owned by one (basename, language).
+
+    Uses the same subdirectory-safe basename semantics as ``pdd.operation_log``
+    (e.g. ``commands/foo`` → ``commands_foo``).
+    """
+    safe = _safe_basename(str(basename))
+    language = str(language)
+    return [
+        f".pdd/meta/{safe}_{language}.json",
+        f".pdd/meta/{safe}_{language}_run.json",
+    ]
+
+
+def _healed_module_name(module: Any) -> str:
+    """Return a display/staging basename for healed module identifiers."""
+    basename = getattr(module, "basename", module)
+    return str(basename)
+
+
+def _healed_module_metadata_relpaths(module: Any) -> List[str]:
+    """Return metadata relpaths owned by one healed module, if language is known."""
+    basename = getattr(module, "basename", None)
+    language = getattr(module, "language", None)
+    if not basename or not language:
+        return []
+    return _operation_log_metadata_relpaths(str(basename), str(language))
+
+
+def _healed_module_file_relpaths(module: Any, repo_root: Path) -> List[str]:
+    """Return source/prompt/example/test paths owned by one healed module.
+
+    DriftInfo attributes are populated lazily and may be ``None`` even after a
+    successful heal — e.g. ``--modules`` with a code file that lacked a prompt
+    starts with ``example_path=None`` and the follow-up ``pdd example`` step
+    never writes the new path back onto the dataclass. To make sure files
+    actually generated by the heal still get staged, we fall back to
+    ``get_pdd_file_paths(basename, language)`` for any missing attribute and
+    include the resulting on-disk path when it exists.
+    """
+    relpaths: List[str] = []
+    seen: Set[str] = set()
+    attr_to_key = {
+        "prompt_path": "prompt",
+        "code_path": "code",
+        "example_path": "example",
+        "test_path": "test",
+    }
+
+    resolved_paths: Dict[str, Any] = {}
+    missing_attrs = [attr for attr in attr_to_key if not getattr(module, attr, None)]
+    if missing_attrs:
+        basename = getattr(module, "basename", None)
+        language = getattr(module, "language", None)
+        if basename and language:
+            # ``get_pdd_file_paths`` resolves prompts/code/example/test dirs
+            # relative to the current working directory. ``commit_and_push``
+            # may be invoked from a subdirectory, so anchor the lookup at
+            # ``repo_root`` to avoid silently missing files that live at the
+            # real repo-root-relative location (e.g. ``examples/<m>_example.py``).
+            prev_cwd = Path.cwd()
+            try:
+                try:
+                    os.chdir(repo_root)
+                except OSError:
+                    pass
+                try:
+                    resolved_paths = _resolve_paths(str(basename), str(language))
+                except Exception:
+                    resolved_paths = {}
+            finally:
+                try:
+                    os.chdir(prev_cwd)
+                except OSError:
+                    pass
+
+    for attr, key in attr_to_key.items():
+        value = getattr(module, attr, None)
+        if not value:
+            fallback = resolved_paths.get(key) if resolved_paths else None
+            if fallback is None:
                 continue
             try:
-                added += int(a_str)
-                deleted += int(d_str)
-                saw_row = True
-            except ValueError:
-                continue
-        if not saw_row:
-            return None
-        return (added, deleted)
-    except Exception:
-        return None
-
-
-def _enforce_prompt_churn_gate(drift: DriftInfo) -> bool:
-    """Check that the prompt churn is not wildly larger than the code churn.
-
-    After `pdd update` runs, the prompt file is modified in the working tree
-    (not yet committed). We compare `git diff --numstat HEAD -- <prompt_path>`
-    (prompt churn) against `git diff --numstat <diff_base> -- <code_path>`
-    (code churn that motivated the heal). If prompt-churn / code-churn
-    exceeds `_HEAL_PROMPT_CHURN_MAX_RATIO`, we revert the prompt file and
-    return False so the caller treats the heal as failed.
-
-    This is a safety net for cases where the LLM rewrites far more of the
-    prompt than the code change warrants (see PR gltanaka/pdd#1187).
-    Returns True when the gate passes or when we cannot measure (missing
-    paths, git errors) — in the unmeasurable case we prefer to let the
-    healthier structural-invariant validator be the gatekeeper.
-    """
-    if not drift.prompt_path or not drift.code_path or not drift.diff_base:
-        return True
-
-    ratio_cap_str = os.environ.get("PDD_HEAL_PROMPT_CHURN_MAX_RATIO")
-    try:
-        ratio_cap = float(ratio_cap_str) if ratio_cap_str else _HEAL_PROMPT_CHURN_MAX_RATIO
-    except ValueError:
-        ratio_cap = _HEAL_PROMPT_CHURN_MAX_RATIO
-
-    prompt_counts = _numstat_line_counts(["HEAD", "--", drift.prompt_path])
-    code_counts = _numstat_line_counts([drift.diff_base, "--", drift.code_path])
-
-    if prompt_counts is None or code_counts is None:
-        return True
-
-    prompt_churn = prompt_counts[0] + prompt_counts[1]
-    code_churn = max(1, code_counts[0] + code_counts[1])
-    ratio = prompt_churn / code_churn
-
-    if ratio <= ratio_cap:
-        return True
-
-    console.print(
-        f"[red]✗ Prompt churn gate tripped for {drift.basename}: "
-        f"prompt changed {prompt_churn} lines vs code {code_churn} lines "
-        f"(ratio {ratio:.1f} > cap {ratio_cap:.1f}).[/red]\n"
-        f"[red]  Rewrite was likely destructive — see PR gltanaka/pdd#1187. "
-        f"Reverting {drift.prompt_path} and skipping this module.[/red]"
-    )
-    _revert_prompt_file(drift)
-    return False
-
-
-# Regexes used by the structural-invariants validator. Compiled once at module
-# import time so the gate adds negligible overhead per heal.
-_INCLUDE_TAG_RE = re.compile(r"<include(?:-many)?>")
-_PDD_OPEN_TAG_RE = re.compile(r"<pdd\.[A-Za-z_][A-Za-z0-9_]*>")
-_PERCENT_MARKER_RE = re.compile(r"^%\s", re.MULTILINE)
-_FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n.*?\n```", re.DOTALL)
-
-# Env var for selectively disabling individual invariants. Comma-separated
-# list of invariant names. Motivation: invariant #4 (fenced blocks byte-
-# identical) is the strictest — it blocks legitimate refactors where an
-# example's API signature inside a fenced block needs to change. Without
-# an escape hatch the only way out would be a code change here. The other
-# invariants are already soft (counts or subset checks) but expose them
-# for uniformity.
-_VALID_SKIPPABLE_INVARIANTS = frozenset({
-    "include",          # skip invariant #1 (<include>/<include-many> count)
-    "pdd_tags",         # skip invariant #2 (<pdd.*> prefix preservation)
-    "percent_markers",  # skip invariant #3 (% section marker threshold)
-    "fenced_blocks",    # skip invariant #4 (fenced block byte-identity)
-})
-
-
-def _get_skipped_invariants() -> set:
-    """Return the set of invariant names to skip, parsed from env var.
-
-    Reads `PDD_HEAL_INVARIANTS_SKIP` as a comma-separated list. Unknown
-    names are logged and dropped rather than raising, so a typo in CI
-    config doesn't break the whole heal. Empty / unset env → empty set
-    (all invariants enforced).
-    """
-    raw = os.environ.get("PDD_HEAL_INVARIANTS_SKIP", "")
-    if not raw.strip():
-        return set()
-    requested = {s.strip() for s in raw.split(",") if s.strip()}
-    unknown = requested - _VALID_SKIPPABLE_INVARIANTS
-    if unknown:
-        console.print(
-            f"[yellow]⚠ Unknown invariant names in "
-            f"PDD_HEAL_INVARIANTS_SKIP, ignoring: {sorted(unknown)}. "
-            f"Valid names: {sorted(_VALID_SKIPPABLE_INVARIANTS)}.[/yellow]"
-        )
-    return requested & _VALID_SKIPPABLE_INVARIANTS
-
-
-def _git_repo_relative_path(file_path: str) -> Optional[str]:
-    """Return a git-friendly repo-relative path for `file_path`.
-
-    Absolute paths from get_pdd_file_paths() work for filesystem IO but not for
-    `git checkout HEAD -- <path>` in Cloud Build. Convert absolute paths to a
-    repo-relative POSIX form while leaving already-relative paths untouched.
-    Returns None when the repo root cannot be determined or the path is outside
-    the repo.
-    """
-    try:
-        path = Path(file_path)
-        if not path.is_absolute():
-            return path.as_posix()
-
-        repo_root_proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if repo_root_proc.returncode != 0:
-            return None
-
-        repo_root = Path(repo_root_proc.stdout.strip()).resolve()
-        return path.resolve().relative_to(repo_root).as_posix()
-    except Exception:
-        return None
-
-
-def _git_show_prompt_at_head(prompt_path: str) -> Optional[str]:
-    """Return the committed HEAD content of `prompt_path`, or None on failure.
-
-    `git show HEAD:<path>` requires a repo-relative path with forward slashes;
-    absolute paths (which is what DriftInfo.prompt_path holds, since
-    get_pdd_file_paths returns absolute Paths) are rejected by git. Resolve
-    the path against the repo root first, then hand the relative form to git.
-    """
-    try:
-        rel_str = _git_repo_relative_path(prompt_path)
-        if rel_str is None:
-            return None
-        show_proc = subprocess.run(
-            ["git", "show", f"HEAD:{rel_str}"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if show_proc.returncode != 0:
-            return None
-        return show_proc.stdout
-    except Exception:
-        return None
-
-
-def _enforce_structural_invariants(drift: DriftInfo) -> bool:
-    """Verify that `pdd update` did not strip known structural elements.
-
-    Path-agnostic post-heal check: runs regardless of whether the legacy
-    two-stage `update_prompt()` or the agentic path produced the rewrite.
-    Pulls the pre-heal content from `git show HEAD:<prompt_path>` and
-    compares it against the on-disk content. Reverts the prompt file and
-    returns False on any violation. Returns True when the gate passes or
-    when inputs cannot be resolved (permissive on missing, mirroring the
-    churn gate — the churn gate is still running alongside as a
-    magnitude-based belt-and-suspenders).
-
-    Invariants (motivated by PR gltanaka/pdd#1187):
-      1. `<include>` / `<include-many>` tag count must not decrease.
-      2. Every `<pdd.NAME>` open tag in the original must still appear
-         verbatim (prefix included) in the current content.
-      3. If the original has `%`-prefixed section markers, the current
-         content must retain at least `max(1, ceil(original_count / 2))`.
-      4. Every fenced code block in the original must appear verbatim
-         (byte-identical) somewhere in the current content.
-
-    Individual invariants can be disabled via the comma-separated env var
-    `PDD_HEAL_INVARIANTS_SKIP` — valid names are `include`, `pdd_tags`,
-    `percent_markers`, `fenced_blocks`. Motivation: invariant #4 is the
-    strictest; legitimate example-code refactors inside a fenced block
-    need an escape hatch without a code change here.
-    """
-    if not drift.prompt_path:
-        return True
-
-    original = _git_show_prompt_at_head(drift.prompt_path)
-    if original is None:
-        return True
-
-    try:
-        current = Path(drift.prompt_path).read_text()
-    except Exception:
-        return True
-
-    skipped = _get_skipped_invariants()
-    violations: List[str] = []
-
-    if "include" not in skipped:
-        original_include_count = len(_INCLUDE_TAG_RE.findall(original))
-        current_include_count = len(_INCLUDE_TAG_RE.findall(current))
-        if current_include_count < original_include_count:
-            violations.append(
-                f"<include>/<include-many> count dropped from "
-                f"{original_include_count} to {current_include_count}"
-            )
-
-    if "pdd_tags" not in skipped:
-        original_pdd_tags = set(_PDD_OPEN_TAG_RE.findall(original))
-        missing_pdd_tags = sorted(tag for tag in original_pdd_tags if tag not in current)
-        if missing_pdd_tags:
-            violations.append(
-                "missing <pdd.*> tags (prefix stripped or tag deleted): "
-                + ", ".join(missing_pdd_tags)
-            )
-
-    if "percent_markers" not in skipped:
-        original_percent_lines = _PERCENT_MARKER_RE.findall(original)
-        current_percent_count = len(_PERCENT_MARKER_RE.findall(current))
-        if original_percent_lines:
-            required = max(1, math.ceil(len(original_percent_lines) / 2))
-            if current_percent_count < required:
-                violations.append(
-                    f"% section markers dropped below threshold "
-                    f"({current_percent_count} < {required}, "
-                    f"original had {len(original_percent_lines)})"
+                exists = (
+                    bool(fallback.exists())
+                    if hasattr(fallback, "exists")
+                    else Path(str(fallback)).exists()
                 )
+            except Exception:
+                exists = False
+            if not exists:
+                continue
+            value = fallback
+        for rel in _git_relative_path_candidates(value, repo_root):
+            if rel not in seen:
+                seen.add(rel)
+                relpaths.append(rel)
+    return relpaths
 
-    if "fenced_blocks" not in skipped:
-        original_blocks = _FENCED_BLOCK_RE.findall(original)
-        missing_blocks = [b for b in original_blocks if b not in current]
-        if missing_blocks:
-            previews = [b[:80].replace("\n", " ") + "..." for b in missing_blocks]
-            violations.append(
-                "missing fenced code blocks: " + " | ".join(previews)
-            )
 
-    if not violations:
-        return True
+def _has_symlinked_ancestor(rel: str, repo_root: Path) -> bool:
+    """Return True if any directory ancestor of ``rel`` under ``repo_root`` is a symlink.
 
-    console.print(
-        f"[red]✗ Structural invariants failed for {drift.basename}:[/red]"
-    )
-    for v in violations:
-        console.print(f"[red]  - {v}[/red]")
-    console.print(
-        f"[red]  Reverting {drift.prompt_path} — see PR gltanaka/pdd#1187.[/red]"
-    )
-    _revert_prompt_file(drift)
+    ``git add`` refuses pathspecs whose ancestor directory is a symlink ("pathspec
+    'X' is beyond a symbolic link"). When ``_git_relative_path_candidates`` returns
+    both the symlinked form (e.g. ``prompts/foo.prompt`` via ``prompts -> pdd/prompts``)
+    and the canonical form (``pdd/prompts/foo.prompt``) for the same source path,
+    the symlinked form will fail staging. Dropping it lets the canonical form get
+    staged instead.
+    """
+    parts = PurePosixPath(rel).parts
+    if len(parts) <= 1:
+        return False
+    cur = repo_root
+    for part in parts[:-1]:
+        cur = cur / part
+        try:
+            if cur.is_symlink():
+                return True
+        except OSError:
+            return False
     return False
 
 
-def _revert_prompt_file(drift: DriftInfo) -> None:
-    """Restore a prompt file to HEAD after a failed heal attempt.
+def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> bool:
+    """Stage existing pathspecs with an explicit git-add call.
 
-    Raises:
-        PromptRevertError: If the prompt path is unavailable, git checkout fails,
-            or the prompt still appears modified afterwards.
+    Two filters run **before** ``git add`` and **before** ``git check-ignore``:
+
+    1. **Symlink-traversal filter.** Drops pathspecs whose ancestor directory is
+       a symlink (e.g. the repo-root ``prompts -> pdd/prompts`` shim). Recent
+       Git fatals on such paths with "pathspec 'X' is beyond a symbolic link" —
+       and that fatal hits ``git check-ignore`` first, not just ``git add``, so
+       the symlink filter MUST run before any git invocation. The canonical
+       form is normally also present in the list because
+       ``_git_relative_path_candidates`` returns both shapes.
+
+    2. **Gitignore filter.** Run ``git check-ignore`` on the symlink-free
+       survivors so we know which paths to skip — otherwise ``git add`` refuses
+       the whole batch with "paths are ignored" (e.g. per-run reports under
+       ``.pdd/meta/*_run.json``), aborting an otherwise-successful heal commit.
+
+    Returns True on success or on a "nothing to stage" no-op. Returns False
+    only if ``git add`` itself fails after filters have been applied. Emits a
+    warning (not a hard failure) if all input paths get filtered out, since
+    silent drops are observable here but would be invisible at the caller.
     """
-    if not drift.prompt_path:
-        msg = (
-            f"Cannot safely revert {drift.basename}: prompt_path is unavailable. "
-            "Blocking commit phase to avoid publishing a partial heal."
+    repo_root = (cwd or Path.cwd()).resolve()
+    existing = [rel for rel in pathspecs if (cwd or Path.cwd()).joinpath(rel).exists()]
+    if not existing:
+        return True
+
+    # Filter 1: symlink-traversal. Must come BEFORE check-ignore — git's
+    # "beyond a symbolic link" fatal applies to check-ignore too, not just to
+    # `git add`. If the symlink filter ran after check-ignore, a mixed batch
+    # would lose its ignore information when check-ignore fatals on the
+    # symlinked entry, and ignored paths would then leak through to `git add`
+    # (which would refuse the whole batch). Invariant:
+    # `_git_relative_path_candidates` emits both the symlinked and the
+    # canonical form for any source that traverses a symlinked ancestor, so
+    # dropping the symlinked form here loses nothing.
+    symlinked = {rel for rel in existing if _has_symlinked_ancestor(rel, repo_root)}
+    if symlinked:
+        console.print(
+            f"[dim]ci-heal: skipping symlink-traversal paths during stage: "
+            f"{sorted(symlinked)}[/dim]"
         )
-        console.print(f"[red]✗ {msg}[/red]")
-        raise PromptRevertError(msg)
+    survivors = [rel for rel in existing if rel not in symlinked]
+    if not survivors:
+        # Every input went through a symlinked ancestor and was dropped.
+        # That's almost certainly a caller bug (the canonical form was not
+        # supplied alongside), so make it observable.
+        console.print(
+            f"[yellow]ci-heal: every input pathspec was dropped as symlink-traversal "
+            f"({sorted(symlinked)}); nothing staged. Caller should also pass the "
+            f"canonical (resolved) form for these paths.[/yellow]"
+        )
+        return True
+
+    # Filter 2: gitignore.
+    ignored: Set[str] = set()
     try:
-        rel_prompt_path = _git_repo_relative_path(drift.prompt_path)
-        if rel_prompt_path is None:
-            msg = (
-                f"Cannot safely revert {drift.prompt_path}: could not resolve a "
-                "repo-relative git path. Blocking commit phase to avoid "
-                "publishing a partial heal."
-            )
-            console.print(f"[red]✗ {msg}[/red]")
-            raise PromptRevertError(msg)
-
-        restore_result = subprocess.run(
-            ["git", "checkout", "HEAD", "--", rel_prompt_path],
-            check=False,
+        rc_check = subprocess.run(
+            ["git", "check-ignore", "--", *survivors],
+            cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
-        if restore_result.returncode != 0:
-            stderr = (restore_result.stderr or "").strip()
-            msg = (
-                f"Failed to revert {drift.prompt_path} after heal failure"
-                + (f": {stderr}" if stderr else ".")
-            )
-            console.print(f"[red]✗ {msg}[/red]")
-            raise PromptRevertError(msg)
+        # Exit 0 = at least one path ignored, 1 = none ignored, >1 = real error.
+        # Treat anything else as "best-effort check failed" and fall through to
+        # the original list.
+        rc_code = getattr(rc_check, "returncode", 1)
+        if rc_code in (0, 1):
+            ignored = {
+                line.strip()
+                for line in (rc_check.stdout or "").splitlines()
+                if line.strip()
+            }
+    except Exception:
+        ignored = set()
 
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain", "--", rel_prompt_path],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
+    if ignored:
+        console.print(
+            f"[dim]ci-heal: skipping gitignored paths during stage: "
+            f"{sorted(ignored)}[/dim]"
         )
-        if status_result.returncode != 0 or (status_result.stdout or "").strip():
-            stderr = (status_result.stderr or "").strip()
-            msg = (
-                f"Prompt {drift.prompt_path} still appears dirty after revert"
-                + (f": {stderr}" if stderr else ".")
+
+    stageable = [rel for rel in survivors if rel not in ignored]
+    if not stageable:
+        return True
+
+    rc_add = subprocess.run(
+        ["git", "add", "--", *stageable],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if getattr(rc_add, "returncode", 1) != 0:
+        console.print(f"[red]git add failed: {(rc_add.stderr or '').strip()}[/red]")
+        return False
+    return True
+
+
+def _stage_heal_changes(healed_modules: Sequence[Any]) -> bool:
+    """Stage tracked updates plus explicit new files owned by healed modules.
+
+    Avoids ``git add -A``, which stages unrelated untracked artifacts such as
+    temporary ``.pdd/meta/*.json`` fingerprints from modules outside the heal
+    scope (Issue #1021).
+
+    Each item is expected to be a :class:`DriftInfo` (or any object exposing
+    the same ``basename``/``language``/``operation`` and optional ``*_path``
+    attributes). Items that don't expose those attrs will contribute nothing
+    to the per-module pathspecs — they will NOT cause untracked files to be
+    auto-discovered. Production callers must pass DriftInfo to get correct
+    staging of newly generated files.
+    """
+    repo_root = _repo_root()
+    rc_add_tracked = subprocess.run(
+        ["git", "add", "-u"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if getattr(rc_add_tracked, "returncode", 1) != 0:
+        console.print(
+            f"[red]git add failed: {(rc_add_tracked.stderr or '').strip()}[/red]"
+        )
+        return False
+
+    pathspecs: List[str] = []
+    seen: Set[str] = set()
+    for module in healed_modules:
+        for rel in (
+            _healed_module_metadata_relpaths(module)
+            + _healed_module_file_relpaths(module, repo_root)
+        ):
+            if rel not in seen:
+                seen.add(rel)
+                pathspecs.append(rel)
+
+    # When any healed module ran `pdd auto-deps`, that command may have *created*
+    # a fresh project_dependencies.csv at the repo root. Tracked updates are
+    # already covered by `git add -u`, but a brand-new CSV is untracked and must
+    # be added explicitly or it silently drops out of the heal commit.
+    if any(
+        getattr(module, "operation", None) == "auto-deps"
+        for module in healed_modules
+    ):
+        if "project_dependencies.csv" not in seen:
+            seen.add("project_dependencies.csv")
+            pathspecs.append("project_dependencies.csv")
+
+    return _git_add_pathspecs(pathspecs, cwd=repo_root)
+
+
+def _enforce_prompt_churn_gate(drift: Any) -> bool:
+    """Return True (gate passed/permissive) or False (gate violated, reverted)."""
+    prompt_path = getattr(drift, "prompt_path", None)
+    code_path = getattr(drift, "code_path", None)
+    diff_base = getattr(drift, "diff_base", None)
+
+    if not prompt_path or diff_base is None:
+        return True
+
+    try:
+        ratio_max = float(os.environ.get(
+            "PDD_HEAL_PROMPT_CHURN_MAX_RATIO",
+            _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT,
+        ))
+    except (TypeError, ValueError):
+        ratio_max = _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT
+
+    prompt_counts = _numstat_line_counts(["HEAD", "--", str(prompt_path)])
+    if prompt_counts is None:
+        return True
+    prompt_total = prompt_counts[0] + prompt_counts[1]
+    if prompt_total == 0:
+        return True
+
+    if not code_path:
+        return True
+    code_counts = _numstat_line_counts([diff_base, "--", str(code_path)])
+    if code_counts is None:
+        return True
+    code_total = code_counts[0] + code_counts[1]
+    if code_total == 0:
+        return True
+
+    ratio = prompt_total / code_total
+    if ratio > ratio_max:
+        try:
+            _revert_prompt_file(drift)
+        except PromptRevertError:
+            pass
+        return False
+    return True
+
+
+def _enforce_structural_invariants(drift: Any) -> bool:
+    """Return True if invariants hold; False (and revert) on violation."""
+    prompt_path = getattr(drift, "prompt_path", None)
+    if not prompt_path:
+        return True
+
+    pre = _git_show_prompt_at_head(prompt_path)
+    if not isinstance(pre, str):
+        return True
+
+    try:
+        post = Path(prompt_path).read_text(encoding="utf-8")
+    except Exception:
+        return True
+    if not isinstance(post, str):
+        return True
+
+    skip_env = os.environ.get("PDD_HEAL_INVARIANTS_SKIP", "") or ""
+    skip = {s.strip() for s in skip_env.split(",") if s.strip()} & _INVARIANT_KEYS
+
+    violation = False
+
+    if "include" not in skip:
+        orig_inc = len(re.findall(r"<include(?:-many)?\b", pre))
+        cur_inc = len(re.findall(r"<include(?:-many)?\b", post))
+        if cur_inc < orig_inc:
+            violation = True
+
+    if not violation and "pdd_tags" not in skip:
+        orig_tags = set(re.findall(r"<(pdd\.[A-Za-z0-9_]+)\b", pre))
+        cur_tags = set(re.findall(r"<(pdd\.[A-Za-z0-9_]+)\b", post))
+        if orig_tags - cur_tags:
+            violation = True
+
+    if not violation and "percent_markers" not in skip:
+        orig_pct = len(re.findall(r"^\s*%", pre, flags=re.MULTILINE))
+        cur_pct = len(re.findall(r"^\s*%", post, flags=re.MULTILINE))
+        threshold = max(1, math.ceil(orig_pct / 2)) if orig_pct > 0 else 0
+        if orig_pct > 0 and cur_pct < threshold:
+            violation = True
+
+    if not violation and "fenced_blocks" not in skip:
+        orig_blocks = re.findall(r"```.*?```", pre, flags=re.DOTALL)
+        for blk in orig_blocks:
+            if blk not in post:
+                violation = True
+                break
+
+    if violation:
+        try:
+            _revert_prompt_file(drift)
+        except PromptRevertError:
+            pass
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Heal dispatch
+# ---------------------------------------------------------------------------
+
+
+def _heal_skip_modules() -> Set[str]:
+    raw = os.environ.get("PDD_HEAL_SYNC_SKIP_MODULES", "")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _auto_deps_directory(drift: Any) -> str:
+    """Resolve the directory passed to `pdd auto-deps`."""
+    dep_dir = getattr(drift, "dependency_dir", None)
+    if dep_dir:
+        return str(dep_dir)
+    return "context"
+
+
+def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> Optional[bool]:
+    code_path = getattr(drift, "code_path", None)
+    if not code_path:
+        console.print(f"[red]heal failed for {drift.basename}: code_path unresolved[/red]")
+        return False
+
+    if not _run_pdd_command(
+        ["pdd", "--force", "--strength", "0.5", "update", str(code_path)],
+        env=env,
+        label=f"pdd update {drift.basename}",
+    ):
+        return False
+
+    # Lazy prompt_path resolution post-update (Requirement 8: only when prompt_path is None,
+    # i.e. the code-without-prompt flow where `pdd update` just created the prompt).
+    prompt_path = getattr(drift, "prompt_path", None)
+    if not prompt_path:
+        paths = _resolve_paths(drift.basename, drift.language)
+        candidate = paths.get("prompt")
+        # Use candidate.exists() directly so callers can hand back either a
+        # real Path or a test double; converting to Path() first would lose
+        # any test-injected .exists() override.
+        try:
+            candidate_exists = bool(candidate is not None and candidate.exists())
+        except Exception:
+            candidate_exists = False
+        if not candidate_exists:
+            console.print(
+                f"[red]heal failed for {drift.basename}: prompt_path unresolvable post-update[/red]"
             )
-            console.print(f"[red]✗ {msg}[/red]")
-            raise PromptRevertError(msg)
-    except Exception as e:
-        if isinstance(e, PromptRevertError):
+            drift.metadata_finalization_failed = True
+            drift.metadata_finalization_error = "prompt_path unresolvable post-update"
+            return False
+        drift.prompt_path = str(candidate)
+        prompt_path = drift.prompt_path
+
+    # Issue #1106 Gap 2: the lazy block above only fail-closes when
+    # `drift.prompt_path` was initially None. If it was set on `drift`
+    # BEFORE this heal ran but the file is missing on disk after the
+    # `pdd update` subprocess (typo, deleted, renamed by update, language
+    # detection mismatch), the previous code's `if prompt_exists:` guard
+    # further down silently skipped `_run_metadata_sync_safe` AND still
+    # fell through to the follow-up `pdd example` — masking metadata
+    # failure as a successful heal. Pull that gate up here so the missing
+    # case mirrors the lazy-unresolvable case: explicit hard failure, no
+    # metadata sync, no follow-up example.
+    try:
+        prompt_exists_post_update = Path(str(prompt_path)).exists()
+    except Exception:
+        prompt_exists_post_update = False
+    if not prompt_exists_post_update:
+        console.print(
+            f"[red]heal failed for {drift.basename}: prompt_path "
+            f"{prompt_path} set but missing on disk post-update[/red]"
+        )
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = (
+            "prompt_path set but missing on disk post-update"
+        )
+        return False
+
+    # Gates.
+    if not _enforce_prompt_churn_gate(drift):
+        return False
+    if not _enforce_structural_invariants(drift):
+        return False
+
+    # Snapshot + metadata orchestrator. Prompt-exists was verified above, so
+    # the previous `if prompt_exists:` guard is now unconditional — keep the
+    # snapshot/revert flow inline.
+    snapshot = _snapshot_metadata_state_for(drift)
+    meta_ok = _run_metadata_sync_safe(str(prompt_path), str(code_path) if code_path else None)
+    if not meta_ok:
+        try:
+            _revert_prompt_file(drift)
+        except PromptRevertError:
             raise
-        msg = f"Could not revert {drift.prompt_path}: {e}"
-        console.print(f"[red]✗ {msg}[/red]")
-        raise PromptRevertError(msg) from e
+        if snapshot is not None:
+            _restore_metadata_state_for(snapshot)
+        # Metadata finalization is a hard requirement (Issue #1006): a
+        # successful auto-heal commit must include the updated fingerprint,
+        # so this failure must surface distinctly from advisory subprocess
+        # failures and fail the run loudly in every mode.
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "metadata sync returned false"
+        return False
+    drift.metadata_finalized = True
+
+    # Optional follow-up: skip when module bypassed via env.
+    if drift.basename in skip_set:
+        console.print(
+            f"[dim]skipping follow-up pdd example for {drift.basename} "
+            f"(PDD_HEAL_SYNC_SKIP_MODULES)[/dim]"
+        )
+        return True
+
+    ok_ex = _run_pdd_command(
+        [
+            "pdd", "--force", "--strength", "0.5", "example",
+            str(prompt_path), str(code_path),
+        ],
+        env=env,
+        label=f"pdd example {drift.basename}",
+    )
+    if not ok_ex:
+        try:
+            _revert_prompt_file(drift)
+        except PromptRevertError:
+            raise
+        if snapshot is not None:
+            _restore_metadata_state_for(snapshot)
+        return False
+    return True
 
 
-_HEAL_STRENGTH = "0.5"
-"""CLI `--strength` value passed to every heal subprocess.
+def _heal_example(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
+    prompt_path = getattr(drift, "prompt_path", None)
+    code_path = getattr(drift, "code_path", None)
+    if not prompt_path or not code_path:
+        console.print(f"[red]heal failed for {drift.basename}: paths unresolved[/red]")
+        return False
 
-Must be passed explicitly because `.pddrc` context strengths (often 0.75-0.9)
-otherwise take precedence over `PDD_STRENGTH_DEFAULT` and push model selection
-up the ELO ladder into Sonnet/Opus territory. `.5` keeps the selector pinned
-to `PDD_MODEL_DEFAULT` without interpolating above it.
-"""
+    # CI bypass: review-only drift with an existing example.
+    if env.get("PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT") == "1":
+        review_markers = (
+            "Code and prompt changed together",
+            "Prompt changed without code changes",
+        )
+        if any(m in (drift.reason or "") for m in review_markers):
+            ex = getattr(drift, "example_path", None)
+            if ex and Path(str(ex)).exists():
+                return None
 
-
-def _pdd_heal_command(*args: str) -> List[str]:
-    """Build noninteractive pdd command used by CI auto-heal subprocesses."""
-    return ["pdd", "--force", "--strength", _HEAL_STRENGTH, *args]
-
-
-def _auto_deps_directory() -> str:
-    """Return the dependency-scan directory for CI auto-deps."""
-    for candidate in ("context", "examples"):
-        if Path(candidate).is_dir():
-            return candidate
-    return "."
-
-
-def _resolve_prompt_path_after_update(drift: DriftInfo) -> Optional[str]:
-    """Look up the prompt path for a module after `pdd update` has run.
-
-    Used by the code-without-prompt update flow: detect_drift creates a drift
-    with prompt_path=None because the prompt didn't exist yet; pdd update
-    creates it; we now need the path to run the follow-up example step.
-    """
-    try:
-        from pdd.sync_determine_operation import get_pdd_file_paths
-        paths = get_pdd_file_paths(drift.basename, drift.language)
-    except Exception:
-        return None
-    if not paths:
-        return None
-    prompt = paths.get("prompt")
-    if prompt is None:
-        return None
-    try:
-        if not prompt.exists():
+    # Broader bypass: any existing example.
+    if env.get("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT") == "1":
+        ex = getattr(drift, "example_path", None)
+        if ex and Path(str(ex)).exists():
             return None
-    except Exception:
-        return None
-    return str(prompt)
+
+    ok = _run_pdd_command(
+        [
+            "pdd", "--force", "--strength", "0.5", "example",
+            str(prompt_path), str(code_path),
+        ],
+        env=env,
+        label=f"pdd example {drift.basename}",
+    )
+    return ok if ok else False
+
+
+def _heal_auto_deps(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
+    prompt_path = getattr(drift, "prompt_path", None)
+    if not prompt_path:
+        console.print(f"[red]heal failed for {drift.basename}: prompt_path unresolved[/red]")
+        return False
+    dep_dir = _auto_deps_directory(drift)
+    ok = _run_pdd_command(
+        [
+            "pdd", "--force", "--strength", "0.5", "auto-deps",
+            str(prompt_path), str(dep_dir),
+            "--output", str(prompt_path),
+            "--csv", "project_dependencies.csv",
+        ],
+        env=env,
+        label=f"pdd auto-deps {drift.basename}",
+    )
+    return ok if ok else False
 
 
 def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
-    """Heal a single drifted module by running the appropriate pdd command.
+    """Heal a single module. Returns True/False/None (skipped)."""
+    skip_set = _heal_skip_modules()
+    op = getattr(drift, "operation", "")
 
-    Dispatch by `drift.operation`:
+    # Modules explicitly skipped take precedence for non-update operations.
+    if op != "update" and drift.basename in skip_set:
+        return None
 
-    * `"update"` — run `pdd update <code>` then `pdd example <prompt> <code>`.
-      Both calls are a single LLM invocation each. The follow-up example
-      regenerates the example from the now-updated prompt. For the
-      code-without-prompt case (prompt created by `pdd update`), prompt_path
-      is resolved lazily after the update succeeds.
-    * `"example"` — run `pdd example <prompt> <code>` directly. Single call.
-    * Any other operation (`"verify"`, `"generate"`, `"auto-deps"`, `"test"`,
-      `"crash"`) — run `pdd sync <basename>` so sync_determine_operation can
-      dispatch through the correct flow. We do NOT use `pdd example` for
-      these because it would overwrite user edits (verify), skip required
-      code regeneration (generate), or save a fingerprint that hides drift
-      on the next run.
-
-    All commands take `--strength 0.5` to override `.pddrc` context defaults
-    (which can interpolate the model pick up into Sonnet/Opus) and keep
-    selection pinned to `PDD_MODEL_DEFAULT`.
-
-    Args:
-        drift: DriftInfo describing the drift to heal.
-        env: Environment variables dict for the subprocess.
-
-    Returns:
-        True if healing succeeded, False if it failed, or None if it was
-        intentionally skipped by CI policy.
-    """
-    if drift.operation == "update":
-        if not drift.code_path:
-            console.print(
-                f"[red]✗ Refusing to run repo-wide `pdd update` for {drift.basename}: "
-                "code_path could not be resolved.[/red]"
-            )
-            return False
-
-        update_cmd = _pdd_heal_command("update", drift.code_path)
-        if not _run_pdd_command(update_cmd, env, f"Healing {drift.basename} (update)"):
-            return False
-
-        # Lazily resolve prompt_path if it wasn't set pre-update.
-        # This is the code-without-prompt flow: pdd update created the
-        # prompt; now we need the path for gates and the follow-up example.
-        if not drift.prompt_path:
-            resolved = _resolve_prompt_path_after_update(drift)
-            if resolved:
-                drift.prompt_path = resolved
-
-        if not drift.prompt_path:
-            # pdd update returned 0 but `get_pdd_file_paths` still can't
-            # find the prompt. This is a path-resolution inconsistency —
-            # pdd update may have written the prompt to a location other
-            # than the resolver expects, language may be misdetected, or
-            # the exit code was spurious. Fail closed: returning True
-            # would push this module into healed_modules, and
-            # commit_and_push's `git add -A` would publish whatever state
-            # is on disk, including possibly a prompt at the wrong path.
-            # The churn/structural gates also rely on prompt_path, so we
-            # can't vet the rewrite before committing.
-            console.print(
-                f"[red]✗ `pdd update` claimed success for {drift.basename} "
-                "but prompt_path is still unresolvable post-update. Path "
-                "resolution is inconsistent for this module — failing "
-                "closed instead of publishing a partial heal.[/red]"
-            )
-            return False
-
-        # Change-magnitude gate: refuse prompt rewrites that are wildly
-        # out of proportion to the originating code change.
-        if not _enforce_prompt_churn_gate(drift):
-            return False
-
-        # Structural-invariant gate: ensure the rewrite still contains the
-        # <include> preamble, <pdd.*> namespaced tags, % section markers,
-        # and fenced code blocks from the pre-heal version.
-        if not _enforce_structural_invariants(drift):
-            return False
-
-        # Step 2: Regenerate example from the now-updated prompt.
-        skip_reason = _get_heal_sync_skip_reason(drift.basename)
-        if skip_reason:
-            console.print(
-                f"[yellow]⚠ Skipping follow-up example for {drift.basename}: "
-                f"{skip_reason}. Example regeneration is left for a manual "
-                "or dedicated follow-up run.[/yellow]"
-            )
-            return True
-
-        example_cmd = [
-            *_pdd_heal_command("example", drift.prompt_path, drift.code_path)
-        ]
-        if not _run_pdd_command(example_cmd, env, f"Regenerating example for {drift.basename}"):
-            # Update succeeded but example regeneration failed. Revert the
-            # prompt update so commit_and_push() cannot stage and publish a
-            # half-healed module.
-            console.print(
-                f"[red]✗ Follow-up example regeneration failed for {drift.basename}. "
-                "Reverting prompt update and marking the module failed.[/red]"
-            )
-            _revert_prompt_file(drift)
-            return False
-        return True
-
-    elif drift.operation == "example":
-        if not drift.prompt_path or not drift.code_path:
-            console.print(
-                f"[red]✗ Refusing to heal {drift.basename} (example): "
-                f"prompt_path={drift.prompt_path!r} code_path={drift.code_path!r} — "
-                "cannot invoke `pdd example` without both paths.[/red]"
-            )
-            return False
-        skip_reason = _get_heal_sync_skip_reason(drift.basename)
-        if skip_reason:
-            console.print(
-                f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
-                f"{skip_reason}. This module can be regenerated in a separate "
-                "follow-up run without blocking the PR auto-heal build.[/yellow]"
-            )
-            return None
-        if (
-            env.get("PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT") == "1"
-            and drift.example_path
-            and Path(drift.example_path).exists()
-            and _is_review_only_example_drift(drift)
-        ):
-            console.print(
-                f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
-                "prompt/code changes are already part of this PR, the example "
-                "file already exists, and example refresh is left for review.[/yellow]"
-            )
-            return None
-        if (
-            env.get("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT") == "1"
-            and drift.example_path
-            and Path(drift.example_path).exists()
-        ):
-            console.print(
-                f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
-                f"existing example {drift.example_path} is left for PR review.[/yellow]"
-            )
-            return None
-        return _run_pdd_command(
-            _pdd_heal_command("example", drift.prompt_path, drift.code_path),
-            env,
-            f"Regenerating example for {drift.basename}",
+    if op == "update":
+        return _heal_update(drift, env, skip_set)
+    if op == "example":
+        return _heal_example(drift, env)
+    if op == "auto-deps":
+        return _heal_auto_deps(drift, env)
+    if op in ("verify", "generate", "test", "crash"):
+        ok = _run_pdd_command(
+            ["pdd", "--force", "--strength", "0.5", "sync", drift.basename],
+            env=env,
+            label=f"pdd sync {drift.basename}",
         )
+        return ok if ok else False
 
-    elif drift.operation == "auto-deps":
-        if not drift.prompt_path:
-            console.print(
-                f"[red]✗ Refusing to heal {drift.basename} (auto-deps): "
-                "prompt_path is unresolved.[/red]"
-            )
-            return False
-        skip_reason = _get_heal_sync_skip_reason(drift.basename)
-        if skip_reason:
-            console.print(
-                f"[yellow]⚠ Skipping auto-heal auto-deps for {drift.basename}: "
-                f"{skip_reason}.[/yellow]"
-            )
-            return None
-        return _run_pdd_command(
-            _pdd_heal_command(
-                "auto-deps",
-                drift.prompt_path,
-                _auto_deps_directory(),
-                "--output",
-                drift.prompt_path,
-                "--csv",
-                "project_dependencies.csv",
-            ),
-            env,
-            f"Healing {drift.basename} (operation=auto-deps)",
-        )
+    console.print(f"[red]unknown operation '{op}' for {drift.basename}[/red]")
+    return False
 
-    elif drift.operation in {"verify", "generate", "test", "crash"}:
-        # Non-update, non-example operations: fall back to `pdd sync` so
-        # sync_determine_operation can dispatch through the correct flow
-        # (verify preserves user edits, generate regenerates code, etc.).
-        # This preserves the original pdd-sync-based behavior for the rarer
-        # drift types that can't be served by pdd example alone.
-        skip_reason = _get_heal_sync_skip_reason(drift.basename)
-        if skip_reason:
-            console.print(
-                f"[yellow]⚠ Skipping auto-heal sync for {drift.basename} "
-                f"(operation={drift.operation}): {skip_reason}.[/yellow]"
-            )
-            return None
-        return _run_pdd_command(
-            _pdd_heal_command("sync", drift.basename),
-            env,
-            f"Healing {drift.basename} (operation={drift.operation})",
-        )
-    else:
-        console.print(
-            f"[red]✗ Unknown operation '{drift.operation}' for {drift.basename}[/red]"
-        )
-        return False
+
+# ---------------------------------------------------------------------------
+# Commit + push
+# ---------------------------------------------------------------------------
 
 
 def commit_and_push(
-    healed_modules: List[str],
+    healed_modules: Sequence["DriftInfo"],
     skip_ci: bool = False,
     checkpoint: bool = False,
+    finalized_modules: Optional[List[Tuple[str, str]]] = None,
 ) -> bool:
-    """Stage, commit, and push healed changes.
+    """Stage scoped heal changes, commit, and push. Returns True on success.
 
-    Args:
-        healed_modules: List of module basenames that were healed.
-        skip_ci: If True, prepend [skip ci] to commit message.
-        checkpoint: If True, mark the commit as a successful PR auto-heal
-            checkpoint for later incremental PR runs.
+    ``healed_modules`` must be a sequence of :class:`DriftInfo` so per-module
+    pathspecs (prompt, code, example, test, plus the operation-log fingerprint
+    files) can be computed for staging. Bare basenames are no longer accepted
+    because, without a known language, the staging step cannot discover newly
+    generated source/example/test files for the heal scope.
 
-    Returns:
-        True if commit and push succeeded, False otherwise.
+    ``finalized_modules`` is a list of ``(basename, language)`` for modules
+    that successfully finalized metadata. Their expected fingerprint paths
+    MUST appear in the staged set or the commit aborts (Issue #1006).
+
+    Staging avoids blanket ``git add -A`` (Issue #1021): the helper
+    :func:`_stage_heal_changes` runs ``git add -u`` plus explicit per-module
+    pathspecs from ``DriftInfo`` and filters gitignored paths through
+    ``git check-ignore`` before the final ``git add``.
     """
     if not healed_modules:
-        console.print("[yellow]No modules to commit.[/yellow]")
         return True
 
-    module_list = ", ".join(healed_modules)
-    commit_msg = f"chore: auto-heal prompt/example drift for {module_list}"
-    if skip_ci:
-        commit_msg = f"[skip ci] {commit_msg}"
+    if not _stage_heal_changes(healed_modules):
+        return False
 
-    # Stage all changes. CI runs on a clean checkout so -A is safe, and healing
-    # may create new files (e.g. a missing example) that -u would miss.
+    # Detect whether there's anything staged.
     try:
-        subprocess.run(
-            ["git", "add", "-A"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except Exception as e:
-        console.print(f"[yellow]⚠ Could not stage changes: {e}[/yellow]")
-
-    # Check if there are staged changes
-    try:
-        diff_result = subprocess.run(
+        diff = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
             capture_output=True,
             text=True,
         )
-        if diff_result.returncode == 0:
-            console.print("[yellow]No staged changes to commit.[/yellow]")
+    except Exception as exc:
+        console.print(f"[red]git diff --cached failed: {exc}[/red]")
+        return False
+    if diff.returncode == 0:
+        if finalized_modules:
+            for basename, language in finalized_modules:
+                expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+                console.print(
+                    f"[red]metadata staging verification failed: missing {expected}[/red]"
+                )
+            return False
+        # Nothing staged.
+        return True
+
+    # Metadata staging verification: every module that reported a successful
+    # finalization must have its fingerprint file present in the staged set,
+    # otherwise the commit could ship without the updated fingerprint
+    # (Issue #1006). The fingerprint JSON includes a fresh timestamp on every
+    # write, so a real finalization always produces a staged change.
+    if finalized_modules:
+        try:
+            names = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:
+            console.print(f"[red]git diff --cached --name-only failed: {exc}[/red]")
+            return False
+        if names.returncode != 0:
+            console.print(
+                f"[red]git diff --cached --name-only failed: "
+                f"{getattr(names, 'stderr', '')}[/red]"
+            )
+            return False
+        stdout = getattr(names, "stdout", "") or ""
+        staged_paths = {line.strip() for line in stdout.splitlines() if line.strip()}
+        missing: List[str] = []
+        for basename, language in finalized_modules:
+            expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+            if expected not in staged_paths:
+                missing.append(expected)
+        if missing:
+            for path in missing:
+                console.print(f"[red]metadata staging verification failed: missing {path}[/red]")
+            return False
+
+    module_str = ", ".join(_healed_module_name(m) for m in healed_modules)
+    headline = f"chore: auto-heal prompt/example drift for {module_str}"
+    if skip_ci:
+        headline = f"[skip ci] {headline}"
+
+    msg_args = ["git", "commit", "-m", headline]
+    if checkpoint:
+        msg_args.extend(["-m", _AUTO_HEAL_SUCCESS_TRAILER])
+
+    try:
+        r = subprocess.run(msg_args, capture_output=True, text=True)
+    except Exception as exc:
+        console.print(f"[red]git commit failed: {exc}[/red]")
+        return False
+    if r.returncode != 0:
+        text = (getattr(r, "stdout", "") or "") + (getattr(r, "stderr", "") or "")
+        if "nothing to commit" in text.lower():
             return True
-    except Exception:
-        pass
-
-    # Commit
-    try:
-        commit_cmd = ["git", "commit", "-m", commit_msg]
-        if checkpoint:
-            commit_cmd.extend(["-m", _AUTO_HEAL_SUCCESS_TRAILER])
-        commit_result = subprocess.run(
-            commit_cmd,
-            capture_output=True,
-            text=True,
-        )
-        if commit_result.returncode != 0:
-            stderr = (commit_result.stderr or "").strip()
-            console.print(f"[red]✗ Git commit failed: {stderr}[/red]")
-            return False
-        console.print(f"[green]✓ Committed: {commit_msg}[/green]")
-    except Exception as e:
-        console.print(f"[red]✗ Git commit error: {e}[/red]")
+        console.print(f"[red]git commit failed: {getattr(r, 'stderr', '')}[/red]")
         return False
 
-    # Push to current branch
     try:
-        push_result = subprocess.run(
-            ["git", "push"],
-            capture_output=True,
-            text=True,
-        )
-        if push_result.returncode != 0:
-            stderr = (push_result.stderr or "").strip()
-            console.print(f"[red]✗ Git push failed: {stderr}[/red]")
-            return False
-        console.print("[green]✓ Pushed to remote[/green]")
-    except Exception as e:
-        console.print(f"[red]✗ Git push error: {e}[/red]")
+        r = subprocess.run(["git", "push"], capture_output=True, text=True)
+    except Exception as exc:
+        console.print(f"[red]git push failed: {exc}[/red]")
         return False
-
+    if r.returncode != 0:
+        console.print(f"[red]git push failed: {getattr(r, 'stderr', '')}[/red]")
+        return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Console output
+# ---------------------------------------------------------------------------
+
+
+def _print_drift_summary(drifts: List[DriftInfo]) -> None:
+    """Print a compact summary of detected drift before healing."""
+    table = Table(title="Drift summary")
+    table.add_column("Module")
+    table.add_column("Operation")
+    table.add_column("Reason")
+    for drift in drifts:
+        table.add_row(drift.basename, drift.operation, drift.reason or "")
+    console.print(table)
+
+
+def _print_final_summary(
+    healed: Sequence[Any],
+    failed: List[str],
+    skipped: List[str],
+) -> None:
+    """Print final heal counts."""
+    console.print(
+        f"Auto-heal summary: healed={len(healed)} "
+        f"failed={len(failed)} skipped={len(skipped)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CLI argument parser
+# ---------------------------------------------------------------------------
+
+
+def _parse_args(argv: List[str]) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        prog="python -m pdd.ci_drift_heal",
+        description="CI script for detecting and auto-healing prompt/example drift.",
+    )
+    parser.add_argument("--modules", nargs="*", default=None)
+    parser.add_argument("--budget-cap", type=float, default=None)
+    parser.add_argument("--skip-ci", action="store_true")
+    parser.add_argument("--diff-base", default=None)
+
+    ns = parser.parse_args(argv)
+    if ns.modules is not None:
+        ns.modules = _parse_modules_arg(ns.modules)
+    return ns
+
+
+# ---------------------------------------------------------------------------
+# main entry point
+# ---------------------------------------------------------------------------
 
 
 def main(
@@ -1277,230 +1616,135 @@ def main(
     skip_ci: bool = False,
     diff_base: Optional[str] = None,
 ) -> int:
-    """Main entry point for drift detection and auto-healing.
-
-    Args:
-        modules: Optional list of basenames to limit scope.
-        budget_cap: Optional budget cap in dollars for LLM healing costs.
-        skip_ci: If True, prepend [skip ci] to commit message.
-        diff_base: Optional git diff base for git-based drift reclassification.
-
-    Returns:
-        0 on success (including no drift), 1 on any failure.
-    """
-    console.print("[bold]🔍 PDD Drift Detection & Auto-Heal[/bold]\n")
-
-    if modules:
-        console.print(f"Scope limited to modules: {', '.join(modules)}")
-    if budget_cap is not None:
-        console.print(f"Budget cap: ${budget_cap:.2f}")
-
-    # --- Detection Phase ---
-    console.print("\n[bold]Phase 1: Detecting drift...[/bold]")
+    """Detect drift, heal modules, and commit healed changes."""
     try:
         prompt_drifts, example_drifts = detect_drift(modules, diff_base=diff_base)
-    except Exception as e:
-        console.print(f"[red]✗ Detection failed: {e}[/red]")
+    except Exception as exc:
+        console.print(f"[red]detect_drift failed: {exc}[/red]")
         return 1
 
-    all_drifts = prompt_drifts + example_drifts
-
+    all_drifts: List[DriftInfo] = list(prompt_drifts) + list(example_drifts)
     if not all_drifts:
-        console.print("[green]✓ No drift detected. All modules are synchronized.[/green]")
         return 0
+    _print_drift_summary(all_drifts)
 
-    _print_drift_table(prompt_drifts, example_drifts)
-    console.print(
-        f"\nFound [bold]{len(all_drifts)}[/bold] drifted module(s): "
-        f"{len(prompt_drifts)} prompt, {len(example_drifts)} example\n"
-    )
+    # Create per-run cost CSV.
+    fd, cost_path = tempfile.mkstemp(prefix="pdd_ci_drift_heal_cost_", suffix=".csv")
+    os.close(fd)
+    Path(cost_path).write_text("operation,cost\n", encoding="utf-8")
 
-    # --- Healing Phase ---
-    console.print("[bold]Phase 2: Healing drifted modules...[/bold]\n")
+    env = _build_ci_env(cost_path)
 
-    # Create temp CSV for cost tracking
-    cost_csv_fd, cost_csv_path = tempfile.mkstemp(suffix=".csv", prefix="pdd_cost_")
-    os.close(cost_csv_fd)
+    healed: List[DriftInfo] = []
+    failed: List[str] = []
+    skipped: List[str] = []
+    finalized_modules: List[Tuple[str, str]] = []
+    meta_failed: List[str] = []
+    revert_blocks_commit = False
+    skip_set = _heal_skip_modules()
+
+    # Budget tracking: once cumulative cost (read from CSV after a heal) exceeds
+    # the cap, all remaining modules are skipped as warnings. The cap is checked
+    # AFTER each heal so the module that pushes us over the limit still runs;
+    # remaining modules are then skipped without invoking heal_module. The CSV
+    # path is fresh per run (mkstemp), so we use the absolute reading rather
+    # than subtracting a baseline.
+    budget_exceeded = False
 
     try:
-        env = _build_ci_env(cost_csv_path)
-        cumulative_cost = 0.0
-        healed_modules: List[str] = []
-        failed_modules: List[str] = []
-        skipped_modules: List[str] = []
-        any_failure = False
-        unsafe_to_commit = False
-
         for drift in all_drifts:
-            # Budget check before each heal
-            if budget_cap is not None and cumulative_cost >= budget_cap:
-                console.print(
-                    f"[yellow]⚠ Budget cap (${budget_cap:.2f}) reached. "
-                    f"Skipping {drift.basename}[/yellow]"
-                )
-                skipped_modules.append(drift.basename)
+            if budget_exceeded:
+                skipped.append(drift.basename)
                 continue
 
-            # Clear cost CSV before each operation to get per-operation cost
-            Path(cost_csv_path).write_text("", encoding="utf-8")
-
-            revert_failed = False
             try:
-                success = heal_module(drift, env)
-            except PromptRevertError as e:
-                console.print(
-                    "[red]✗ Prompt revert failed; blocking commit phase to avoid "
-                    "publishing partial heal changes.[/red]"
-                )
-                unsafe_to_commit = True
-                revert_failed = True
-                success = False
+                result = heal_module(drift, env)
+            except PromptRevertError:
+                failed.append(drift.basename)
+                revert_blocks_commit = True
+                continue
+            except Exception as exc:
+                console.print(f"[red]heal_module raised for {drift.basename}: {exc}[/red]")
+                failed.append(drift.basename)
+                continue
 
-            # Parse cost from this operation
-            operation_cost = _parse_cost_from_csv(cost_csv_path)
-            cumulative_cost += operation_cost
-
-            if operation_cost > 0:
-                console.print(
-                    f"  Cost: ${operation_cost:.4f} "
-                    f"(cumulative: ${cumulative_cost:.4f})"
-                )
-
-            # `update` can succeed while explicitly skipping its follow-up
-            # example step. Treat that as healed for push-to-main commits, but
-            # also skipped so PR mode cannot create a success checkpoint.
-            update_followup_skipped = (
-                success is True
-                and drift.operation == "update"
-                and _get_heal_sync_skip_reason(drift.basename) is not None
-            )
-
-            if success is None:
-                skipped_modules.append(drift.basename)
-            elif success:
-                healed_modules.append(drift.basename)
-                if update_followup_skipped:
-                    skipped_modules.append(drift.basename)
+            if result is None:
+                skipped.append(drift.basename)
+            elif result is True:
+                healed.append(drift)
+                if drift.operation == "update" and drift.basename in skip_set:
+                    skipped.append(drift.basename)
+                if getattr(drift, "metadata_finalized", False):
+                    finalized_modules.append((drift.basename, drift.language))
             else:
-                if not revert_failed or drift.basename not in failed_modules:
-                    failed_modules.append(drift.basename)
-                any_failure = True
+                failed.append(drift.basename)
+                if getattr(drift, "metadata_finalization_failed", False):
+                    reason = getattr(
+                        drift,
+                        "metadata_finalization_error",
+                        "metadata sync returned false",
+                    ) or "metadata sync returned false"
+                    console.print(
+                        f"[red]metadata finalization failed for {drift.basename}: {reason}[/red]"
+                    )
+                    meta_failed.append(drift.basename)
 
-        # Print skipped modules warning. Skips can be caused by the budget cap
-        # or explicit operator policy (PDD_HEAL_SYNC_SKIP_MODULES).
-        if skipped_modules:
-            console.print(
-                f"\n[yellow]⚠ Skipped modules: {', '.join(skipped_modules)}[/yellow]"
-            )
-
+            # Post-heal budget check: if cumulative cost exceeds cap, latch the
+            # flag so subsequent modules are skipped without invoking heal.
+            if budget_cap is not None:
+                current = _parse_cost_from_csv(cost_path)
+                if current > budget_cap:
+                    budget_exceeded = True
     finally:
-        # Clean up temp CSV
         try:
-            os.unlink(cost_csv_path)
-        except OSError:
+            os.unlink(cost_path)
+        except Exception:
             pass
 
-    # --- Summary ---
-    console.print(f"\n[bold]Healing Summary:[/bold]")
-    console.print(f"  Healed:  {len(healed_modules)}")
-    console.print(f"  Failed:  {len(failed_modules)}")
-    console.print(f"  Skipped: {len(skipped_modules)}")
-    console.print(f"  Total cost: ${cumulative_cost:.4f}")
+    has_failures = bool(failed)
+    has_healed = bool(healed)
+    has_skipped = bool(skipped)
+    is_pr_mode = not skip_ci
+    _print_final_summary(healed, failed, skipped)
 
-    # --- Commit Phase ---
-    if unsafe_to_commit:
-        console.print(
-            "\n[red]✗ Skipping commit phase because a failed heal could not be "
-            "safely reverted.[/red]"
-        )
-    elif (any_failure or skipped_modules) and healed_modules and not skip_ci:
-        reason_parts = []
-        if any_failure:
-            reason_parts.append("at least one module failed")
-        if skipped_modules:
-            reason_parts.append("at least one module was skipped")
-        reason = " and ".join(reason_parts)
-        console.print(
-            f"\n[yellow]Healed modules are present, but {reason}. Skipping PR "
-            "commit so a partial heal is not used as a future incremental "
-            "checkpoint.[/yellow]"
-        )
-    elif healed_modules:
-        console.print("\n[bold]Phase 3: Committing changes...[/bold]\n")
-        commit_success = commit_and_push(
-            healed_modules,
-            skip_ci,
-            checkpoint=not skip_ci and not any_failure and not skipped_modules,
-        )
-        if not commit_success:
-            any_failure = True
-    else:
-        console.print("\n[yellow]No modules healed — skipping commit phase.[/yellow]")
-
-    if any_failure:
-        if skip_ci:
-            # Push-to-main mode: heal failures are advisory, not blocking
-            console.print("\n[yellow]⚠ Completed with failures (non-blocking on push to main).[/yellow]")
-            return 0
-        console.print("\n[red]✗ Completed with failures.[/red]")
+    if revert_blocks_commit:
         return 1
 
-    console.print("\n[green]✓ Drift heal completed successfully.[/green]")
+    # Metadata finalization is a hard requirement (Issue #1006): if it failed
+    # for any module, fail loudly in every mode (PR and push-to-main/preflight)
+    # without committing partial state from earlier modules.
+    if meta_failed:
+        return 1
+
+    if is_pr_mode and has_failures:
+        return 1
+
+    # PR mode: partial success (any failed or skipped alongside healed)
+    # skips the commit to avoid creating a bad checkpoint (Req 15).
+    pr_partial_success = is_pr_mode and has_healed and (has_failures or has_skipped)
+    push_partial_failure = (not is_pr_mode) and has_healed and has_failures
+    if has_healed and not pr_partial_success and not push_partial_failure:
+        checkpoint = is_pr_mode and not has_failures and not has_skipped
+        committed = commit_and_push(
+            healed,
+            skip_ci,
+            checkpoint=checkpoint,
+            finalized_modules=finalized_modules,
+        )
+        if not committed:
+            return 1
+
+    if has_failures and not is_pr_mode:
+        # Push-to-main mode treats subprocess failures as advisory (exit 0).
+        return 0
     return 0
 
 
-def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(
-        description="PDD Drift Detection & Auto-Heal CI Script",
-        prog="drift_heal",
-    )
-    parser.add_argument(
-        "--modules",
-        nargs="*",
-        default=None,
-        help="Space-separated list of module basenames to check. "
-        "If omitted, all discovered modules are scanned.",
-    )
-    parser.add_argument(
-        "--budget-cap",
-        type=float,
-        default=None,
-        help="Maximum LLM cost in dollars for healing operations.",
-    )
-    parser.add_argument(
-        "--skip-ci",
-        action="store_true",
-        default=False,
-        help="Prepend [skip ci] to the commit message.",
-    )
-    parser.add_argument(
-        "--diff-base",
-        type=str,
-        default=None,
-        help="Git diff base reference (e.g. 'origin/main...HEAD') for detecting "
-        "drift direction. When set, code-changed-but-prompt-unchanged modules "
-        "are reclassified as prompt (update) drift instead of example (sync).",
-    )
-    args = parser.parse_args(argv)
-
-    # Expand comma-separated module values so that both
-    # --modules "auth,api" and --modules auth api work correctly.
-    if args.modules is not None:
-        expanded: List[str] = []
-        for m in args.modules:
-            expanded.extend(part for part in m.split(",") if part)
-        args.modules = expanded
-
-    return args
-
-
 if __name__ == "__main__":
-    args = _parse_args()
-    exit_code = main(
-        modules=args.modules,
-        budget_cap=args.budget_cap,
-        skip_ci=args.skip_ci,
-        diff_base=args.diff_base,
-    )
-    sys.exit(exit_code)
+    ns = _parse_args(sys.argv[1:])
+    sys.exit(main(
+        modules=ns.modules,
+        budget_cap=ns.budget_cap,
+        skip_ci=ns.skip_ci,
+        diff_base=ns.diff_base,
+    ))

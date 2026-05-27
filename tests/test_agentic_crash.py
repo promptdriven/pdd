@@ -252,11 +252,16 @@ def test_json_substring_extraction(setup_files, mock_dependencies):
     assert "extracted.py" in changed
 
 
-def test_file_system_changes_detected(setup_files, mock_dependencies):
+def test_file_system_changes_detected(setup_files, mock_dependencies, monkeypatch, tmp_path):
     """Test that file modifications are detected via mtime snapshots."""
     prompt, code, prog, log = setup_files
     _, _, mock_task, _, _ = mock_dependencies
-    
+
+    # agentic_crash uses Path.cwd() as project_root; chdir into tmp_path so the
+    # mocked side effect writes new_file.txt into the test sandbox rather than
+    # the real repo root (which would leave a stray artifact — see issue #1116).
+    monkeypatch.chdir(tmp_path)
+
     # Define a side effect for the agent task that creates a file
     def agent_side_effect(*args, **kwargs):
         cwd = kwargs.get('cwd')

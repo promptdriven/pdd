@@ -26,6 +26,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .construct_paths import _is_known_language
+from .sync_order import compute_sccs
 
 console = Console()
 
@@ -188,6 +189,17 @@ def _format_duration(start: Optional[float], end: Optional[float]) -> str:
 _CONFORMANCE_PREFIX = "Architecture conformance error for "
 _MISSING_DECLARED_MARKER = "declared symbols missing from generated code"
 _MISSING_CAMELCASE_MARKER = "Python code uses camelCase names"
+_MISSING_PDD_INTERFACE_PARAMS_MARKER = (
+    "declares parameter(s) missing from the generated code"
+)
+_MISSING_PDD_INTERFACE_FUNCS_MARKER = (
+    "declares function(s)/method(s) missing from the generated code"
+)
+_PDD_INTERFACE_DRIFT_MARKER = (
+    "declares parameter(s) whose signature drifted in the generated code"
+)
+_PUBLIC_SURFACE_PREFIX = "Public surface regression for "
+_TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
 
 
 def _parse_conformance_failure(
@@ -199,22 +211,43 @@ def _parse_conformance_failure(
     Returns (repair_directive, missing_symbols_sorted_tuple) when a conformance
     error is detected, or None otherwise.
 
-    Two output shapes are supported:
+    Three inline output shapes are supported, plus a bullet fallback:
 
-    * Inline form emitted by ``ArchitectureConformanceError.__init__`` —
+    * Default form emitted by ``ArchitectureConformanceError.__init__`` —
       ``... declared symbols missing from generated code: A, B.c, D. Expected: ...``
       The missing symbols are a comma-separated list on the same line, ending
       at the next sentence-terminating period (followed by space/EOL or
-      ``Expected:``). The camelCase variant is similar but parenthesised:
+      ``Expected:``).
+    * camelCase variant — parenthesised:
       ``... Python code uses camelCase names (foo, barBaz) but ...``
+    * ``<pdd-interface>`` signature variant emitted by
+      ``code_generator_main._verify_pdd_interface_signatures`` —
+      ``... declares parameter(s) missing from the generated code:
+       foo.bar, baz.qux. Output: ...``
     * Bullet form from a richer multi-line message (kept for forward
-      compatibility), where bullets follow the marker line.
+      compatibility), where bullets follow any of the marker lines.
     """
     combined = (stdout or "") + "\n" + (stderr or "")
     if _CONFORMANCE_PREFIX not in combined:
         return None
 
-    missing: List[str] = []
+    # Track which shape each symbol came from so we can build a directive
+    # that actually matches the failure mode: legacy export-missing vs. the
+    # new pdd-interface parameter-missing vs. pdd-interface function/method-
+    # missing emitted by ``_verify_pdd_interface_signatures``. Mixing them
+    # under a single "Required missing exports" header tells the model to
+    # add an export named ``update_main.sync_metadata`` instead of a
+    # parameter — which is exactly the misdirection the previous directive
+    # caused. Bare dotted method names (``ContentSelector.select``) MUST
+    # route to ``iface_missing_funcs`` rather than ``iface_missing_params``
+    # so the parser does not split them into ("ContentSelector", "select").
+    export_missing: List[str] = []
+    iface_missing_params: List[str] = []
+    iface_missing_funcs: List[str] = []
+    # ``iface_drift`` carries the full parenthesised diagnostic for each
+    # drifted parameter so the directive can tell the model what kind of
+    # drift (annotation vs. default) and what value to restore.
+    iface_drift: List[str] = []
 
     def _split_symbols(blob: str) -> List[str]:
         out: List[str] = []
@@ -233,11 +266,11 @@ def _parse_conformance_failure(
     # field label.
     inline_re = re.compile(
         r"declared symbols missing from generated code:\s*(.+?)"
-        r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
         re.MULTILINE,
     )
     for m in inline_re.finditer(combined):
-        missing.extend(_split_symbols(m.group(1)))
+        export_missing.extend(_split_symbols(m.group(1)))
 
     # 2) Inline camelCase form:
     #    "... Python code uses camelCase names (foo, barBaz) but ..."
@@ -245,41 +278,190 @@ def _parse_conformance_failure(
         r"Python code uses camelCase names\s*\(([^)]*)\)"
     )
     for m in camel_re.finditer(combined):
-        missing.extend(_split_symbols(m.group(1)))
+        export_missing.extend(_split_symbols(m.group(1)))
 
-    # 3) Bullet form: capture bullet lines following the marker.
-    capture = False
+    # 3) Inline <pdd-interface> parameter-conformance form:
+    #    "... <pdd-interface> declares parameter(s) missing from the
+    #     generated code: foo.bar, baz.qux. Output: ..."
+    # Emitted by code_generator_main._verify_pdd_interface_signatures.
+    pdd_iface_params_re = re.compile(
+        r"declares parameter\(s\) missing from the generated code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE,
+    )
+    for m in pdd_iface_params_re.finditer(combined):
+        iface_missing_params.extend(_split_symbols(m.group(1)))
+
+    # 4) Inline <pdd-interface> function/method-conformance form:
+    #    "... <pdd-interface> declares function(s)/method(s) missing from
+    #     the generated code: ContentSelector.select. Output: ..."
+    # Emitted alongside (3) when the prompt declares a function/method that
+    # is absent from the generated code; routed to the missing-function
+    # directive section so we don't tell the model to add ``select`` as a
+    # parameter of ``ContentSelector``.
+    pdd_iface_funcs_re = re.compile(
+        r"declares function\(s\)/method\(s\) missing from the generated "
+        r"code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE,
+    )
+    for m in pdd_iface_funcs_re.finditer(combined):
+        iface_missing_funcs.extend(_split_symbols(m.group(1)))
+
+    # 5) Inline <pdd-interface> signature-drift form:
+    #    "... <pdd-interface> declares parameter(s) whose signature drifted
+    #     in the generated code: foo.bar (annotation: declared `bool`,
+    #     found `str`), baz.qux (default: declared `None`, found `0`).
+    #     Output: ..."
+    # The diagnostic is preserved verbatim per-entry so the directive can
+    # emit "update parameter X annotation to `bool`" rather than asking the
+    # model to add a missing parameter.
+    pdd_iface_drift_re = re.compile(
+        r"declares parameter\(s\) whose signature drifted in the generated "
+        r"code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE | re.DOTALL,
+    )
+    for m in pdd_iface_drift_re.finditer(combined):
+        # Split on ", " between entries — each entry contains a parenthesised
+        # diagnostic so a simple comma split would shred them. Walk the
+        # string and track parenthesis depth instead.
+        blob = m.group(1).strip()
+        entries: List[str] = []
+        depth = 0
+        current = ""
+        i = 0
+        while i < len(blob):
+            ch = blob[i]
+            if ch == "(":
+                depth += 1
+                current += ch
+            elif ch == ")":
+                depth = max(0, depth - 1)
+                current += ch
+            elif ch == "," and depth == 0:
+                if current.strip():
+                    entries.append(current.strip())
+                current = ""
+            else:
+                current += ch
+            i += 1
+        if current.strip():
+            entries.append(current.strip())
+        iface_drift.extend(entries)
+
+    # 6) Bullet form: capture bullet lines following the marker. The marker
+    # text we matched dictates which bucket the bullets belong to.
+    capture_bucket: Optional[List[str]] = None
     for line in combined.splitlines():
         stripped = line.strip()
+        if _MISSING_PDD_INTERFACE_FUNCS_MARKER in stripped:
+            capture_bucket = iface_missing_funcs
+            continue
+        if _MISSING_PDD_INTERFACE_PARAMS_MARKER in stripped:
+            capture_bucket = iface_missing_params
+            continue
         if (
             _MISSING_DECLARED_MARKER in stripped
             or _MISSING_CAMELCASE_MARKER in stripped
         ):
-            capture = True
+            capture_bucket = export_missing
             continue
-        if capture:
+        if capture_bucket is not None:
             m = re.match(r"^[-*]\s+(\S+)", stripped)
             if m:
-                missing.append(m.group(1).rstrip(".,"))
+                capture_bucket.append(m.group(1).rstrip(".,"))
                 continue
             if stripped == "":
                 continue
-            capture = False
+            capture_bucket = None
 
-    missing_sorted = tuple(sorted(set(missing)))
+    # The drift bucket carries parenthesised diagnostics; strip them when
+    # contributing to ``missing_sorted`` so the short-circuit comparison on
+    # the canonical dotted symbol still works across retries.
+    drift_symbols = []
+    for entry in iface_drift:
+        head = entry.split("(", 1)[0].strip()
+        if head:
+            drift_symbols.append(head)
+
+    missing_sorted = tuple(
+        sorted(
+            set(export_missing)
+            | set(iface_missing_params)
+            | set(iface_missing_funcs)
+            | set(drift_symbols)
+        )
+    )
     if not missing_sorted:
         return None
 
-    directive_lines = [
-        "Architecture conformance repair required.",
-        "Required missing exports:",
-    ]
-    for sym in missing_sorted:
-        directive_lines.append(f"- {sym}")
-    directive_lines.append(
-        "Add these exact exports. Do not modify architecture.json. "
-        "Do not remove existing valid exports."
-    )
+    directive_lines: List[str] = ["Architecture conformance repair required."]
+
+    if export_missing:
+        directive_lines.append("Required missing exports:")
+        for sym in sorted(set(export_missing)):
+            directive_lines.append(f"- {sym}")
+        directive_lines.append(
+            "Add these exact exports. Do not modify architecture.json. "
+            "Do not remove existing valid exports."
+        )
+
+    if iface_missing_params or iface_missing_funcs or iface_drift:
+        # The pdd-interface check emits dotted method/param names via two
+        # distinct error sentences so we can route them correctly here.
+        # Missing-function entries (possibly dotted, e.g.
+        # ``ContentSelector.select``) MUST stay grouped under "add the
+        # following missing function(s)/method(s)" — splitting on the dot
+        # would misdirect the model into adding a parameter named
+        # ``select`` to ``ContentSelector``.
+        if export_missing:
+            directive_lines.append("")
+        directive_lines.append(
+            "The prompt's <pdd-interface> declares function(s)/parameter(s) "
+            "missing from the generated code:"
+        )
+        if iface_missing_funcs:
+            directive_lines.append(
+                "- Add the following missing function(s)/method(s) declared "
+                f"in the prompt: `{', '.join(sorted(set(iface_missing_funcs)))}`."
+            )
+        # Parameter entries are dotted ``func[.qual].param``: rpartition so
+        # ``ContentSelector.select.mode`` groups as ("ContentSelector.select",
+        # "mode") rather than misattributing the parameter to the class.
+        params_by_func: Dict[str, List[str]] = {}
+        for sym in sorted(set(iface_missing_params)):
+            if "." in sym:
+                func, _, param = sym.rpartition(".")
+                params_by_func.setdefault(func, []).append(param)
+            else:
+                # Defensive: a bare entry under the parameter shape would be
+                # malformed, but route it to the missing-function section so
+                # we never tell the model to add a nameless parameter.
+                directive_lines.append(
+                    "- Add the following missing function(s)/method(s) declared "
+                    f"in the prompt: `{sym}`."
+                )
+        for func, params in params_by_func.items():
+            directive_lines.append(
+                f"- On `{func}`, add the following missing parameter(s) to "
+                f"the signature and corresponding code paths: "
+                f"`{', '.join(params)}`."
+            )
+        # Signature drift entries: pass them through with a clarifying
+        # prefix. They already contain the symbol and the diagnostic that
+        # ``_verify_pdd_interface_signatures`` produced.
+        for entry in sorted(set(iface_drift)):
+            directive_lines.append(
+                f"- Update the generated code so parameter {entry} "
+                f"matches the prompt."
+            )
+        directive_lines.append(
+            "Do not remove the declared parameters from the prompt's "
+            "<pdd-interface>. The prompt is the source of truth — update "
+            "the generated code to match it."
+        )
+
     repair_directive = "\n".join(directive_lines)
     return repair_directive, missing_sorted
 
@@ -311,6 +493,169 @@ def build_conformance_hard_failure_from_error(
         f"expected: {', '.join(expected) if expected else '<unknown>'}",
         f"found: {', '.join(found) if found else '<unknown>'}",
         f"missing: {', '.join(missing) if missing else '<none>'}",
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
+
+
+def _parse_public_surface_failure_fields(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+    """Detect a public-surface regression and keep removals/signatures separate."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _PUBLIC_SURFACE_PREFIX not in combined:
+        return None
+    match = re.search(r"^removed:\s*(.+)$", combined, re.MULTILINE)
+    if not match:
+        match = re.search(
+            r"removed public symbols:\s*(.+?)"
+            r"(?=\.\s+(?:Output|Pre surface size|Post surface size)\b|\.\s*$|\n|$)",
+            combined,
+            re.MULTILINE,
+        )
+    removed_text = match.group(1) if match else ""
+    removed = tuple(
+        sorted(
+            {
+                token.strip().strip("`'\"").rstrip(".")
+                for token in removed_text.split(",")
+                if token.strip() and token.strip() != "<none>"
+            }
+        )
+    )
+    changed_match = re.search(r"^signature_changed:\s*(.+)$", combined, re.MULTILINE)
+    changed_text = changed_match.group(1) if changed_match else ""
+    changed = tuple(
+        sorted(
+            {
+                token.strip().strip("`'\"").rstrip(".")
+                for token in changed_text.split(",")
+                if token.strip() and token.strip() != "<none>"
+            }
+        )
+    )
+    if not removed and not changed:
+        return None
+    lines = ["Public surface regression repair required."]
+    if removed:
+        lines.append("Restore these public symbols from the existing module:")
+        for sym in removed:
+            lines.append(f"- {sym}")
+    if changed:
+        lines.append("Restore compatible signatures for these public symbols:")
+        for sym in changed:
+            lines.append(f"- {sym}")
+    lines.append(
+        "Preserve backward-compatible public helpers unless the prompt lists "
+        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+        "or BREAKING-CHANGE: change signature <symbol> markers."
+    )
+    return "\n".join(lines), removed, changed
+
+
+def _parse_public_surface_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a public-surface regression in subprocess output."""
+    parsed = _parse_public_surface_failure_fields(stdout, stderr)
+    if parsed is None:
+        return None
+    directive, removed, changed = parsed
+    signature = tuple(
+        [f"removed:{symbol}" for symbol in removed]
+        + [f"signature_changed:{symbol}" for symbol in changed]
+    )
+    return directive, signature
+
+
+def _parse_test_churn_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a test-churn failure in subprocess output."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _TEST_CHURN_PREFIX not in combined:
+        return None
+    ratio = "unknown"
+    threshold = "unknown"
+    match = re.search(r"^ratio:\s*([0-9.]+)", combined, re.MULTILINE)
+    threshold_match = re.search(r"^threshold:\s*([0-9.]+)", combined, re.MULTILINE)
+    if match and threshold_match:
+        ratio, threshold = match.group(1), threshold_match.group(1)
+    else:
+        match = re.search(
+        r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
+        combined,
+        )
+        if match:
+            ratio, threshold = match.group(1), match.group(2)
+    pre_lines = "unknown"
+    pre_match = re.search(
+        r"(?:^|[.\n]\s*)(?:Pre lines|pre_line_count):\s*(\d+)",
+        combined,
+        re.MULTILINE,
+    )
+    if pre_match:
+        pre_lines = pre_match.group(1)
+    signature = (f"ratio={ratio}", f"pre_lines={pre_lines}")
+    directive = (
+        "Test churn repair required.\n"
+        "- Keep the existing broad test coverage and avoid unrelated rewrites.\n"
+        f"- Reduce churn below threshold {threshold}; current churn is {ratio}.\n"
+        "- Add or update only tests needed for the prompt change."
+    )
+    return directive, signature
+
+
+def build_public_surface_hard_failure_from_error(
+    exc: Any,
+    basename: str,
+) -> str:
+    """Format a structured public-surface hard-failure block."""
+    removed = list(getattr(exc, "removed_symbols", []) or [])
+    changed = list(getattr(exc, "changed_signatures", []) or [])
+    block_lines = [
+        str(exc),
+        "",
+        "=== public surface regression ===",
+        f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
+        f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
+        "removed: " + (", ".join(removed) if removed else "<none>"),
+        "signature_changed: " + (", ".join(changed) if changed else "<none>"),
+        f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
+        f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
+        "",
+        "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
+        "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
+        "`rename`, `change signature`).",
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
+
+
+def build_test_churn_hard_failure_from_error(
+    exc: Any,
+    basename: str,
+) -> str:
+    """Format a structured test-churn hard-failure block."""
+    block_lines = [
+        str(exc),
+        "",
+        "=== test churn threshold exceeded ===",
+        f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
+        f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
+        f"churn ratio: {getattr(exc, 'churn_ratio', '<unknown>')}",
+        f"threshold: {getattr(exc, 'threshold', '<unknown>')}",
+        f"pre lines: {getattr(exc, 'pre_line_count', '<unknown>')}",
+        f"post lines: {getattr(exc, 'post_line_count', '<unknown>')}",
+        "",
+        "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
+        "directive to the prompt body.",
         "",
         f"Reproduce locally: pdd sync {basename}",
         "",
@@ -639,6 +984,7 @@ class AsyncSyncRunner:
         verbose: bool = False,
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Any]] = None,
+        module_targets: Optional[Dict[str, str]] = None,
         initial_cost: float = 0.0,
     ):
         self.basenames: List[str] = list(basenames)
@@ -652,6 +998,7 @@ class AsyncSyncRunner:
         self.issue_url = issue_url
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
+        self.module_targets: Dict[str, str] = dict(module_targets or {})
         self.initial_cost = float(initial_cost or 0.0)
 
         self.total_budget = self.sync_options.get("total_budget")
@@ -660,6 +1007,28 @@ class AsyncSyncRunner:
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in self.basenames
         }
+        # SCC membership is built over the subgraph induced by `basenames` so
+        # external deps don't pull non-target nodes into a cycle.
+        basename_set = set(self.basenames)
+        subgraph = {
+            b: [d for d in self.dep_graph.get(b, []) if d in basename_set]
+            for b in self.basenames
+        }
+        self._scc_of: Dict[str, frozenset] = {}
+        # SCCs that participate in a real cycle (size > 1, or a 1-node SCC
+        # with a self-loop). A trivial SCC (single node, no self-loop) is NOT
+        # here, so soft-edge logic only applies to actual cycle members.
+        self._cyclic_sccs: set = set()
+        for scc in compute_sccs(subgraph):
+            scc_set = frozenset(scc)
+            is_cyclic = len(scc) > 1 or any(
+                m in subgraph.get(m, []) for m in scc
+            )
+            for m in scc:
+                if m in basename_set:
+                    self._scc_of[m] = scc_set
+            if is_cyclic:
+                self._cyclic_sccs.add(scc_set)
         self.failed: bool = False
         self.budget_exhausted: bool = False
         self.comment_id: Optional[int] = None
@@ -811,64 +1180,158 @@ class AsyncSyncRunner:
             )
 
     def _get_ready_modules(self) -> List[str]:
-        """Pending modules whose deps are all satisfied."""
+        """Pending modules whose deps are all satisfied.
+
+        For modules participating in a cyclic SCC (size > 1, or 1-node with
+        a self-loop), intra-SCC dep edges are treated as **soft** — only a
+        failed peer blocks readiness — and the union of cross-SCC deps over
+        ALL members of the SCC must be satisfied before any member can
+        start. Otherwise an SCC could begin work while a transitive
+        dependency reached through a cycle peer was still pending or
+        failed, weakening dependency ordering. Cycle execution is
+        serialized: at most one member of a cyclic SCC may be running or
+        scheduled per pass.
+
+        Cross-SCC dep edges remain hard ordering constraints, and a consumer
+        outside the SCC must wait until every member of the dep's SCC has
+        succeeded.
+        """
         ready: List[str] = []
         with self.lock:
+            # SCCs that already have a running member -> peers must wait.
+            running_cyclic_sccs: set = set()
+            for b in self.basenames:
+                if self.module_states[b].status == "running":
+                    own = self._scc_of.get(b)
+                    if own is not None and own in self._cyclic_sccs:
+                        running_cyclic_sccs.add(own)
+
+            # SCCs that already had a member picked in THIS pass -> only one
+            # ready slot per SCC per pass (serialize cycle execution).
+            picked_cyclic_sccs: set = set()
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
-                deps = self.dep_graph.get(basename, [])
-                deps_ok = True
-                for d in deps:
-                    dep_state = self.module_states.get(d)
-                    if dep_state is None:
-                        # Out-of-target deps assumed already synced
+                own = self._scc_of.get(basename)
+                in_cycle = own is not None and own in self._cyclic_sccs
+                if in_cycle:
+                    if own in running_cyclic_sccs or own in picked_cyclic_sccs:
                         continue
-                    if dep_state.status != "success":
-                        deps_ok = False
+
+                # For a cycle member, the SCC's effective dependencies are
+                # the union of every member's cross-SCC deps; intra-SCC
+                # edges are soft. For non-cycle members, just walk the
+                # module's own deps.
+                if in_cycle:
+                    members_to_walk = list(own)
+                else:
+                    members_to_walk = [basename]
+
+                deps_ok = True
+                for member in members_to_walk:
+                    if not deps_ok:
                         break
+                    for d in self.dep_graph.get(member, []):
+                        dep_state = self.module_states.get(d)
+                        if dep_state is None:
+                            # Out-of-target deps assumed already synced
+                            continue
+                        # Intra-SCC edges (including a self-loop) are soft
+                        # when the SCC is cyclic; only a failed peer blocks
+                        # readiness.
+                        intra_scc = in_cycle and d in own
+                        if intra_scc:
+                            if dep_state.status == "failed":
+                                deps_ok = False
+                                break
+                            continue
+                        # Cross-SCC edge: depend on the WHOLE upstream SCC.
+                        dep_scc = self._scc_of.get(d)
+                        if dep_scc is None or dep_scc is own:
+                            if dep_state.status != "success":
+                                deps_ok = False
+                                break
+                        else:
+                            all_success = True
+                            for peer in dep_scc:
+                                peer_state = self.module_states.get(peer)
+                                if peer_state is None or peer_state.status != "success":
+                                    all_success = False
+                                    break
+                            if not all_success:
+                                deps_ok = False
+                                break
                 if deps_ok:
                     ready.append(basename)
+                    if in_cycle:
+                        picked_cyclic_sccs.add(own)
         return ready
 
     def _get_blocked_modules(self) -> List[str]:
-        """Pending modules transitively blocked by a failed dep."""
+        """Pending modules transitively blocked by a failed dep.
+
+        Operates on the SCC condensation (which is a DAG) so blocked-status
+        propagation through a cycle is sound regardless of which member is
+        visited first. A per-module DFS with a "visiting" set would wrongly
+        cache ``False`` on cycle re-entry before knowing whether the
+        parent's later deps would fail the chain.
+        """
         blocked: List[str] = []
         with self.lock:
-            cache: Dict[str, bool] = {}
+            scc_blocked_cache: Dict[frozenset, bool] = {}
 
-            def is_blocked(module: str, visiting: set) -> bool:
-                cached = cache.get(module)
+            def scc_is_blocked(scc: frozenset, visiting: set) -> bool:
+                cached = scc_blocked_cache.get(scc)
                 if cached is not None:
                     return cached
-                if module in visiting:
-                    cache[module] = False
+                # The condensation is acyclic, so this guard should never
+                # trigger; keep it for safety.
+                if scc in visiting:
                     return False
-                visiting.add(module)
+                visiting.add(scc)
                 try:
-                    for dep in self.dep_graph.get(module, []):
-                        dep_state = self.module_states.get(dep)
-                        if dep_state is None:
-                            continue
-                        if dep_state.status == "failed":
-                            cache[module] = True
+                    # Any member of this SCC itself failed?
+                    for m in scc:
+                        st = self.module_states.get(m)
+                        if st is not None and st.status == "failed":
+                            scc_blocked_cache[scc] = True
                             return True
-                        if dep_state.status == "pending" and is_blocked(
-                            dep, visiting
-                        ):
-                            cache[module] = True
-                            return True
+                    # Any cross-SCC dep is failed, or its SCC is blocked?
+                    for m in scc:
+                        for dep in self.dep_graph.get(m, []):
+                            dep_state = self.module_states.get(dep)
+                            if dep_state is None:
+                                # Out-of-target dep -> treated as synced.
+                                continue
+                            dep_scc = self._scc_of.get(dep)
+                            if dep_scc is None or dep_scc == scc:
+                                continue
+                            # Direct failure of the dep
+                            if dep_state.status == "failed":
+                                scc_blocked_cache[scc] = True
+                                return True
+                            # Dep's SCC may have a failed peer (cycle), or be
+                            # transitively blocked, regardless of the named
+                            # dep's current status. Always recurse to walk the
+                            # condensation DAG correctly.
+                            if scc_is_blocked(dep_scc, visiting):
+                                scc_blocked_cache[scc] = True
+                                return True
                 finally:
-                    visiting.discard(module)
-                cache[module] = False
+                    visiting.discard(scc)
+                scc_blocked_cache[scc] = False
                 return False
 
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
-                if is_blocked(basename, set()):
+                own_scc = self._scc_of.get(basename)
+                if own_scc is None:
+                    # Treat as a trivial 1-element SCC of just this basename.
+                    own_scc = frozenset({basename})
+                if scc_is_blocked(own_scc, set()):
                     blocked.append(basename)
         return blocked
 
@@ -1406,6 +1869,15 @@ class AsyncSyncRunner:
 
         if self.sync_options.get("local"):
             cmd.append("--local")
+        context_override = self.sync_options.get("context")
+        if context_override:
+            cmd.extend(["--context", str(context_override)])
+        strength = self.sync_options.get("strength")
+        if strength is not None:
+            cmd.extend(["--strength", str(strength)])
+        temperature = self.sync_options.get("temperature")
+        if temperature is not None:
+            cmd.extend(["--temperature", str(temperature)])
         cmd.append("sync")
 
         # Module-specific flags
@@ -1437,7 +1909,7 @@ class AsyncSyncRunner:
         elif self.sync_options.get("budget") is not None:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
 
-        cmd.append(basename)
+        cmd.append(self.module_targets.get(basename, basename))
         return cmd
 
     def _build_env(
@@ -1465,7 +1937,8 @@ class AsyncSyncRunner:
             Tuple of (success, total_cost_across_attempts, error_message).
         """
         total_cost = 0.0
-        last_missing: Optional[Tuple[str, ...]] = None
+        last_signature: Optional[Tuple[str, ...]] = None
+        last_failure_kind: Optional[str] = None
         last_error = ""
         last_stdout = ""
         last_stderr = ""
@@ -1486,31 +1959,63 @@ class AsyncSyncRunner:
                 return True, total_cost, ""
 
             conformance = _parse_conformance_failure(stdout, stderr)
-            if conformance is None:
+            public_surface = _parse_public_surface_failure(stdout, stderr)
+            test_churn = _parse_test_churn_failure(stdout, stderr)
+            failure_kind = "architecture"
+            parsed_failure = conformance
+            if parsed_failure is None and public_surface is not None:
+                failure_kind = "public_surface"
+                parsed_failure = public_surface
+            if parsed_failure is None and test_churn is not None:
+                failure_kind = "test_churn"
+                parsed_failure = test_churn
+
+            if parsed_failure is None:
                 # Not a conformance failure: do not retry
                 return False, total_cost, error
 
-            new_directive, new_missing = conformance
-            if last_missing is not None and new_missing == last_missing:
+            new_directive, new_signature = parsed_failure
+            if (
+                last_signature is not None
+                and new_signature == last_signature
+                and failure_kind == last_failure_kind
+            ):
                 # Stuck on identical symbol set — abort and emit hard-failure block
                 break
-            last_missing = new_missing
+            last_signature = new_signature
+            last_failure_kind = failure_kind
             repair_directive = new_directive
 
             if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
                 break
+            if failure_kind == "test_churn" and attempt >= 1:
+                break
             remaining_budget = self._remaining_total_budget(total_cost)
             if remaining_budget is not None and remaining_budget <= 0.0:
+                failure_label = (
+                    "architecture conformance"
+                    if failure_kind == "architecture"
+                    else failure_kind
+                )
                 last_error = (
-                    f"Budget exhausted during architecture conformance repair "
+                    f"Budget exhausted during {failure_label} repair "
                     f"(${total_cost:.2f} spent in {basename})."
                 )
                 break
 
         # Hard-failure path: include structured conformance block
-        hard_block = self._build_conformance_hard_failure(
-            basename, last_error, last_stdout, last_stderr
-        )
+        if last_failure_kind == "public_surface":
+            hard_block = self._build_public_surface_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
+        elif last_failure_kind == "test_churn":
+            hard_block = self._build_test_churn_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
+        else:
+            hard_block = self._build_conformance_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
         return False, total_cost, hard_block
 
     def _build_conformance_hard_failure(
@@ -1567,6 +2072,153 @@ class AsyncSyncRunner:
             _env_fingerprint(),
         ]
         return "\n".join(block_lines)
+
+    def _build_public_surface_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured public-surface hard-failure error string."""
+        parsed = _parse_public_surface_failure_fields(stdout, stderr)
+        removed = parsed[1] if parsed else tuple()
+        changed = parsed[2] if parsed else tuple()
+        combined = (stdout or "") + "\n" + (stderr or "")
+
+        prompt_field = "<unknown>"
+        for line in combined.splitlines():
+            if _PUBLIC_SURFACE_PREFIX in line:
+                tail = line.split(_PUBLIC_SURFACE_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        field_boundary = (
+            r"(?=\.\s+(?:Output|Pre surface size|Post surface size)\b"
+            r"|\.\s*$|\n|$)"
+        )
+
+        def _extract_field(label: str, default: str = "<unknown>") -> str:
+            normalized = label.lower().replace(" ", "_")
+            aliases = {
+                "pre_lines": ("pre_lines", "pre_line_count"),
+                "post_lines": ("post_lines", "post_line_count"),
+            }.get(normalized, (normalized,))
+            for alias in aliases:
+                line_match = re.search(
+                    rf"^{re.escape(alias)}:\s*(.+)$",
+                    combined,
+                    re.MULTILINE,
+                )
+                if line_match:
+                    return line_match.group(1).strip() or default
+            pattern = re.compile(
+                rf"{re.escape(label)}:\s*(.*?){field_boundary}",
+                re.DOTALL,
+            )
+            match = pattern.search(combined)
+            if not match:
+                return default
+            return match.group(1).strip().rstrip(".").strip() or default
+
+        return "\n".join(
+            [
+                failure_summary or "Public surface regression",
+                "",
+                "=== public surface regression ===",
+                f"prompt: {prompt_field}",
+                f"output: {_extract_field('Output')}",
+                "removed: " + (", ".join(removed) if removed else "<none>"),
+                "signature_changed: "
+                + (", ".join(changed) if changed else "<none>"),
+                f"pre surface size: {_extract_field('Pre surface size')}",
+                f"post surface size: {_extract_field('Post surface size')}",
+                "",
+                "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
+                "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
+                "`rename`, `change signature`).",
+                "",
+                f"Reproduce locally: pdd sync {basename}",
+                "",
+                _env_fingerprint(),
+            ]
+        )
+
+    def _build_test_churn_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured test-churn hard-failure error string."""
+        combined = (stdout or "") + "\n" + (stderr or "")
+
+        prompt_field = "<unknown>"
+        for line in combined.splitlines():
+            if _TEST_CHURN_PREFIX in line:
+                tail = line.split(_TEST_CHURN_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        field_boundary = r"(?=\.\s+(?:Output|Pre lines|Post lines)\b|\.\s*$|\n|$)"
+
+        def _extract_field(label: str, default: str = "<unknown>") -> str:
+            normalized = label.lower().replace(" ", "_")
+            aliases = {
+                "pre_lines": ("pre_lines", "pre_line_count"),
+                "post_lines": ("post_lines", "post_line_count"),
+            }.get(normalized, (normalized,))
+            for alias in aliases:
+                line_match = re.search(
+                    rf"^{re.escape(alias)}:\s*(.+)$",
+                    combined,
+                    re.MULTILINE,
+                )
+                if line_match:
+                    return line_match.group(1).strip() or default
+            pattern = re.compile(
+                rf"{re.escape(label)}:\s*(.*?){field_boundary}",
+                re.DOTALL,
+            )
+            match = pattern.search(combined)
+            if not match:
+                return default
+            return match.group(1).strip().rstrip(".").strip() or default
+
+        ratio = threshold = "<unknown>"
+        ratio_match = re.search(r"^ratio:\s*([0-9.]+)", combined, re.MULTILINE)
+        threshold_match = re.search(r"^threshold:\s*([0-9.]+)", combined, re.MULTILINE)
+        if ratio_match and threshold_match:
+            ratio, threshold = ratio_match.group(1), threshold_match.group(1)
+        else:
+            match = re.search(
+                r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
+                combined,
+            )
+            if match:
+                ratio, threshold = match.group(1), match.group(2)
+
+        return "\n".join(
+            [
+                failure_summary or "Test churn threshold exceeded",
+                "",
+                "=== test churn threshold exceeded ===",
+                f"prompt: {prompt_field}",
+                f"output: {_extract_field('Output')}",
+                f"churn ratio: {ratio}",
+                f"threshold: {threshold}",
+                f"pre lines: {_extract_field('Pre lines')}",
+                f"post lines: {_extract_field('Post lines')}",
+                "",
+                "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
+                "directive to the prompt body.",
+                "",
+                f"Reproduce locally: pdd sync {basename}",
+                "",
+                _env_fingerprint(),
+            ]
+        )
 
     def _run_attempt(
         self,

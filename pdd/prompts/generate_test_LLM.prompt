@@ -31,7 +31,7 @@
     - Focus on testing functionality NOT already covered by existing tests
 
 % REPO PROMPTING GUIDE (optional; use it only to infer repo-specific filename, metadata tag, dependency, and include conventions when present):
-<include optional select="lines:299-307,lines:385-406">docs/prompting_guide.md</include>
+<include optional select="section:Best Practices,section:Relationship to Other Tags">docs/prompting_guide.md</include>
 
 % Follow these rules:
     - CRITICAL: You MUST analyze the actual code provided in code_under_test and generate tests for the EXACT public functions/classes defined in that code.

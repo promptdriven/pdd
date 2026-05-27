@@ -42,15 +42,84 @@ def example_happy_path() -> None:
         cwd = Path(tmpdir)
 
         def mock_run(*args, **kwargs):
-            """Return step-specific outputs for realistic behavior."""
+            """Return step-specific outputs for realistic behavior.
+
+            Each output wraps a `<step_report>` block — the orchestrator
+            extracts that and posts it via `post_step_comment(body=...)`
+            using trusted credentials (issue #964).
+            """
             label = kwargs.get("label", "")
+            if label == "step5":
+                return (
+                    True,
+                    "<step_report>## Step 5\n\nReproduced the crash.</step_report>\n"
+                    "REPRO_FILES_CREATED: tests/test_repro.py",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step6":
+                return (
+                    True,
+                    "<step_report>## Step 6\n\nRoot cause located.</step_report>\n"
+                    "FIX_LOCATIONS: pdd/module.py\n"
+                    "EXPANSION_ITEMS: none",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step7":
+                return (
+                    True,
+                    "<step_report>## Step 7\n\nDefect classified.</step_report>\n"
+                    "DEFECT_TYPE: code",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step8":
+                return (
+                    True,
+                    "<step_report>## Step 8\n\nTest plan drafted.</step_report>\n"
+                    "PLANNED_TEST_COUNT: 1",
+                    0.10,
+                    "anthropic",
+                )
             if label == "step9":
-                return (True, "Generated unit test\nFILES_CREATED: tests/test_fix.py", 0.10, "anthropic")
+                return (
+                    True,
+                    "<step_report>## Step 9\n\nGenerated failing test.</step_report>\n"
+                    "FILES_CREATED: tests/test_fix.py",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>## Step 10\n\nUnit tests verified.</step_report>\n"
+                    "E2E_NEEDED: yes - integration path should be covered",
+                    0.10,
+                    "anthropic",
+                )
             if label == "step11":
-                return (True, "E2E test\nE2E_FILES_CREATED: tests/e2e/test_e2e.py", 0.15, "anthropic")
+                return (
+                    True,
+                    "<step_report>## Step 11\n\nE2E test passes against the fix.</step_report>\n"
+                    "E2E_FILES_CREATED: tests/e2e/test_e2e.py",
+                    0.15,
+                    "anthropic",
+                )
             if label == "step12":
-                return (True, "PR created: https://github.com/owner/repo/pull/99", 0.05, "anthropic")
-            return (True, f"Output for {label}", 0.10, "anthropic")
+                return (
+                    True,
+                    "<step_report>## Step 12\n\nDraft PR created: "
+                    "https://github.com/owner/repo/pull/99</step_report>",
+                    0.05,
+                    "anthropic",
+                )
+            return (
+                True,
+                f"<step_report>## {label}\n\nMocked output for {label}.</step_report>",
+                0.10,
+                "anthropic",
+            )
 
         mock_worktree = cwd / ".pdd" / "worktrees" / "fix-issue-42"
         mock_worktree.mkdir(parents=True, exist_ok=True)
@@ -63,9 +132,11 @@ def example_happy_path() -> None:
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=cwd), \
              patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "all passed")), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)), \
              patch("pdd.agentic_bug_orchestrator.subprocess") as _mock_sub, \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
-             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True):
 
             import subprocess as _real_subprocess
             _mock_sub.run.return_value = _real_subprocess.CompletedProcess(
@@ -105,10 +176,13 @@ def example_hard_stop_duplicate() -> None:
     with TemporaryDirectory() as tmpdir:
         cwd = Path(tmpdir)
 
-        # Step 1 output triggers the hard stop condition
+        # Step 1 output triggers the hard stop condition. The `<step_report>`
+        # block is what the orchestrator extracts and posts via the trusted
+        # `post_step_comment(body=...)` path (issue #964).
         mock_run = MagicMock(return_value=(
             True,
-            "This looks like a Duplicate of #17",
+            "<step_report>## Step 1: Duplicate Check\n\n"
+            "This looks like a Duplicate of #17.</step_report>",
             0.05,
             "anthropic",
         ))
@@ -120,7 +194,8 @@ def example_hard_stop_duplicate() -> None:
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=cwd), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
-             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True):
 
             success, message, cost, model, changed_files = run_agentic_bug_orchestrator(
                 issue_url="https://github.com/owner/repo/issues/50",

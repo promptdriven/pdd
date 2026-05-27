@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -15,11 +16,29 @@ from pdd.agentic_checkup_orchestrator import (
     STEP_ORDER,
     TOTAL_STEPS,
     _copy_uncommitted_changes,
+    _format_pr_changed_files_for_prompt,
+    _format_step_abort_message,
     _get_state_dir,
+    _is_step_timeout_failure,
     _next_step,
     _parse_changed_files,
+    _pr_base_tracking_ref,
     run_agentic_checkup_orchestrator,
 )
+
+
+# Round-4 Finding 1: Step 7 must emit structured JSON for `_step7_passed`
+# to permit the orchestrator to push or create a PR. Tests that previously
+# only emitted the "All Issues Fixed" loop-exit sentinel now must include
+# this JSON payload too. Trailing it on every step output is harmless —
+# the JSON gate only consults the step-7 output.
+STEP7_VERDICT_JSON = (
+    '```json\n'
+    '{"success": true, "message": "ok", "issue_aligned": true, '
+    '"issues": [], "changed_files": []}\n'
+    '```'
+)
+ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +58,7 @@ def mock_dependencies():
          patch("pdd.agentic_checkup_orchestrator.console") as mock_console, \
          patch("pdd.agentic_checkup_orchestrator._setup_worktree") as mock_worktree:
 
-        mock_run.return_value = (True, "Step output. All Issues Fixed", 0.1, "gpt-4")
+        mock_run.return_value = (True, f"Step output. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
         mock_load.return_value = "Prompt for {issue_number}"
         mock_worktree.return_value = (Path("/tmp/worktree"), None)
 
@@ -94,7 +113,7 @@ class TestHappyPath:
 
         def side_effect(*args, **kwargs):
             call_counter[0] += 1
-            return (True, f"Output {call_counter[0]}. All Issues Fixed", call_counter[0] * 0.1, "gpt-4")
+            return (True, f"Output {call_counter[0]}. {ALL_ISSUES_FIXED}", call_counter[0] * 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -121,7 +140,7 @@ class TestHappyPath:
             label = kwargs.get("label", "")
             if label == "step1":
                 return (True, step1_out, 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -202,10 +221,10 @@ class TestNoFixMode:
 
         mock_worktree.assert_not_called()
 
-    def test_provider_failure_on_step_5_aborts_no_fix_before_step_7(
+    def test_timeout_on_step_5_aborts_no_fix_before_step_7_with_timeout_message(
         self, mock_dependencies, default_args, tmp_path
     ):
-        """A provider failure in step 5 should stop --no-fix before step 7."""
+        """A Step 5 agent timeout should not be reported as provider outage."""
         mock_run, _, _, _ = mock_dependencies
         default_args["no_fix"] = True
         default_args["cwd"] = tmp_path
@@ -231,7 +250,8 @@ class TestNoFixMode:
             success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
 
         assert success is False
-        assert "agent providers unavailable" in msg
+        assert "timed out" in msg
+        assert "agent providers unavailable" not in msg
         assert "Step 5" in msg
         assert mock_run.call_count == 5
 
@@ -244,6 +264,26 @@ class TestNoFixMode:
             "FAILED: All agent providers failed: openai: Timeout expired"
         )
         assert "6_1" not in final_state["step_outputs"]
+
+    def test_start_step_7_runs_verify_without_rerunning_step_5(
+        self, mock_dependencies, default_args
+    ):
+        """Recovery override can jump past a stuck test step to Step 7."""
+        mock_run, mock_load, _, _ = mock_dependencies
+        default_args["no_fix"] = True
+        default_args["start_step_override"] = 7
+        mock_load.return_value = (
+            "step5={step5_output}\n"
+            "step6={step6_1_output}\n"
+            "pr_files={pr_changed_files}"
+        )
+
+        success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+            **default_args
+        )
+
+        assert success is True
+        assert [c.kwargs["label"] for c in mock_run.call_args_list] == ["step7"]
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +301,7 @@ class TestWorktreeHandling:
         def side_effect_run(*args, **kwargs):
             label = kwargs.get("label", "")
             executed_labels.append(label)
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -362,6 +402,28 @@ class TestWorktreeHandling:
 
 
 class TestChangedFilesTracking:
+    @staticmethod
+    def _init_git_repo(path: Path, initial_branch: str = "master") -> None:
+        subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "branch", "-m", initial_branch],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+
     def test_parse_changed_files_basic(self):
         """_parse_changed_files should extract file paths."""
         output = (
@@ -387,6 +449,394 @@ class TestChangedFilesTracking:
         result = _parse_changed_files(output)
         assert result == ["src/new.py", "src/old.py"]
 
+    def test_timeout_detects_runner_timeout_messages(self):
+        """Timeout failures should be classified separately from provider outages."""
+        assert _is_step_timeout_failure(
+            "All agent providers failed: openai: Timeout expired"
+        )
+        assert _is_step_timeout_failure("subprocess.TimeoutExpired after 600s")
+        assert _is_step_timeout_failure("Agent timed out while running tests")
+        assert not _is_step_timeout_failure(
+            "All agent providers failed: openai: request timed out"
+        )
+
+    def test_timeout_abort_message_is_not_provider_outage(self):
+        """A timeout wrapped in provider failure text should get timeout wording."""
+        msg = _format_step_abort_message(
+            5,
+            "All agent providers failed: openai: Timeout expired",
+        )
+
+        assert "timed out" in msg
+        assert "agent providers unavailable" not in msg
+
+    def test_format_pr_changed_files_uses_base_ref_diff(self, tmp_path):
+        """PR-mode prompt context should list merge-base changed files."""
+        self._init_git_repo(tmp_path)
+        (tmp_path / "app.py").write_text("print('base')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "branch", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "app.py").write_text("print('feature')\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_app.py").write_text(
+            "def test_app():\n    assert True\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(
+            ["git", "update-ref", base_ref, "base"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "base", "base_local_ref": base_ref},
+        )
+
+        assert f"Base: {base_ref}" in result
+        assert "- M: app.py" in result
+        assert "- A: tests/test_app.py" in result
+
+    def test_format_pr_changed_files_includes_all_pr_commits(self, tmp_path):
+        """Merge-base diff should not collapse multi-commit PRs to HEAD~1."""
+        self._init_git_repo(tmp_path)
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "branch", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+
+        (tmp_path / "first.py").write_text("print('first')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "first.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=tmp_path, check=True)
+
+        (tmp_path / "second.py").write_text("print('second')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "second.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True)
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(
+            ["git", "update-ref", base_ref, "base"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "base", "base_local_ref": base_ref},
+        )
+
+        assert f"Base: {base_ref}" in result
+        assert "- A: first.py" in result
+        assert "- A: second.py" in result
+
+    def test_format_pr_changed_files_uses_refreshed_base_not_stale_origin(
+        self, tmp_path
+    ):
+        """A stale origin/main must not broaden PR-scoped test context."""
+        self._init_git_repo(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True)
+        root_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", root_sha],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        (tmp_path / "base_only.py").write_text("print('base')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "base_only.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "advance base"], cwd=tmp_path, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(
+            ["git", "update-ref", base_ref, base_sha],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "feature.py").write_text("print('feature')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "main", "base_local_ref": base_ref},
+        )
+
+        assert "- A: feature.py" in result
+        assert "base_only.py" not in result
+
+    def test_format_pr_changed_files_requires_refreshed_pr_base(self, tmp_path):
+        """PR metadata must not fall back to stale origin/<base>."""
+        self._init_git_repo(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "feature.py").write_text("print('feature')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "main"},
+        )
+
+        assert result.startswith("PR changed files unavailable")
+        assert "Do not use stale origin/main" in result
+        assert "feature.py" not in result
+
+    def test_format_pr_changed_files_uses_api_fallback_when_base_fetch_fails(
+        self, tmp_path
+    ):
+        """A failed git base refresh should still keep PR-scoped files if API data exists."""
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {
+                "base_ref": "main",
+                "base_ref_fetch_error": "network unreachable",
+                "api_changed_files": (
+                    "- ADDED: feature.py\n"
+                    "- RENAMED: old_name.py -> new_name.py"
+                ),
+            },
+        )
+
+        assert result.startswith("Source: GitHub PR files API")
+        assert "- ADDED: feature.py" in result
+        assert "- RENAMED: old_name.py -> new_name.py" in result
+        assert "origin/main" not in result
+
+    def test_format_pr_changed_files_uses_api_fallback_when_base_metadata_missing(
+        self, tmp_path
+    ):
+        """Failed PR metadata should still use PR files API data when present."""
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"api_changed_files": "- MODIFIED: src/feature.py"},
+        )
+
+        assert result == "Source: GitHub PR files API\n- MODIFIED: src/feature.py"
+
+    def test_format_pr_changed_files_writes_full_api_fallback_artifact(
+        self, tmp_path
+    ):
+        """A truncated API preview should point agents at the full local file list."""
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {
+                "base_ref": "main",
+                "base_ref_fetch_error": "network unreachable",
+                "api_changed_files": (
+                    "- MODIFIED: pdd/file_0.py\n"
+                    "NOTE: GitHub PR files API list truncated; showing 1 of 2 files."
+                ),
+                "api_changed_files_full": (
+                    "- MODIFIED: pdd/file_0.py\n"
+                    "- MODIFIED: pdd/file_1.py"
+                ),
+            },
+        )
+
+        artifact = tmp_path / ".pdd" / "checkup-context" / "pr-changed-files-api.txt"
+        assert (
+            "Full API changed-file list artifact: "
+            ".pdd/checkup-context/pr-changed-files-api.txt"
+        ) in result
+        assert artifact.read_text(encoding="utf-8") == (
+            "- MODIFIED: pdd/file_0.py\n"
+            "- MODIFIED: pdd/file_1.py\n"
+        )
+
+    def test_format_pr_changed_files_missing_pr_metadata_is_unavailable(self, tmp_path):
+        """PR mode with failed metadata fetch must not use conventional fallbacks."""
+        self._init_git_repo(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "feature.py").write_text("print('feature')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(tmp_path, {})
+
+        assert result.startswith("PR changed files unavailable")
+        assert "metadata is missing" in result
+        assert "feature.py" not in result
+
+    def test_format_pr_changed_files_does_not_use_head_parent_fallback(self, tmp_path):
+        """Missing base refs should be explicit instead of diffing only HEAD~1."""
+        self._init_git_repo(tmp_path, initial_branch="trunk")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+
+        (tmp_path / "first.py").write_text("print('first')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "first.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=tmp_path, check=True)
+
+        (tmp_path / "second.py").write_text("print('second')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "second.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(tmp_path)
+
+        assert result.startswith("PR changed files unavailable")
+        assert "Do not infer PR scope from HEAD~1" in result
+        assert "second.py" not in result
+
+    def _run_orchestrator_capturing_context(
+        self,
+        tmp_path,
+        *,
+        test_scope: str,
+        format_call_count: list,
+    ):
+        """Helper: run orchestrator in PR mode, capture step contexts."""
+        captured_contexts = []
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def capture_step(step_num, _name, context, **_kw):  # noqa: ANN001
+            captured_contexts.append(dict(context))
+            output = ALL_ISSUES_FIXED if step_num == 7 else f"out-{step_num}"
+            return (True, output, 0.0, "fake")
+
+        def fake_format(*_args, **_kwargs):
+            format_call_count.append(1)
+            return "Base: main\n- M: pdd/example.py"
+
+        # Stable PR head metadata for both the entry capture and the
+        # post-Step-7 no-fix freshness refetch (issue #1116). Without
+        # this mock the orchestrator's gh-CLI call would fail in the
+        # test sandbox, leaving current_pr_head_sha empty and
+        # triggering the unverified-freshness fail-closed downgrade.
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef00000001",
+        }
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._format_pr_changed_files_for_prompt",
+            side_effect=fake_format,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=capture_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value=stable_metadata,
+        ), patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+                test_scope=test_scope,
+            )
+
+        assert success is True
+        assert captured_contexts
+        return captured_contexts
+
+    def test_pr_mode_targeted_scope_includes_changed_files(self, tmp_path):
+        """Opt-in targeted scope passes changed-file summary into step prompts."""
+        format_calls: list = []
+        captured = self._run_orchestrator_capturing_context(
+            tmp_path,
+            test_scope="targeted",
+            format_call_count=format_calls,
+        )
+        assert format_calls, "formatter should be invoked under targeted scope"
+        assert captured[0]["pr_test_scope"] == "targeted"
+        assert captured[0]["pr_changed_files"] == (
+            "Base: main\n- M: pdd/example.py"
+        )
+
+    def test_pr_mode_full_scope_skips_changed_files(self, tmp_path):
+        """Default 'full' scope keeps pr_changed_files empty so the agent runs the full suite."""
+        format_calls: list = []
+        captured = self._run_orchestrator_capturing_context(
+            tmp_path,
+            test_scope="full",
+            format_call_count=format_calls,
+        )
+        assert not format_calls, "formatter must not run under full scope"
+        assert captured[0]["pr_test_scope"] == "full"
+        assert captured[0]["pr_changed_files"] == ""
+
+    def test_orchestrator_rejects_invalid_test_scope(self, tmp_path):
+        """Invalid test_scope must fail loudly, not silently fall back."""
+        with pytest.raises(ValueError, match="test_scope"):
+            run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                quiet=True,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+                test_scope="quick",
+            )
+
     def test_changed_files_passed_to_step_8(self, mock_dependencies, default_args):
         """Changed files from step 6 should be available to step 8 as files_to_stage."""
         mock_run, mock_load, _, _ = mock_dependencies
@@ -396,7 +846,7 @@ class TestChangedFilesTracking:
             if "step6" in label:
                 return (True, "FILES_CREATED: src/fix.py\nFILES_MODIFIED: src/main.py", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -426,7 +876,7 @@ class TestChangedFilesTracking:
             if "step6" in label:
                 return (True, "FILES_CREATED: src/fix.py\nFILES_MODIFIED: src/fix.py", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -462,7 +912,7 @@ class TestSoftFailures:
             label = kwargs.get("label", "")
             if label == "step2":
                 return (False, "Agent had a problem but no hard stop", 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -483,7 +933,7 @@ class TestSoftFailures:
             if "step3" in label:
                 return (False, "Build check failed somehow", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -609,7 +1059,7 @@ class TestProviderFailureAbort:
             label = kwargs.get("label", "")
             if label in ("step1", "step2"):
                 return (False, "Some other error", 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -629,7 +1079,7 @@ class TestProviderFailureAbort:
                 return (False, "All agent providers failed", 0.0, "")
             if label == "step2":
                 return (False, "All agent providers failed", 0.0, "")
-            return (True, f"ok. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"ok. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -716,7 +1166,7 @@ class TestResume:
 
         def side_effect_run(instruction, **kwargs):
             formatted_prompts.append(instruction)
-            return (True, f"Output for {kwargs.get('label', '')}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {kwargs.get('label', '')}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -811,7 +1261,7 @@ class TestResume:
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
             executed_steps.append(label)
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -857,7 +1307,7 @@ class TestResume:
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
             executed_steps.append(label)
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -993,7 +1443,7 @@ class TestFormatStringInjection:
             label = kwargs.get("label", "")
             if label == "step1":
                 return (True, "The error is in {url} config", 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -1210,7 +1660,7 @@ class TestBuildState:
             if "step6_1" in label:
                 return (True, "FILES_CREATED: src/fix.py", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -1306,7 +1756,7 @@ class TestFixVerifyLoop:
             if label == "step7_iter1":
                 return (True, "Issues remain: 2 tests failing", 0.1, "gpt-4")
             if label == "step7_iter2":
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
@@ -1325,7 +1775,7 @@ class TestFixVerifyLoop:
         assert "step8" in called_labels
 
     def test_max_iterations_reached(self, mock_dependencies, default_args):
-        """Step 7 never returns clean -> 3 iterations, then step 8 with warning."""
+        """Step 7 never returns clean -> 3 iterations, then fail closed."""
         mock_run, _, _, mock_console = mock_dependencies
 
         def side_effect(*args, **kwargs):
@@ -1339,14 +1789,15 @@ class TestFixVerifyLoop:
 
         success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
 
-        assert success is True
-        # 2 (steps 1-2) + 3*7 (3 iterations) + 1 (step 8) = 24
-        assert mock_run.call_count == 24
+        assert success is False
+        assert "did not verify all issues fixed" in msg.lower()
+        # 2 (steps 1-2) + 3*7 (3 iterations), then no step 8.
+        assert mock_run.call_count == 23
 
         called_labels = [c.kwargs["label"] for c in mock_run.call_args_list]
         assert "step3_iter3" in called_labels
         assert "step7_iter3" in called_labels
-        assert "step8" in called_labels
+        assert "step8" not in called_labels
 
     def test_labels_have_iteration_suffix(self, mock_dependencies, default_args):
         """Loop steps should have iteration-suffixed labels like step3_iter1."""
@@ -1383,7 +1834,7 @@ class TestFixVerifyLoop:
             if label == "step7_iter1":
                 return (True, "Issues remain", 0.1, "gpt-4")
             if label == "step7_iter2":
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -1421,7 +1872,7 @@ class TestFixVerifyLoop:
             if label == "step6_1_iter2":
                 return (True, "FILES_CREATED: src/fix2.py", 0.1, "gpt-4")
             if label == "step7_iter2":
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -1853,3 +2304,309 @@ class TestBetweenIterationsResume:
         assert "step8" in called_labels
         # Should NOT have any iter1 labels (all were completed before resume)
         assert not any("iter1" in lbl for lbl in called_labels)
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The checkup orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with a composite-key
+    encoding (fractional 6.1/6.2/6.3 and iterated fix-verify loop)."""
+
+    def test_success_path_posts_step_comment_once(self, mock_dependencies, default_args):
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (
+            True,
+            f"<step_report>step report body</step_report>\n{ALL_ISSUES_FIXED}",
+            0.1,
+            "gpt-4",
+        )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 1
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_posts_fallback_comment(
+        self, mock_dependencies, default_args
+    ):
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (True, f"Step output. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 1
+        assert any(
+            "no `<step_report>` block returned by agent" in c.kwargs["body"]
+            and "Raw output retained in workflow state" in c.kwargs["body"]
+            for c in mock_post_once.call_args_list
+        )
+
+    def test_post_exception_does_not_break_run(self, mock_dependencies, default_args):
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (
+            True,
+            f"<step_report>some report</step_report>\n{ALL_ISSUES_FIXED}",
+            0.1,
+            "gpt-4",
+        )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+
+
+class TestRefreshPrBaseRefTimeout:
+    """Iter-20 Finding 3: the base-ref fetch MUST be bounded so a
+    stalled transport (auth prompt, dead remote, transient hang)
+    cannot hold the review loop forever. The deterministic-gate
+    layer's own ``gate_timeout`` does NOT apply to this subprocess
+    because the fetch runs BEFORE gate discovery.
+    """
+
+    def test_passes_timeout_to_subprocess_run(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        recorded = {}
+
+        def fake_run(args, **kwargs):
+            recorded["args"] = args
+            recorded["kwargs"] = kwargs
+            return sp.CompletedProcess(args, 0, b"", b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "release-1.4"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        assert "timeout" in recorded["kwargs"], (
+            "subprocess.run MUST be called with a timeout kwarg so a stalled "
+            "fetch cannot hang the review loop"
+        )
+        assert recorded["kwargs"]["timeout"] > 0
+        assert md.get("base_local_ref") == "refs/remotes/pdd-checkup/pr-1/base"
+
+    def test_timeout_expired_populates_base_ref_fetch_error(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        def fake_run(args, **kwargs):
+            raise sp.TimeoutExpired(cmd=args, timeout=60)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "release-1.4"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        # MUST be caught and surfaced as base_ref_fetch_error so the
+        # review-loop's iter-19 fail-closed path kicks in. MUST NOT
+        # leak as an unhandled TimeoutExpired exception.
+        assert "base_ref_fetch_error" in md
+        assert "timed out" in md["base_ref_fetch_error"].lower()
+        assert "base_local_ref" not in md
+
+    def test_called_process_error_scrubs_secrets_from_stderr(self, tmp_path):
+        """``_refresh_pr_base_ref`` MUST
+        route the failed-fetch stderr through ``_scrub_secrets`` (regex
+        catch-all) BEFORE storing it on ``pr_metadata`` or printing it
+        to the console. Env-token redaction alone misses credentials
+        supplied by the git credential helper, GitHub App installation
+        tokens minted at runtime, embedded ``https://<user>:<token>@host``
+        basic-auth, and verbose-transport ``Bearer`` headers. The
+        console.print output and ``pr_metadata["base_ref_fetch_error"]``
+        both flow into long-term log capture and the rendered checkup
+        report — they are public surfaces.
+        """
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        # stderr carrying a GitHub App installation token (`ghs_…`)
+        # that is NOT in process env — would slip past the env-token
+        # redaction unless the regex scrub runs.
+        leaky_stderr = (
+            "remote: Invalid username or token. "
+            "Token ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 has expired\n"
+            "fatal: Authentication failed for "
+            "'https://x-access-token:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/o/r.git/'\n"
+        )
+
+        def fake_run(args, **kwargs):
+            raise sp.CalledProcessError(
+                returncode=128, cmd=args, output="", stderr=leaky_stderr
+            )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="upstream",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._github_token_from_env",
+            return_value="",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "main"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        stored = md["base_ref_fetch_error"]
+        # Both token shapes MUST be redacted even though the env is empty.
+        assert "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in stored
+        assert "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" not in stored
+        assert "[REDACTED]" in stored
+        # Surrounding context (the operator-useful diagnostic) survives.
+        assert "Authentication failed" in stored or "expired" in stored.lower()
+
+    def test_called_process_error_scrubs_generic_url_userinfo(self, tmp_path):
+        """Generic ``scheme://user:password@host`` basic-auth credentials
+        in git stderr MUST be scrubbed even when the password does not
+        match any prefix-anchored token pattern (custom internal token
+        shape, runtime-minted App installation token, credential-helper
+        PAT). The URL-userinfo regex uses lookbehind/lookahead around
+        ``://``…``@`` so the scheme + host stay readable for diagnostics
+        while the credential payload is replaced.
+        """
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        # Generic basic-auth URL whose password is a custom token shape
+        # — does NOT start with ghp_/ghs_/sk-/etc., would slip past
+        # every other pattern unless URL-userinfo redaction runs.
+        leaky_stderr = (
+            "fatal: Authentication failed for "
+            "'https://x-access-token:customToken123456789@github.com/o/r.git/'\n"
+        )
+
+        def fake_run(args, **kwargs):
+            raise sp.CalledProcessError(
+                returncode=128, cmd=args, output="", stderr=leaky_stderr
+            )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="upstream",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._github_token_from_env",
+            return_value="",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "main"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        stored = md["base_ref_fetch_error"]
+        # The generic-shape credential MUST NOT survive verbatim.
+        assert "customToken123456789" not in stored
+        assert "x-access-token:customToken123456789" not in stored
+        # Scheme + host remain readable so the diagnostic is still useful.
+        assert "github.com/o/r.git" in stored
+        assert "[REDACTED]" in stored
+
+    def test_refresh_pr_base_ref_uses_trusted_git_under_dot_path(
+        self, tmp_path, monkeypatch
+    ):
+        """Greg PR #1095 review: the base-ref refresh is part of the
+        gates-on flow and must not execute a PR-controlled ``./git`` shim
+        before gate discovery starts.
+        """
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_base_tracking_ref,
+            _refresh_pr_base_ref,
+        )
+
+        remote = tmp_path / "remotes" / "o" / "r.git"
+        seed = tmp_path / "seed"
+        worktree = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "init", "--bare", "-q", "-b", "main", str(remote)],
+            check=True,
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=seed, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "base",
+                "-q",
+            ],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+        subprocess.run(["git", "clone", "-q", str(remote), str(worktree)], check=True)
+
+        shim = worktree / "git"
+        marker = worktree / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        md = {"base_ref": "main"}
+        _refresh_pr_base_ref(worktree, "o", "r", 1, md, quiet=True)
+
+        assert md.get("base_local_ref") == _pr_base_tracking_ref(1)
+        assert "base_ref_fetch_error" not in md
+        assert not marker.exists()

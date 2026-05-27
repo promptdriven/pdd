@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.vsix
+
+# setuptools-scm generated version file
+pdd/_version.py
+
 .tmp/
 .agentic_prompt*
 .agentic_output_*.txt
@@ -262,3 +266,4 @@ fake_test_output.py
 github_token
 diff_base.txt
 modules.txt
+.loop/

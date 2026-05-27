@@ -2,94 +2,80 @@ from __future__ import annotations
 
 import os
 import sys
-import subprocess
-from pathlib import Path
-from typing import List, Optional
+from unittest.mock import patch
 
-# Ensure the project root is in the path for imports
-# The module is located at pdd/ci_drift_heal.py
-project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+from rich.console import Console
 
-from pdd.ci_drift_heal import main, detect_drift, heal_module, _build_ci_env
+# Import the functions and data structures from the module
+from pdd.ci_drift_heal import (
+    DriftInfo,
+    commit_and_push,
+    detect_drift,
+    heal_module,
+    main,
+)
 
-def run_ci_auto_heal_example():
+console = Console()
+
+
+def demonstrate_drift_info() -> None:
+    """Demonstrate how DriftInfo represents a drifted module.
+    
+    DriftInfo is a dataclass used throughout ci_drift_heal to track the
+    state of a module that needs automated healing.
     """
-    Demonstrates the full lifecycle of a PDD CI Auto-Heal run.
-    
-    The process consists of:
-    1. Detection: Finding modules where code and prompts are out of sync.
-    2. Healing: Running 'pdd update' or 'pdd sync' to fix the drift.
-    3. Verification: Running structural and churn gates (internal to heal_module).
-    4. Commitment: Pushing successful fixes back to the repository.
-    """
-
-    # Setup environment for the example
-    # PDD_PATH is already set. We simulate a CI environment configuration.
-    os.environ["PDD_HEAL_PROMPT_CHURN_MAX_RATIO"] = "5.0"
-    os.environ["PDD_HEAL_INVARIANTS_SKIP"] = "fenced_blocks"  # Example of skipping a strict gate
-    
-    # Create a temporary directory for costs tracking
-    output_dir = Path("./output")
-    output_dir.mkdir(exist_ok=True)
-    cost_csv = output_dir / "example_costs.csv"
-
-    print("--- Scenario 1: Using the high-level main entry point ---")
-    # This is how you would typically call it from a CI script (e.g., GitHub Action)
-    # modules: List of basenames to check (None = all)
-    # budget_cap: Max dollars to spend on LLM calls (float)
-    # skip_ci: Adds [skip ci] to commit messages (bool)
-    # diff_base: Git ref to compare against for drift direction (string)
-    
-    # Note: We pass dummy args. In a real CI, diff_base might be 'origin/main...HEAD'
-    exit_code = main(
-        modules=["auth_logic", "data_parser"], 
-        budget_cap=2.50, 
-        skip_ci=True,
-        diff_base=None
+    drift = DriftInfo(
+        basename="demo_module",
+        language="python",
+        operation="update",
+        reason="Prompt changed without code changes",
+        prompt_path="prompts/demo_module_python.prompt",
+        code_path="pdd/demo_module.py",
+        estimated_cost=0.15
     )
-    print(f"Main execution returned exit code: {exit_code}")
+    console.print("[bold green]Created DriftInfo:[/bold green]")
+    console.print(f"  Basename: {drift.basename}")
+    console.print(f"  Operation: {drift.operation}")
+    console.print(f"  Reason: {drift.reason}")
 
-    print("\n--- Scenario 2: Granular control using detect_drift and heal_module ---")
+
+def demonstrate_mocked_main() -> None:
+    """Demonstrate the main entry point using mocked dependencies.
     
-    # 1. Detection Phase
-    # returns (prompt_drifts, example_drifts)
-    prompt_drifts, example_drifts = detect_drift(modules=None, diff_base=None)
+    Because ci_drift_heal orchestrates real git commands and subprocesses,
+    we mock the core Git and PDD subprocess logic here to safely show 
+    how the workflow executes.
+    """
+    console.print("\n[bold green]Running ci_drift_heal.main() with mocks...[/bold green]")
     
-    print(f"Detected {len(prompt_drifts)} prompt drifts and {len(example_drifts)} example drifts.")
+    # We mock detect_drift to return a dummy drift
+    dummy_drift = DriftInfo(
+        basename="mocked_module",
+        language="python",
+        operation="example",
+        reason="Mocked drift for example demonstration",
+        prompt_path="prompts/mocked_module_python.prompt",
+        code_path="pdd/mocked_module.py"
+    )
+    
+    # Patch out the heavy lifting functions so it runs safely in the example
+    with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [dummy_drift])), \
+         patch("pdd.ci_drift_heal.heal_module", return_value=True), \
+         patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+         patch("pdd.ci_drift_heal._repo_root", return_value=os.getcwd()):
+         
+         # Call the main entry point.
+         # In a real environment, this is invoked via: python -m pdd.ci_drift_heal
+         exit_code = main(
+             modules=["mocked_module"],  # Restrict healing to specific modules
+             budget_cap=5.0,             # Stop healing if LLM cost exceeds $5.00
+             skip_ci=True                # Prepend [skip ci] to the git commit message
+         )
+         console.print(f"[cyan]main() completed with exit code: {exit_code}[/cyan]")
 
-    # 2. Healing Phase (Individual modules)
-    if prompt_drifts:
-        # Prepare the standard CI environment dictionary
-        env = _build_ci_env(str(cost_csv))
-        
-        # Take the first detected drift for demonstration
-        target_drift = prompt_drifts[0]
-        print(f"Attempting to heal module: {target_drift.basename}")
-        
-        # heal_module returns:
-        # True: Success
-        # False: Failed gates or subprocess error
-        # None: Intentionally skipped by policy
-        success = heal_module(target_drift, env)
-        
-        if success:
-            print(f"Successfully healed {target_drift.basename}")
-        elif success is False:
-            print(f"Failed to heal {target_drift.basename} (likely tripped a safety gate)")
-        else:
-            print(f"Healing skipped for {target_drift.basename} based on configuration")
-
-    print("\n--- Cleanup ---")
-    if cost_csv.exists():
-        cost_csv.unlink()
-    print("Example run completed.")
 
 if __name__ == "__main__":
-    # Ensure we are in a git repo for the module to function correctly
-    try:
-        subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], 
-                       capture_output=True, check=True)
-        run_ci_auto_heal_example()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("This example must be run inside a Git repository.")
+    console.print("[bold]ci_drift_heal Example[/bold]")
+    console.print("=====================")
+    demonstrate_drift_info()
+    demonstrate_mocked_main()

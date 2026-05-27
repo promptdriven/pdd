@@ -1,11 +1,11 @@
-<pdd-reason>CLI wrapper for splitting a prompt into sub-prompt and modified-prompt with legacy flag support.</pdd-reason>
+<pdd-reason>CLI wrapper for splitting a prompt into sub-prompt and modified-prompt.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "split_main", "signature": "(ctx, input_prompt_file, input_code_file, example_code_file, output_sub, output_modified, legacy)", "returns": "Tuple[Dict[str, str], float, str]"}
+      {"name": "split_main", "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[Dict[str, str], float, str]", "returns": "Tuple[Dict[str, str], float, str]"}
     ]
   }
 }

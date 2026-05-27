@@ -1,0 +1,23 @@
+flowchart LR
+    subgraph Below["Below Threshold"]
+        direction TB
+        B1["1-2 components"] --> B2["Fixes converge"]
+        B2 --> B3["Ship"]
+        style B3 fill:#d4edda,stroke:#155724
+    end
+
+    subgraph Threshold["THE THRESHOLD"]
+        direction TB
+        T1["Enough components that\nfixing one probabilistically\nbreaks another"]
+        style T1 fill:#fff3cd,stroke:#856404,stroke-width:3px
+    end
+
+    subgraph Above["Above Threshold"]
+        direction TB
+        A1["5+ components"] --> A2["Fixes create\nnew regressions"]
+        A2 --> A3["Non-convergent\nloop"]
+        A3 --> A2
+        style A3 fill:#f8d7da,stroke:#dc3545
+    end
+
+    Below ~~~ Threshold ~~~ Above

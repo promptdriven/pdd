@@ -23,6 +23,7 @@ from pathlib import Path
 from pdd.agentic_test_orchestrator import (
     run_agentic_test_orchestrator,
     TEST_STEP_TIMEOUTS,
+    _setup_worktree,
 )
 
 
@@ -265,6 +266,99 @@ def test_resume_from_cached_state(mock_deps, default_args):
     assert "step5" in executed
 
 
+def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
+    """clean_restart should clear durable state and start from step 1."""
+    mocks = mock_deps
+    default_args["clean_restart"] = True
+    mocks["template"].side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_test_step9_submit_pr_LLM"
+        else "Mock prompt: {issue_content}"
+    )
+
+    stale_state = {
+        "last_completed_step": 4,
+        "step_outputs": {"1": "old", "2": "old", "3": "old", "4": "old"},
+        "total_cost": 0.4,
+        "model_used": "anthropic",
+    }
+    mocks["load"].return_value = (stale_state, 100)
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    with patch("pdd.agentic_test_orchestrator.post_step_comment_once") as mock_post_once:
+        success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    assert mocks["clear"].call_count >= 1
+    mocks["load"].assert_not_called()
+    assert "step1" in [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    assert any(c.args[3].get("clean_restart") is True for c in mocks["save"].call_args_list)
+    step17_calls = [
+        c for c in mocks["run"].call_args_list
+        if c.kwargs.get("label") == "step17"
+    ]
+    assert step17_calls
+    assert "clean=true" in step17_calls[0].kwargs["instruction"]
+    assert any(
+        c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
+        for c in mock_post_once.call_args_list
+    )
+
+
+def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
+    mock_deps, default_args
+):
+    """A normal resume after clean restart keeps clean worktree and PR behavior."""
+    mocks = mock_deps
+    mocks["template"].side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_test_step9_submit_pr_LLM"
+        else "Mock prompt: {issue_content}"
+    )
+    step_outputs = {str(step): f"cached step {step}" for step in range(1, 12)}
+    step_outputs["5.5"] = "cached enhanced plan"
+    mocks["load"].return_value = (
+        {
+            "last_completed_step": 11,
+            "step_outputs": step_outputs,
+            "total_cost": 1.1,
+            "model_used": "anthropic",
+            "clean_restart": True,
+        },
+        None,
+    )
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    step17_calls = [
+        c for c in mocks["run"].call_args_list
+        if c.kwargs.get("label") == "step17"
+    ]
+    assert step17_calls
+    assert "clean=true" in step17_calls[0].kwargs["instruction"]
+    assert any(c.args[3].get("clean_restart") is True for c in mocks["save"].call_args_list)
+
+
 def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
     """Issue #467: All-failed state should re-run from step 1."""
     mocks = mock_deps
@@ -346,6 +440,59 @@ def test_worktree_creation_failure(mock_deps, default_args):
 
     assert success is False
     assert "Failed to create worktree" in msg
+
+
+def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
+    """clean_restart must not base the test worktree on current HEAD."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        cmd = list(args)
+        calls.append(cmd)
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+            if "origin/main" in cmd:
+                result.stdout = "abc123\n"
+                return result
+            result.returncode = 128
+            return result
+        return result
+
+    with patch("pdd.agentic_test_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_test_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator._branch_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt_path, err = _setup_worktree(
+            tmp_path,
+            1,
+            quiet=True,
+            console=MagicMock(),
+            clean_restart=True,
+        )
+
+    assert err is None
+    assert wt_path == tmp_path / ".pdd" / "worktrees" / "test-issue-1"
+    assert [
+        "git",
+        "fetch",
+        "origin",
+        "+refs/heads/test/issue-1:refs/remotes/origin/test/issue-1",
+    ] in calls
+    adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+    assert adds, "expected git worktree add"
+    assert adds[-1][-1] == "abc123"
+    assert adds[-1][-1] != "HEAD"
+
+
+def test_submit_pr_prompt_uses_clean_restart_push_and_pr_update():
+    """Step 17 must handle old remote test branches during clean restart."""
+    prompt = Path("pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "git push --force-with-lease -u origin test/issue-{issue_number}" in prompt
+    assert "gh pr list --head test/issue-{issue_number}" in prompt
+    assert "gh pr edit <number>" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -961,3 +1108,125 @@ def test_test_orchestrator_check_hard_stop_patterns_functional():
     assert result is None, (
         "Test orchestrator step 3 casual mention must not trigger without STOP_CONDITION tag"
     )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The test orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with a composite-key
+    encoding (fractional step 5.5 and iterated manual-testing loop)."""
+
+    def test_success_path_posts_step_comment_once(self, mock_deps, default_args):
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False):
+            if label == "step4":
+                return (
+                    True,
+                    "<step_report>step 4</step_report>\nTEST_TYPE: api\nTEST_FRAMEWORK: pytest",
+                    0.1, "anthropic",
+                )
+            if label == "step12":
+                return (
+                    True,
+                    "<step_report>step 12</step_report>\nFILES_CREATED: tests/test_api.py",
+                    0.1, "anthropic",
+                )
+            if label == "step17":
+                return (
+                    True,
+                    "<step_report>step 17</step_report>\nPR Created: https://github.com/o/r/pull/10",
+                    0.1, "anthropic",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_posts_fallback_comment(
+        self, mock_deps, default_args
+    ):
+        """Steps that omit <step_report> still get a visible fallback comment."""
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False):
+            if label == "step4":
+                return (True, "TEST_TYPE: api", 0.1, "anthropic")
+            if label == "step12":
+                return (True, "FILES_CREATED: tests/test_api.py", 0.1, "anthropic")
+            if label == "step17":
+                return (True, "PR Created: https://github.com/o/r/pull/10", 0.1, "anthropic")
+            return (True, f"Output for {label} (no report block)", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        assert any(
+            "no `<step_report>` block returned by agent" in c.kwargs["body"]
+            and "Raw output retained in workflow state" in c.kwargs["body"]
+            for c in mock_post_once.call_args_list
+        )
+
+    def test_post_exception_does_not_break_run(self, mock_deps, default_args):
+        """Exceptions raised by the helper must be log-and-continue."""
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False):
+            if label == "step4":
+                return (
+                    True,
+                    "<step_report>step 4</step_report>\nTEST_TYPE: api",
+                    0.1, "anthropic",
+                )
+            if label == "step12":
+                return (
+                    True,
+                    "<step_report>step 12</step_report>\nFILES_CREATED: tests/test_api.py",
+                    0.1, "anthropic",
+                )
+            if label == "step17":
+                return (
+                    True,
+                    "<step_report>step 17</step_report>\nPR Created: https://github.com/o/r/pull/10",
+                    0.1, "anthropic",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from datetime import datetime
+from click.testing import CliRunner
 
 # Import the module under test
 from pdd import operation_log
@@ -370,6 +371,113 @@ def test_log_operation_decorator_failure(temp_pdd_env):
     assert len(entries) == 1
     assert entries[0]["success"] is False
     assert entries[0]["error"] == "Boom"
+
+def test_log_operation_decorator_failure_preserves_run_report(temp_pdd_env):
+    """Regression for issue #1057: ``clears_run_report=True`` must NOT erase the
+    existing run report when the decorated function raises.
+
+    Prior implementation cleared the report *before* invoking the wrapped
+    function, so a failed ``pdd example`` (and other commands that pass
+    ``clears_run_report=True``) silently destroyed prior runtime verification
+    state even though no new example output was produced.
+    """
+    basename, lang = "foo", "python"
+
+    # Pre-seed a run report describing the pre-mutation runtime state.
+    operation_log.ensure_meta_dir()
+    rr_path = operation_log.get_run_report_path(basename, lang)
+    with open(rr_path, "w", encoding="utf-8") as f:
+        f.write('{"tests": "previous-pass"}')
+    assert rr_path.exists()
+
+    @operation_log.log_operation(
+        operation="example",
+        updates_fingerprint=True,
+        clears_run_report=True,
+    )
+    def failing_example(prompt_file: str):
+        raise RuntimeError("generation failed")
+
+    prompt_path = f"prompts/{basename}_{lang}.prompt"
+    with pytest.raises(RuntimeError, match="generation failed"):
+        failing_example(prompt_file=prompt_path)
+
+    # The existing run report must remain intact because no new example
+    # output was produced. clears_run_report fires only on success.
+    assert rr_path.exists(), (
+        "clears_run_report must not erase runtime verification state on failure"
+    )
+    with open(rr_path, encoding="utf-8") as f:
+        assert '"previous-pass"' in f.read()
+
+    # Fingerprint must also NOT be written for a failed run.
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    assert not fp_path.exists(), (
+        "updates_fingerprint must not run on failure"
+    )
+
+
+def test_example_command_failure_preserves_run_report_and_fingerprint(temp_pdd_env):
+    """Regression for issue #1057: failed pdd example must not finalize metadata."""
+    import importlib
+
+    generate_module = importlib.import_module("pdd.commands.generate")
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        with open("prompts/foo_python.prompt", "w", encoding="utf-8") as f:
+            f.write("p")
+        with open("foo.py", "w", encoding="utf-8") as f:
+            f.write("c")
+
+        operation_log.save_run_report("foo", "python", {"tests": "previous-pass"})
+        rr_path = operation_log.get_run_report_path("foo", "python")
+        fp_path = operation_log.get_fingerprint_path("foo", "python")
+
+        with patch.object(
+            generate_module,
+            "context_generator_main",
+            side_effect=RuntimeError("example generation failed"),
+        ), patch.object(generate_module, "handle_error"):
+            result = runner.invoke(
+                generate_module.example,
+                ["prompts/foo_python.prompt", "foo.py"],
+                obj={"quiet": True},
+            )
+
+    assert result.exit_code == 1
+    assert rr_path.exists()
+    assert not fp_path.exists()
+
+
+def test_log_operation_decorator_success_clears_run_report(temp_pdd_env):
+    """Successful commands with ``clears_run_report=True`` must still remove a
+    pre-existing run report so a fresh fingerprint never coexists with a stale
+    per-module run report (issue #1057)."""
+    basename, lang = "bar", "python"
+
+    operation_log.ensure_meta_dir()
+    rr_path = operation_log.get_run_report_path(basename, lang)
+    with open(rr_path, "w", encoding="utf-8") as f:
+        f.write('{"tests": "stale"}')
+    assert rr_path.exists()
+
+    @operation_log.log_operation(
+        operation="example",
+        updates_fingerprint=True,
+        clears_run_report=True,
+    )
+    def ok_example(prompt_file: str):
+        return "ok", 0.0, "mock"
+
+    prompt_path = f"prompts/{basename}_{lang}.prompt"
+    ok_example(prompt_file=prompt_path)
+
+    assert not rr_path.exists(), (
+        "clears_run_report must remove the stale run report on success"
+    )
+
 
 def test_log_operation_decorator_no_identity(temp_pdd_env):
     """Test decorator when module identity cannot be inferred."""
@@ -808,3 +916,29 @@ def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_en
         warning_args = str(mock_logger.warning.call_args)
         assert "badmod" in warning_args
         assert "python" in warning_args
+
+
+def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(temp_pdd_env):
+    """
+    Regression for issue #1057: if a stale run report survives clear_run_report(),
+    the decorator must not write a fresh fingerprint next to stale runtime state.
+    """
+    operation_log.save_run_report("demo", "python", {"success": True})
+    run_report_path = operation_log.get_run_report_path("demo", "python")
+    assert run_report_path.exists()
+
+    @operation_log.log_operation(
+        operation="generate",
+        clears_run_report=True,
+        updates_fingerprint=True,
+    )
+    def successful_command(prompt_file):
+        return "ok", False, 0.0, "model"
+
+    with patch("pdd.operation_log.os.remove", lambda _path: None), patch(
+        "pdd.operation_log.save_fingerprint"
+    ) as mock_save_fingerprint:
+        successful_command(prompt_file="prompts/demo_python.prompt")
+
+    assert run_report_path.exists()
+    mock_save_fingerprint.assert_not_called()

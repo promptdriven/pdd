@@ -49,6 +49,9 @@ class TestAuthLoginSlowDownE2E:
     @pytest.fixture
     def mock_env(self, tmp_path, monkeypatch):
         """Set up required environment variables and mock JWT cache."""
+        monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setattr("pdd.get_jwt_token._is_noninteractive", lambda: False)
         monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test-firebase-key")
         monkeypatch.setenv("GITHUB_CLIENT_ID", "test-github-client-id")
         monkeypatch.setenv("PDD_ENV", "local")
@@ -56,10 +59,27 @@ class TestAuthLoginSlowDownE2E:
         # Mock JWT cache file location
         jwt_cache = tmp_path / ".pdd" / "jwt_cache"
         jwt_cache.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("pdd.get_jwt_token.JWT_CACHE_FILE", jwt_cache)
         monkeypatch.setattr("pdd.commands.auth.JWT_CACHE_FILE", jwt_cache)
         monkeypatch.setattr("pdd.auth_service.JWT_CACHE_FILE", jwt_cache)
+        monkeypatch.setattr(
+            "pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            "pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token",
+            lambda self, refresh_token: True,
+        )
 
         return {"jwt_cache": jwt_cache, "tmp_path": tmp_path}
+
+    def _invoke_mocked_login(self, runner, cli):
+        """Run auth login as an explicit interactive simulation."""
+        return runner.invoke(
+            cli.cli,
+            ["auth", "login", "--no-browser"],
+            env={"CI": None, "PDD_NO_INTERACTIVE": None},
+        )
 
     def _create_github_device_code_response(self, interval: int = 5) -> MagicMock:
         """Create a mock response for GitHub's device code request."""
@@ -184,7 +204,7 @@ class TestAuthLoginSlowDownE2E:
         with patch("pdd.get_jwt_token.requests.post", side_effect=mock_post):
             with patch("pdd.get_jwt_token.asyncio.sleep", side_effect=fast_sleep):
                 with patch("pdd.get_jwt_token.webbrowser.open", return_value=True):
-                    result = runner.invoke(cli.cli, ["auth", "login", "--no-browser"])
+                    result = self._invoke_mocked_login(runner, cli)
 
         # With the fix, this should succeed
         # Without the fix, this would fail with: "An unexpected error occurred: 'interval'"
@@ -238,7 +258,7 @@ class TestAuthLoginSlowDownE2E:
         with patch("pdd.get_jwt_token.requests.post", side_effect=mock_post):
             with patch("pdd.get_jwt_token.asyncio.sleep", side_effect=fast_sleep):
                 with patch("pdd.get_jwt_token.webbrowser.open", return_value=True):
-                    result = runner.invoke(cli.cli, ["auth", "login", "--no-browser"])
+                    result = self._invoke_mocked_login(runner, cli)
 
         # With the fix, should succeed
         # Without the fix, would fail with: "Token error: 429 Client Error"
@@ -299,7 +319,7 @@ class TestAuthLoginSlowDownE2E:
         with patch("pdd.get_jwt_token.requests.post", side_effect=mock_post):
             with patch("pdd.get_jwt_token.asyncio.sleep", side_effect=fast_sleep):
                 with patch("pdd.get_jwt_token.webbrowser.open", return_value=True):
-                    result = runner.invoke(cli.cli, ["auth", "login", "--no-browser"])
+                    result = self._invoke_mocked_login(runner, cli)
 
         # Verify the CLI handles the complex sequence and succeeds
         assert result.exit_code == 0, (
@@ -352,7 +372,7 @@ class TestAuthLoginSlowDownE2E:
         with patch("pdd.get_jwt_token.requests.post", side_effect=mock_post):
             with patch("pdd.get_jwt_token.asyncio.sleep", side_effect=fast_sleep):
                 with patch("pdd.get_jwt_token.webbrowser.open", return_value=True):
-                    result = runner.invoke(cli.cli, ["auth", "login", "--no-browser"])
+                    result = self._invoke_mocked_login(runner, cli)
 
         # With the fix, the CLI should retry and eventually succeed
         # Without the fix, it would fail immediately with "Token error: 429..."

@@ -356,7 +356,7 @@ def test_web_second_pass_executes_after_deferral(reset_firecrawl_cache) -> None:
     """Second pass without recursion should execute the deferred web scrape."""
     prompt = "Start <web>https://example.com</web> End"
     mock_firecrawl = MagicMock()
-    mock_firecrawl.Firecrawl.return_value.scrape_url.return_value = {'markdown': "# Content"}
+    mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
@@ -577,7 +577,7 @@ def test_process_xml_web_tag(reset_firecrawl_cache) -> None:
     # Since Firecrawl is imported inside the function, we need to patch the module
     mock_firecrawl = MagicMock()
     mock_app = MagicMock()
-    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
     mock_firecrawl.Firecrawl.return_value = mock_app
 
     # Patch the import at the module level
@@ -594,7 +594,7 @@ def test_process_xml_web_tag_firecrawl_app_fallback(reset_firecrawl_cache) -> No
     expected_output = f"This is a test {mock_markdown_content}"
 
     mock_app = MagicMock()
-    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
     mock_firecrawl = MagicMock()
     del mock_firecrawl.Firecrawl
     mock_firecrawl.FirecrawlApp.return_value = mock_app
@@ -604,6 +604,25 @@ def test_process_xml_web_tag_firecrawl_app_fallback(reset_firecrawl_cache) -> No
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
             assert result == expected_output
             mock_firecrawl.FirecrawlApp.assert_called_once_with(api_key='fake_api_key')
+
+
+def test_process_xml_web_tag_legacy_scrape_url_fallback(reset_firecrawl_cache) -> None:
+    """Pre-v4 firecrawl-py clients exposed scrape_url() only; preprocess should fall back."""
+    mock_markdown_content = "# Legacy scrape_url content"
+    prompt = "This is a test <web>https://example.com</web>"
+    expected_output = f"This is a test {mock_markdown_content}"
+
+    mock_app = MagicMock(spec=['scrape_url'])  # no scrape attribute
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl = MagicMock()
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
+            mock_app.scrape_url.assert_called_once()
+
 
 # Test for handling missing Firecrawl API key
 def test_process_xml_web_tag_missing_api_key(reset_firecrawl_cache) -> None:
@@ -648,7 +667,7 @@ def test_process_xml_web_tag_empty_content(reset_firecrawl_cache) -> None:
     # Create a mock Firecrawl class that returns empty response
     mock_firecrawl_class = MagicMock()
     mock_instance = mock_firecrawl_class.return_value
-    mock_instance.scrape_url.return_value = {}  # No markdown key
+    mock_instance.scrape.return_value = {}  # No markdown key
 
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
@@ -668,7 +687,7 @@ def test_process_xml_web_tag_scraping_error(reset_firecrawl_cache) -> None:
     # Create a mock Firecrawl class that raises an exception
     mock_firecrawl_class = MagicMock()
     mock_instance = mock_firecrawl_class.return_value
-    mock_instance.scrape_url.side_effect = Exception(error_message)
+    mock_instance.scrape.side_effect = Exception(error_message)
 
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
@@ -689,7 +708,7 @@ def test_process_web_tag_invalid_ttl_env_no_crash(reset_firecrawl_cache) -> None
 
     mock_firecrawl = MagicMock()
     mock_app = MagicMock()
-    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
     mock_firecrawl.Firecrawl.return_value = mock_app
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
@@ -2817,16 +2836,55 @@ def test_split_prompt_include_selectors_resolve_without_fallback(monkeypatch, ca
 
 
 def test_prompt_files_do_not_select_implementation_symbols_from_example_files() -> None:
-    """Symbol selectors must target files that actually define the symbol."""
+    """Symbol selectors must target files that actually define the symbol.
+
+    The original `forbidden_selectors` list pinned the case from Greg's #1354
+    review where prompts selected symbols not present in the example files.
+    A selector is only forbidden as long as the named example file does not
+    define a matching top-level `def`/`class`. We resolve each tuple at test
+    time so adding a real `def preprocess(...)` wrapper to
+    `context/preprocess_example.py` (Issue #814 codex iter-7 fix) lifts the
+    ban automatically — selectors that DO resolve are not regressions.
+    """
     from pathlib import Path as _P
+    import ast as _ast
 
     repo_root = _P(__file__).resolve().parent.parent
-    forbidden_selectors = (
-        '<include select="def:preprocess">context/preprocess_example.py',
-        '<include select="def:llm_invoke">context/llm_invoke_example.py',
-        '<include select="class:ContentSelector">context/content_selector_example.py',
-        '<include select="class:IncludeQueryExtractor">context/include_query_extractor_example.py',
+
+    candidate_selectors = (
+        ("def:preprocess", "context/preprocess_example.py", "preprocess", "def"),
+        ("def:llm_invoke", "context/llm_invoke_example.py", "llm_invoke", "def"),
+        (
+            "class:ContentSelector",
+            "context/content_selector_example.py",
+            "ContentSelector",
+            "class",
+        ),
+        (
+            "class:IncludeQueryExtractor",
+            "context/include_query_extractor_example.py",
+            "IncludeQueryExtractor",
+            "class",
+        ),
     )
+
+    def _has_top_level_symbol(file_path: _P, name: str, kind: str) -> bool:
+        try:
+            tree = _ast.parse(file_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, SyntaxError):
+            return False
+        node_type = _ast.FunctionDef if kind == "def" else _ast.ClassDef
+        return any(
+            isinstance(node, node_type) and node.name == name
+            for node in tree.body
+        )
+
+    forbidden_selectors = tuple(
+        f'<include select="{selector}">{example_rel}'
+        for selector, example_rel, name, kind in candidate_selectors
+        if not _has_top_level_symbol(repo_root / example_rel, name, kind)
+    )
+
     offenders = [
         str(path.relative_to(repo_root))
         for path in (repo_root / "pdd" / "prompts").glob("*.prompt")

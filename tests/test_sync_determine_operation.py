@@ -1988,6 +1988,29 @@ class TestIsWorkflowComplete:
         
         assert _is_workflow_complete(paths) is False  # Requires test file
         assert _is_workflow_complete(paths, skip_tests=True) is True  # Skip test requirement
+
+    def test_workflow_complete_with_both_skip_flags_needs_no_run_report(self, tmp_path, monkeypatch):
+        """When tests and verify are skipped, file existence is enough."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        code_file = tmp_path / "test.py"
+        example_file = tmp_path / "test_example.py"
+        code_file.write_text("def add(a, b): return a + b")
+        example_file.write_text("from test import add")
+
+        paths = {
+            'code': code_file,
+            'example': example_file,
+            'test': tmp_path / "test_test.py"
+        }
+
+        assert _is_workflow_complete(
+            paths,
+            skip_tests=True,
+            skip_verify=True,
+            basename="test",
+            language="python",
+        ) is True
     
     def test_workflow_incomplete(self, tmp_path):
         """Test workflow is incomplete when required files are missing."""
@@ -2824,7 +2847,6 @@ class TestAllFilesExistWorkflowIncomplete:
             f"Expected 'nothing' when workflow complete, "
             f"got '{decision.operation}' with reason: {decision.reason}"
         )
-
 
 # --- Part 6: PDD Doctrine - Derived Artifacts Tests ---
 
@@ -3932,6 +3954,40 @@ class TestFingerprintIncludeDependencies:
         deps = extract_include_deps(prompt_path)
         assert len(deps) == 1, f"Expected 1 include dep, got {len(deps)}"
         assert str(dep_file) in deps or any("shared_types.py" in k for k in deps)
+
+    @pytest.mark.parametrize(
+        "attributed_include",
+        [
+            '<include select="def:helper">utils.py</include>',
+            '<include query="utility helpers">utils.py</include>',
+            '<include select="def:helper" mode="interface">utils.py</include>',
+        ],
+        ids=["select-attr", "query-attr", "select-plus-mode"],
+    )
+    def test_extract_include_deps_finds_attributed_includes(
+        self, pdd_test_environment, attributed_include
+    ):
+        """extract_include_deps must match attributed <include …> forms.
+
+        ``auto_include`` emits ``<include select="…">`` and
+        ``<include query="…">`` directives; if the extractor's regex only
+        matched bare ``<include>`` the fingerprint would lose those deps
+        and dependency changes would go undetected by sync.
+        """
+        prompts_dir = pdd_test_environment / "prompts"
+        dep_file = pdd_test_environment / "utils.py"
+        create_file(dep_file, "def helper(): pass\n")
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, f"Build module.\n{attributed_include}\n")
+
+        deps = extract_include_deps(prompt_path)
+        assert len(deps) == 1, (
+            f"Expected 1 dep for {attributed_include!r}, got {deps!r}"
+        )
+        assert any("utils.py" in k for k in deps), (
+            f"Expected utils.py in deps keys, got {list(deps)}"
+        )
 
     def test_extract_include_deps_finds_backtick_includes(self, pdd_test_environment):
         """extract_include_deps should find ```<file>``` backtick includes."""

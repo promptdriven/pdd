@@ -1,17 +1,26 @@
+<pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
+
+<pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
+
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
 
 <include>context/python_preamble.prompt</include>
 
 % Requirements
 - Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
+- Implement `pdd checkup lint ...` as the primary command to lint prompts and stories.
+  The sub-invocation may use extra-argument dispatch, but `pdd checkup --help` and
+  `pdd checkup lint --help` must both show the appropriate help output.
 - Params:
   - `target` arg (positional, optional — required for issue mode)
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
+  - `--start-step` recovery override. Accept only `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, or `8`; pass the parsed int/float as `start_step_override` to the legacy `run_agentic_checkup` path.
   - `--no-github-state` flag
   - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against module prompt `<include>` tags; mutually exclusive with `target` and `--pr`/`--issue`)
   - `--project-root` (path, used with `--validate-arch-includes`)
   - `--strict` flag (used with `--validate-arch-includes`)
+  - `--help` / `-h` eager flag when needed for alias-aware help dispatch
   - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; requires `--issue`, mutually exclusive with `target`)
   - `--issue <issue-url>` (PR-mode companion to `--pr` — the source issue the PR is meant to resolve)
   - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop)
@@ -19,29 +28,37 @@
   - `--reviewers` (legacy comma-separated role order, default `codex,claude`; first role is reviewer, second role is fixer)
   - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
+  - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
+  - `--fixer-fallback` (optional secondary fixer role invoked once if the primary fixer cannot address reviewer findings; must differ from the resolved fixer, active reviewer, and originally configured reviewer)
   - `--max-review-rounds` (int, default `5`)
-  - `--max-review-cost` (float, default `10.0`)
+  - `--max-review-cost` (float, default `50.0`)
   - `--max-review-minutes` (float, default `90.0`)
   - `--require-all-reviewers-clean/--no-require-all-reviewers-clean` (default true)
-  - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit reviewer failures as `degraded` instead of `failed`, but never marks them clean or continues mutation)
+  - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit/auth/network/sandbox reviewer failures as `degraded` instead of `failed`, but never marks the active reviewer clean or continues mutation without a completed review)
+  - `--fallback-reviewer-on-failure` (flag, default off; when the primary reviewer ends in `failed` or `missing`, run a second review pass using the fixer's identity as a fallback reviewer; only `failed`/`missing` are eligible — `degraded` means reduced quality and must not silently lose signal; on a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, but the primary's original failure is preserved in `reviewer_status_details` with a `superseded_by_fallback="true"` marker and rendered in the `### Reviewer Diagnostics` subsection)
   - `--require-final-fresh-review/--no-require-final-fresh-review` (default true)
   - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
   - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
+  - `--no-gates` (flag, default off; disable the Issue #1092 deterministic-gate enforcement layer — the review loop discovers a conservative set of fast local checks (prettier --check, PR-range git diff --check, a non-mutating Python syntax check via builtin `compile()`, optional ruff/black/mypy/tsc) and refuses a clean LLM verdict if any of them fail on the worktree; `--no-gates` reverts to LLM-only verdicts)
+  - `--gate-timeout` (float, default `60.0`; per-gate wall-clock cap in seconds — a gate exceeding the cap is recorded as a runner-side failure and treated as a blocker finding rather than blocking the loop)
+  - `--gate-allow` (repeatable string, default `()`; forward-compatibility hook for opting extra gate names into discovery beyond the conservative v1 set — discovery remains allowlist-only; this argument is threaded through so the CLI surface and discovery surface can co-evolve)
 - Signature returns `Optional[Tuple[str, float, str]]`.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.
+  - If `--start-step` is combined with `--review-loop`: reject it; the override only applies to the legacy checkup orchestrator.
   - If `--review-loop` is set: require PR mode (`--pr` and `--issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values are positive (`--max-review-rounds >= 1`, cost/minutes > 0).
   - If `--pr` or `--issue` is set: BOTH must be present; `target` must be `None`; validate `--pr` via `_parse_pr_url(pr_url)` (mention "GitHub pull-request URL" in error); validate `--issue` via `_is_github_issue_url(issue_url_opt)` (mention "GitHub issue URL" in error); use `issue_url_opt` as the effective issue URL.
   - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").
-- Force `--no-fix` when `--pr` is set and `--review-loop` is NOT set (legacy PR verification still cannot push fixes). Print a warning to stderr explaining why and how to re-invoke if fixes were intended.
+- Do not force `--no-fix` in PR mode. `pdd checkup --pr <pr-url> --issue <issue-url>` must preserve the user's fix intent so the orchestrator can run the full steps 1-7, commit generated fixes, and push them back to the same PR branch. `--no-fix` remains an explicit user option for verification-only PR checks.
 - `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
-- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states)` where `pr_url` is `None` in non-PR modes.
+- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, reviewer_fallback=reviewer_fallback, fixer_fallback=fixer_fallback, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, fallback_reviewer_on_failure=fallback_reviewer_on_failure, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states, enable_gates=not no_gates, gate_timeout=gate_timeout, gate_allow=tuple(gate_allow), start_step_override=start_step_override)` where `pr_url` is `None` in non-PR modes. The CLI exposes `--fixer-fallback` (string, default `None`) as the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically because of Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the review loop invokes the configured fallback fixer once before breaking. The fallback must differ from `--fixer` and `--reviewer` to preserve reviewer/fixer role independence.
 - If not quiet, `click.echo` exactly these lines:
   - `Status: Success|Failed`
   - `Message: {message}`
   - `Cost: ${cost:.4f}`
   - `Model: {model}`
+- **Model suppression**: Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
 - If `not success`: raise `click.exceptions.Exit(1)`; else return `(message, cost, model)`.
 - Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error(exception, "checkup", ctx.obj.get("quiet", False))` and return `None`.
 

@@ -11,13 +11,25 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from pdd.agentic_sync_runner import (
-    AsyncSyncRunner,
+    AsyncSyncRunner as _AsyncSyncRunner,
     ModuleState,
     build_dep_graph_from_architecture,
     _format_duration,
     _is_nonfatal_warning,
     _parse_cost_from_csv,
 )
+
+
+class AsyncSyncRunner(_AsyncSyncRunner):
+    """Top-level subclass of the real `AsyncSyncRunner`.
+
+    Exists so static-resolution tooling (e.g. the prompt-include selector
+    resolver invoked by auto-heal) can find a `class AsyncSyncRunner` symbol
+    in this example file and bind ``<include>`` references to it instead of
+    rewriting them as `Invalid selector` placeholders. Behavior is identical
+    to `pdd.agentic_sync_runner.AsyncSyncRunner` — no methods are
+    overridden.
+    """
 
 
 def main():

@@ -9,7 +9,7 @@ JOB_RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 JOB_NAME="pdd-test-${JOB_RUN_ID}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-POLL_INTERVAL="${POLL_INTERVAL:-10}"
+POLL_INTERVAL="${POLL_INTERVAL:-5}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-7200}"  # Real LLM shards can exceed 30 minutes.
 
 # Portable timeout (macOS lacks GNU timeout)
@@ -24,6 +24,35 @@ _with_timeout() {
     kill "$sleep_pid" 2>/dev/null || true
     wait "$sleep_pid" 2>/dev/null || true
     return "$rc"
+}
+
+# Snapshot pre-existing multiprocessing PIDs so we can later identify gcloud-leaked workers.
+_pre_gcloud_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
+trap 'cleanup_leaked_gcloud_workers' EXIT
+
+# Sweep gcloud's leaked multiprocessing workers that this script spawned.
+# Scope is bounded by the pre-script snapshot: only workers that didn't exist before
+# the script started are killed. The PPID==1 filter was dropped because gcloud's
+# workers don't always re-parent to init by the time the EXIT trap fires — some
+# parents in gcloud's pool stay alive past the gcloud-cli command exit and only
+# die later. Snapshot-and-diff alone is narrow enough to avoid killing unrelated
+# workers from other processes that pre-existed this script.
+cleanup_leaked_gcloud_workers() {
+    [ -z "${_pre_gcloud_workers+x}" ] && return 0
+    local now_workers new_workers pid
+    local -a term_pids=()
+    now_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
+    [ -z "${now_workers}" ] && return 0
+    new_workers="$(comm -13 <(printf '%s\n' "${_pre_gcloud_workers}") <(printf '%s\n' "${now_workers}") 2>/dev/null || true)"
+    [ -z "${new_workers}" ] && return 0
+    while IFS= read -r pid; do
+        [ -z "${pid}" ] && continue
+        term_pids+=("${pid}")
+    done < <(printf '%s\n' "${new_workers}")
+    [ "${#term_pids[@]}" -eq 0 ] && return 0
+    kill -TERM "${term_pids[@]}" 2>/dev/null || true
+    sleep 1
+    kill -KILL "${term_pids[@]}" 2>/dev/null || true
 }
 
 # ── Prepare source path allowlist ─────────────────────────────────────────
@@ -43,6 +72,7 @@ SOURCE_PATHS=(
     ci
     scripts
     utils
+    .github
     .sync-config.yml
     architecture.json
     README.md
@@ -87,6 +117,30 @@ if [ -f "${PARENT_PDDRC}" ]; then
     tar -C /tmp -rf /tmp/pdd-source.tar .pddrc_pddcloud
     rm /tmp/.pddrc_pddcloud
 fi
+
+# .git is excluded from the source tarball, so setuptools-scm cannot detect
+# the version inside the container. Reproduce setuptools-scm's default
+# `guess-next-dev` scheme with `local_scheme = "no-local-version"` (see
+# pyproject.toml [tool.setuptools_scm]) so tests/test_version.py keeps
+# accepting the stamped value (strict PEP 440, no local segment).
+_pdd_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || true)"
+_pdd_tag="${_pdd_tag:-0.0.0}"
+_pdd_distance="$(git rev-list --count "v${_pdd_tag}..HEAD" 2>/dev/null || echo 0)"
+case "${_pdd_distance}" in ''|*[!0-9]*) _pdd_distance=0 ;; esac
+if [ "${_pdd_distance}" -eq 0 ]; then
+    PDD_PACKAGE_VERSION="${_pdd_tag}"
+else
+    _pdd_major="${_pdd_tag%%.*}"
+    _pdd_rest="${_pdd_tag#*.}"
+    _pdd_minor="${_pdd_rest%%.*}"
+    _pdd_patch="${_pdd_rest#*.}"
+    case "${_pdd_patch}" in ''|*[!0-9]*) _pdd_patch=0 ;; esac
+    _pdd_next_patch=$((_pdd_patch + 1))
+    PDD_PACKAGE_VERSION="${_pdd_major}.${_pdd_minor}.${_pdd_next_patch}.dev${_pdd_distance}"
+fi
+printf '%s\n' "${PDD_PACKAGE_VERSION}" > /tmp/.pdd-package-version
+tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
+rm /tmp/.pdd-package-version
 
 gzip -f /tmp/pdd-source.tar
 
@@ -134,7 +188,7 @@ rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
-trap 'rm -rf "${STREAMING_DIR}"' EXIT
+trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
 
 TOTAL=77  # 76 (spot) + 1 (standard)
 STREAM_FAILURES=0
@@ -152,8 +206,20 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
 
     # ── Stream completed task results ─────────────────────────────────
     _with_timeout 15 gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
-    COMPLETED=$(find "${STREAMING_DIR}" -maxdepth 1 -name "task_*.json" | wc -l | tr -d ' ')
-    COMPLETED=${COMPLETED:-0}
+
+    # Count completed tasks. Tasks pre-create task_N.json with
+    # status="preempted" at startup so SIGKILL leaves a diagnosable marker;
+    # those provisional files must NOT count as completed and must NOT trigger
+    # the failure-reporting loop until the job is in a terminal state (because
+    # write_result will overwrite them with the real result on normal exit).
+    COMPLETED=0
+    for json_file in "${STREAMING_DIR}"/task_*.json; do
+        [ -f "${json_file}" ] || continue
+        [ "$(wc -c < "${json_file}")" -lt 10 ] && continue
+        _stream_status=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
+        [ "${_stream_status}" = "preempted" ] && continue
+        COMPLETED=$((COMPLETED + 1))
+    done
 
     # Check for new failures
     for json_file in "${STREAMING_DIR}"/task_*.json; do
@@ -163,9 +229,14 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
         basename_file=$(basename "${json_file}")
         # Skip if already seen
         [ -f "${STREAMING_DIR}/seen_${basename_file}" ] && continue
-        touch "${STREAMING_DIR}/seen_${basename_file}"
 
         TASK_STATUS=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
+        # Skip provisional preempted markers — write_result will overwrite
+        # them with the real result if/when the task completes. Don't mark
+        # them seen, so a later pass picks up the real status.
+        [ "${TASK_STATUS}" = "preempted" ] && continue
+        touch "${STREAMING_DIR}/seen_${basename_file}"
+
         if [ "${TASK_STATUS}" != "passed" ]; then
             STREAM_FAILURES=$((STREAM_FAILURES + 1))
             TASK_NUM=$(echo "${basename_file}" | sed 's/task_\([0-9]*\)\.json/\1/')

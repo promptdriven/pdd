@@ -356,9 +356,15 @@ class TestPreflightDriftHeal:
         # Verify subprocess was invoked with sys.executable -m pdd (venv parity)
         # + correct cwd. Bare ["pdd", ...] would resolve via PATH and could pick
         # up a different version.
+        # The preflight heal passes `--sync-metadata` so finalization goes
+        # through the shared `run_metadata_sync` orchestrator (issue #871);
+        # without it the fingerprint is left stale and the same drift is
+        # re-detected on the next preflight pass.
         import sys
         call = m_run.call_args_list[0]
-        assert call.args[0] == [sys.executable, "-m", "pdd", "update", "pdd/mod_a.py"]
+        assert call.args[0] == [
+            sys.executable, "-m", "pdd", "update", "--sync-metadata", "pdd/mod_a.py",
+        ]
         assert str(call.kwargs.get("cwd", "")) == str(worktree)
 
     def test_multiple_drift_each_independently_tracked(self, worktree: Path) -> None:

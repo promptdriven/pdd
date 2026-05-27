@@ -6,6 +6,10 @@ from click import Context, UsageError
 from rich.console import Console
 from pathlib import Path # Import Path
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(450)
+
 # Import DEFAULT_STRENGTH
 from pdd import DEFAULT_STRENGTH
 

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 
-from .architecture_registry import extract_modules
+from .architecture_registry import BUNDLED_SAMPLE_TOPLEVEL_DIRS, extract_modules
 from .sync_order import extract_includes_from_file, extract_module_from_include
 
 
@@ -30,24 +30,10 @@ def _module_prompt_include_target(include_path: str) -> Optional[str]:
         return None
     return extract_module_from_include(p)
 
-# Top-level directories in the PDD repo that ship sample architecture (not app code).
-_BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str] = frozenset(
-    {"examples", "example_project", "example_workspace", "staging"}
-)
 
-
-def _arch_path_under_skipped_sample_tree(
-    arch_path: Path,
-    project_root: Path,
-    skip_roots: FrozenSet[str],
-) -> bool:
-    if not skip_roots:
-        return False
-    try:
-        rel = arch_path.resolve().relative_to(project_root.resolve())
-    except ValueError:
-        return False
-    return len(rel.parts) >= 2 and rel.parts[0] in skip_roots
+# Re-export for backwards compatibility with external imports that still
+# reference this name from the validation module.
+_BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str] = BUNDLED_SAMPLE_TOPLEVEL_DIRS
 
 
 def collect_architecture_include_validation_warnings(
@@ -61,17 +47,15 @@ def collect_architecture_include_validation_warnings(
     Each file is validated with its **parent directory** as the project root for
     resolving ``prompts/…`` paths, so nested packages (e.g. ``services/api/``) work.
 
-    When ``skip_bundled_sample_arch`` is true (default), skips trees like
+    When ``skip_bundled_sample_arch`` is true (default), discovery skips trees like
     ``examples/`` used in the PDD repository so routine sync stays focused on app code.
     """
     from .architecture_registry import find_architecture_for_project
 
-    root = project_root.resolve()
-    skip = _BUNDLED_SAMPLE_TOPLEVEL_DIRS if skip_bundled_sample_arch else frozenset()
     warnings: List[str] = []
-    for arch_path in find_architecture_for_project(project_root):
-        if _arch_path_under_skipped_sample_tree(arch_path, root, skip):
-            continue
+    for arch_path in find_architecture_for_project(
+        project_root, skip_bundled_sample_arch=skip_bundled_sample_arch
+    ):
         try:
             with open(arch_path, "r", encoding="utf-8") as f:
                 data = json.load(f)

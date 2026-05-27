@@ -1,3 +1,5 @@
+<pdd-reason>CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.</pdd-reason>
+
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
@@ -88,7 +90,13 @@
     - Use `get_pdd_file_paths()` from `sync_determine_operation` to resolve module file paths
     - **Fingerprint check**: If not force mode, call `sync_determine_operation()` to check if module is already synced; skip if operation is "nothing"
     - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`. Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc` `generate_output_path`), not an explicit user `--output` flag, so front-matter `output:` should still take precedence over the .pddrc default.
-    - **Architecture-conformance retry (#866)**: Wrap the `code_generator_main()` call in a retry loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). On `ArchitectureConformanceError` (raised from `code_generator_main`), add `exc.total_cost` to `pre_cost`, remember `exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only if budget remains. Track the missing-symbol set across attempts; if the next attempt fails with the **identical** missing-symbol set, abort the loop (no progress) instead of looping forever. After every attempt, restore the previous value of `PDD_REPAIR_DIRECTIVE` (pop it if it was unset before) in a `finally` so the env never leaks. When the loop exhausts, set `last_exc.total_cost` to the accumulated failed-attempt cost, call `build_conformance_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner`, and `print()` the structured block to **stderr** (this includes `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint), then re-raise `last_exc` so the existing CLI error path runs. This keeps the plain `pdd sync <module>` diagnostic in parity with `agentic_sync_runner.py` and matches the `sync_orchestration` `generate` operation. Do **not** drop or simplify this loop when regenerating: it is the source-of-truth contract for #865/#866.
+    - **Architecture-conformance / public-surface / test-churn retry (#866, #1012)**: Wrap the `code_generator_main()` call in a retry loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). The loop catches three typed exceptions raised from `code_generator_main`: `ArchitectureConformanceError`, `PublicSurfaceRegressionError`, and `TestChurnError`. For each, add `exc.total_cost` to `pre_cost`, remember `exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only if budget remains.
+        - Track the failure signature across attempts: sorted `missing_symbols` for conformance, sorted `removed_symbols` for public-surface, `(round(churn_ratio, 2), pre_line_count)` for test-churn. If the next attempt fails with the **identical** signature, abort the loop (no progress) instead of looping forever. Test-churn additionally caps at ONE repair attempt — the additive-only directive either lands the first try or stays stuck.
+        - **`.pddrc` / `strength` stability across retries (#1012)**: in-process retries reuse the same resolved `ctx.obj` (`strength`, `temperature`, `context_override`, `context_config`) that was set up before the first `code_generator_main` call, so retries cannot silently switch model or context. Do NOT re-resolve `.pddrc` mid-loop. (The cross-subprocess pinning needed when `agentic_sync_runner` retries a child process is handled separately in `agentic_sync_runner_python.prompt` Req 9b.)
+        - **Pre-generation snapshot (#1012)**: the public-surface gate's pre-generation snapshot is taken inside `code_generator_main` itself — it reads the existing code file from disk before overwriting it (see `code_generator_main` Req 5b). `sync_main` does NOT need to pre-read or hand off those bytes; the in-process retry loop only needs to keep the resolved output path stable across attempts (handled by the `.pddrc` / strength pinning above). First-time generation is silently exempt because the on-disk file does not yet exist.
+        - After every attempt, restore the previous value of `PDD_REPAIR_DIRECTIVE` (pop it if it was unset before) in a `finally` so the env never leaks.
+        - When the loop exhausts, set `last_exc.total_cost` to the accumulated failed-attempt cost, then call the appropriate hard-failure builder from `pdd.agentic_sync_runner` — `build_conformance_hard_failure_from_error`, `build_public_surface_hard_failure_from_error`, or `build_test_churn_hard_failure_from_error` — and `print()` the structured block to **stderr** (this includes the typed header, the relevant `expected:`/`found:`/`missing:` or `removed:` or `ratio:`/`threshold:` fields, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint). Re-raise `last_exc` so the existing CLI error path runs.
+        - This keeps the plain `pdd sync <module>` diagnostic in parity with `agentic_sync_runner.py` and matches the `sync_orchestration` `generate` operation. Do **not** drop or simplify this loop when regenerating: it is the source-of-truth contract for #865/#866/#1012.
     - **Phase 2 (One-session sync)**: Call `run_one_session_sync()` from `one_session_sync` to run example/crash/verify/test in a single agent session
     - Merge costs: add `pre_cost` (including failed conformance attempts and the final successful generate attempt) to the one-session result's `total_cost`; pass only `remaining_budget - pre_cost` into the one-session phase.
     - If code generation fails (code file still missing), return failure without proceeding to one-session
@@ -114,9 +122,13 @@
     - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
     - **Auto-submit on success**: After sync_orchestration returns success for a language (and not local mode), call `_auto_submit_example()` to submit the prompt+code pair to PDD Cloud, same as one-session mode. Use `get_pdd_file_paths()` to resolve the module file paths needed for submission. Wrap in try/except and log warnings on failure (do not abort sync).
 
-11. **User Feedback** (unless quiet=True):
+11. User Feedback (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)
-    - Display final results table (language, status, cost, details)
+    - Display final results table (Language, Status, Cost (USD), Details)
+    - **Details column**: Use `result.get("summary")` as the primary value.
+    - **Robust fallback**: If `summary` is missing, empty, or contains forbidden values ("None", "No details."), use "No sync operations required; selected target is already synchronized." for Success and "Step failed" for Failure (use `error` if available and not a forbidden value).
+    - **Forbidden values**: NEVER display the literal strings "None" or "No details." in the Details column, even if they are returned in `summary` or `error` by upstream components.
+    - Suppress the 'Model:' line in any execution summary if the model name is empty, 'unknown', or 'N/A' (case-insensitive).
     - Total time elapsed, total cost, overall status
 
 % Helper Functions (implement as internal functions):
@@ -205,10 +217,10 @@
     <include select="def:get_jwt_token,def:get_cached_jwt">context/auth_service_example.py</include>
 </pdd.auth_service>
 <pdd.code_generator_main>
-    <include select="class:ArchitectureConformanceError,def:code_generator_main">pdd/code_generator_main.py</include>
+    <include select="class:ArchitectureConformanceError,class:PublicSurfaceRegressionError,class:TestChurnError,def:code_generator_main">pdd/code_generator_main.py</include>
 </pdd.code_generator_main>
 <pdd.agentic_sync_runner>
-    <include select="def:build_conformance_hard_failure_from_error">pdd/agentic_sync_runner.py</include>
+    <include select="def:build_conformance_hard_failure_from_error,def:build_public_surface_hard_failure_from_error,def:build_test_churn_hard_failure_from_error">pdd/agentic_sync_runner.py</include>
 </pdd.agentic_sync_runner>
 
 % CLI command documentation:

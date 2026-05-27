@@ -91,15 +91,30 @@ def test_empty_argv_skips_duplicate_check(enable_guard, monkeypatch):
     load.assert_not_called()
 
 
+def test_dry_run_skips_duplicate_check(enable_guard, monkeypatch):
+    """Read-only audit commands must be repeatable and should not block."""
+    ctx = _ctx(sub="sync")
+    load = mock.Mock(return_value=_prev_base())
+    find_root = mock.Mock(return_value=FAKE_ROOT)
+    monkeypatch.setattr(dg, "normalized_argv", lambda _argv=None: ["sync", "--dry-run"])
+    monkeypatch.setattr(dg, "find_project_root", find_root)
+    monkeypatch.setattr(dg, "load_last_run", load)
+
+    dg.check_duplicate_before_subcommand(ctx)
+
+    find_root.assert_not_called()
+    load.assert_not_called()
+
+
 def test_duplicate_noninteractive_raises_usage_error(enable_guard, monkeypatch):
     monkeypatch.setattr(dg.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(dg.sys.stdout, "isatty", lambda: False)
     monkeypatch.setattr(dg, "find_project_root", lambda: FAKE_ROOT)
-    prev = _prev_base()
+    prev = _prev_base(argv=["sync", "mod"])
     ctx = _ctx()
     with (
         mock.patch.object(dg, "load_last_run", return_value=prev),
-        mock.patch.object(dg, "normalized_argv", return_value=["sync", "mod", "--dry-run"]),
+        mock.patch.object(dg, "normalized_argv", return_value=["sync", "mod"]),
         mock.patch.object(dg, "_run_fingerprint", return_value="samefp"),
         mock.patch.object(dg.time, "time", return_value=1_700_000_030.0),
     ):
@@ -263,6 +278,23 @@ def test_record_after_guarded_skips_empty_argv(enable_guard, monkeypatch):
     save = mock.Mock()
     find_root = mock.Mock(return_value=Path("/w"))
     monkeypatch.setattr(dg, "normalized_argv", lambda _argv=None: [])
+    monkeypatch.setattr(dg, "find_project_root", find_root)
+    monkeypatch.setattr(dg, "save_last_run", save)
+
+    dg.record_after_guarded_command(ctx)
+
+    find_root.assert_not_called()
+    save.assert_not_called()
+
+
+def test_record_after_guarded_skips_dry_run(enable_guard, monkeypatch):
+    ctx = mock.MagicMock()
+    ctx.obj = {"invoked_subcommands": ["sync"]}
+    ctx.invoked_subcommands = []
+
+    save = mock.Mock()
+    find_root = mock.Mock(return_value=Path("/w"))
+    monkeypatch.setattr(dg, "normalized_argv", lambda _argv=None: ["sync", "--dry-run"])
     monkeypatch.setattr(dg, "find_project_root", find_root)
     monkeypatch.setattr(dg, "save_last_run", save)
 

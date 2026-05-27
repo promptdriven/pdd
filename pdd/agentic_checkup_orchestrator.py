@@ -14,18 +14,25 @@ branch; the worktree is created before the first loop iteration.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from rich.console import Console
 
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
+    _sanitize_comment_body,
     clear_workflow_state,
+    extract_step_report,
     load_workflow_state,
+    normalize_step_comments_state,
+    post_pr_comment,
+    post_step_comment,
+    post_step_comment_once,
     run_agentic_task,
     save_workflow_state,
     substitute_template_variables,
@@ -58,6 +65,103 @@ STEP_ORDER: List[Union[int, float]] = [1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7, 8]
 # Maximum number of build-fix-verify loop iterations before giving up.
 MAX_FIX_VERIFY_ITERATIONS = 3
 
+# Issue #1116: when the remote PR head advances mid-checkup we discard the
+# stale work and restart the inner orchestrator against the new head. The
+# restart budget is bounded so a PR that keeps moving cannot make us loop
+# forever; once exhausted we surface a clear failure and the operator
+# reruns once the branch stabilizes.
+MAX_PR_HEAD_REFRESHES = 2
+
+
+class _PRHeadAdvancedRestart(Exception):
+    """Signal that the remote PR head moved mid-checkup.
+
+    Raised by the inner orchestrator (``_run_agentic_checkup_orchestrator_
+    inner``) when a refetch of the PR metadata reveals the head SHA
+    advanced after we began verifying. The outer wrapper
+    (``run_agentic_checkup_orchestrator``) catches the exception,
+    consumes one slot of the refresh budget, and re-enters the inner
+    against the new head — bounded by :data:`MAX_PR_HEAD_REFRESHES`.
+
+    Carries the cost and model accumulated by the inner before the
+    restart so the outer can produce an honest cumulative-cost return.
+
+    External review Finding 2: also carries the inner's ``step_comments``
+    set so the outer wrapper can replay it into the next iteration and
+    prevent duplicate per-step issue comments (the iteration's
+    composite-key dedup set would otherwise reset to empty after
+    ``clear_workflow_state`` wipes the stored ``step_comments`` field).
+    """
+
+    def __init__(
+        self,
+        old_sha: str,
+        new_sha: str,
+        reason: str,
+        cost_so_far: float = 0.0,
+        model: str = "unknown",
+        step_comments: Optional[Set[int]] = None,
+    ) -> None:
+        super().__init__(
+            f"PR head advanced from {old_sha[:8]} to {new_sha[:8]}: {reason}"
+        )
+        self.old_sha = old_sha
+        self.new_sha = new_sha
+        self.reason = reason
+        self.cost_so_far = cost_so_far
+        self.model = model
+        self.step_comments = set(step_comments) if step_comments else set()
+
+
+def _refresh_count_path(cwd: Path, pr_number: int) -> Path:
+    """Sidecar path holding the per-PR consumed-restart count.
+
+    Stored under ``.pdd/checkup-pr-{pr_number}/pr_head_refreshes`` rather
+    than the workflow-state file so a Ctrl-C + manual resume can't
+    accidentally unbound the rerun budget — the inner discards cached
+    step state on SHA mismatch already (identity guard), so we don't
+    need to couple this to workflow-state semantics.
+    """
+    return cwd / ".pdd" / f"checkup-pr-{pr_number}" / "pr_head_refreshes"
+
+
+def _load_persisted_refresh_count(cwd: Path, pr_number: int) -> int:
+    """Read the persisted restart count for *pr_number*; ``0`` on miss."""
+    path = _refresh_count_path(cwd, pr_number)
+    try:
+        if path.exists():
+            return max(0, int(path.read_text(encoding="utf-8").strip() or "0"))
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _save_persisted_refresh_count(
+    cwd: Path, pr_number: int, count: int
+) -> None:
+    """Best-effort persist of the restart count.
+
+    Failures are swallowed: the in-process counter in the outer wrapper
+    is authoritative for the current run; persistence is belt-and-
+    suspenders for cross-process resumes.
+    """
+    path = _refresh_count_path(cwd, pr_number)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(count), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _clear_persisted_refresh_count(cwd: Path, pr_number: int) -> None:
+    """Remove the sidecar after a clean run so the next checkup starts fresh."""
+    path = _refresh_count_path(cwd, pr_number)
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
 
 def _next_step(current: Union[int, float]) -> Union[int, float]:
     """Return the step that follows *current* in ``STEP_ORDER``.
@@ -83,13 +187,19 @@ def _next_step(current: Union[int, float]) -> Union[int, float]:
 # Git helpers
 # ---------------------------------------------------------------------------
 
-def _get_git_root(cwd: Path) -> Optional[Path]:
+def _get_git_root(
+    cwd: Path,
+    *,
+    git_cmd: str = "git",
+    git_env: Optional[Dict[str, str]] = None,
+) -> Optional[Path]:
     """Get the root directory of the git repository."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            [git_cmd, "rev-parse", "--show-toplevel"],
             cwd=cwd,
             capture_output=True,
+            env=git_env,
             text=True,
             check=True,
         )
@@ -161,6 +271,141 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
 
 
+def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
+    """Return a PR worktree branch name scoped to this checkout root."""
+    root_scope = hashlib.sha1(str(git_root.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"checkup/pr-{pr_number}-{root_scope}"
+
+
+def _pr_base_tracking_ref(pr_number: int) -> str:
+    """Return the refreshed local ref used for PR merge-base diffs."""
+    return f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
+
+
+def _trusted_gate_git(worktree: Path) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+    """Resolve git for gate-layer subprocesses without trusting worktree PATH."""
+    from .checkup_gates import _build_subprocess_env, _resolve_trusted_git
+
+    git_cmd = _resolve_trusted_git(worktree)
+    if not git_cmd:
+        return None, None
+    return git_cmd, _build_subprocess_env(worktree)
+
+
+def _refresh_pr_base_ref(
+    worktree: Path,
+    pr_owner: str,
+    pr_repo: str,
+    pr_number: int,
+    pr_metadata: Dict[str, str],
+    quiet: bool,
+) -> None:
+    """Fetch the PR base branch into a dedicated local ref for diff scoping."""
+    pr_metadata.pop("base_local_ref", None)
+    pr_metadata.pop("base_ref_fetch_error", None)
+    base_ref = str(pr_metadata.get("base_ref") or "").strip()
+    if not base_ref:
+        return
+
+    git_cmd, git_env = _trusted_gate_git(worktree)
+    if not git_cmd or git_env is None:
+        pr_metadata["base_ref_fetch_error"] = (
+            "trusted git binary not found on sanitized PATH"
+        )
+        return
+
+    git_root = _get_git_root(worktree, git_cmd=git_cmd, git_env=git_env)
+    if not git_root:
+        pr_metadata["base_ref_fetch_error"] = "worktree is not a git repository"
+        return
+
+    remote_target = _resolve_pr_remote(
+        git_root,
+        pr_owner,
+        pr_repo,
+        git_cmd=git_cmd,
+        git_env=git_env,
+    )
+    if remote_target is None:
+        remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
+
+    base_local_ref = _pr_base_tracking_ref(pr_number)
+    try:
+        # Bounded timeout so a stalled transport (auth prompt, dead
+        # remote, transient hang) cannot hold the review loop forever.
+        # The deterministic-gate layer's own ``gate_timeout`` does not
+        # apply to this fetch because the fetch runs BEFORE gate
+        # discovery. 60s matches the default per-gate timeout so the
+        # operator sees a single consistent upper bound.
+        subprocess.run(
+            [
+                git_cmd,
+                "fetch",
+                remote_target,
+                f"refs/heads/{base_ref}:{base_local_ref}",
+                "--force",
+            ],
+            cwd=git_root,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        # Surface as ``base_ref_fetch_error`` so the review loop's
+        # ``_enforce_gates_before_clean`` converts it into a synthetic
+        # ``gate:base-ref`` blocker finding (iter-19 fail-closed path).
+        # Without this branch a timeout would leak as an unhandled
+        # ``TimeoutExpired`` from ``_refresh_pr_base_ref`` and the loop
+        # would abort with a stack trace instead of a clean refusal.
+        pr_metadata["base_ref_fetch_error"] = (
+            f"git fetch timed out after 60s for base ref {base_ref!r}"
+        )
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: PR base ref fetch timed out: "
+                f"{pr_metadata['base_ref_fetch_error']}[/yellow]"
+            )
+        return
+    except subprocess.CalledProcessError as exc:
+        # Env-token redaction alone is insufficient.
+        # Git stderr on a failed fetch can carry
+        # credentials that did NOT come from the process env — a
+        # credential-helper-supplied PAT, a GitHub App installation
+        # token minted at runtime, a remote URL with embedded
+        # `https://<user>:<token>@host` basic-auth, or a `Bearer`
+        # header from a verbose transport. The console.print and
+        # `pr_metadata["base_ref_fetch_error"]` surfaces both flow
+        # into long-term log capture (rich console → stdout → CI
+        # log) and the rendered checkup report. Scrub through the
+        # full regex catch-all BEFORE either surface sees the
+        # string. Keep the env-token `_redact_secret` pass for
+        # belt-and-braces: regex patterns are best-effort and a
+        # token that does not match a known shape (e.g. a 16-char
+        # custom internal token) still falls through; the explicit
+        # secret subtraction guarantees the env value is gone.
+        raw_err = (exc.stderr or str(exc)).strip()
+        safe_err = _scrub_secrets(raw_err)
+        token = _github_token_from_env()
+        if token:
+            safe_err = _redact_secret(safe_err, token)
+        # The remote URL fallback `https://github.com/<owner>/<repo>.git`
+        # is non-sensitive, but a configured remote NAME may also be
+        # echoed verbatim. Names are not secret. URLs WITH embedded
+        # credentials would have been caught above by the regex
+        # patterns (`ghp_`/`ghs_`/`gho_`/…) and the env-token strip.
+        pr_metadata["base_ref_fetch_error"] = safe_err or "git fetch failed"
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: failed to refresh PR base ref {base_ref}: "
+                f"{pr_metadata['base_ref_fetch_error']}[/yellow]"
+            )
+        return
+
+    pr_metadata["base_local_ref"] = base_local_ref
+
+
 def _copy_uncommitted_changes(
     git_root: Path,
     worktree_path: Path,
@@ -230,6 +475,9 @@ def _resolve_pr_remote(
     git_root: Path,
     pr_owner: str,
     pr_repo: str,
+    *,
+    git_cmd: str = "git",
+    git_env: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Find a configured git remote whose URL points at ``pr_owner/pr_repo``.
 
@@ -244,9 +492,10 @@ def _resolve_pr_remote(
     """
     try:
         result = subprocess.run(
-            ["git", "remote", "-v"],
+            [git_cmd, "remote", "-v"],
             cwd=git_root,
             capture_output=True,
+            env=git_env,
             check=True,
             text=True,
         )
@@ -273,6 +522,292 @@ def _resolve_pr_remote(
     return None
 
 
+def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
+    """Lazy wrapper around the review-loop PR metadata helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _fetch_pr_metadata as fetch,
+    )
+
+    return fetch(owner, repo, pr_number, include_changed_files=True)
+
+
+def _commit_and_push_if_changed(
+    worktree: Path,
+    pr_metadata: Dict[str, str],
+    message: str,
+) -> Tuple[bool, str]:
+    """Lazy wrapper around the shared PR-head commit/push helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _commit_and_push_if_changed as commit_and_push,
+    )
+
+    return commit_and_push(worktree, pr_metadata, message)
+
+
+def _is_remote_advanced_push_error(error: str) -> bool:
+    """Lazy wrapper around the shared remote-advanced push-error detector.
+
+    Re-exported at module scope so the orchestrator's Checkpoint B can
+    recognize the generic ``Failed to push fixes to PR branch: <stderr>``
+    surface — which is what the push helper returns once its internal
+    3-attempt retry loop exhausts on remote-advance.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _is_remote_advanced_push_error as detector,
+    )
+
+    return detector(error)
+
+
+def _git_changed_files(worktree: Path) -> List[str]:
+    """Lazy wrapper around the review-loop changed-files helper.
+
+    Re-exported at module scope so tests can patch
+    ``pdd.agentic_checkup_orchestrator._git_changed_files`` without
+    monkey-patching across module boundaries.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _git_changed_files as fn,
+    )
+
+    return fn(worktree)
+
+
+def _git_rev_parse_head(worktree: Path) -> str:
+    """Lazy wrapper around the review-loop HEAD-SHA helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _git_rev_parse_head as fn,
+    )
+
+    return fn(worktree)
+
+
+def _check_prompt_source_guard(
+    worktree: Path, changed_files: List[str]
+) -> Optional[str]:
+    """Lazy wrapper around the review-loop prompt-source guard (clause 10a).
+
+    PDD's source-of-truth contract is that prompts generate code. Bare PR-mode
+    used to push fixer-generated edits directly to the PR head without ever
+    running this guard, so a code-only patch could land and silently violate
+    #1063 until the next ``pdd sync`` overwrote the bot's edits. Re-exporting
+    the review-loop guard here lets the orchestrator enforce the same policy
+    BEFORE the push (matching the review-loop call site).
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _check_prompt_source_guard as fn,
+    )
+
+    return fn(worktree, changed_files)
+
+
+def _check_architecture_registry_edit_guard(
+    worktree: Path, changed_files: List[str]
+) -> Optional[str]:
+    """Lazy wrapper around the review-loop architecture-registry guard (clause 10b).
+
+    Sibling of ``_check_prompt_source_guard``. Catches the coordinated
+    rename + prompt delete + registry rewrite shape (issue #1081) that
+    10a alone cannot detect.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _check_architecture_registry_edit_guard as fn,
+    )
+
+    return fn(worktree, changed_files)
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    """Lazy wrapper around the review-loop secret-redaction helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _redact_secret as fn,
+    )
+
+    return fn(text, secret)
+
+
+def _github_token_from_env() -> str:
+    """Lazy wrapper around the review-loop env-token helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _github_token_from_env as fn,
+    )
+
+    return fn()
+
+
+def _scrub_secrets(text: str) -> str:
+    """Lazy wrapper around the review-loop regex secret scrubber.
+
+    `_refresh_pr_base_ref` previously redacted
+    only the env-derived GitHub token before publishing fetch stderr to the
+    console and `pr_metadata`. Tokens that travel via git credential helper,
+    a GitHub App installation token minted at runtime, or an embedded
+    `x-access-token:...@github.com` in a remote URL would all slip through.
+    Pipe the stderr through this regex catch-all (covers `ghp_`/`ghs_`/`gho_`,
+    `sk-...`, `Bearer`/`Authorization` headers, AWS access keys, Slack
+    tokens, and the common `https://<user>:<token>@host` URL shape) before
+    any console.print or `pr_metadata` storage.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _scrub_secrets as fn,
+    )
+
+    return fn(text)
+
+
+def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
+    """Parse Step 7's JSON report and decide whether the checkup may proceed.
+
+    The Step 7 prompt (``agentic_checkup_step7_verify_LLM.prompt``) requires
+    a structured JSON report as the last block of output, shaped like::
+
+        {{
+          "success": true/false,
+          "issue_aligned": true/false,    # PR mode only — REQUIRED
+          "issues": [
+            {{"severity": "critical|medium|low", "fixed": true/false, ...}},
+            ...
+          ],
+          ...
+        }}
+
+    Returns ``(passed, failure_reason)`` where ``passed`` is True iff:
+
+    * ``success`` is ``True``;
+    * in PR mode, ``issue_aligned`` is ``True``;
+    * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
+
+    Fails closed: if no JSON object can be extracted, returns
+    ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
+    orchestrator never proceeds on an ambiguous verdict (Finding 1 of the
+    round-3 external review). Reuses the JSON-extraction helper defined in
+    :mod:`pdd.agentic_checkup` via a lazy import to avoid a circular module
+    dependency at orchestrator import time.
+    """
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    if not step7_output or not step7_output.strip():
+        return (
+            False,
+            "Step 7 verdict JSON could not be parsed: empty step 7 output.",
+        )
+
+    payload = _extract_json_from_text(step7_output)
+    if payload is None:
+        snippet = step7_output.strip()
+        if len(snippet) > 200:
+            snippet = snippet[:200] + "..."
+        return (
+            False,
+            f"Step 7 verdict JSON could not be parsed (fail-closed): {snippet}",
+        )
+
+    if payload.get("success") is not True:
+        return (
+            False,
+            f"Step 7 reported success=false. "
+            f"Message: {payload.get('message') or '<no message>'}",
+        )
+
+    if pr_mode and payload.get("issue_aligned") is not True:
+        return (
+            False,
+            f"Step 7 reported issue_aligned=false — PR does not resolve the "
+            f"source issue. Message: "
+            f"{payload.get('message') or '<no message>'}",
+        )
+
+    issues = payload.get("issues")
+    if isinstance(issues, list):
+        unfixed_critical: List[str] = []
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            severity = str(issue.get("severity", "")).lower()
+            if severity != "critical":
+                continue
+            if issue.get("fixed") is True:
+                continue
+            module = issue.get("module") or issue.get("file") or "<unknown>"
+            desc = (
+                issue.get("description")
+                or issue.get("fix_description")
+                or "<no description>"
+            )
+            unfixed_critical.append(f"{module}: {desc}")
+        if unfixed_critical:
+            joined = "; ".join(unfixed_critical[:5])
+            more = "" if len(unfixed_critical) <= 5 else (
+                f" (+{len(unfixed_critical) - 5} more)"
+            )
+            return (
+                False,
+                f"Step 7 reported unfixed critical issues: {joined}{more}",
+            )
+
+    return True, ""
+
+
+def _format_pr_mode_final_report(step7_output: str, push_message: str) -> str:
+    """Build the trusted post-push PR/issue comment body."""
+    body = step7_output.strip()
+    push_message = push_message.strip()
+    if push_message:
+        body = f"{body}\n\n### PR Push Status\n{push_message}"
+    return _sanitize_comment_body(body)
+
+
+def _refresh_pr_context_from_worktree(
+    context: Dict[str, str],
+    worktree_path: Path,
+) -> None:
+    """Re-load project context from the PR worktree.
+
+    ``run_agentic_checkup`` loads architecture.json / .pddrc from the
+    *pre-worktree* checkout before the orchestrator runs (round-5
+    Finding 3). When ``pdd checkup --pr`` checks out the PR head into
+    ``.pdd/worktrees/checkup-pr-<n>``, any architecture/config changes
+    the PR makes are invisible to downstream prompts unless we refresh
+    the context here.
+
+    Overwrites ``project_root``, ``architecture_json``, and
+    ``pddrc_content`` in place. Falls back to the canonical "missing"
+    string when the worktree lacks either file — stale caller content
+    must not leak through.
+
+    Imports are lazy because :mod:`agentic_checkup` imports this module
+    at top level; eager imports would form a cycle.
+    """
+    import json as _json  # pylint: disable=import-outside-toplevel
+
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _escape_format_braces,
+        _load_pddrc_content,
+    )
+    from .agentic_sync import (  # pylint: disable=import-outside-toplevel
+        _find_project_root,
+        _load_architecture_json,
+    )
+
+    pr_project_root = _find_project_root(worktree_path)
+    context["project_root"] = str(pr_project_root)
+
+    try:
+        architecture, _arch_path = _load_architecture_json(pr_project_root)
+    except Exception:  # pylint: disable=broad-except
+        architecture = None
+    if architecture:
+        raw_arch_json_str = _json.dumps(architecture, indent=2)
+    else:
+        raw_arch_json_str = "No architecture.json available."
+    context["architecture_json"] = _escape_format_braces(raw_arch_json_str)
+
+    raw_pddrc_content = _load_pddrc_content(pr_project_root)
+    context["pddrc_content"] = _escape_format_braces(raw_pddrc_content)
+
+
 def _setup_pr_worktree(
     cwd: Path,
     pr_owner: str,
@@ -297,7 +832,7 @@ def _setup_pr_worktree(
 
     worktree_rel_path = Path(".pdd") / "worktrees" / f"checkup-pr-{pr_number}"
     worktree_path = git_root / worktree_rel_path
-    branch_name = f"checkup/pr-{pr_number}"
+    branch_name = _pr_worktree_branch_name(git_root, pr_number)
 
     # 1. Clean up existing worktree at path
     if worktree_path.exists():
@@ -333,8 +868,15 @@ def _setup_pr_worktree(
         )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+        # Redact any GH token that git may echo back from a tokenized remote
+        # URL (e.g. when callers seed ``https://x-access-token:...@github.com``
+        # into the resolved remote). Matches the push-failure redaction at
+        # ``checkup_review_loop._commit_and_push_if_changed``.
+        token = _github_token_from_env()
+        safe_err = _redact_secret(err_msg.strip(), token) if token else err_msg.strip()
+        safe_remote = _redact_secret(remote_target, token) if token else remote_target
         return None, (
-            f"Failed to fetch PR #{pr_number} from {remote_target}: {err_msg.strip()}. "
+            f"Failed to fetch PR #{pr_number} from {safe_remote}: {safe_err}. "
             f"Confirm the PR exists and you have read access to "
             f"{pr_owner}/{pr_repo}."
         )
@@ -445,6 +987,171 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+def _is_provider_failure(output: str) -> bool:
+    """Return true when the agent runner exhausted every provider."""
+    return "All agent providers failed" in output
+
+
+def _is_step_timeout_failure(output: str) -> bool:
+    """Return true when a step failed because the agent process timed out."""
+    return bool(
+        re.search(
+            r"(Timeout expired|TimeoutExpired|agent(?:ic)? execution timed out|Agent timed out|step \d+(?:\.\d+)? timed out)",
+            output or "",
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _format_step_abort_message(step_num: Union[int, float], output: str) -> str:
+    """Format a no-fix hard-stop message with the real failure class."""
+    if _is_step_timeout_failure(output):
+        return (
+            f"Aborting after Step {step_num}: agent execution timed out "
+            "before the step could complete"
+        )
+    if _is_provider_failure(output):
+        return f"Aborting after Step {step_num}: agent providers unavailable"
+    return f"Aborting after Step {step_num}: step failed"
+
+
+def _format_pr_changed_files_for_prompt(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, str]] = None,
+) -> str:
+    """Return a concise merge-base changed-file summary for PR-mode prompts."""
+    base_candidates: List[str] = []
+    api_changed_files = (
+        str((pr_metadata or {}).get("api_changed_files") or "").strip()
+        if pr_metadata is not None
+        else ""
+    )
+    api_changed_files_full = (
+        str((pr_metadata or {}).get("api_changed_files_full") or "").strip()
+        if pr_metadata is not None
+        else ""
+    )
+    artifact_note = ""
+    if api_changed_files_full:
+        artifact_rel = Path(".pdd") / "checkup-context" / "pr-changed-files-api.txt"
+        try:
+            artifact_path = worktree / artifact_rel
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(api_changed_files_full + "\n", encoding="utf-8")
+            artifact_note = (
+                "\nFull API changed-file list artifact: "
+                f"{artifact_rel.as_posix()}"
+            )
+        except OSError:
+            artifact_note = "\nFull API changed-file list artifact: unavailable"
+    api_fallback = (
+        "Source: GitHub PR files API\n" + api_changed_files + artifact_note
+        if api_changed_files
+        else ""
+    )
+    git_cmd, git_env = _trusted_gate_git(worktree)
+    if not git_cmd or git_env is None:
+        return api_fallback or (
+            "PR changed files unavailable: trusted git binary was not found "
+            "on the sanitized PATH. Run targeted tests conservatively."
+        )
+    if pr_metadata is not None:
+        base_ref = str(pr_metadata.get("base_ref") or "").strip()
+        if base_ref:
+            base_local_ref = str(pr_metadata.get("base_local_ref") or "").strip()
+            if base_local_ref:
+                base_candidates.append(base_local_ref)
+            else:
+                if api_fallback:
+                    return api_fallback
+                fetch_error = str(pr_metadata.get("base_ref_fetch_error") or "").strip()
+                reason = f" Fetch error: {fetch_error}" if fetch_error else ""
+                return (
+                    "PR changed files unavailable: PR base ref "
+                    f"'{base_ref}' was not refreshed into a local tracking ref."
+                    f"{reason} Do not use stale origin/{base_ref}; run targeted "
+                    "tests conservatively or refresh the PR base ref."
+                )
+        else:
+            if api_fallback:
+                return api_fallback
+            return (
+                "PR changed files unavailable: PR base metadata is missing. "
+                "Do not use stale origin/main; run targeted tests conservatively "
+                "or refresh PR metadata."
+            )
+    else:
+        base_candidates.extend([
+            "origin/main",
+            "origin/master",
+            "main",
+            "master",
+        ])
+
+    seen_bases: Set[str] = set()
+    for base in base_candidates:
+        if not base or base in seen_bases:
+            continue
+        seen_bases.add(base)
+        try:
+            verify = subprocess.run(
+                [git_cmd, "rev-parse", "--verify", base],
+                cwd=worktree,
+                capture_output=True,
+                env=git_env,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if verify.returncode != 0:
+            continue
+
+        try:
+            diff = subprocess.run(
+                [
+                    git_cmd,
+                    "diff",
+                    "--name-status",
+                    "--find-renames",
+                    f"{base}...HEAD",
+                ],
+                cwd=worktree,
+                capture_output=True,
+                env=git_env,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if diff.returncode != 0:
+            continue
+
+        lines: List[str] = []
+        for raw_line in diff.stdout.splitlines():
+            parts = [part.strip() for part in raw_line.split("\t") if part.strip()]
+            if len(parts) < 2:
+                continue
+            status = parts[0]
+            if status.startswith("R") and len(parts) >= 3:
+                path = f"{parts[1]} -> {parts[2]}"
+            else:
+                path = parts[-1]
+            lines.append(f"- {status}: {path}")
+
+        if lines:
+            return "Base: " + base + "\n" + "\n".join(lines)
+        return f"Base: {base}\nNo changed files found against this base."
+
+    if api_fallback:
+        return api_fallback
+
+    tried = ", ".join(seen_bases) if seen_bases else "none"
+    return (
+        "PR changed files unavailable: no local PR base ref could be resolved "
+        f"(tried: {tried}). Do not infer PR scope from HEAD~1; run targeted "
+        "tests conservatively or fetch the PR base ref."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal: run a single step
 # ---------------------------------------------------------------------------
@@ -505,7 +1212,7 @@ def _run_single_step(
 # ---------------------------------------------------------------------------
 
 
-def run_agentic_checkup_orchestrator(
+def _run_agentic_checkup_orchestrator_inner(
     issue_url: str,
     issue_content: str,
     repo_owner: str,
@@ -526,6 +1233,12 @@ def run_agentic_checkup_orchestrator(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_number: Optional[int] = None,
+    test_scope: str = "full",
+    start_step_override: Optional[Union[int, float]] = None,
+    # External review (issue #1116). Both default to "off"; set only by
+    # the outer wrapper on restart iterations.
+    _force_skip_state_load: bool = False,
+    _carried_step_comments: Optional[Set[int]] = None,
 ) -> Tuple[bool, str, float, str]:
     """Orchestrate the 8-step agentic checkup workflow.
 
@@ -539,8 +1252,16 @@ def run_agentic_checkup_orchestrator(
         (success, final_message, total_cost, model_used)
     """
     pr_mode = pr_url is not None and pr_number is not None
+    if test_scope not in ("full", "targeted"):
+        raise ValueError(
+            f"test_scope must be 'full' or 'targeted', got {test_scope!r}"
+        )
+    pr_test_scope = test_scope if pr_mode else "full"
     if not quiet:
-        console.print(f"[bold]Running checkup for issue #{issue_number}: \"{issue_title}\"[/bold]")
+        console.print(
+            f"[bold]Running checkup for issue #{issue_number}: "
+            f"\"{issue_title}\"[/bold]"
+        )
 
     # Context accumulation — grows across steps.
     context: Dict[str, str] = {
@@ -561,7 +1282,19 @@ def run_agentic_checkup_orchestrator(
         "pr_owner": pr_owner or "",
         "pr_repo": pr_repo or "",
         "pr_number": str(pr_number) if pr_number is not None else "",
+        "pr_push_output": "",
+        "pr_changed_files": "",
+        "pr_test_scope": pr_test_scope,
+        "manual_start_step": str(start_step_override or ""),
+        "worktree_path": "",
+        "files_to_stage": "",
+        "fix_verify_iteration": "1",
+        "max_fix_verify_iterations": str(MAX_FIX_VERIFY_ITERATIONS),
+        "previous_fixes": "",
     }
+    for step in STEP_ORDER:
+        step_key = str(step).replace(".", "_")
+        context[f"step{step_key}_output"] = ""
 
     total_cost = 0.0
     last_model_used = "unknown"
@@ -572,29 +1305,99 @@ def run_agentic_checkup_orchestrator(
 
     # Resume: load existing state if available.
     state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(
-        cwd=cwd,
-        issue_number=issue_number,
-        workflow_type="checkup",
-        state_dir=state_dir,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        use_github_state=use_github_state,
-    )
+    # External review Finding 3: on restart iterations the outer wrapper
+    # sets ``_force_skip_state_load=True`` so a flaky GitHub state load
+    # cannot reload stale cached step outputs even if ``clear_workflow_
+    # state``'s GitHub DELETE silently failed. Defense-in-depth around
+    # the clear-then-reload path.
+    if _force_skip_state_load:
+        state = None
+        loaded_gh_id = None
+    else:
+        state, loaded_gh_id = load_workflow_state(
+            cwd=cwd,
+            issue_number=issue_number,
+            workflow_type="checkup",
+            state_dir=state_dir,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+        )
 
     step_outputs: Dict[str, str] = {}
     last_completed_step = 0
     fix_verify_iteration = 0
     previous_fixes = ""
 
+    # Round-5 Finding 4: accumulates a suffix when the canonical PR-mode
+    # final report could not be posted to GitHub. The gate outcome stays
+    # source-of-truth — gh / network flakiness must not flip a clean
+    # code-verification — but the suffix is appended to the returned
+    # ``message`` on success paths so consumers (pdd-issue, pdd_cloud)
+    # see the partial-post condition.
+    pending_post_suffix: str = ""
+
+    # PR head SHA observed for the CURRENT invocation. Captured once via
+    # ``_fetch_pr_metadata`` when entering PR mode so the resume path can
+    # invalidate cached step outputs whose verification ran against a
+    # different (older) head. Empty/None when metadata is unavailable —
+    # callers degrade gracefully rather than block.
+    current_pr_head_sha: str = ""
+    metadata_for_guard: Dict[str, str] = {}
+    if pr_mode:
+        assert pr_owner is not None and pr_repo is not None and pr_number is not None
+        try:
+            metadata_for_guard = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+        except Exception:  # noqa: BLE001 — metadata is best-effort
+            metadata_for_guard = {}
+        current_pr_head_sha = str(metadata_for_guard.get("head_sha", "") or "")
+
+    # Issue #1116 round-5 Finding 2: fix mode (no_fix=False) requires a
+    # known entry head SHA. All four fix-mode freshness checkpoints
+    # (A, A2, B, D) gate on a non-empty ``current_pr_head_sha`` — with an
+    # empty baseline they all skip, leaving a stale-verdict hole if the
+    # remote advances mid-run. Fail-closed at entry instead, mirroring
+    # the --no-fix round-3 precedent (the --no-fix path detects the same
+    # condition after Step 7). The user retries once gh recovers.
+    #
+    # ``_force_skip_state_load`` (set by the outer wrapper on restart
+    # iterations) means we already discarded prior state — so an empty
+    # SHA here is a fresh transient failure, not a resumed run. Either
+    # way, the outer wrapper does not retry on a plain return; it returns
+    # the message to the caller (pdd-issue / pdd_cloud).
+    if pr_mode and not no_fix and not current_pr_head_sha:
+        if not quiet:
+            console.print(
+                f"[red]PR #{pr_number}: could not determine entry head "
+                f"SHA via _fetch_pr_metadata (transient gh / network "
+                f"failure). Fix-mode checkup needs a known baseline to "
+                f"validate freshness before pushing. Rerun pdd checkup "
+                f"--pr once gh recovers.[/red]"
+            )
+        return (
+            False,
+            (
+                f"Could not determine entry PR head SHA for PR "
+                f"#{pr_number}; fix-mode freshness lease requires a "
+                f"baseline. Rerun pdd checkup --pr."
+            ),
+            total_cost,
+            last_model_used,
+        )
+
     if state is not None:
         # State-identity guard. A state from a prior run on the same
-        # issue_number must match the current invocation across THREE
+        # issue_number must match the current invocation across FOUR
         # axes before reuse:
         #   (a) mode (issue vs pr) — different worktree paths
         #   (b) pr_number — same issue can verify different PRs over time
         #   (c) pr_owner/pr_repo — fork-PR identity (same pr_number could
         #       refer to different upstream/fork combos)
+        #   (d) pr_head_sha — the PR branch can advance between runs
+        #       (maintainer push, auto-heal, etc.). Cached step outputs
+        #       describing build/test/verify results from the OLD SHA
+        #       would otherwise be silently replayed against new code
+        #       (codex round-1 blocker #1).
         # Any mismatch carries stale step outputs and a stale
         # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
         # silently running all subsequent steps against the wrong code.
@@ -622,6 +1425,31 @@ def run_agentic_checkup_orchestrator(
                     f"pr_repo "
                     f"(cached={cached_pr_owner}/{cached_pr_repo}, "
                     f"current={pr_owner}/{pr_repo})"
+                )
+            # Head-SHA invalidation — FAIL CLOSED (codex round-2
+            # follow-through). Reuse cached PR step outputs ONLY when both
+            # the cached and current ``pr_head_sha`` are non-empty AND
+            # equal. Every other combination — missing cached SHA (state
+            # predates this axis), missing current SHA (metadata fetch
+            # unavailable), or different non-empty SHAs — discards cache.
+            #
+            # Fail-open is the bug the SHA axis was added to prevent:
+            # silently replaying step outputs verified against an unknown
+            # or older PR head against new code. A first-PR-run with
+            # cached state predating this field also gets re-verified
+            # rather than reused; since the field isn't released yet, the
+            # one-time cost is acceptable to preserve "if you can't prove
+            # it's the same code, don't trust the verification".
+            cached_pr_head_sha = state.get("pr_head_sha") or ""
+            if not (
+                cached_pr_head_sha
+                and current_pr_head_sha
+                and cached_pr_head_sha == current_pr_head_sha
+            ):
+                identity_mismatch_reasons.append(
+                    f"pr_head_sha "
+                    f"(cached={cached_pr_head_sha[:8] or '<empty>'}, "
+                    f"current={current_pr_head_sha[:8] or '<empty>'})"
                 )
         if identity_mismatch_reasons:
             if not quiet:
@@ -698,6 +1526,27 @@ def run_agentic_checkup_orchestrator(
                 worktree_path = wt_path
                 current_cwd = worktree_path
             context["worktree_path"] = str(worktree_path)
+            # Round-5 Finding 3: refresh project context on resume too.
+            # The state dict does not persist architecture_json/pddrc/
+            # project_root; on resume the caller-supplied (pre-worktree)
+            # values land in ``context`` and post-resume steps would
+            # otherwise audit stale architecture/config.
+            if pr_mode:
+                _refresh_pr_context_from_worktree(context, worktree_path)
+                assert pr_owner is not None and pr_repo is not None and pr_number is not None
+                _refresh_pr_base_ref(
+                    worktree_path,
+                    pr_owner,
+                    pr_repo,
+                    pr_number,
+                    metadata_for_guard,
+                    quiet,
+                )
+                if pr_test_scope == "targeted":
+                    context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
+                        worktree_path,
+                        metadata_for_guard,
+                    )
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
@@ -707,6 +1556,18 @@ def run_agentic_checkup_orchestrator(
         # Restore files_to_stage if available
         if changed_files:
             context["files_to_stage"] = ", ".join(changed_files)
+
+    if state is None:
+        # External review Finding 2: when re-entering after a restart,
+        # the outer wrapper passes the previous iteration's
+        # ``step_comments_set`` so per-step issue comments aren't
+        # re-posted on the new iteration. Defaults to a fresh empty set
+        # when not provided (every non-restart entry path).
+        step_comments_set: Set[int] = (
+            set(_carried_step_comments) if _carried_step_comments else set()
+        )
+    else:
+        step_comments_set = normalize_step_comments_state(state.get("step_comments"))
 
     # Step definitions (step 6 split into 6.1/6.2/6.3 sub-steps).
     steps: List[Tuple[Union[int, float], str, str]] = [
@@ -729,6 +1590,15 @@ def run_agentic_checkup_orchestrator(
     _display_step: Dict[float, str] = {6.1: "6a", 6.2: "6b", 6.3: "6c"}
 
     start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
+    if start_step_override is not None:
+        if start_step_override not in STEP_ORDER:
+            return (
+                False,
+                f"Invalid start step: {start_step_override}",
+                total_cost,
+                last_model_used,
+            )
+        start_step = start_step_override
     last_completed_step_to_save = last_completed_step
     consecutive_provider_failures = 0
 
@@ -747,6 +1617,8 @@ def run_agentic_checkup_orchestrator(
             pr_number=pr_number,
             pr_owner=pr_owner,
             pr_repo=pr_repo,
+            pr_head_sha=current_pr_head_sha if pr_mode else None,
+            step_comments=sorted(step_comments_set),
         )
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
@@ -756,8 +1628,42 @@ def run_agentic_checkup_orchestrator(
             github_comment_id=github_comment_id,
         )
 
-    def _is_provider_failure(output: str) -> bool:
-        return "All agent providers failed" in output
+    def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
+        """Project (step_num, iteration) -> deterministic non-negative int.
+
+        Encoding ``iteration * 10000 + int(round(step_num * 10))`` handles
+        fractional steps (6.1 -> 61) and the iterated fix-verify loop.
+        """
+        return iteration * 10000 + int(round(float(step_num) * 10))
+
+    def _maybe_post_step_comment(
+        step_num: Union[int, float],
+        description: str,
+        step_output: str,
+        iteration: int = 1,
+    ) -> None:
+        """Post a trusted per-step success comment; log-and-continue on error."""
+        try:
+            report_body = extract_step_report(step_output)
+            if not report_body:
+                report_body = (
+                    f"_Step {step_num} completed; no `<step_report>` block "
+                    "returned by agent. Raw output retained in workflow state._"
+                )
+            comment_body = (
+                f"## Step {step_num}/{TOTAL_STEPS}: {description}\n\n{report_body}"
+            )
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=_step_comment_key(step_num, iteration),
+                body=comment_body,
+                posted_steps=step_comments_set,
+                cwd=current_cwd,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
 
     def _handle_step_result(
         step_num: Union[int, float],
@@ -765,6 +1671,8 @@ def run_agentic_checkup_orchestrator(
         output: str,
         cost: float,
         model: str,
+        description: str = "",
+        iteration: int = 1,
     ) -> Optional[Tuple[bool, str, float, str]]:
         """Process a step result — update context, save state.
 
@@ -801,16 +1709,23 @@ def run_agentic_checkup_orchestrator(
             step_outputs[step_key] = output
             last_completed_step_to_save = step_num
             consecutive_provider_failures = 0
+            if description:
+                _maybe_post_step_comment(step_num, description, output, iteration)
         else:
             step_outputs[step_key] = f"FAILED: {output}"
             if _is_provider_failure(output):
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
                     _save_state()
+                    failure_kind = (
+                        "agent execution timed out before the steps could complete"
+                        if _is_step_timeout_failure(output)
+                        else "agent providers unavailable"
+                    )
                     return (
                         False,
                         f"Aborting: {consecutive_provider_failures} consecutive "
-                        f"steps failed - agent providers unavailable",
+                        f"steps failed - {failure_kind}",
                         total_cost,
                         last_model_used,
                     )
@@ -819,6 +1734,155 @@ def run_agentic_checkup_orchestrator(
 
         _save_state()
         return None
+
+    def _run_post_push_reverify_if_needed(
+        push_message: str,
+    ) -> Optional[Tuple[bool, str, float, str]]:
+        """Re-run Step 7 when push rebased local fixes onto a newer PR head."""
+        if "after rebasing onto updated PR head" not in push_message:
+            return None
+
+        name7, desc7 = step_map[7]
+        if not quiet:
+            console.print(
+                f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7} "
+                f"(post-push reverify)..."
+            )
+
+        result = _run_single_step(
+            7,
+            name7,
+            context,
+            cwd=cwd,
+            step_cwd=current_cwd if worktree_path else cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label="step7_post_push_reverify",
+            timeout_adder=timeout_adder,
+            reasoning_time=reasoning_time,
+        )
+        if result is None:
+            template_name = f"agentic_checkup_step7_{name7}_LLM"
+            return (
+                False,
+                f"Missing prompt template: {template_name}",
+                total_cost,
+                last_model_used,
+            )
+
+        success, output, cost, model = result
+        abort = _handle_step_result(7, success, output, cost, model)
+        if abort is not None:
+            return abort
+        if not success or "All Issues Fixed" not in output:
+            return (
+                False,
+                "Post-push verification did not confirm the final rebased PR head is clean.",
+                total_cost,
+                last_model_used,
+            )
+        # Round-4 Finding 1 follow-through: re-apply the strict JSON gate
+        # to the post-push reverify output. The "All Issues Fixed" string
+        # alone is just a loop-exit sentinel; the structured verdict is
+        # what tells us the rebased tree actually satisfies the contract.
+        passed, reason = _step7_passed(output, pr_mode=pr_mode)
+        if not passed:
+            return (
+                False,
+                f"Post-push verification failed Step 7 gate: {reason}",
+                total_cost,
+                last_model_used,
+            )
+        return None
+
+    def _post_pr_mode_final_report(final_step7_output: str) -> str:
+        """Post the canonical PR-mode final report to PR + issue threads.
+
+        Returns a ``status_suffix`` (empty when reporting is not applicable
+        or both posts succeeded). On failure, the rendered body is also
+        persisted under ``.pdd/checkup-pr-<n>/final-report.md`` and a
+        human-readable status is written into
+        ``step_outputs["pr_post_status"]`` so downstream consumers can
+        detect the partial-post condition without parsing the message.
+
+        The gate outcome is NOT flipped by a post failure — gh / network
+        flakiness must remain decoupled from code-verification truth
+        (round-5 Finding 4). Callers should append the returned suffix
+        to whatever message they return so pdd-issue / pdd_cloud see the
+        partial-post in their summary surface.
+        """
+        if not (
+            pr_mode
+            and use_github_state
+            and pr_owner
+            and pr_repo
+            and pr_number is not None
+            and final_step7_output.strip()
+        ):
+            return ""
+
+        body = _format_pr_mode_final_report(
+            final_step7_output,
+            context.get("pr_push_output", ""),
+        )
+        pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+        step_posted = post_step_comment(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=7,
+            total_steps=TOTAL_STEPS,
+            description="Verification & Final Report",
+            output=final_step7_output,
+            cwd=cwd,
+            body=body,
+        )
+        if pr_posted and step_posted:
+            return ""
+
+        # Comment-post failed: persist the body so the report is not lost.
+        artifact_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+        artifact_path: Optional[Path] = artifact_dir / "final-report.md"
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(body, encoding="utf-8")
+        except OSError as exc:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: failed to persist final report "
+                    f"artifact at {artifact_path}: {exc}[/yellow]"
+                )
+            artifact_path = None
+
+        failed_surfaces: List[str] = []
+        if not pr_posted:
+            failed_surfaces.append("PR")
+        if not step_posted:
+            failed_surfaces.append("issue")
+        surfaces_str = " and ".join(failed_surfaces)
+        if artifact_path is not None:
+            persisted = (
+                f"Final report post failed for {surfaces_str} surface; "
+                f"saved to {artifact_path}"
+            )
+            suffix = (
+                f" (report post failed for {surfaces_str} surface; "
+                f"saved to {artifact_path})"
+            )
+        else:
+            persisted = (
+                f"Final report post failed for {surfaces_str} surface; "
+                f"artifact also could not be persisted"
+            )
+            suffix = (
+                f" (report post failed for {surfaces_str} surface; "
+                f"artifact could not be saved)"
+            )
+        step_outputs["pr_post_status"] = persisted
+        _save_state()
+        if not quiet:
+            console.print(f"[yellow]{persisted}[/yellow]")
+        return suffix
 
     # ==================================================================
     # PR mode: create the PR-branch worktree up-front. All subsequent steps
@@ -831,10 +1895,36 @@ def run_agentic_checkup_orchestrator(
             cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False
         )
         if not wt_path:
-            return False, f"Failed to set up PR worktree: {err}", total_cost, last_model_used
+            return (
+                False,
+                f"Failed to set up PR worktree: {err}",
+                total_cost,
+                last_model_used,
+            )
         worktree_path = wt_path
         current_cwd = worktree_path
         context["worktree_path"] = str(worktree_path)
+
+        # Round-5 Finding 3: refresh project context from the PR worktree
+        # so downstream prompts audit the PR's project state. Caller
+        # passed architecture/pddrc loaded from the pre-PR-worktree
+        # ``cwd``; if the PR modifies either file, the audit otherwise
+        # never sees the change.
+        _refresh_pr_context_from_worktree(context, worktree_path)
+        assert pr_owner is not None and pr_repo is not None and pr_number is not None
+        _refresh_pr_base_ref(
+            worktree_path,
+            pr_owner,
+            pr_repo,
+            pr_number,
+            metadata_for_guard,
+            quiet,
+        )
+        if pr_test_scope == "targeted":
+            context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
+                worktree_path,
+                metadata_for_guard,
+            )
 
         if not quiet:
             console.print(
@@ -874,7 +1964,7 @@ def run_agentic_checkup_orchestrator(
 
         success, output, cost, model = result
 
-        abort = _handle_step_result(step_num, success, output, cost, model)
+        abort = _handle_step_result(step_num, success, output, cost, model, description=description)
         if abort is not None:
             return abort
 
@@ -901,7 +1991,10 @@ def run_agentic_checkup_orchestrator(
                 continue
             name, description = step_map[step_num]
             if not quiet:
-                console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
+                console.print(
+                    f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] "
+                    f"{description}..."
+                )
 
             result = _run_single_step(
                 step_num, name, context,
@@ -917,13 +2010,15 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
-            abort = _handle_step_result(step_num, success, output, cost, model)
+            abort = _handle_step_result(step_num, success, output, cost, model, description=description)
             if abort is not None:
                 return abort
-            if not success and _is_provider_failure(output):
+            if not success and (
+                _is_provider_failure(output) or _is_step_timeout_failure(output)
+            ):
                 return (
                     False,
-                    f"Aborting after Step {step_num}: agent providers unavailable",
+                    _format_step_abort_message(step_num, output),
                     total_cost,
                     last_model_used,
                 )
@@ -945,6 +2040,7 @@ def run_agentic_checkup_orchestrator(
             _save_state()
 
         # Run step 7.
+        nofix_step7_output = ""
         if 7 >= start_step:
             name7, desc7 = step_map[7]
             if not quiet:
@@ -964,9 +2060,21 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
-            abort = _handle_step_result(7, success, output, cost, model)
+            nofix_step7_output = output
+            abort = _handle_step_result(7, success, output, cost, model, description=desc7)
             if abort is not None:
                 return abort
+        else:
+            # Resume path that already cached step 7's output.
+            nofix_step7_output = step_outputs.get("7", "")
+
+        # Round-4 Finding 1: gate the --no-fix verification path too.
+        # No push happens here, but pdd-issue / pdd_cloud consume the
+        # return tuple. Returning success when Step 7 reported failure
+        # would be the same anti-pattern as the fix-mode push case.
+        nofix_gate_passed, nofix_gate_reason = _step7_passed(
+            nofix_step7_output, pr_mode=pr_mode
+        )
 
         # Skip step 8.
         if 8 >= start_step:
@@ -977,6 +2085,102 @@ def run_agentic_checkup_orchestrator(
             context["step8_output"] = skipped_output
             last_completed_step_to_save = 8
             _save_state()
+
+        if not nofix_gate_passed:
+            if not quiet:
+                console.print(
+                    f"[red]Step 7 gate failed (--no-fix): {nofix_gate_reason}[/red]"
+                )
+            # Post the canonical PR/issue final report even when the gate
+            # fails: Step 7's PR-mode prompt suppresses agent commenting
+            # because the orchestrator owns the report. Skipping the post
+            # here leaves downstream consumers (pdd-issue, reviewers) with
+            # no record of what was checked or why it failed.
+            post_suffix = _post_pr_mode_final_report(nofix_step7_output)
+            return (
+                False,
+                f"{nofix_gate_reason}{post_suffix}",
+                total_cost,
+                last_model_used,
+            )
+
+        # External review Finding 1: in --no-fix --pr mode the orchestrator
+        # is the only authority — ``_finalize``'s fail-closed downgrade only
+        # runs under --review-loop, and the fix-mode freshness lease's
+        # checkpoints all explicitly skip ``no_fix``. Refetch the remote PR
+        # head before publishing the canonical verification report.
+        # Fail-closed on THREE conditions (no rerun budget consumed — the
+        # lease is fix-mode only by design):
+        #   • advance confirmed     (fresh_sha != entry_sha, both non-empty)
+        #   • post-run unknown      (refetch failed / returned empty sha)
+        #   • pre-run unknown       (entry sha was empty — we never had a
+        #                            baseline to compare against, so we
+        #                            cannot certify the Step 7 verdict ran
+        #                            against the head we're about to post)
+        # Issue #1116 round-4 (entry-SHA gap): a transient entry-side
+        # _fetch_pr_metadata failure must NOT later be hidden by a working
+        # post-run fetch. If we never had an entry SHA, freshness is
+        # unverifiable in either direction.
+        if pr_mode and worktree_path is not None and no_fix and nofix_gate_passed:
+            assert pr_owner is not None and pr_repo is not None
+            assert pr_number is not None
+            try:
+                nofix_fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+            except Exception:  # noqa: BLE001
+                nofix_fresh_metadata = {}
+            nofix_fresh_sha = str(
+                (nofix_fresh_metadata or {}).get("head_sha", "") or ""
+            )
+            if not nofix_fresh_sha:
+                stale_msg = (
+                    f"--no-fix verification on PR #{pr_number} completed a "
+                    f"clean Step 7 but the post-run freshness check failed "
+                    f"(could not retrieve the current PR head SHA). "
+                    f"Verdict treated as unverified; rerun pdd checkup --pr "
+                    f"--no-fix."
+                )
+            elif not current_pr_head_sha:
+                stale_msg = (
+                    f"--no-fix verification on PR #{pr_number} produced a "
+                    f"clean Step 7 verdict but the entry PR head SHA was "
+                    f"unavailable (the initial _fetch_pr_metadata returned "
+                    f"empty), so freshness against the post-run head "
+                    f"({nofix_fresh_sha[:8]}) cannot be confirmed. Verdict "
+                    f"treated as unverified; rerun pdd checkup --pr --no-fix."
+                )
+            elif nofix_fresh_sha != current_pr_head_sha:
+                stale_msg = (
+                    f"--no-fix verification on PR #{pr_number} produced a "
+                    f"clean Step 7 verdict but the PR head advanced during "
+                    f"the run ({current_pr_head_sha[:8]}->{nofix_fresh_sha[:8]}). "
+                    f"Verdict treated as unverified; rerun pdd checkup --pr "
+                    f"--no-fix."
+                )
+            else:
+                stale_msg = None
+            if stale_msg is not None:
+                if not quiet:
+                    console.print(f"[red]{stale_msg}[/red]")
+                # Include the downgrade reason in the posted report body so
+                # the PR/issue thread shows WHY the verdict was invalidated,
+                # not just the clean Step 7 output that no longer applies.
+                stale_report_body = (
+                    f"**Verdict downgraded — unverified:**\n\n{stale_msg}"
+                    f"\n\n---\n\n{nofix_step7_output}"
+                )
+                stale_post_suffix = _post_pr_mode_final_report(stale_report_body)
+                return (
+                    False,
+                    f"{stale_msg}{stale_post_suffix}",
+                    total_cost,
+                    last_model_used,
+                )
+
+        # No-fix gate passed: post the canonical report so PR consumers see
+        # the verification verdict. The fix-mode equivalent runs after the
+        # push at the bottom of this function; the no-fix path never pushes,
+        # so we post here.
+        pending_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
 
     else:
         # --- Fix mode: iterative loop over steps 3-7 ---
@@ -1070,7 +2274,10 @@ def run_agentic_checkup_orchestrator(
                     return (False, f"Missing prompt template: {tmpl_name}", total_cost, last_model_used)
 
                 success, output, cost, model = result
-                abort = _handle_step_result(step_num, success, output, cost, model)
+                abort = _handle_step_result(
+                    step_num, success, output, cost, model,
+                    description=description, iteration=fix_verify_iteration,
+                )
                 if abort is not None:
                     return abort
 
@@ -1090,11 +2297,116 @@ def run_agentic_checkup_orchestrator(
             _save_state()
 
         if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
+            max_msg = (
+                f"Checkup did not verify all issues fixed after "
+                f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
+            )
+            max_reason = max_msg
+            max_gate_passed, max_gate_reason = _step7_passed(
+                step7_output, pr_mode=pr_mode
+            )
+            if not max_gate_passed:
+                max_reason = f"{max_msg} {max_gate_reason}"
             if not quiet:
                 console.print(
-                    f"[yellow]Warning: Max fix-verify iterations "
-                    f"({MAX_FIX_VERIFY_ITERATIONS}) reached. "
-                    f"Proceeding to PR creation.[/yellow]"
+                    f"[red]{max_reason} Not pushing fixes or creating a PR.[/red]"
+                )
+            if pr_mode:
+                step_outputs["pr_push"] = f"Skipped push because: {max_reason}"
+                context["pr_push_output"] = step_outputs["pr_push"]
+            else:
+                step_outputs["8"] = f"Skipped step 8 because: {max_reason}"
+                context["step8_output"] = step_outputs["8"]
+            _save_state()
+            # Step 7's PR-mode prompt suppresses agent commenting because
+            # the orchestrator owns the canonical report. Post it here so
+            # the PR thread records the max-iteration verdict instead of
+            # going silent.
+            post_suffix = _post_pr_mode_final_report(
+                step_outputs.get("7", step7_output)
+            )
+            return (
+                False,
+                f"{max_reason}{post_suffix}",
+                total_cost,
+                last_model_used,
+            )
+
+        # --------------------------------------------------------------
+        # Round-4 Finding 1: gate the orchestrator on Step 7's structured
+        # verdict BEFORE pushing to a PR or creating one. Without this
+        # gate, the loop printed a warning and pushed anyway, so a PR
+        # with `issue_aligned: false` or unfixed critical issues could be
+        # marked green by downstream consumers.
+        # --------------------------------------------------------------
+        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode)
+        if not gate_passed:
+            if not quiet:
+                console.print(
+                    f"[red]Step 7 gate failed: {gate_reason}[/red]"
+                )
+            if pr_mode:
+                skip_msg = f"Skipped push because: {gate_reason}"
+                step_outputs["pr_push"] = skip_msg
+                context["pr_push_output"] = skip_msg
+            else:
+                skip_msg = f"Skipped step 8 because: {gate_reason}"
+                step_outputs["8"] = skip_msg
+                context["step8_output"] = skip_msg
+            # Persist the gate signal but do NOT clear workflow state — an
+            # operator may want to resume after fixing the underlying
+            # issue. Return failure so callers (pdd-issue, pdd_cloud,
+            # operators) see the gate fired instead of receiving a
+            # success message for a checkup that did not pass.
+            _save_state()
+            # Step 7's PR-mode prompt suppresses agent commenting because
+            # the orchestrator owns the canonical report. Post it on the
+            # gate-fail path too so the PR thread shows the verdict
+            # instead of going silent.
+            post_suffix = _post_pr_mode_final_report(
+                step_outputs.get("7", step7_output)
+            )
+            return (
+                False,
+                f"{gate_reason}{post_suffix}",
+                total_cost,
+                last_model_used,
+            )
+
+        # --------------------------------------------------------------
+        # Issue #1116 — Checkpoint A: the gate just passed, but if the
+        # remote PR head advanced since we entered the run, every cached
+        # step result (build, test, verify) was produced against the OLD
+        # code. Pushing now would land our fixes on top of unverified
+        # remote changes. Refetch the head SHA; if it moved, raise the
+        # restart signal so the outer wrapper can rerun against the new
+        # head (bounded by ``MAX_PR_HEAD_REFRESHES``).
+        #
+        # Only fires in fix mode. ``--no-fix`` falls through to the
+        # existing flow because no push is forthcoming. Transient
+        # ``_fetch_pr_metadata`` failures (empty fresh SHA) fail-degrade
+        # to current behavior to avoid false-positive restarts.
+        # --------------------------------------------------------------
+        if pr_mode and worktree_path is not None and not no_fix:
+            assert pr_owner is not None and pr_repo is not None
+            assert pr_number is not None
+            try:
+                fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+            except Exception:  # noqa: BLE001 — metadata is best-effort
+                fresh_metadata = {}
+            fresh_head_sha = str((fresh_metadata or {}).get("head_sha", "") or "")
+            if (
+                fresh_head_sha
+                and current_pr_head_sha
+                and fresh_head_sha != current_pr_head_sha
+            ):
+                raise _PRHeadAdvancedRestart(
+                    old_sha=current_pr_head_sha,
+                    new_sha=fresh_head_sha,
+                    reason="Step 7 gate passed but PR head advanced before push",
+                    cost_so_far=total_cost,
+                    model=last_model_used,
+                    step_comments=step_comments_set,
                 )
 
         # ==============================================================
@@ -1105,6 +2417,287 @@ def run_agentic_checkup_orchestrator(
         # ==============================================================
 
         if pr_mode:
+            assert pr_owner is not None
+            assert pr_repo is not None
+            assert pr_number is not None
+            if worktree_path is not None:
+                pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+
+                # ----------------------------------------------------------
+                # Issue #1116 — Checkpoint A2: registry/prompt-source guard
+                # refusal paths post the canonical Step 7 verdict via
+                # _post_pr_mode_final_report and then return. If the remote
+                # head advanced between Checkpoint A's refetch and now, that
+                # verdict belongs to the OLD head — publishing it as the
+                # canonical report would leak a stale clean verdict. Reuse
+                # the pr_metadata fetch just above (no extra GitHub I/O); if
+                # the head moved, raise restart so the outer wrapper reruns
+                # against the new head.
+                #
+                # Only fires in fix mode (no_fix=False already implied by
+                # being in the fix-mode push block here). Empty current SHA
+                # or empty fresh SHA fail-degrades to current behavior to
+                # avoid false-positive restarts.
+                # ----------------------------------------------------------
+                fresh_head_sha_a2 = str(
+                    (pr_metadata or {}).get("head_sha", "") or ""
+                )
+                if (
+                    fresh_head_sha_a2
+                    and current_pr_head_sha
+                    and fresh_head_sha_a2 != current_pr_head_sha
+                ):
+                    raise _PRHeadAdvancedRestart(
+                        old_sha=current_pr_head_sha,
+                        new_sha=fresh_head_sha_a2,
+                        reason=(
+                            "PR head advanced between Step 7 gate and "
+                            "guards-and-push block"
+                        ),
+                        cost_so_far=total_cost,
+                        model=last_model_used,
+                        step_comments=step_comments_set,
+                    )
+
+                # Codex round-1 blocker #3: prompt-source + architecture-
+                # registry guards. The review-loop runs these BEFORE its
+                # push (checkup_review_loop.py:1183/:1194); bare PR-mode
+                # used to skip them, opening a #1063/#1081 bypass. Run
+                # 10b first (registry-edit) and 10a second (prompt-
+                # source) to mirror the review-loop ordering.
+                guard_changed_files = _git_changed_files(worktree_path)
+                pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+
+                registry_refusal = _check_architecture_registry_edit_guard(
+                    worktree_path, guard_changed_files
+                )
+                if registry_refusal:
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir
+                        / "architecture-registry-guard-refusal.txt"
+                    ).write_text(registry_refusal + "\n")
+                    step_outputs["pr_push"] = registry_refusal
+                    context["pr_push_output"] = registry_refusal
+                    _save_state()
+                    # Step 7 already ran successfully; the registry guard
+                    # blocks the push, not the verdict. Post the canonical
+                    # report so the PR records why the push was refused.
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{registry_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                prompt_refusal = _check_prompt_source_guard(
+                    worktree_path, guard_changed_files
+                )
+                if prompt_refusal:
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir / "prompt-source-guard-refusal.txt"
+                    ).write_text(prompt_refusal + "\n")
+                    step_outputs["pr_push"] = prompt_refusal
+                    context["pr_push_output"] = prompt_refusal
+                    _save_state()
+                    # Step 7 already ran successfully; the prompt-source
+                    # guard blocks the push, not the verdict. Post the
+                    # canonical report so the PR records why the push was
+                    # refused.
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{prompt_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                push_ok, push_message = _commit_and_push_if_changed(
+                    worktree_path,
+                    pr_metadata,
+                    f"fix: apply checkup fixes for #{issue_number}",
+                )
+                step_outputs["pr_push"] = push_message
+                context["pr_push_output"] = push_message
+                _save_state()
+                if not push_ok:
+                    # Codex round-1 blocker #2 / round-2 nit A: enrich the
+                    # failure message so the operator can recover the
+                    # unpushed local fix.
+                    # ``_commit_and_push_if_changed`` can fail at any of
+                    # several points: ``git add`` (no commit yet), ``git
+                    # commit`` (no commit yet), missing PR metadata after
+                    # commit, or ``push`` after commit. We don't try to
+                    # distinguish; instead we point the operator at the
+                    # worktree HEAD with neutral wording so they can
+                    # inspect for an unpushed fix commit regardless of
+                    # which leg failed.
+                    local_sha = _git_rev_parse_head(worktree_path)
+                    sha_clause = (
+                        f" at SHA {local_sha}" if local_sha else ""
+                    )
+                    recovery = (
+                        f" Local HEAD in worktree: {worktree_path}"
+                        f"{sha_clause}; check for an unpushed fix commit "
+                        f"before re-running."
+                    )
+                    sep = "" if push_message.rstrip().endswith(".") else "."
+                    enriched = push_message + sep + recovery
+                    step_outputs["pr_push"] = enriched
+                    context["pr_push_output"] = enriched
+                    _save_state()
+                    # ------------------------------------------------------
+                    # Issue #1116 — Checkpoint B: restart if the push failed
+                    # because we couldn't rebase onto an updated remote
+                    # head. Only consume budget after a fresh refetch
+                    # confirms the head actually moved — generic auth /
+                    # network errors must not trigger a rerun.
+                    #
+                    # Codex round-1 Finding 1: also match the generic
+                    # ``Failed to push fixes to PR branch: <stderr>``
+                    # surface that ``_commit_and_push_if_changed`` returns
+                    # once its internal 3-attempt retry loop exhausts on
+                    # remote-advance. Without the
+                    # ``_is_remote_advanced_push_error`` co-trigger, a
+                    # legitimate auth/network failure with the same
+                    # prefix would falsely restart, so the embedded git
+                    # stderr must carry recognized markers (fetch-first /
+                    # non-fast-forward / etc.).
+                    # ------------------------------------------------------
+                    if not no_fix and (
+                        "Failed to rebase fixes onto updated PR branch"
+                        in push_message
+                        or "Failed to refresh PR branch before retrying push"
+                        in push_message
+                        # Codex round-2 Finding 2: _rebase_onto_updated_
+                        # pr_head emits this prefix when the pre-rebase
+                        # ``git reset --hard <fixer_sha>`` fails. The
+                        # reset only runs in the remote-advance recovery
+                        # path, so a refetch-confirmed advance still
+                        # qualifies for the bounded restart.
+                        or "Failed to reset to original fixer commit before rebase"
+                        in push_message
+                        or (
+                            push_message.startswith(
+                                "Failed to push fixes to PR branch:"
+                            )
+                            and _is_remote_advanced_push_error(push_message)
+                        )
+                    ):
+                        try:
+                            fresh_meta_b = _fetch_pr_metadata(
+                                pr_owner, pr_repo, pr_number
+                            )
+                        except Exception:  # noqa: BLE001
+                            fresh_meta_b = {}
+                        fresh_head_sha_b = str(
+                            (fresh_meta_b or {}).get("head_sha", "") or ""
+                        )
+                        if (
+                            fresh_head_sha_b
+                            and current_pr_head_sha
+                            and fresh_head_sha_b != current_pr_head_sha
+                        ):
+                            raise _PRHeadAdvancedRestart(
+                                old_sha=current_pr_head_sha,
+                                new_sha=fresh_head_sha_b,
+                                reason="Push rebase failed against advanced PR head",
+                                cost_so_far=total_cost,
+                                model=last_model_used,
+                                step_comments=step_comments_set,
+                            )
+                    # Step 7 already ran successfully; the push itself
+                    # failed. Post the canonical report so the PR records
+                    # the verdict and the enriched failure context.
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{enriched}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+                if not quiet:
+                    console.print(f"[green]{push_message}[/green]")
+                post_push_abort = _run_post_push_reverify_if_needed(push_message)
+                if post_push_abort is not None:
+                    # Step 7 ran twice (pre-push + post-rebase reverify).
+                    # The reverify produced a verdict before failing; post
+                    # the canonical report so PR consumers see the failure
+                    # context. ``step_outputs["7"]`` is refreshed by
+                    # ``_run_single_step``'s persistence so it reflects the
+                    # latest (post-rebase) verdict.
+                    abort_ok, abort_reason, abort_cost, abort_model = post_push_abort
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        abort_ok,
+                        f"{abort_reason}{post_suffix}",
+                        abort_cost,
+                        abort_model,
+                    )
+                # ------------------------------------------------------
+                # Issue #1116 round-5 Finding 1 — Checkpoint D: between
+                # the successful-push paths and the canonical Step 7
+                # report there is a final stale-verdict window where a
+                # third party can push more commits on top of ours. The
+                # narrow round-1 Checkpoint C only fired on
+                # "No changes to push." / "No eligible changes to push.";
+                # plain success and post-rebase reverify-passed paths
+                # skipped the boundary. Broaden the check to fire on
+                # every successful push outcome (the failure paths are
+                # already covered by Checkpoint B above).
+                #
+                # The baseline must NOT be ``current_pr_head_sha`` here
+                # — that's the entry SHA, and after a real push the
+                # remote head moved BECAUSE of us; comparing fresh
+                # against entry would false-positive every push into a
+                # restart. The correct baseline is the local worktree
+                # HEAD: after a normal push it equals our pushed commit,
+                # after a rebase-then-push it equals the rebased commit,
+                # and after a no-change push it equals the entry SHA
+                # (which subsumes round-1 Checkpoint C). A divergence
+                # between local HEAD and the refetched remote head
+                # means *additional* commits landed after ours — the
+                # stale-verdict case.
+                # ------------------------------------------------------
+                local_head_sha_d = _git_rev_parse_head(worktree_path)
+                try:
+                    fresh_meta_d = _fetch_pr_metadata(
+                        pr_owner, pr_repo, pr_number
+                    )
+                except Exception:  # noqa: BLE001
+                    fresh_meta_d = {}
+                fresh_head_sha_d = str(
+                    (fresh_meta_d or {}).get("head_sha", "") or ""
+                )
+                if (
+                    fresh_head_sha_d
+                    and local_head_sha_d
+                    and fresh_head_sha_d != local_head_sha_d
+                ):
+                    raise _PRHeadAdvancedRestart(
+                        old_sha=local_head_sha_d,
+                        new_sha=fresh_head_sha_d,
+                        reason=(
+                            "Push completed but PR head advanced "
+                            "beyond pushed commit before final report"
+                        ),
+                        cost_so_far=total_cost,
+                        model=last_model_used,
+                        step_comments=step_comments_set,
+                    )
+                pending_post_suffix = _post_pr_mode_final_report(
+                    step_outputs.get("7", step7_output)
+                )
             if 8 >= start_step:
                 if not quiet:
                     console.print(
@@ -1136,7 +2729,7 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
-            abort = _handle_step_result(8, success, output, cost, model)
+            abort = _handle_step_result(8, success, output, cost, model, description=desc8)
             if abort is not None:
                 return abort
 
@@ -1160,7 +2753,187 @@ def run_agentic_checkup_orchestrator(
         if worktree_path:
             console.print(f"   Worktree: {worktree_path}")
 
-    return True, final_msg, total_cost, last_model_used
+    return (
+        True,
+        f"{final_msg}{pending_post_suffix}",
+        total_cost,
+        last_model_used,
+    )
+
+
+def run_agentic_checkup_orchestrator(
+    issue_url: str,
+    issue_content: str,
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    issue_title: str,
+    architecture_json: str,
+    pddrc_content: str,
+    *,
+    cwd: Path,
+    verbose: bool = False,
+    quiet: bool = False,
+    no_fix: bool = False,
+    timeout_adder: float = 0.0,
+    use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
+    pr_url: Optional[str] = None,
+    pr_owner: Optional[str] = None,
+    pr_repo: Optional[str] = None,
+    pr_number: Optional[int] = None,
+    test_scope: str = "full",
+    start_step_override: Optional[Union[int, float]] = None,
+) -> Tuple[bool, str, float, str]:
+    """Public entry point for the agentic checkup orchestrator.
+
+    Wraps :func:`_run_agentic_checkup_orchestrator_inner`. In non-PR mode
+    this is a straight pass-through. In PR mode it catches
+    :class:`_PRHeadAdvancedRestart` and re-enters the inner against the
+    new head, bounded by :data:`MAX_PR_HEAD_REFRESHES` (issue #1116).
+
+    The retry budget is durable: the consumed count lives in a sidecar
+    file at ``.pdd/checkup-pr-{pr_number}/pr_head_refreshes`` so a
+    Ctrl-C + manual rerun cannot bypass the bound. The counter is
+    cleared on a clean terminal success.
+
+    Returns ``(success, message, total_cost, model_used)`` — same shape
+    as the inner.
+    """
+    pr_mode = pr_url is not None and pr_number is not None
+    if not pr_mode:
+        return _run_agentic_checkup_orchestrator_inner(
+            issue_url=issue_url,
+            issue_content=issue_content,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            architecture_json=architecture_json,
+            pddrc_content=pddrc_content,
+            cwd=cwd,
+            verbose=verbose,
+            quiet=quiet,
+            no_fix=no_fix,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            reasoning_time=reasoning_time,
+            pr_url=pr_url,
+            pr_owner=pr_owner,
+            pr_repo=pr_repo,
+            pr_number=pr_number,
+            test_scope=test_scope,
+            start_step_override=start_step_override,
+        )
+
+    # PR-mode rerun loop. ``refresh_count`` is initialized from disk so a
+    # resumed run picks up where a prior process left off.
+    assert pr_number is not None
+    refresh_count = _load_persisted_refresh_count(cwd, pr_number)
+    refresh_history: List[Tuple[str, str]] = []
+    cumulative_cost = 0.0
+    last_model = "unknown"
+    # External review Finding 2: carry the per-step issue-comment dedup
+    # set across restart iterations so we don't re-post each step's
+    # comment after ``clear_workflow_state`` wipes the stored field.
+    preserved_step_comments: Set[int] = set()
+
+    while True:
+        is_restart_iteration = refresh_count > 0
+        try:
+            success, message, cost, model = _run_agentic_checkup_orchestrator_inner(
+                issue_url=issue_url,
+                issue_content=issue_content,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                issue_title=issue_title,
+                architecture_json=architecture_json,
+                pddrc_content=pddrc_content,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                no_fix=no_fix,
+                timeout_adder=timeout_adder,
+                use_github_state=use_github_state,
+                reasoning_time=reasoning_time,
+                pr_url=pr_url,
+                pr_owner=pr_owner,
+                pr_repo=pr_repo,
+                pr_number=pr_number,
+                test_scope=test_scope,
+                start_step_override=start_step_override,
+                # External review Finding 3: bypass load_workflow_state
+                # on restarts so a flaky GH state load can't reload
+                # stale cached step outputs even if clear_workflow_state's
+                # DELETE silently failed.
+                _force_skip_state_load=is_restart_iteration,
+                # External review Finding 2: replay the previous
+                # iteration's posted-step-comments set so dedup is
+                # honored across restarts.
+                _carried_step_comments=(
+                    preserved_step_comments if is_restart_iteration else None
+                ),
+            )
+        except _PRHeadAdvancedRestart as restart:
+            cumulative_cost += restart.cost_so_far
+            last_model = restart.model
+            refresh_history.append((restart.old_sha, restart.new_sha))
+            # External review Finding 2: capture the inner's
+            # step_comments_set so the next iteration sees the same dedup
+            # state and doesn't re-post comments for steps that already
+            # commented on this PR.
+            preserved_step_comments = set(restart.step_comments)
+            # Codex round-2 Finding 1: belt-and-suspenders. The restart
+            # exception already proves the head advanced; don't depend
+            # on the next inner's _fetch_pr_metadata to re-prove it via
+            # the SHA identity guard. A flaky refetch returning the old
+            # SHA would otherwise let the inner reuse stale step
+            # outputs. Clear cached workflow state outright so the next
+            # iteration sets up a fresh worktree from the latest head.
+            # The sidecar at .pdd/checkup-pr-{N}/pr_head_refreshes lives
+            # outside workflow state, so the refresh counter survives.
+            try:
+                clear_workflow_state(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    workflow_type="checkup",
+                    state_dir=_get_state_dir(cwd),
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+            if refresh_count >= MAX_PR_HEAD_REFRESHES:
+                history_lines = ", ".join(
+                    f"{old[:8]}->{new[:8]}" for old, new in refresh_history
+                )
+                return (
+                    False,
+                    (
+                        f"PR head kept advancing during checkup "
+                        f"({history_lines}); exhausted "
+                        f"max_pr_head_refreshes={MAX_PR_HEAD_REFRESHES}. "
+                        f"Rerun pdd checkup once the PR branch stabilizes."
+                    ),
+                    cumulative_cost,
+                    last_model,
+                )
+            refresh_count += 1
+            _save_persisted_refresh_count(cwd, pr_number, refresh_count)
+            if not quiet:
+                console.print(
+                    f"[yellow]PR head advanced "
+                    f"({restart.old_sha[:8]}->{restart.new_sha[:8]}); "
+                    f"restarting from new head "
+                    f"(attempt {refresh_count}/{MAX_PR_HEAD_REFRESHES}).[/yellow]"
+                )
+            continue
+        # Inner returned normally — clear persisted counter so the next
+        # checkup on this PR begins with a full budget.
+        _clear_persisted_refresh_count(cwd, pr_number)
+        return success, message, cumulative_cost + cost, model
 
 
 def _build_state(
@@ -1179,6 +2952,8 @@ def _build_state(
     pr_number: Optional[int] = None,
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
+    pr_head_sha: Optional[str] = None,
+    step_comments: Optional[List[int]] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
 
@@ -1189,6 +2964,12 @@ def _build_state(
     issue-mode worktree could be silently reused by a subsequent PR-mode
     run on the same issue_number (or vice versa) and all steps would
     execute against the wrong code.
+
+    ``pr_head_sha`` (codex round-1 blocker #1) records the PR head SHA the
+    cached step outputs were verified against. On resume, ``run_agentic_
+    checkup_orchestrator`` invalidates the cache when this differs from
+    the fresh remote head SHA so a maintainer push to the PR branch
+    cannot leave stale build/test/verify outputs in place.
     """
     return {
         "workflow": "checkup",
@@ -1207,4 +2988,6 @@ def _build_state(
         "pr_number": pr_number,
         "pr_owner": pr_owner,
         "pr_repo": pr_repo,
+        "pr_head_sha": pr_head_sha,
+        "step_comments": list(step_comments) if step_comments else [],
     }

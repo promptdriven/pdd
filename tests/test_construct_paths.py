@@ -3769,3 +3769,39 @@ def test_construct_paths_generate_legacy_context_back_compat_from_subdir(tmp_pat
         )
 
     assert resolved_config["examples_dir"] == "context"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1205 regression tests: BUILTIN_EXT_MAP entries for markdown / yml
+# ---------------------------------------------------------------------------
+
+def test_builtin_ext_map_markdown_maps_to_dot_md():
+    """Bug #1205: BUILTIN_EXT_MAP must have 'markdown' → '.md'.
+
+    Without this entry the fallback f".{lang_key}" synthesises '.markdown',
+    causing --output foo.md to silently land at foo.markdown. This test fails
+    on the buggy code and passes once the entry is added.
+    """
+    from pdd.construct_paths import BUILTIN_EXT_MAP
+
+    result = BUILTIN_EXT_MAP.get('markdown')
+    assert result == '.md', (
+        f"Bug #1205: BUILTIN_EXT_MAP['markdown'] should be '.md' but got {result!r}. "
+        f"Without this entry the fallback f'.{{lang_key}}' synthesises '.markdown', "
+        f"causing --output foo.md to land at foo.markdown."
+    )
+
+
+def test_builtin_ext_map_yml_maps_to_dot_yml():
+    """Regression guard: BUILTIN_EXT_MAP['yml'] must map to '.yml' (not '.yaml').
+
+    This ensures the map correctly preserves the '.yml' extension when the user
+    explicitly requests it, and that the fix does not accidentally break the
+    'yml' entry.
+    """
+    from pdd.construct_paths import BUILTIN_EXT_MAP
+
+    result = BUILTIN_EXT_MAP.get('yml')
+    assert result == '.yml', (
+        f"BUILTIN_EXT_MAP['yml'] should be '.yml' but got {result!r}."
+    )

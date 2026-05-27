@@ -1,3 +1,21 @@
+## Q: Is PDD really a programming language?
+
+*"Yes, if you define the programming language as the human-authored source of truth rather than the CPU's final executable format."*
+
+In PDD, a program is the versioned prompt suite plus its includes, examples, tests, architecture metadata, and configuration. `pdd sync` compiles that source into conventional code and validates the output. Python, TypeScript, Go, Java, and other languages still matter, but they become compilation targets rather than the main thing humans maintain.
+
+## Q: What does "The Last Programming Language" mean?
+
+*"It means PDD moves the durable source from syntax to intent."*
+
+The phrase is a positioning claim for PDD, not a promise that implementation languages disappear. Teams still review generated code, run tests, ship binaries, and debug real systems. The change is that durable behavior lives in prompts and tests, while code can be regenerated from that source as models and project requirements evolve.
+
+## Q: Why not just use Cursor, Claude Code, Codex, or another coding agent?
+
+Those tools are useful, and PDD can work alongside them. The difference is the source-of-truth model.
+
+Interactive coding agents usually treat prompts as transient instructions for patching code. PDD treats prompts as durable source files. That gives teams a reviewable prompt history, repeatable regeneration, explicit includes, accumulating tests, and a path to keep implementation learnings synchronized back into the source.
+
 ## Q: Wouldn't the best language to describe code just be ... code?
 *"Totally get that—that's why every generation of software abstraction still compiles down to real code. We're not trying to replace code as an executable artefact; we're trying to replace code as the primary source-of-truth."*
 

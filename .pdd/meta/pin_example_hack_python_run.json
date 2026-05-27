@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-05-12T02:53:56.323642+00:00",
+  "exit_code": 0,
+  "tests_passed": 1,
+  "tests_failed": 0,
+  "coverage": 100.0,
+  "test_hash": "7fbffec72f9941a52b4ba7efd6468330dd2a3235dc53d0bb81168ea6eb6c3a72",
+  "test_files": {
+    "test_pin_example_hack.py": "7fbffec72f9941a52b4ba7efd6468330dd2a3235dc53d0bb81168ea6eb6c3a72"
+  }
+}

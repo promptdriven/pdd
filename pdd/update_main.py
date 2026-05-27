@@ -332,7 +332,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     # Extract the filename without extension and directory
     code_filename = os.path.basename(code_file_path)
     base_name, _ = os.path.splitext(code_filename)
-    
+
     code_file_abs_path = os.path.abspath(code_file_path)
     code_dir = os.path.dirname(code_file_abs_path)
 
@@ -503,11 +503,11 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             f for f in code_files
             if os.path.splitext(f)[1].lower() in allowed_extensions
         ]
-    
+
     for file_path in code_files:
         prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir, create_missing=False)
         pairs.append((prompt_path, code_path))
-        
+
     return pairs
 
 def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]:
@@ -996,11 +996,196 @@ def _print_repository_drift_report(
 
 def _find_prd_file(project_root: Path) -> Optional[Path]:
     """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
-    for pattern in ["PRD.md", "prd.md", "*_prd.md", "*_PRD.md"]:
-        matches = list(project_root.glob(pattern))
+    if not project_root.is_dir():
+        return None
+
+    # Resolve exact names by literal spelling so case-insensitive volumes
+    # (e.g. macOS default) do not treat glob("PRD.md") as a match for prd.md.
+    by_name = {entry.name: entry for entry in project_root.iterdir() if entry.is_file()}
+    for exact_name in ("PRD.md", "prd.md"):
+        match = by_name.get(exact_name)
+        if match is not None:
+            return match
+
+    for pattern in ("*_prd.md", "*_PRD.md"):
+        matches = sorted(project_root.glob(pattern))
         if matches:
             return matches[0]
     return None
+
+
+def _is_output_redirected(written_prompt_path: Path, source_prompt_path: Path) -> bool:
+    """Return True when ``--output`` redirected the write away from the canonical source prompt.
+
+    Single-file true-update paths accept ``--output <other_prompt>`` so the
+    user can preview an update without overwriting the canonical source. In
+    that case the written prompt does not represent the module's canonical
+    state, so neither the metadata sync orchestrator nor the default
+    fingerprint finalizer must record a fingerprint against it (#1007 stale
+    state class — a redirected fingerprint can let later sync detection treat
+    a still-stale canonical prompt as in sync).
+    """
+    try:
+        written_resolved = Path(written_prompt_path).resolve()
+        source_resolved = Path(source_prompt_path).resolve()
+    except OSError:
+        written_resolved = Path(written_prompt_path)
+        source_resolved = Path(source_prompt_path)
+    return written_resolved != source_resolved
+
+
+def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
+    """Run metadata sync for a single (prompt, code) pair.
+
+    Returns True when every stage reports `ok`/`dry_run`/`skipped`; False when
+    any stage `failed` or the orchestrator raised. Callers in single-file
+    update modes must propagate False as a non-success exit so preflight
+    auto-heal (which keys off the subprocess return code) does not treat a
+    half-finalized update as healed (#871 acceptance criterion).
+    """
+    try:
+        from .metadata_sync import run_metadata_sync
+        sync_result = run_metadata_sync(
+            prompt_path=prompt_path,
+            code_path=code_path,
+            dry_run=False,
+        )
+    except Exception as exc:
+        rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
+        return False
+    if not sync_result.ok:
+        for stage_name, stage in sync_result.stages.items():
+            if stage.status == "failed":
+                rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
+        return False
+    return True
+
+
+def _finalize_single_file_fingerprint(
+    prompt_path: Path,
+    code_path: Path,
+    sync_metadata: bool,
+    dry_run: bool,
+    quiet: bool,
+    cost: float,
+    model: str,
+    source_prompt_path: Optional[Path] = None,
+) -> None:
+    """Default fingerprint finalization for single-file/regeneration update modes.
+
+    Writes a current `(prompt, code)` fingerprint via the existing
+    `pdd.operation_log` helpers so a successful `pdd update <code>` is not
+    re-detected as changed on the next run (issue #1007 / PR #1009
+    Requirement 15). Skips with an `[info]` log line — unless `quiet` — for
+    the intentional skip cases (sync_metadata orchestrator owns the stage,
+    dry-run mode, `--output` redirected the write away from the canonical
+    source prompt, or `infer_module_identity` cannot derive
+    basename/language). All failures are best-effort: a `save_fingerprint`
+    exception surfaces as a `[warning]` line but never breaks the caller's
+    success tuple.
+
+    ``source_prompt_path`` is the canonical input prompt for the module. When
+    callers pass a redirected output path via ``--output``, the written file
+    no longer represents the module's canonical prompt, so finalizing a
+    fingerprint against it would let later sync detection treat unrelated
+    canonical prompts as in sync (issue #1007 stale-state class). Skip in
+    that case.
+    """
+    if sync_metadata:
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                "orchestrator owns fingerprint stage[/info]"
+            )
+        return
+    if dry_run:
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]"
+            )
+        return
+    if source_prompt_path is not None and _is_output_redirected(
+        Path(prompt_path), Path(source_prompt_path)
+    ):
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                "output redirected[/info]"
+            )
+        return
+
+    # Wrap the import itself so the user's successful update tuple is never
+    # broken by an import-time failure (e.g. `_clear_run_report_before_fingerprint`
+    # gets renamed in a future operation_log refactor — it's a private
+    # underscore-prefixed name and therefore more fragile than the public
+    # `clear_run_report` / `infer_module_identity` / `save_fingerprint`
+    # alongside it). An ImportError raised here would propagate up to
+    # `update_main`'s outer `except Exception: return None`, converting a
+    # successful `(prompt, cost, model)` tuple to None — which violates the
+    # issue #1106 acceptance criterion: best-effort metadata cleanup must
+    # never fail the successful update tuple.
+    try:
+        from .operation_log import (
+            _clear_run_report_before_fingerprint,
+            infer_module_identity,
+            save_fingerprint,
+        )
+    except ImportError as exc:
+        if not quiet:
+            rprint(
+                f"[warning][metadata] Could not import finalization helpers: "
+                f"{exc}[/warning]"
+            )
+        return
+    basename, language = infer_module_identity(prompt_path)
+    if not (basename and language):
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                f"unable to infer module identity for {prompt_path}[/info]"
+            )
+        return
+
+    # Reuse the shared helper so the single-file finalize path enforces the
+    # same invariant the `log_operation` decorator and repo-mode block already
+    # do: a fresh fingerprint must never coexist with a stale `_run.json`
+    # (issue #1106). The helper re-checks that the run report is actually
+    # gone after `clear_run_report()` and emits a console warning if a
+    # silent `os.remove` failure left it behind — see
+    # `pdd.operation_log._clear_run_report_before_fingerprint`. The warning
+    # surfaces unconditionally (the helper does not consult `quiet`): the
+    # contract the issue text quotes is "print a warning" without qualifying
+    # on quiet mode, and the user should learn that runtime verification
+    # state still describes the pre-mutation files even when --quiet
+    # suppresses other chatter (why: informational about a real metadata
+    # problem, not status fluff).
+    try:
+        fingerprint_allowed = _clear_run_report_before_fingerprint(basename, language)
+    except Exception as exc:
+        # Defensive: surrounding pattern in this function treats metadata
+        # cleanup as best-effort; an unexpected raise must not break the
+        # successful update tuple. Warn and skip the save, matching the
+        # `save_fingerprint` except-arm below.
+        if not quiet:
+            rprint(
+                f"[warning][metadata] Run report clear failed: {exc}[/warning]"
+            )
+        return
+    if not fingerprint_allowed:
+        return
+
+    try:
+        save_fingerprint(
+            basename,
+            language,
+            operation="update",
+            paths={"prompt": Path(prompt_path), "code": Path(code_path)},
+            cost=cost,
+            model=model,
+        )
+    except Exception as exc:
+        if not quiet:
+            rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
 
 
 def update_main(
@@ -1019,6 +1204,7 @@ def update_main(
     base_branch: str = "main",
     budget: Optional[float] = None,
     dry_run: bool = False,
+    sync_metadata: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -1038,6 +1224,10 @@ def update_main(
     :param base_branch: Git branch to compare against for change detection in repo mode.
     :param budget: Optional repository-wide cap; stop processing once cumulative update cost reaches this amount.
     :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
+    :param sync_metadata: If True, orchestrate prompt metadata finalization via run_metadata_sync
+        after the update writes the prompt. In repo mode, replaces the legacy per-pair fingerprint
+        and architecture sync with a per-pair run_metadata_sync call; PRD sync remains in this
+        wrapper and runs once after the batch when architecture entries changed.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -1130,6 +1320,7 @@ def update_main(
         results = []
         total_repo_cost = 0.0
         budget_reached = False
+        metadata_results: Dict[str, Any] = {}
 
         progress = Progress(
             SpinnerColumn(),
@@ -1176,58 +1367,152 @@ def update_main(
 
                 total_repo_cost += result.get("cost", 0.0)
 
-                # Save fingerprint so the file isn't detected as changed next run
-                if "Success" in result.get("status", ""):
-                    from .operation_log import save_fingerprint, infer_module_identity
-                    basename, language = infer_module_identity(prompt_path)
-                    if basename and language:
-                        try:
-                            paths = {
-                                "prompt": Path(prompt_path),
-                                "code": Path(code_path),
-                            }
-                            save_fingerprint(
-                                basename, language,
-                                operation="update",
-                                paths=paths,
-                                cost=result.get("cost", 0.0),
-                                model=result.get("model", "unknown"),
+                if not sync_metadata:
+                    # Save fingerprint so the file isn't detected as changed next run
+                    if "Success" in result.get("status", ""):
+                        from .operation_log import (
+                            clear_run_report,
+                            get_run_report_path,
+                            infer_module_identity,
+                            save_fingerprint,
+                        )
+                        basename, language = infer_module_identity(prompt_path)
+                        if basename and language:
+                            # Clear stale run report first so it can't outlive
+                            # the prompt/code pair it described. Best-effort:
+                            # never fail the update because of metadata I/O,
+                            # but surface failures as a non-fatal warning so
+                            # the user knows runtime verification state may
+                            # still describe the pre-mutation files.
+                            try:
+                                _stale_report_path = get_run_report_path(basename, language)
+                            except Exception:
+                                _stale_report_path = None
+                            _pre_existed = bool(
+                                _stale_report_path is not None
+                                and _stale_report_path.exists()
                             )
-                        except Exception:
-                            pass  # Best-effort; don't fail the update
+                            try:
+                                clear_run_report(basename, language)
+                            except Exception as exc:
+                                if not quiet:
+                                    rprint(
+                                        f"[warning][metadata] Run report clear failed for "
+                                        f"{basename} ({language}): {exc}[/warning]"
+                                    )
+                            # Defensive: clear_run_report() in pdd.operation_log
+                            # silently swallows OSError on the actual unlink
+                            # (see pdd/operation_log.py:317-320), so if the
+                            # report file existed before the call but still
+                            # exists afterwards, the deletion failed silently.
+                            # Surface that as a non-fatal warning so the user
+                            # knows runtime verification state may still
+                            # describe the pre-mutation files.
+                            _stale_remains = False
+                            if _pre_existed and _stale_report_path is not None:
+                                try:
+                                    _still_there = _stale_report_path.exists()
+                                except Exception:
+                                    _still_there = False
+                                if _still_there:
+                                    _stale_remains = True
+                                    if not quiet:
+                                        rprint(
+                                            f"[warning][metadata] Run report clear failed for "
+                                            f"{basename} ({language}): "
+                                            f"still exists after clear_run_report: "
+                                            f"{_stale_report_path}; skipping fingerprint update so a "
+                                            f"fresh fingerprint does not coexist with a stale "
+                                            f"run report (issue #1057)."
+                                            f"[/warning]"
+                                        )
+                            if not _stale_remains:
+                                try:
+                                    paths = {
+                                        "prompt": Path(prompt_path),
+                                        "code": Path(code_path),
+                                    }
+                                    save_fingerprint(
+                                        basename, language,
+                                        operation="update",
+                                        paths=paths,
+                                        cost=result.get("cost", 0.0),
+                                        model=result.get("model", "unknown"),
+                                    )
+                                except Exception:
+                                    pass  # Best-effort; don't fail the update
+                else:
+                    if "Success" in result.get("status", ""):
+                        try:
+                            from .metadata_sync import run_metadata_sync
+                            sync_res = run_metadata_sync(
+                                prompt_path=Path(prompt_path),
+                                code_path=Path(code_path),
+                                dry_run=False,
+                            )
+                            metadata_results[prompt_path] = sync_res
+                        except Exception as exc:
+                            from .metadata_sync import MetadataSyncResult, StageStatus
+                            metadata_results[prompt_path] = MetadataSyncResult(
+                                prompt_path=Path(prompt_path),
+                                code_path=Path(code_path),
+                                dry_run=False,
+                                stages={"prompt": StageStatus(status="failed", reason=str(exc))},
+                            )
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
-        # --- Post-update: Architecture sync ---
+        # --- Post-update: Architecture sync (+ PRD sync if arch changed) ---
+        # The PRD-sync block always runs (independent of `sync_metadata`) so
+        # that opting into `--sync-metadata` does not silently drop PRD
+        # propagation. The orchestrator handles per-pair arch updates when
+        # `sync_metadata=True`, so we only run the legacy arch loop when
+        # `sync_metadata=False`; the PRD step keys off the resulting count
+        # of architecture entries that actually changed.
         arch_entries_updated = 0
         prd_status = "skipped"
 
-        # Determine prompts directory and architecture path
-        prompts_dir = Path(repo_root) / "prompts"
         from .architecture_registry import find_architecture_for_project
         arch_files = find_architecture_for_project(Path(repo_root))
         architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
+        prompts_dir = Path(repo_root) / "prompts"
 
-        successful_prompts = [
-            res["prompt_file"] for res in results
-            if "Success" in res.get("status", "")
-        ]
+        if not sync_metadata:
+            successful_prompts = [
+                res["prompt_file"] for res in results
+                if "Success" in res.get("status", "")
+            ]
 
-        if successful_prompts and architecture_path.exists():
-            from .architecture_sync import update_architecture_from_prompt
-            for prompt_file in successful_prompts:
-                prompt_filename = os.path.basename(prompt_file)
-                try:
-                    arch_result = update_architecture_from_prompt(
-                        prompt_filename,
-                        prompts_dir=prompts_dir,
-                        architecture_path=architecture_path,
-                    )
-                    if arch_result.get("success") and arch_result.get("updated"):
-                        arch_entries_updated += 1
-                except Exception:
-                    # Architecture sync is best-effort; don't fail the update
-                    pass
+            if successful_prompts and architecture_path.exists():
+                from .architecture_sync import update_architecture_from_prompt
+                for prompt_file in successful_prompts:
+                    prompt_filename = os.path.basename(prompt_file)
+                    try:
+                        arch_result = update_architecture_from_prompt(
+                            prompt_filename,
+                            prompts_dir=prompts_dir,
+                            architecture_path=architecture_path,
+                        )
+                        if arch_result.get("success") and arch_result.get("updated"):
+                            arch_entries_updated += 1
+                    except Exception:
+                        # Architecture sync is best-effort; don't fail the update
+                        pass
+        else:
+            # The orchestrator already ran update_architecture_from_prompt per
+            # pair. Count entries whose architecture stage reported a real
+            # update so the downstream PRD-sync decision matches the legacy
+            # semantics (only run when arch actually changed).
+            for sync_res in metadata_results.values():
+                arch_stage = sync_res.stages.get("architecture")
+                if (
+                    arch_stage is not None
+                    and arch_stage.status == "ok"
+                    and arch_stage.detail
+                    and arch_stage.detail.startswith("updated fields:")
+                    and arch_stage.detail != "updated fields: []"
+                ):
+                    arch_entries_updated += 1
 
         # --- Post-update: PRD sync (only if architecture changed) ---
         if arch_entries_updated > 0:
@@ -1252,7 +1537,7 @@ def update_main(
                         "If no update is needed, output: NO_UPDATE_NEEDED"
                     )
 
-                    llm_output = run_agentic_task(
+                    llm_success, llm_output, llm_cost, _llm_model = run_agentic_task(
                         instruction=instruction,
                         cwd=Path(repo_root),
                         verbose=ctx.obj.get("verbose", False),
@@ -1260,8 +1545,12 @@ def update_main(
                         label="prd-sync",
                     )
 
-                    if llm_output and "<updated-prd>" in llm_output:
-                        import re
+                    if llm_cost:
+                        total_repo_cost += llm_cost
+
+                    if not llm_success:
+                        prd_status = f"error: {llm_output}"
+                    elif llm_output and "<updated-prd>" in llm_output:
                         match = re.search(
                             r"<updated-prd>(.*?)</updated-prd>",
                             llm_output,
@@ -1279,12 +1568,39 @@ def update_main(
         else:
             prd_status = "skipped (no arch changes)"
 
+        from .metadata_sync import STAGE_ORDER
+
+        def _metadata_column_value(prompt_file_key: str) -> str:
+            res = metadata_results.get(prompt_file_key)
+            if res is None:
+                return "skipped"
+            stages = res.stages
+            failing = res.failing_stage
+            if failing:
+                return f"failed:{failing}"
+            if any(s.status == "dry_run" for s in stages.values()):
+                return "dry-run"
+            # ``partial:<stage>`` surfaces the first skipped stage (e.g. an
+            # unregistered module → architecture stage skipped). Result is
+            # still ``ok`` (skipped is a non-failure), but the column makes it
+            # obvious that not every metadata layer was actually written.
+            skipped = next(
+                (n for n in STAGE_ORDER if stages.get(n) and stages[n].status == "skipped"),
+                None,
+            )
+            if skipped:
+                return f"partial:{skipped}"
+            if res.ok:
+                return "synced"
+            return "skipped"
+
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Prompt File", style="dim", width=50)
         table.add_column("Status")
         table.add_column("Cost", justify="right")
         table.add_column("Model")
         table.add_column("Error", style="error")
+        table.add_column("Metadata")
 
         models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):
@@ -1294,6 +1610,7 @@ def update_main(
                 f"${res['cost']:.6f}",
                 res["model"],
                 res["error"],
+                _metadata_column_value(res["prompt_file"]),
             )
             if res["model"]:
                 models_used.add(res["model"])
@@ -1308,6 +1625,28 @@ def update_main(
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
 
         final_model_str = ", ".join(sorted(models_used)) if models_used else "N/A"
+
+        # When --sync-metadata was opted in, any per-pair MetadataSyncResult
+        # that is not .ok (i.e. a stage reported `failed`) must surface as a
+        # non-zero CLI exit. Without this, repo-mode silently returns the
+        # success tuple and Click exits 0 — masking partial-state heals and
+        # contradicting the single-file `click.exceptions.Exit(1)` contract.
+        # `skipped` is permitted (no arch entry, unregistered modules); only
+        # `failed` blocks. The summary table has already been printed above
+        # so the operator sees which pair(s) failed.
+        if sync_metadata and metadata_results:
+            failed_pairs = [
+                (p, r) for p, r in metadata_results.items()
+                if not getattr(r, "ok", False)
+            ]
+            if failed_pairs:
+                rprint(
+                    f"[error][metadata-sync] repo mode: "
+                    f"{len(failed_pairs)} pair(s) finalized with a failed stage; "
+                    f"exiting non-zero (#871)[/error]"
+                )
+                raise click.exceptions.Exit(1)
+
         return "Repository update complete.", total_repo_cost, final_model_str
 
     # --- Single file logic ---
@@ -1363,6 +1702,25 @@ def update_main(
                         rprint(f"[bold]Provider:[/bold] {provider}")
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
+
+                    if sync_metadata:
+                        if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
+                            # Surface as a non-zero CLI exit, not a soft None
+                            # return. modify.py re-raises click.exceptions.Exit,
+                            # so this bubbles to Click's command boundary and
+                            # the preflight subprocess sees returncode != 0
+                            # (#871 acceptance criterion).
+                            raise click.exceptions.Exit(1)
+
+                    _finalize_single_file_fingerprint(
+                        Path(prompt_path),
+                        Path(modified_code_file),
+                        sync_metadata=sync_metadata,
+                        dry_run=dry_run,
+                        quiet=quiet,
+                        cost=agentic_cost,
+                        model=provider,
+                    )
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1432,6 +1790,20 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
+            if sync_metadata:
+                if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
+                    raise click.exceptions.Exit(1)
+
+            _finalize_single_file_fingerprint(
+                Path(prompt_path),
+                Path(modified_code_file),
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
+                quiet=quiet,
+                cost=total_cost,
+                model=model_name,
+            )
+
             return modified_prompt, total_cost, model_name
 
         # Case 2: True Update Mode.
@@ -1473,6 +1845,30 @@ def update_main(
                         rprint(f"[bold]Provider:[/bold] {provider}")
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
+
+                    if sync_metadata:
+                        if _is_output_redirected(
+                            Path(agentic_prompt_file),
+                            Path(actual_input_prompt_file),
+                        ):
+                            if not quiet:
+                                rprint(
+                                    "[info][metadata] Skipping metadata sync orchestrator: "
+                                    "output redirected[/info]"
+                                )
+                        elif not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
+                            raise click.exceptions.Exit(1)
+
+                    _finalize_single_file_fingerprint(
+                        Path(agentic_prompt_file),
+                        Path(modified_code_file),
+                        sync_metadata=sync_metadata,
+                        dry_run=dry_run,
+                        quiet=quiet,
+                        cost=agentic_cost,
+                        model=provider,
+                        source_prompt_path=Path(actual_input_prompt_file),
+                    )
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1577,6 +1973,30 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
 
+            if sync_metadata:
+                if _is_output_redirected(
+                    Path(output_file_paths["output"]),
+                    Path(actual_input_prompt_file),
+                ):
+                    if not quiet:
+                        rprint(
+                            "[info][metadata] Skipping metadata sync orchestrator: "
+                            "output redirected[/info]"
+                        )
+                elif not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
+                    raise click.exceptions.Exit(1)
+
+            _finalize_single_file_fingerprint(
+                Path(output_file_paths["output"]),
+                Path(modified_code_file),
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
+                quiet=quiet,
+                cost=total_cost,
+                model=model_name,
+                source_prompt_path=Path(actual_input_prompt_file),
+            )
+
             return modified_prompt, total_cost, model_name
 
     except (ValueError, git.InvalidGitRepositoryError) as e:
@@ -1586,6 +2006,13 @@ def update_main(
         return None
     except click.Abort:
         # User cancelled - re-raise to stop the sync loop
+        raise
+    except click.exceptions.Exit:
+        # Intentional non-zero exit (e.g. sync_metadata finalization failure).
+        # Must propagate so the CLI surfaces returncode != 0 and the preflight
+        # auto-heal subprocess does not mark a half-synced update as healed
+        # (#871). Letting the bare `except Exception` below swallow this would
+        # silently convert it to exit 0.
         raise
     except Exception as e:
         if not quiet:

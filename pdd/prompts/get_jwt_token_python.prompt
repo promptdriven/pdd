@@ -73,6 +73,7 @@
         a. Check keyring for refresh token
         b. If refresh token exists: call Firebase to get new JWT, cache it, return it
         c. If no refresh token or refresh fails:
+            - **Non-interactive guard**: before initiating device flow, check `_is_noninteractive()` (returns True when `PDD_NO_INTERACTIVE` or `CI` is set to a truthy value). If non-interactive, raise `AuthError` with a message instructing the caller to set `PDD_JWT_TOKEN` or run `pdd auth login` to cache credentials. This prevents Cloud Build / Docker runners from printing a device code and hanging on a verification prompt no human can answer; upstream `CloudConfig.get_jwt_token` catches the `AuthError` and falls back to local execution.
             i. Request device code from GitHub's OAuth device endpoint
             ii. Display user code and verification URL in terminal
             iii. Poll GitHub's OAuth endpoint for completion

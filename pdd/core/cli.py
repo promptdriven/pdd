@@ -16,6 +16,7 @@ except ImportError:
     DEFAULT_TIME = 0.25
     __version__ = "unknown"
 from ..auto_update import auto_update
+from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
@@ -92,11 +93,20 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
+def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
+    """Return whether this invocation needs prompt-lint machine output."""
+    pairs = set(zip(arguments, arguments[1:]))
+    return "--json" in arguments and ("checkup", "lint") in pairs
+
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         self.format_usage(ctx, formatter)
+        formatter.write_text(PDD_FULL_TAGLINE)
+        formatter.write_text(PDD_POSITIONING)
+        formatter.write_paragraph()
         with formatter.section("Generate Suite (related commands)"):
             formatter.write_dl([
                 ("generate", "Create runnable code from a prompt file."),
@@ -245,7 +255,7 @@ class PDDCLI(click.Group):
 @click.group(
     cls=PDDCLI,
     invoke_without_command=True,
-    help="PDD (Prompt-Driven Development) Command Line Interface.",
+    help="PDD prompt-native programming system.",
 )
 @click.option(
     "--force",
@@ -352,6 +362,11 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
+    # Prompt-lint JSON output is intended for downstream machine consumers.
+    json_mode = _is_prompt_lint_json_invocation(sys.argv)
+    quiet = quiet or json_mode
+    core_dump = core_dump and not json_mode
+
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
 
@@ -458,7 +473,8 @@ def cli(
             )
 
     # Perform auto-update check unless disabled
-    if os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
+
+    if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:
                 console.print("[info]Checking for updates...[/info]")
@@ -575,8 +591,16 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
                 else:
-                    # Generic output using potentially "Unknown Command" name
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_name}")
+                    # Generic output using potentially "Unknown Command" name.
+                    # Suppress the Model: segment when no model was used (zero-cost
+                    # no-ops like an all_synced sync return model_name="" or
+                    # "unknown"/"none"/"N/A") so the UI doesn't render a trailing
+                    # blank "Model: " label (#1103).
+                    model_repr = (model_name or "").strip()
+                    if model_repr and model_repr.lower() not in {"unknown", "n/a", "none", "skipped"}:
+                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
+                    else:
+                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
                 
                 # Display examples used for grounding
                 if isinstance(result_data, dict) and result_data.get("examplesUsed"):

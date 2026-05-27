@@ -36,3 +36,20 @@ Warning: examples/prompts_linter/architecture.json: architecture.json / <include
 CI runs `pdd checkup --validate-arch-includes` against the repo plus a small aligned
 fixture under `tests/fixtures/arch_include_validate_ok/` so the step fails if the
 command or validation logic regresses.
+
+## Discovery-layer skip (used by sync and related tooling)
+
+`pdd.architecture_registry.find_architecture_for_project` applies the same
+bundled-sample skip by default: top-level `examples/`, `example_project/`,
+`example_workspace/`, and `staging/` trees are excluded so a root-level
+`pdd sync` (and other discovery-driven tooling such as `metadata_sync` and
+`auto_deps_architecture`) does not flatten sample modules into the project's
+own `architecture.json` (issue #1060). Real nested architecture files under
+other top-level names (`services/`, `apps/`, `packages/`, `libs/`, `frontend/`,
+`backend/`, etc.) are still discovered.
+
+If your monorepo intentionally uses one of the four sample names for production
+modules, opt back in by passing `skip_bundled_sample_arch=False` to the
+discovery helper, or run the validator with `pdd checkup --validate-arch-includes
+--strict`. The skip is a no-op when the project root is itself a bundled-example
+directory, so scans started inside one of those trees continue to work.

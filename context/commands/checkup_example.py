@@ -50,6 +50,8 @@ def example_pr_review_loop_mode() -> None:
                 "codex",
                 "--fixer",
                 "claude",
+                "--reviewer-fallback",
+                "gemini",
                 "--max-review-rounds",
                 "3",
             ],

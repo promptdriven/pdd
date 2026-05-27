@@ -1,10 +1,17 @@
-# PDD (Prompt-Driven Development) Command Line Interface
+# PDD: The Last Programming Language™
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.233-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PyPI version](https://img.shields.io/pypi/v/pdd-cli.svg) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
-PDD (Prompt-Driven Development) is a toolkit for AI-powered code generation and maintenance.
+PDD (Prompt-Driven Development) is a prompt-native programming system. `.prompt`
+files are the human-authored source language; Python, TypeScript, Go, and other
+traditional languages are generated artifacts.
+
+PDD is the last programming language in this specific sense: developers author
+durable intent, constraints, examples, and tests, then compile that source into
+whatever implementation language the project needs. Code remains real and
+reviewable, but it is no longer the primary source of truth.
 
 **Getting started is simple:**
 
@@ -36,11 +43,17 @@ For prompt-based workflows, the **`sync`** command automates the complete develo
 
 ## Whitepaper
 
+For the positioning essay behind this shift, read [The Last Programming Language](docs/the-last-programming-language.md).
+
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
 [Read the Full Whitepaper with Benchmarks](docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md)
 
+For a case study on specification drift in AI-assisted coding workflows, read [Why AI Code Falls Apart](docs/whitepaper_specification_drift/whitepaper.md).
+
 Also see the Prompt‑Driven Development Doctrine for core principles and practices: [docs/prompt-driven-development-doctrine.md](docs/prompt-driven-development-doctrine.md)
+
+For pre-merge prompt and user-story quality (vague terms, vocabulary, optional LLM review), see [docs/prompt_lint.md](docs/prompt_lint.md).
 
 ## Installation
 
@@ -168,7 +181,8 @@ For CLI enthusiasts, implement GitHub issues directly:
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
+   - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (uses Antigravity OAuth or keyring-backed Google subscription sign-in if present, otherwise `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin the Antigravity binary, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection (`auto` prefers `agy` when credentialed, but keeps legacy `gemini` for legacy-OAuth-only setups).
+   - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
@@ -230,8 +244,8 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription credentials such as Claude Max/Pro, Gemini OAuth, or Codex ChatGPT login, or OpenCode provider auth/config.
-  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription credential or config, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
+  1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config.
+  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
   4. Optionally creates a `.pddrc` project config
   5. Tests the first available model with a real LLM call 
@@ -359,8 +373,6 @@ For proper model identifiers to use in your custom configuration, refer to the [
    - **Python version conflicts**: If you have multiple Python versions, ensure `python3` points to Python 3.8+: `which python3 && python3 --version`
 
 ## Version
-
-Current version: 0.0.233
 
 To check your installed version, run:
 ```
@@ -618,6 +630,7 @@ graph TB
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -803,6 +816,7 @@ The generated CSV file includes the following columns:
 - cost: The estimated cost of the operation in USD (e.g., 0.05 for 5 cents). This will be zero for local models or operations that do not use a LLM.
 - input_files: A list of input files involved in the operation
 - output_files: A list of output files generated or modified by the operation
+- attempted_models: Semicolon-delimited audit log of every model PDD attempted for the command, across all LLM calls the command made (e.g. `generate` runs code-generation followed by postprocess code extraction — both contribute). When PDD's default model fails and the run falls back to another provider (for example Vertex AI → DeepSeek), each attempted model appears here so users can see the full fallback history rather than only the final successful model. The `model` column above names the model that actually produced the command's output; `attempted_models` is the complete record of what was tried. For commands that catch a substep failure and recover with a different model, the list may contain entries that came AFTER the model named in `model` — those represent attempts that were tried but didn't produce the final output. For a single-attempt successful command this column contains just the successful model. Semicolons inside model names are sanitized to preserve the delimiter. **Ordering:** sequential (single-thread) command paths produce a list in wall-clock attempt order; concurrent paths (e.g. `auto-deps --concurrency > 1`, which fans summarization across worker threads) sort their per-file contributions by file-submission index — a deterministic alternative to wall-clock ordering, which would otherwise depend on thread-scheduler timing.
 
 This comprehensive output allows for detailed tracking of not only the cost and type of operations but also the specific files involved in each PDD command execution.
 
@@ -830,7 +844,7 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Antigravity/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
 
 ```bash
 # Project-wide architecture sync (no argument)
@@ -861,7 +875,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
-- `--dry-run`: Display real-time sync analysis instead of running sync operations. For no-argument project-wide sync, this prints the dependency-ordered module list and estimated cost without executing any module syncs. For single-module sync, it performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing operations.
+- `--dry-run`: Display real-time sync analysis instead of running sync operations. For no-argument project-wide sync, this prints the dependency-ordered module list and estimated cost without executing any module syncs, plus a single compact roll-up of modules outside the Tier 1 (`generate` / `auto-deps`) scope — bucketed by reason (e.g. `Out of Tier 1 scope: 42 example, 31 test, 18 verify, 12 update, 74 no-prompt fixture`) instead of one warning line per skipped entry. When zero modules are stale, the `0 stale module(s)` fragment is rendered in green so the success signal is visually unambiguous. Actionable architecture-graph warnings (ambiguous or unresolved cross-arch dependencies) are still printed individually in yellow. For single-module sync, it performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing operations. Passing the top-level `pdd --verbose` flag (see above) restores the legacy per-module enumeration after the compact roll-up — one yellow warning line per module outside the Tier 1 scope — for debugging.
 - `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
@@ -920,7 +934,14 @@ If multiple development language prompt files exist for the same basename, sync 
 The sync command automatically detects what files exist and executes the appropriate workflow:
 
 1. **auto-deps**: Find and inject relevant dependencies into the prompt — both code examples and documentation files (schema docs, API docs, etc.). Removes redundant inline content that duplicates included documents.
-2. **generate**: Create or update the code module from the prompt
+2. **generate**: Create or update the code module from the prompt. After generation an **architecture conformance gate** validates the output against both `architecture.json` and the prompt's `<pdd-interface>` block:
+    - Each declared symbol must exist in the generated code (architecture.json symbol-existence check).
+    - For interface entries that declare a paren-list `signature` (`module`, `cli`, and `command` types), each declared parameter name must appear in the matching function/method signature (dotted names like `ContentSelector.select` are resolved through the class body; variadic `*args`/`**kwargs` do not satisfy a declared named parameter).
+    - **Signature drift** is checked per parameter: annotation drift fires only when both sides specify and differ (conservative — gradually-typed code does not churn), while default drift fires whenever the prompt declares a default and the generated code drops or changes it (strict — a missing default is a runtime contract break for callers omitting the optional kwarg).
+    - **Public-surface regression gate**: when a module already has a generated code file in the working tree (i.e., not a first-time generation), the gate ALSO snapshots the pre-generation public surface and rejects a generation that removes, renames, or changes the callable signature of any public symbol. For Python the snapshot covers top-level functions, classes, `class.method` symbols (including nested classes), module-level constants (`PUBLIC_FLAG = ...`, including bound `AnnAssign` like `PUBLIC_FLAG: bool = True`), and re-exported imports (`import git` exposes `git`; `from .helpers import load` exposes `load`). `from __future__ import …` directives and bare type-only annotations are not part of the surface. Intentional removals/signature changes must be scoped, e.g. `BREAKING-CHANGE: remove calculate_sha256` or `BREAKING-CHANGE: change signature calculate`; listing a top-level class (`BREAKING-CHANGE: remove Service`) implicitly authorizes removing every `Service.method` / `Service.Inner.method` descendant captured in the snapshot. A bare `BREAKING-CHANGE:` does not disable the gate. First-time generation (no prior code file) is exempt. Set `PDD_SKIP_PUBLIC_SURFACE_GATE=1` to disable only this gate, or `PDD_SKIP_CONFORMANCE=1` to skip all conformance gates.
+    - **Test-churn gate**: if `pdd sync` is about to overwrite an existing test file through the code-generation writer, `cmd_test_main`, or one-session agentic sync, and the unified-diff churn ratio between the pre-sync and proposed test file exceeds `PDD_TEST_CHURN_THRESHOLD` (default `0.40`, i.e., 40%), the gate fails fast with `TestChurnError` so a small prompt change cannot land a thousand-line test rewrite that drops broad existing coverage. Pure additive test growth is allowed, first-time test generation is exempt, and intentional rewrites require an explicit marker such as `BREAKING-CHANGE: rewrite tests`. Set `PDD_SKIP_TEST_CHURN_GATE=1` to disable only this gate.
+    - **Empty-generation guard**: when the LLM provider returns an empty (or whitespace-only) body and the output path already has non-empty existing content, the writer refuses to truncate the file. Python public modules / test files trip `PublicSurfaceRegressionError` / `TestChurnError` through the normal gates; non-Python artifacts (JSON, YAML, prompts, etc.) raise a `click.UsageError("Refusing to overwrite ...")` instead. Set `PDD_ALLOW_EMPTY_GENERATION=1` for the rare case where empty output is intentional.
+    - On failure, sync retries the generation step up to `MAX_CONFORMANCE_ATTEMPTS` with a `PDD_REPAIR_DIRECTIVE` that names the function to fix and the parameters/annotations/defaults to add or restore. Public-surface and test-churn failures use the same repair loop **only on the generate and one-session paths**; surface regressions detected after a crash/fix/verify write are hard failures (no retry) because each of those operations already runs its own internal fix loop and a second outer retry would compound retries (`N × M`) without converging. `.pddrc` context/strength are pinned across the entire retry sequence so a retry never silently switches model or context. The retry stops early when the missing-symbol/signature set repeats across attempts, and the final failure is surfaced as a structured `=== architecture conformance failure ===`, `=== public surface regression ===`, or `=== test churn threshold exceeded ===` block listing the offending symbols / churn ratio plus a `Reproduce locally: pdd sync <basename>` line.
 3. **example**: Generate usage example if it doesn't exist or is outdated
 4. **crash**: Fix any runtime errors to make code executable
 5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
@@ -1052,6 +1073,32 @@ Options (agentic mode):
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
+
+### 1a. sync-architecture
+
+Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`). This is useful after editing prompt metadata directly, or after backfilling prompt tags, so the architecture graph and command metadata stay aligned with the prompts.
+
+```bash
+# Preview architecture updates for all prompts
+pdd sync-architecture --dry-run
+
+# Update architecture.json from all prompt metadata tags
+pdd sync-architecture
+
+# Update architecture.json from specific prompt entries
+pdd sync-architecture commands/maintenance_python.prompt
+```
+
+Arguments:
+- No argument: Scan all prompt files known to the current project.
+- `FILENAMES`: Optional prompt filenames as they appear in `architecture.json` or under the configured prompts directory.
+
+Options:
+- `--dry-run`: Report which architecture entries would change without writing `architecture.json`.
+
+The command prints updated prompt entries and validation errors or warnings. It exits non-zero when validation fails, even if it was able to write requested metadata updates before validation.
+
+> Note: Validation is repo-wide and runs even when you target a single prompt. If your `architecture.json` already has unrelated missing-dependency errors elsewhere, the exit code stays non-zero on `--dry-run` even for an otherwise-clean target prompt. Fix the repo-wide errors (or scope your check) before relying on the exit code in scripts.
 
 ### 2. generate
 
@@ -1665,14 +1712,15 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
-  - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
-  - `md`: Generates markdown format with `.md` extension
-  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly.
+  - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript) when no suffix is supplied on `--output`. If `--output` includes a suffix (`.yml`, `.m`, `.txt`, …), that suffix is honored verbatim — pass `--format md` to force a `.md` extension.
+  - `md`: Generates markdown content; the resolved output path will always end in lowercase `.md`, replacing any other suffix (including upper-case variants like `.MD`) on `--output`.
+  When the wrapper rewrites an explicit `--output` path (`--format md` with a non-`.md` suffix, or a bare name under `--format code`) and the rewritten file already exists, you will be prompted to confirm the overwrite unless `--force` is set.
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
 - Sanity checks: The example program is typically used as the runnable program for `crash` and `verify`, providing a quick end-to-end sanity check that the generated code runs and behaves as intended.
 - Auto-deps integration: The `auto-deps` command can scan example files (e.g., `examples/**/*.py`) and insert relevant references into prompts. Based on each example’s content (imports, API usage, filenames), it identifies useful development units to include as dependencies.
+- Metadata finalization: A successful `pdd example` updates the affected module's fingerprint and clears its stale `.pdd/meta/<basename>_<language>_run.json` runtime-verification report, so a regenerated example never leaves runtime state describing the pre-mutation output.
 
 **When to use**: Choose this command when creating reusable references that other prompts can efficiently import. This produces token-efficient examples that are easier to reuse across multiple prompts compared to including full implementations.
 
@@ -1745,13 +1793,14 @@ pdd [GLOBAL OPTIONS] test <github-issue-url>
 **Agentic Options:**
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--clean-restart`: Discard saved agentic test state and start the 18-step workflow fresh
 - `--manual`: Use legacy prompt-based mode instead of agentic mode
 
 **Environment Variables:**
 - `PDD_CLOUD_RUN=true`: Enable parallel execution mode for manual testing (Steps 6-11)
 - `PDD_NO_GITHUB_STATE=1`: Disable GitHub state persistence
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature.
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning.
 
 **Example (Agentic Mode):**
 ```bash
@@ -1760,6 +1809,9 @@ pdd test https://github.com/myorg/myrepo/issues/789
 
 # Resume after answering clarifying questions
 pdd test https://github.com/myorg/myrepo/issues/789
+
+# Start fresh and ignore saved workflow state
+pdd test --clean-restart https://github.com/myorg/myrepo/issues/789
 ```
 
 **Next Step - Fixing Test Issues:**
@@ -1992,6 +2044,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
+- `--clean-restart`: Discard saved agentic E2E fix state and ignore sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
 - `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
@@ -2060,9 +2113,9 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Requires the `claude` CLI to be installed and in your `PATH`.
     *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
     *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Authenticates with `~/.gemini` OAuth credentials (run `gemini` interactively once to populate), `GOOGLE_API_KEY`/`GEMINI_API_KEY`, or Vertex AI service-account credentials.
+2.  **Google (Antigravity `agy` / legacy `gemini`):**
+    *   Requires either the `agy` CLI (preferred, install via `curl -fsSL https://antigravity.google/cli/install.sh | bash`) **or** the legacy `gemini` CLI (`npm install -g @google/gemini-cli`) to be on your `PATH`. When both are installed, `auto` mode picks `agy` when an Antigravity-compatible key/OAuth/Vertex credential is configured; if the only Google auth signal is legacy `~/.gemini/oauth_creds.json`, it uses `gemini` so rollback OAuth keeps working. `PDD_GOOGLE_CLI=gemini` is the explicit rollback to the old binary. `PDD_AGENTIC_PROVIDER=antigravity` pins `agy` and overrides any prior `PDD_GOOGLE_CLI`.
+    *   Authenticates with Antigravity OAuth or keyring-backed Google subscription sign-in (`~/.gemini/antigravity-cli/` state), API keys (`ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, plus PDD maps `GEMINI_API_KEY` to `GOOGLE_API_KEY` for the `agy` subprocess), or Vertex AI env auth. Legacy `gemini` uses its own OAuth file (`~/.gemini/oauth_creds.json`) plus `GEMINI_API_KEY`/`GOOGLE_API_KEY`. Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**.
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
@@ -2076,7 +2129,7 @@ You can configure environment-variable keys using `pdd setup` or by setting them
 
 #### Agentic E2E Fix Mode
 
-For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an 11-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation and code cleanup.
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an iterative 11-step workflow followed by a final PR-mode checkup gate, fixing both unit tests and e2e tests across your codebase, validating CI, and cleaning up code.
 
 **How it Works:**
 
@@ -2093,10 +2146,11 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 9. **Verify All**: Final verification that all tests pass locally
 10. **CI Validation**: Poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate CI-specific issues (lint, artifacts, build)
 11. **Code Cleanup**: Review all changes from the workflow and clean up code quality issues (debug statements, unused imports, duplicated code); revert if tests fail
+12. **Final PR Checkup Gate**: After CI passes, run the full `pdd checkup --pr` against the PR head. If the checkup pushes additional fixes, CI is re-validated on the new head before the workflow returns success
 
 **Resumable Operations:**
 
-State is automatically persisted, allowing you to resume interrupted workflows. Use `--no-resume` to start fresh.
+State is automatically persisted, allowing you to resume interrupted workflows. Use `--clean-restart` to discard saved workflow state and sibling `pdd bug` analysis before starting fresh. Use `--no-resume` only when you want to ignore the E2E fix checkpoint while still allowing reusable bug-analysis context.
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd fix` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
@@ -2114,8 +2168,8 @@ pdd fix --ci-retries 5 https://github.com/myorg/myrepo/issues/42
 # Skip post-push CI validation entirely
 pdd fix --skip-ci https://github.com/myorg/myrepo/issues/42
 
-# Start fresh (ignore saved state)
-pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
+# Start fresh (ignore saved state and sibling bug analysis)
+pdd fix --clean-restart https://github.com/myorg/myrepo/issues/42
 
 # Disable GitHub state persistence (local-only)
 pdd fix --no-github-state https://github.com/myorg/myrepo/issues/42
@@ -2126,7 +2180,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription credential or config (recommended) or an API key in the environment
+- At least one supported agent CLI (Claude, Gemini/Antigravity, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription/config credential (recommended) or an API key in the environment
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2260,6 +2314,8 @@ The 13-step workflow:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
+**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. Cannot be combined with `--manual`.
+
 **Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
 **Worktree Branching Behavior**: When running `pdd change`, `pdd bug`, or `pdd split`, a new git worktree is created based on your current HEAD:
@@ -2306,7 +2362,7 @@ Update prompts based on code changes. This command operates in two primary modes
 
 **Agentic Prompt Optimization (Default)**
 
-The `update` command uses an agentic AI (Claude Code, Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+The `update` command uses an agentic AI (Claude Code, Gemini/Antigravity, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
 
 1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
 2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
@@ -2317,7 +2373,7 @@ This produces prompts that are more concise while remaining clear to developers 
 
 **Prerequisites**: Requires one of these CLI tools installed and configured:
 - `claude` (Anthropic Claude Code)
-- `gemini` (Google Gemini CLI)
+- `agy` (Google Antigravity CLI, preferred for Google provider) **or** `gemini` (legacy Google Gemini CLI, rollback)
 - `codex` (OpenAI Codex CLI)
 - `opencode` (OpenCode CLI)
 
@@ -2379,6 +2435,27 @@ Options:
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 - `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
+- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. **Fingerprint note:** default single-file/regeneration `pdd update <code>` already finalizes the per-target fingerprint (`.pdd/meta/<basename>_<language>.json`) on success, and logs a skip reason when finalization is intentionally bypassed; `--sync-metadata` does not gate that behavior. Before writing the single-file/regeneration fingerprint, the command clears the affected module's stale `.pdd/meta/<basename>_<language>_run.json` runtime-verification report and re-checks it is gone; if the stale report survives the clear attempt (for example, silent `os.remove` failure on permissions/locks), the fingerprint write is skipped with a yellow warning so a fresh fingerprint cannot coexist with stale runtime state — best-effort, the successful `(prompt, cost, model)` update tuple is preserved either way (closing issue [#1106](https://github.com/promptdriven/pdd/issues/1106)). The stale-report warning intentionally surfaces even under `--quiet`, because it describes a real metadata-consistency problem the operator should learn about regardless of other log suppression. Default repo-mode `pdd update --repo` likewise finalizes per-pair fingerprints and, before writing each fingerprint, clears the affected module's stale `.pdd/meta/<basename>_<language>_run.json` runtime-verification report so metadata and runtime state stay in lock-step (clear failures are surfaced as non-fatal warnings, and if the stale `_run.json` still exists after the clear attempt the fingerprint write is skipped so a fresh fingerprint cannot coexist with stale runtime state — closing issue [#1057](https://github.com/promptdriven/pdd/issues/1057)). Without this flag, the broader prompt-tag/architecture/run-report orchestrator is not run and those layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
+
+Example (Metadata Sync):
+```bash
+# Update a single prompt and reconcile metadata (preserve/seed tags,
+# architecture entry, run reports, fingerprint) in one step
+pdd update --sync-metadata src/my_module.py
+
+# Repo-wide update with metadata sync — each updated pair is finalized via the shared orchestrator
+pdd update --sync-metadata
+```
+
+When `--sync-metadata` is enabled, the summary table shows a `metadata` column with one of:
+
+- `synced` — every metadata stage wrote successfully.
+- `partial:<stage>` — orchestration succeeded but one or more stages were skipped (for example, the prompt is not registered in `architecture.json`); the first skipped stage is named.
+- `failed:<stage>` — a stage hit a hard failure; the failing stage is named.
+- `skipped` — the orchestrator did not run for this pair (e.g. the pair was unchanged or the per-pair call returned no result).
+- `dry-run` — the call was made with `dry_run=True`; no on-disk state was written.
+
+If any layer is incomplete, the relevant stage is named explicitly so it is obvious whether tags, architecture, run reports, or the fingerprint is the unresolved gap.
 
 Example (overwrite original prompt - default behavior):
 ```
@@ -2388,7 +2465,7 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 
 Example (agentic vs simple mode):
 ```bash
-# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+# Default: Agentic mode (uses claude/agy/gemini/codex/opencode for intelligent optimization)
 pdd update --git my_module_python.prompt src/my_module.py
 
 # Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)
@@ -2471,7 +2548,7 @@ Options:
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription credential or config, or an API key in your environment (see [Prerequisites](#prerequisites) for details).
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini/Antigravity, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription/config credential or an API key in your environment (see [Prerequisites](#prerequisites) for details).
 
 Example:
 ```
@@ -2523,21 +2600,23 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 3. **Triage** - Assess if enough information is provided to proceed. If the issue already contains a detailed root cause analysis with file paths, line numbers, and causal explanation, fast-tracks to root cause analysis (skipping API research and reproduction). Posts comment requesting more info if needed.
 
-4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
+4. **API research** - Research external APIs, provider behavior, protocol constraints, and dependency contracts that could affect reproduction or the expected fix. Posts comment with relevant constraints. Skipped when Step 3 fast-tracks.
 
-5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
+5. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
+6. **Root cause analysis** - Run experiments to identify the root cause. Classifies the fix scope as `LOCALIZED` (one isolated site), `SIBLING_PATTERN` (other instances share the same root cause and must be checked), or `CROSS_CUTTING` (fix belongs in a shared helper/component rather than many local patches). When the root cause involves a shared symbol, helper, component, state field, marker, schema, event path, or repeated pattern, performs a mandatory sibling search and classifies each candidate with machine-readable evidence (`NEEDS_FIX: <path> | <reason>` for confirmed siblings, `SAFE_EVIDENCE: <path> | <line> | <reason>` for look-alikes that are safe). Broad analogous audits remain opt-in rather than default. Also performs a variable reference audit and state symmetry check. Posts comment explaining the root cause.
 
-6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels and all distinct code paths (first-run, resume, retry, error recovery) to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
+7. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
+8. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels and all distinct code paths (first-run, resume, retry, error recovery) to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
 
-8. **Verify detection** - Confirm the unit test successfully detects the bug. Classifies whether an E2E test is needed (`E2E_NEEDED: yes|no`) based on bug scope. Posts comment confirming verification.
+9. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
-9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Skipped deterministically when Step 8 outputs `E2E_NEEDED: no`, avoiding unnecessary LLM calls for purely internal bugs. Posts comment with E2E test results or skip reason.
+10. **Verify detection** - Confirm the unit test successfully detects the bug. Classifies whether an E2E test is needed (`E2E_NEEDED: yes|no`) based on bug scope. Posts comment confirming verification.
 
-10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
+11. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Skipped deterministically when Step 10 outputs `E2E_NEEDED: no`, avoiding unnecessary LLM calls for purely internal bugs. Posts comment with E2E test results when run; skipped Step 11 is recorded in workflow state without an extra visible comment.
+
+12. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 
 Arguments:
 - `ISSUE_URL`: GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)
@@ -2548,13 +2627,17 @@ Options:
 - `--language LANG`: Specify the programming language for the unit test (default is "Python").
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--clean-restart`: Discard saved agentic bug state and start the investigation workflow fresh
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
 Example:
 ```bash
 # Agentic mode (recommended)
 pdd bug https://github.com/myorg/myrepo/issues/42
+
+# Start fresh and ignore saved workflow state
+pdd bug --clean-restart https://github.com/myorg/myrepo/issues/42
 
 # Manual mode (legacy)
 pdd bug --manual prompt.prompt code.py main.py current.txt desired.txt
@@ -2601,6 +2684,14 @@ The command uses a two-stage retrieval pipeline when candidates exceed 50:
 2. **LLM reranking**: Uses LLM-as-judge to select the most relevant dependencies from candidates
 
 After inserting `<include>` directives, the command performs a **deduplication pass** that identifies and removes inline content in the prompt that semantically duplicates what the included documents already provide.
+
+**Metadata finalization (on success):** After a successful `auto-deps` run, the command writes/updates a fingerprint in `.pdd/meta/` for the file that was actually written (with `operation="auto-deps"` and the current include-dependency hashes) and clears any stale per-module `_run.json` report keyed by the same identity, so downstream commands see a consistent view. The fingerprint write and the include-dependency metadata update are committed together (atomic from the caller's perspective) and use hash-based, language-agnostic helpers from `pdd.operation_log`. Finalization errors are surfaced as warnings and do not mask a successful `auto-deps` result. Invalid `<include>` tags stripped by the prompt sanitizer and architecture-merge failures (e.g. `architecture.json` could not be patched in place) are also surfaced as yellow warnings before the success summary.
+
+Identity is derived from the **output path**:
+- **In-place mode** (`--output <PROMPT_FILE>`, or `pdd sync`'s post-move flow): the output path is the canonical prompt, so the fingerprint lands at `.pdd/meta/<basename>_<language>.json`.
+- **Default mode** (output is the separate `<basename>_<language>_with_deps.prompt` derivative): the fingerprint lands at `.pdd/meta/<basename>_<language>_with_deps.json`. Canonical metadata is intentionally untouched in this case — the derivative fingerprint records that an `auto-deps` run produced that file without overwriting the canonical module's record.
+
+**Note on `pdd sync`:** `pdd sync` invokes `auto-deps` with a `*_with_deps.prompt` temp output and then moves it onto the canonical prompt. To avoid leaving orphan `.pdd/meta/*_with_deps.json` files for the moved temp prompt (and to avoid clearing the wrong run report), sync passes the internal `_skip_finalization=True` flag to `auto_deps_main` and owns canonical metadata itself: sync writes the canonical fingerprint via its atomic state machinery (`_save_fingerprint_atomic`) and clears the canonical `_run.json` via `clear_run_report` immediately after the move.
 
 The command maintains a CSV file with the following columns:
 - `full_path`: The full path to the dependency file
@@ -2668,7 +2759,7 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 
 Run an automated health check on a project from a GitHub issue. The checkup workflow explores the project, identifies problems (missing deps, build errors, interface mismatches, failing tests, orphan pages, inconsistent API patterns), optionally fixes them, writes regression and e2e tests, and creates a PR.
 
-`checkup` can also verify an existing pull request against its source issue. The default PR mode is verification-only; the optional review-loop mode runs a reviewer/fixer loop that can commit and push fixes back to the PR branch.
+`checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
 
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
@@ -2680,6 +2771,7 @@ Arguments:
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--start-step STEP`: Recovery override for the legacy checkup flow; accepted values are `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, and `8`. Not compatible with `--review-loop`.
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 - `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
 - `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
@@ -2688,11 +2780,27 @@ Options:
 - `--reviewer ROLE`: Primary reviewer role for `--review-loop` (for example, `codex`).
 - `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
+- `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
+- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
-- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 10.0).
+- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 50.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
-- `--continue-on-reviewer-limit`: Report provider, rate, context-window, and timeout failures as `degraded` instead of `failed`. Degraded reviewers are still not clean and do not continue mutation.
+- `--continue-on-reviewer-limit`: Report provider, rate, context-window, timeout, auth, network, sandbox, permission, and non-zero-exit reviewer failures as `degraded` instead of `failed`. Degraded reviewers are still not clean unless a configured fallback reviewer completes successfully and takes over as the active reviewer.
+- `--fallback-reviewer-on-failure`: When the primary reviewer ends in `failed` or `missing` (not `degraded`), run a second review pass using the fixer's identity as a fallback reviewer. On a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, while the primary's original failure detail is preserved in the `### Reviewer Diagnostics` subsection of the final report with a `superseded_by_fallback` marker. Off by default to preserve existing CI expectations.
+- `--no-gates`: Disable the deterministic local gates (`git diff --check` against the PR range, `prettier --check`, `npx --no-install tsc --noEmit`, a non-mutating Python syntax check via the builtin `compile()`, `ruff check`/`black --check`/`mypy`) that otherwise run before any `clean` verdict in `--review-loop`. The Python syntax gate routes through `compile()` rather than `python -m py_compile` so it never writes `__pycache__/*.pyc` into the worktree; the TypeScript gate uses `--no-install` so it never hits the npm registry. Gate subprocesses resolve `git` and tool binaries through a sanitized PATH so a PR cannot provide worktree-local shims via `PATH=.:$PATH`. Default: gates are enabled. The flag exists only as a diagnostic/emergency escape hatch — under normal operation a failing gate must block the PR from being declared clean even when the LLM reviewer says clean. Issue #1092.
+- `--gate-timeout FLOAT`: Per-gate timeout in seconds (default: 60). Applies to every discovered gate; the runner kills the subprocess and surfaces the gate as a `runner-error` blocker finding when the timeout fires.
+- `--gate-allow GATE`: Repeatable allowlist token forwarded to `discover_gates` as `extra_allow`. Reserved for future versions to opt extra gate names into the discovery set; the current default discovery is allowlist-only and the argument is accepted but does not widen it. Useful primarily as a forward-compat plumbing hook for CI configurations.
+
+**Deterministic-gate coverage limits (issue #1092)**: The default gate set is intentionally conservative because PR contents are untrusted on fork PRs. As a result the following workflows do NOT block a clean verdict and you should still rely on CI / human review for them:
+- **JS/TS PRs that change any `.js` / `.cjs` / `.mjs` file (anywhere in the worktree)**: prettier and eslint script gates are skipped because their configs can `require()` arbitrary local JavaScript (including subdirectory plugin modules) and the require chain is undecidable without running the very code we are trying to gate. A PR-sized JS formatting/lint regression on such a PR will only be caught by CI.
+- **TypeScript PRs that change `tsconfig*.json`, anything under `node_modules/`, or whose tsconfig extends-chain sets `incremental: true` / `composite: true`**: the script-based `npm run typecheck` gate is skipped because it would write `tsbuildinfo` into the worktree or execute PR-controlled config/plugin code. The direct `tsc --noEmit` gate also skips on a PR-touched `node_modules/` for the same reason.
+- **Repos without a recognised lockfile-local tool**: gates skip cleanly when the operator-supplied tool is missing; you'll see the gate absent from `### Deterministic Gates` rather than a runner error.
+- **Python PRs that change `pyproject.toml`, `setup.cfg`, `mypy.ini` / `.mypy.ini`, `ruff.toml` / `.ruff.toml`, or `tox.ini`**: ruff / black / mypy gates all skip because those config files steer the tools' exclusion lists, plugin loading, and rule disables. A PR-modified `[tool.black] force-exclude = '.*'` or `[tool.ruff] exclude = ['a.py']` would otherwise make the gate silently pass over real failures.
+- **Repos whose mypy config declares a worktree-local plugin path** (e.g. `[tool.mypy] plugins = ['./local_mypy_plugin.py']` or the same under `[mypy]` in `mypy.ini` / `setup.cfg`): mypy gate skips even on PRs that don't touch the config, because the existing plugin file is itself PR-modifiable and is imported during type-checking. Pure-package plugins (`mypy_django_plugin.main`) let the gate fire ONLY when the plugin's top-level name has no matching package at the worktree root OR under `src/` — under an editable install or a worktree-resolving `PYTHONPATH=.` env, mypy's import would otherwise resolve to PR-controlled worktree code, so a matching `my_project/` or `src/my_project/` (with `__init__.py`, as a namespace dir, or as `my_project.py`) disables the gate.
+- **Mixed / nested-manifest repositories**: gate discovery only inspects the worktree root for `package.json` (JS/TS tool gates) and `pyproject.toml` (Python tool gates). A repo whose manifests live one or more directories down — for example `frontend/package.json` plus `backend/pyproject.toml`, or a monorepo where each `apps/<name>/package.json` carries its own `scripts` block — will NOT have JS/TS or Python tool gates discovered against those nested manifests. The root-only convention is a deliberate scope choice: a recursive walk would have to make per-directory `cwd` / lockfile / env-sanitization decisions for each gate spawn and the safety contract behind every `node_modules_pr_touched` / config-touched skip would have to be re-derived for each nested workspace before it was safe to widen discovery. For now: use root-level manifests where you want the gates to fire, or rely on CI / human review for nested workspaces. Two gates survive on nested-manifest repos because they do not depend on a root manifest: `py-compile` is emitted per PR-changed `.py` file anywhere in the worktree, and `git-diff-check` runs against the git tree itself. The remaining gates — the script-based `npm:*` family AND the direct `tsc-noemit` gate — are all root-anchored: `tsc-noemit` requires `typescript` declared in the worktree-root `package.json` plus a worktree-root `tsconfig.json`, and there is no standalone direct `prettier --check` discovery (prettier only runs as a `package.json:scripts.format:check` script gate). All of those are skipped on nested-manifest layouts.
+
+These trade favourable-on-untrusted-PRs safety against gate coverage. To enforce the full check matrix in trusted environments, run the corresponding tools in CI under your existing PR pipeline.
 
 **How it works (8-step workflow with iterative fix-verify loop):**
 
@@ -2710,17 +2818,21 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, checkout-scoped `checkup/pr-{N}-<scope>` branch for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
 **Report-Only Mode**: Use `--no-fix` to run steps 1-5 and 7 without applying fixes — useful for auditing a project's health without making changes.
 
-Each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail.
+In **issue mode**, each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail. In **PR mode** (see below), step-level posting is suppressed — the orchestrator posts a single canonical final report on the PR thread and the issue thread once it knows the outcome (gate pass after push, gate fail, push failure, refusal, or `--no-fix` pass/fail). If GitHub commenting fails, the report body is also saved to `.pdd/checkup-pr-<n>/final-report.md` so it is never lost; the failure is surfaced via the run's returned message and persisted as `step_outputs["pr_post_status"]`, but it does not flip the gate outcome.
 
-**PR Verification Mode**: Use `--pr` and `--issue` to verify an existing PR against the issue it is intended to resolve. Without `--review-loop`, this mode remains verification-only and refuses to apply fixes or push to the PR branch.
+**PR Mode**: Use `--pr` and `--issue` to run checkup against an existing PR and the issue it is intended to resolve. By default this runs the full standard checkup flow on the PR worktree, commits eligible generated fixes, pushes them back to the same PR branch, and skips step 8 because the PR already exists. Add `--no-fix` when you want verification-only behavior. PR mode reloads `architecture.json` and `.pddrc` from the PR worktree before running, so audits see the PR's project state and not the parent checkout's.
 
-**Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the same reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification, and reviewer provider failures remain not-clean.
+**PR-Head Freshness Lease (auto-rerun on advance)**: In PR fix mode, if the remote PR head advances mid-checkup (a teammate pushes while PDD is auditing), the orchestrator transparently restarts the workflow against the new head rather than publishing a stale verdict. Restarts are capped at `MAX_PR_HEAD_REFRESHES = 2`, so the worst case is three inner attempts before exhaustion. The current restart count persists at `.pdd/checkup-pr-{pr_number}/pr_head_refreshes` (a single-int sidecar outside the workflow-state dir, so Ctrl-C + manual resume cannot bypass the bound); it is cleared automatically on a clean terminal success. When budget is exhausted, the run returns a failure message that lists every observed `old_sha->new_sha` transition and cites `max_pr_head_refreshes=2`, e.g.: `PR head kept advancing during checkup (aaaaaaaa->bbbbbbbb, bbbbbbbb->cccccccc, cccccccc->dddddddd); exhausted max_pr_head_refreshes=2. Rerun pdd checkup once the PR branch stabilizes.` The lease triggers at four checkpoints inside the inner orchestrator (post-Step-7 gate, pre-guards, push failure, post-push), and never force-pushes. `--no-fix --pr` does NOT consume restart budget; instead it fails closed (`Verdict downgraded — unverified:` banner over the clean Step 7 body) when post-Step-7 freshness cannot be confirmed — head advance, post-run refetch failure, or pre-run refetch failure (transient `_fetch_pr_metadata` flake at entry). Fix mode similarly fails closed at entry when `_fetch_pr_metadata` returns an empty head SHA — a fix-mode push requires a known baseline to validate freshness.
+
+**Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the active reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the active reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification, and active reviewer provider failures remain not-clean. Use `--reviewer-fallback` when the primary reviewer is known to be fragile in a given environment; the fallback reviewer is opt-in and distinct from the fixer.
+
+The review loop enforces a SHA-backed verification trust boundary so an unverified fixer attempt is never rendered as a completed fix (#1088). Each `### Fixes Attempted` bullet in the final report is rendered in the fixed-field form `fixer_result=… push_status=… local_sha=… pushed_sha=… verification=verified|unverified [summary=…]`; bare `success`/`fixed` tokens from fixer output never appear as the leading status. The report header always includes `verified-head-sha:` (the PR head SHA the verifier most recently cleared) and `remote-pr-head-sha:` (the current PR head observed at final-report render time). Before rendering `fresh-final-review: clean` or `verification=verified`, the loop re-fetches the remote PR head; if it has advanced past the verified SHA, affected bullets are forced to `verification=unverified` and `fresh-final-review` is downgraded so the report cannot claim a fresh clean review on a head the verifier never saw. If budget/cost/time exhausts after a fixer push but before the verifier clears, affected findings remain open and the report renders `verification=unverified` rather than a misleading `success`.
 
 Example:
 ```bash
@@ -2733,8 +2845,14 @@ pdd checkup --no-fix https://github.com/myorg/myrepo/issues/42
 # With extra timeout for large projects
 pdd checkup --timeout-adder 120 https://github.com/myorg/myrepo/issues/42
 
-# Verify an existing PR against its source issue without applying fixes
+# Run full checkup against an existing PR and push fixes to that PR
 pdd checkup \
+  --pr https://github.com/myorg/myrepo/pull/123 \
+  --issue https://github.com/myorg/myrepo/issues/42
+
+# Verify an existing PR without applying fixes
+pdd checkup \
+  --no-fix \
   --pr https://github.com/myorg/myrepo/pull/123 \
   --issue https://github.com/myorg/myrepo/issues/42
 
@@ -2744,7 +2862,8 @@ pdd checkup \
   --issue https://github.com/myorg/myrepo/issues/42 \
   --review-loop \
   --reviewer codex \
-  --fixer claude
+  --fixer claude \
+  --reviewer-fallback gemini
 
 # Review-loop audit only: no fixer, commits, or pushes
 pdd checkup \
@@ -3100,12 +3219,13 @@ PDD uses several environment variables to customize its behavior:
 #### Agentic Workflow Variables
 
 - **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set. Surfaced in the `.pdd/agentic-logs/` audit trail's `model` field when the response JSON does not carry an explicit model name (Issue #1376).
-- **`GEMINI_MODEL`**: Override the model used by Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` to the Gemini CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
+- **`GEMINI_MODEL`**: Override the model used by the legacy Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` only to the legacy `gemini` command. Antigravity `agy` does not expose an equivalent model flag; model routing is handled by the Antigravity CLI. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
 - **`CODEX_MODEL`**: Override the model used by Codex (OpenAI) CLI in agentic workflows (e.g., `gpt-5`). When set, passes `--model` to the Codex CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
-- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens include `anthropic`, `google`, `openai`, and `opencode` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`).
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
+- **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 
@@ -3448,25 +3568,32 @@ PDD can be integrated into various development workflows. Here are the conceptua
 
 **Process**:
 1. Scan modules for drift using `sync_determine_operation` (no LLM calls)
-2. For stale prompts: run `pdd update` to sync code changes back to prompts
+2. For stale prompts: run `pdd update` to sync code changes back to prompts, then invoke the shared metadata-sync orchestrator to finalize prompt tags, architecture entries, run reports, and the fingerprint atomically before any follow-up example refresh
 3. For stale examples: run `pdd sync` with example+verify operations
-4. Stage and commit healed files with a descriptive message
+4. Stage and commit healed files with a descriptive message — partial metadata state (any stage reporting `failed`) blocks the commit/checkpoint in PR mode. `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag generation pending #870) and does not block.
 5. Push changes to the current branch
+
+**Metadata Finalization**: The CI auto-heal `update` branch and the preflight drift-heal path both call the same `run_metadata_sync` orchestrator that `pdd update --sync-metadata` uses, so all three workflows share one finalization surface. The orchestrator runs in a fixed order — prompt → tags → architecture → run-report cleanup → fingerprint last. **Within `run_metadata_sync`** a `failed` upstream stage gates every later write-bearing stage (architecture, run_report, fingerprint), so a tags failure cannot drag architecture or fingerprint state out of sync. `skipped` upstream (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) is acceptable and does not gate later stages. **The orchestrator is not transactional across stages**: if e.g. tags + architecture succeed and fingerprint then fails, the prompt and `architecture.json` writes have already landed on disk and `run_metadata_sync` itself does not roll them back. End-to-end rollback for a failing module is handled by the CI auto-heal layer — on a sync failure, `pdd.ci_drift_heal` calls `_revert_prompt_file` and the module-scoped `_snapshot_metadata_state_for(drift)` / `_restore_metadata_state_for(snapshot)` pair (which captures this module's `architecture.json` bytes + `.pdd/meta/<basename>_<language>.json` pre-sync and writes them back on failure, never touching other modules' state). A repo-scoped `git restore -- .pdd` / `git restore -- architecture.json` is explicitly NOT used because in a multi-module push-to-main heal it would wipe earlier successful modules' writes from the same run; the legacy `_cleanup_metadata_artifacts` symbol is kept only as a no-op import shim. **Staging is scoped, not blanket** — `commit_and_push` runs `git add -u` for tracked updates plus explicit per-module pathspecs (computed from each `DriftInfo`'s `prompt_path`/`code_path`/`example_path`/`test_path` and `_operation_log_metadata_relpaths(basename, language)`), filters out gitignored paths via `git check-ignore`, and adds `project_dependencies.csv` only when a healed module ran `auto-deps`; `git add -A` is explicitly rejected because it sweeps unrelated `.pdd/meta/*.json` fingerprints from out-of-scope modules into the heal commit (issue #1021) and could publish a failed module's partial metadata alongside another module's successful heal. The combined invariant: auto-heal never commits a half-synced state, and preflight never leaves stale fingerprints after a successful update.
 
 **Usage:**
 ```bash
 # Scan all modules (main branch trigger)
-python -m pdd.ci_drift_heal
+python -m pdd.ci_drift_heal --diff-base HEAD~1
 
-# Scan specific modules (PR trigger)
-python -m pdd.ci_drift_heal --modules module_a module_b
+# Scan specific modules (PR trigger) — pass --diff-base so clean-CI
+# reclassification and the phantom-crash filter can run
+python -m pdd.ci_drift_heal \
+    --modules module_a module_b \
+    --diff-base origin/main...HEAD
 
 # With budget cap and skip-ci flag
-python -m pdd.ci_drift_heal --budget-cap 5.00 --skip-ci
+python -m pdd.ci_drift_heal \
+    --budget-cap 5.00 --skip-ci --diff-base HEAD~1
 ```
 
 **Key Options:**
 - `--modules`: Limit detection to specific modules (for PR-scoped checks)
+- `--diff-base`: Git diff base (e.g. `origin/main...HEAD` on PR builds, `HEAD~1` on push-to-main). **Required in CI.** Without it (or if the git lookup returns `None`, e.g. shallow checkout / missing ref), the phantom "no run_report" crash filter cannot determine whether a touched module is genuinely untouched, and the `heal_module` guard fails closed — the affected module is recorded as **failed** and the heal exits non-zero. Always provide a resolvable `--diff-base` so the touched/untouched split can run inside `detect_drift`.
 - `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 
@@ -3487,19 +3614,26 @@ For detailed command examples for each workflow, see the respective command docu
 
 ### CI Auto-Heal
 
-**Workflow File**: `.github/workflows/auto-heal-drift.yml`
+**Workflow File**: `.github/workflows/auto-heal.yml`. It only dispatches the heal — the heal itself runs in pdd_cloud's Google Cloud Build pipeline, which checks out the PR branch and invokes `python -m pdd.ci_drift_heal` from an installed pdd-cli wheel.
 
-**Purpose**: Automatically detect and fix prompt-code drift in CI.
+**Purpose**: Automatically detect and fix prompt-code drift on pull requests.
 
 **Triggers**:
-- **Pull requests**: Heals only modules changed by the PR, commits fixes to the PR branch
-- **Push to main**: Heals all modules, commits fixes directly to main
+- `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
+- `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
 
-**Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
+Generated internal PRs authored by `prompt-driven-github[bot]` are trusted as
+the autonomous pdd-issue App identity for the `pull_request_target` heal path.
+Other PR authors and all `/heal` comment requesters must pass the `pdd_cloud`
+collaborator check before Cloud Build is dispatched.
 
-**Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
+There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 
-For full details, see [docs/ci-auto-heal.md](docs/ci-auto-heal.md).
+**Loop prevention**: Auto-heal commits start with `chore: auto-heal …`; the Cloud Build step short-circuits when the triggering commit subject matches that prefix, so the heal cannot retrigger itself.
+
+**Metadata Finalization**: The auto-heal `update` path invokes the same `run_metadata_sync` orchestrator as `pdd update --sync-metadata` and preflight drift-heal, so prompt tags, architecture entries, run reports, and fingerprint state are always reconciled together. **Any stage reporting `failed`** blocks the auto-heal checkpoint commit so a PR cannot land a half-synced state; `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) and does not block — matching the contract documented in the CI Drift Detection section above.
+
+**Configuration**: Heal budget is controlled by the `_PDD_BUDGET_CAP` substitution on the pdd_cloud auto-heal Cloud Build trigger (see `cloudbuild-pdd-cli-auto-heal-pr.yaml` in the `pdd_cloud` repo); the GHA workflow does not read a repo variable.
 
 ## Integrations
 
@@ -3571,7 +3705,7 @@ One or more patent applications covering aspects of the PDD workflows and system
 
 ## Conclusion
 
-PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
+PDD (Prompt-Driven Development) is a prompt-native programming system for managing `.prompt` source files, generating code, creating examples, running tests, and keeping implementation artifacts synchronized with durable intent. By treating prompts and tests as the source of truth, PDD turns conventional code into reviewable output that can be regenerated as requirements evolve.
 
 The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
 
@@ -3581,4 +3715,4 @@ As you become more familiar with PDD, you can compose richer workflows by chaini
 
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
-Happy coding with PDD!
+Keep prompts as source; regenerate with PDD.

@@ -934,6 +934,10 @@ def sync_main(
                             "model_name": "",
                             "operations_completed": [],
                             "errors": [],
+                            "summary": (
+                                "No sync operations required; selected target "
+                                "is already synchronized."
+                            ),
                         }
                         _one_session_skipped = True
 
@@ -941,14 +945,19 @@ def sync_main(
                     # Phase 1: Run pdd generate to create the code file
                     pre_cost = 0.0
                     pre_model = ""
+                    _generate_ran = False
                     if not pdd_files["code"].exists() or force:
                         from .code_generator_main import (
                             code_generator_main,
                             ArchitectureConformanceError,
+                            PublicSurfaceRegressionError,
+                            TestChurnError,
                         )
                         from .agentic_sync_runner import (
                             MAX_CONFORMANCE_ATTEMPTS,
                             build_conformance_hard_failure_from_error,
+                            build_public_surface_hard_failure_from_error,
+                            build_test_churn_hard_failure_from_error,
                         )
 
                         if not quiet:
@@ -963,9 +972,24 @@ def sync_main(
                         # so we mutate os.environ directly and restore it after.
                         import os as _os
                         _prev_repair = _os.environ.get("PDD_REPAIR_DIRECTIVE")
+                        # Pop the env var BEFORE attempt 1 (#1012, F-I)
+                        # so `code_generator_main` reads a CLEAN env on
+                        # the first try. Without this, a stale outer
+                        # `PDD_REPAIR_DIRECTIVE` (set by the caller's
+                        # shell, a parent orchestration layer, or a
+                        # prior PDD command) would be injected into the
+                        # first generation attempt's prompt via the
+                        # `<architecture_repair_directive>` block read
+                        # at code_generator_main.py:1990. Only failures
+                        # raised inside THIS loop populate the directive
+                        # for subsequent attempts. The `finally` block
+                        # below restores the prior outer value when the
+                        # loop exits.
+                        _os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
                         try:
-                            last_exc: Optional[ArchitectureConformanceError] = None
-                            last_missing: Optional[Tuple[str, ...]] = None
+                            last_exc: Optional[Any] = None
+                            last_signature: Optional[Tuple[str, ...]] = None
+                            last_kind: Optional[str] = None
                             for _attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                 try:
                                     gen_result = code_generator_main(
@@ -981,7 +1005,11 @@ def sync_main(
                                     )
                                     last_exc = None
                                     break
-                                except ArchitectureConformanceError as exc:
+                                except (
+                                    ArchitectureConformanceError,
+                                    PublicSurfaceRegressionError,
+                                    TestChurnError,
+                                ) as exc:
                                     attempt_cost = float(
                                         getattr(exc, "total_cost", 0.0) or 0.0
                                     )
@@ -990,19 +1018,42 @@ def sync_main(
                                     exc_model = getattr(exc, "model_name", "") or ""
                                     if exc_model and exc_model != "unknown":
                                         pre_model = exc_model
-                                    new_missing = tuple(
-                                        sorted(set(exc.missing_symbols))
-                                    )
+                                    if isinstance(exc, PublicSurfaceRegressionError):
+                                        new_kind = "public_surface"
+                                        new_signature = tuple(
+                                            [f"removed:{symbol}" for symbol in sorted(set(exc.removed_symbols))]
+                                            + [
+                                                f"signature_changed:{symbol}"
+                                                for symbol in sorted(
+                                                    set(getattr(exc, "changed_signatures", []))
+                                                )
+                                            ]
+                                        )
+                                    elif isinstance(exc, TestChurnError):
+                                        new_kind = "test_churn"
+                                        new_signature = (
+                                            f"{exc.churn_ratio:.2f}",
+                                            str(exc.pre_line_count),
+                                        )
+                                    else:
+                                        new_kind = "architecture"
+                                        new_signature = tuple(
+                                            sorted(set(exc.missing_symbols))
+                                        )
                                     if (
-                                        last_missing is not None
-                                        and new_missing == last_missing
+                                        last_signature is not None
+                                        and new_signature == last_signature
+                                        and new_kind == last_kind
                                     ):
                                         # Stuck on identical symbol set — abort.
                                         last_exc = exc
                                         break
-                                    last_missing = new_missing
+                                    last_signature = new_signature
+                                    last_kind = new_kind
                                     last_exc = exc
                                     if _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                        break
+                                    if isinstance(exc, TestChurnError) and _attempt >= 1:
                                         break
                                     if (
                                         remaining_budget is not None
@@ -1010,10 +1061,16 @@ def sync_main(
                                     ):
                                         break
                                     if not quiet:
+                                        if isinstance(exc, PublicSurfaceRegressionError):
+                                            failure_label = "Public surface regression"
+                                        elif isinstance(exc, TestChurnError):
+                                            failure_label = "Test churn threshold exceeded"
+                                        else:
+                                            failure_label = "Architecture conformance failed"
                                         rprint(
-                                            "[yellow]Architecture conformance failed; "
+                                            f"[yellow]{failure_label}; "
                                             f"retrying generation with repair directive "
-                                            f"(missing: {', '.join(new_missing) or '<none>'}).[/yellow]"
+                                            f"(signature: {', '.join(new_signature) or '<none>'}).[/yellow]"
                                         )
                                     _os.environ["PDD_REPAIR_DIRECTIVE"] = exc.repair_directive
                             if last_exc is not None:
@@ -1022,9 +1079,18 @@ def sync_main(
                                 # same diagnostic the agentic runner emits)
                                 # before re-raising the original click.UsageError.
                                 import sys as _sys
-                                hard_block = build_conformance_hard_failure_from_error(
-                                    last_exc, basename
-                                )
+                                if isinstance(last_exc, PublicSurfaceRegressionError):
+                                    hard_block = build_public_surface_hard_failure_from_error(
+                                        last_exc, basename
+                                    )
+                                elif isinstance(last_exc, TestChurnError):
+                                    hard_block = build_test_churn_hard_failure_from_error(
+                                        last_exc, basename
+                                    )
+                                else:
+                                    hard_block = build_conformance_hard_failure_from_error(
+                                        last_exc, basename
+                                    )
                                 print(hard_block, file=_sys.stderr)
                                 raise last_exc
                         finally:
@@ -1035,6 +1101,7 @@ def sync_main(
                         # code_generator_main returns (content, was_incremental, cost, model)
                         pre_cost += gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
                         pre_model = gen_result[3] if gen_result and len(gen_result) > 3 else pre_model
+                        _generate_ran = True
                     elif not quiet:
                         rprint("[dim]Code file exists, skipping generate.[/dim]")
 
@@ -1046,6 +1113,7 @@ def sync_main(
                             "model_name": "",
                             "operations_completed": [],
                             "errors": ["Code generation failed"],
+                            "summary": "Step generate failed: Code generation failed",
                         }
                     else:
                         # Phase 2: Hand off to one-session agent for example + crash + verify + test
@@ -1061,6 +1129,21 @@ def sync_main(
                         )
                         # Merge costs from both phases
                         one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
+
+                        # Surface the pre-generate phase in operations_completed and
+                        # summary so the Details column doesn't under-report when the
+                        # generate phase actually ran in one-session mode.
+                        if _generate_ran and one_session_result.get("success"):
+                            existing_ops = list(one_session_result.get("operations_completed") or [])
+                            if "generate" not in existing_ops:
+                                one_session_result["operations_completed"] = ["generate"] + existing_ops
+                            existing_summary = one_session_result.get("summary") or ""
+                            if "generate" not in existing_summary:
+                                merged_ops = ", ".join(one_session_result["operations_completed"])
+                                one_session_result["summary"] = (
+                                    f"One-session sync complete (operations: {merged_ops})"
+                                )
+
                         sync_result = one_session_result
 
                         # Post-sync: save fingerprint so next sync sees files as up-to-date
@@ -1166,7 +1249,27 @@ def sync_main(
         for lang, result in aggregated_results["results_by_language"].items():
             status = "[green]Success[/green]" if result.get("success") else "[red]Failed[/red]"
             cost_str = f"${result.get('total_cost', 0.0):.4f}"
-            details = result.get("summary") or result.get("error", "No details.")
+            # Prompt forbids "No details." / "None" placeholders in this column
+            # (sync_main_python.prompt §11). Pick the first truthy candidate
+            # whose string form is not a forbidden literal, then fall back to a
+            # status-scoped phrase so the row never carries a placeholder.
+            forbidden = {"none", "no details.", "no details"}
+            candidates = (result.get("summary"), result.get("error"))
+            details = next(
+                (
+                    str(value)
+                    for value in candidates
+                    if value is not None and str(value).strip()
+                    and str(value).strip().lower() not in forbidden
+                ),
+                None,
+            )
+            if details is None:
+                details = (
+                    "No sync operations required; selected target is already synchronized."
+                    if result.get("success")
+                    else "Step failed"
+                )
             final_table.add_row(lang, status, cost_str, str(details))
 
         rprint(final_table)

@@ -284,6 +284,83 @@ def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_p
 
 
 # ---------------------------------------------------------------------------
+# Codex round-4 Finding 1: expected_head_sha_override
+#
+# The post-CI final-checkup gate pushes from a SEPARATE worktree
+# (``.pdd/worktrees/checkup-pr-N``). Without an override, the loop would
+# compare the remote PR head to ``_get_head_sha(cwd)`` — the pdd-issue
+# worktree's local HEAD, which is stale. The override forces the loop to
+# wait for the actual post-checkup remote head SHA.
+# ---------------------------------------------------------------------------
+
+
+def test_run_ci_validation_loop_uses_override_when_provided(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_poll(*_args, **kwargs):  # noqa: ANN001
+        captured["expected_head_sha"] = kwargs.get("expected_head_sha")
+        return "passed", []
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch(
+             "pdd.ci_validation._get_head_sha",
+             return_value="stale_local_sha_should_not_be_used",
+         ), \
+         patch("pdd.ci_validation._poll_required_checks", side_effect=fake_poll), \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, _msg, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=0,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+            expected_head_sha_override="post_checkup_remote_sha",
+        )
+
+    assert success is True
+    assert captured["expected_head_sha"] == "post_checkup_remote_sha", (
+        "Override must reach _poll_required_checks instead of _get_head_sha(cwd) — "
+        "otherwise the poll would wait for the stale local HEAD and burn the timeout"
+    )
+
+
+def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_poll(*_args, **kwargs):  # noqa: ANN001
+        captured["expected_head_sha"] = kwargs.get("expected_head_sha")
+        return "passed", []
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value="local_cwd_head"), \
+         patch("pdd.ci_validation._poll_required_checks", side_effect=fake_poll), \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=0,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert captured["expected_head_sha"] == "local_cwd_head", (
+        "Existing callers without the override must see the local-HEAD behavior"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Issue #1025: _classify_check_result unit tests
 # ---------------------------------------------------------------------------
 
