@@ -42,53 +42,6 @@ def valid_inputs():
 def mock_console():
     return Console()
 
-
-_SAMPLE_GENERATED_TEST = '''import sys
-from pathlib import Path
-_repo_root = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_repo_root))
-
-def test_example():
-    assert True
-'''
-
-
-@pytest.fixture(autouse=True)
-def _mock_generate_test_llm(monkeypatch, request):
-    """Avoid real LLM calls in tests that exercise generate_test end-to-end."""
-    if request.node.get_closest_marker("real_llm"):
-        return
-
-    def _sample_for_language(language: str) -> str:
-        if (language or "python").lower() != "python":
-            return (
-                "describe('add', () => {\n"
-                "  it('adds numbers', () => expect(add(1, 2)).toBe(3));\n"
-                "});\n"
-            )
-        return _SAMPLE_GENERATED_TEST
-
-    def fake_llm_invoke(**kwargs):
-        language = (kwargs.get("input_json") or {}).get("language", "python")
-        body = _sample_for_language(language)
-        return {
-            "result": f"```\n{body}\n```",
-            "cost": 0.01,
-            "model_name": "test-model",
-        }
-
-    def fake_postprocess(**kwargs):
-        language = kwargs.get("language", "python")
-        return (_sample_for_language(language), 0.0, "test-model")
-
-    monkeypatch.setattr("pdd.generate_test.llm_invoke", fake_llm_invoke)
-    monkeypatch.setattr(
-        "pdd.generate_test.unfinished_prompt",
-        lambda **kwargs: ("", True, 0.0, "test-model"),
-    )
-    monkeypatch.setattr("pdd.generate_test.postprocess", fake_postprocess)
-
-
 # Test successful generation
 # Per-test timeouts bound real-LLM calls so a stalled provider produces a fast
 # attributable test failure rather than a chunk-wide timeout (exit 124) that

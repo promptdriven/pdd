@@ -49,8 +49,6 @@ def test_cli_version_reads_metadata_after_prior_invocation(monkeypatch):
     assert second.exit_code == 0
     assert "version 0.0.251.dev107" in first.output
     assert "version 0.0.251.dev110" in second.output
-
-
 def test_version_matches_expected_for_current_state():
     """At a tag: version == tag. Between tags: version starts with next-patch + '.dev'."""
     repo_root = Path(__file__).resolve().parents[1]
