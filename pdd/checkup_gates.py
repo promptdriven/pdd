@@ -1429,26 +1429,47 @@ def _discover_python_gates(
         # ``--gate-allow`` filtering still works and the failure surfaces
         # under its own ``ruff-format`` name in the report.
         #
-        # Codex pass-4 finding 3 + pass-5 finding 3: a project may use
-        # ruff for LINTING while running black (with or without a
-        # declared ``[tool.black]`` section — black runs on defaults).
-        # Firing ``ruff format --check`` against such a project would
-        # block clean verdicts on formatting CI does not enforce.
-        # Require EXPLICIT opt-in via ``[tool.ruff.format]`` — the
-        # canonical way to express "yes, I use ruff format". A project
-        # using ruff format with the default config will trivially add
-        # an empty ``[tool.ruff.format]`` section to opt in; a project
-        # using black has no reason to declare it. Pass-4's
-        # "no [tool.black] → opt-in by default" heuristic is dropped
-        # because black runs on defaults and many projects never
-        # declare it, producing the false-positive blocker pass-5
-        # called out.
-        if _tool_section_present("ruff.format"):
+        # Codex pass-4 finding 3 + pass-5 finding 3 + pass-6 finding 3:
+        # ruff-format opt-in requires an EXPLICIT signal that the
+        # project uses ruff format. Three signals are accepted:
+        #   1. ``[tool.ruff.format]`` declared in pyproject.toml — the
+        #      canonical opt-in.
+        #   2. ``ruff format`` invoked in any of the project's CI
+        #      configs: ``.pre-commit-config.yaml``,
+        #      ``cloudbuild-*-ci.yaml``, ``.github/workflows/*.yml``.
+        #      Detected by literal substring (case-sensitive
+        #      ``ruff\s+format``) so a project that runs ruff format
+        #      with Ruff's default formatter config and no
+        #      ``[tool.ruff.format]`` section still gets gate parity
+        #      with CI. To prevent a PR poisoning the signal, skip
+        #      the CI-signal check when the PR touched any of the
+        #      same CI config files.
+        # Without ANY of these signals the format gate stays silent
+        # — projects that use ruff for linting alone won't see false-
+        # positive formatting blockers.
+        ci_signal_blocked = any(
+            (
+                path == ".pre-commit-config.yaml"
+                or path.startswith("cloudbuild-")
+                or path.startswith(".github/workflows/")
+            )
+            for path in changed_files
+        )
+        ci_signaled = (
+            (not ci_signal_blocked)
+            and _ruff_format_signaled_by_ci(worktree)
+        )
+        if _tool_section_present("ruff.format") or ci_signaled:
+            source_label = (
+                "pyproject.toml:[tool.ruff.format]"
+                if _tool_section_present("ruff.format")
+                else "ci-config:ruff format"
+            )
             gates.append(
                 Gate(
                     name="ruff-format",
                     cmd=[ruff_abs, "format", "--check", "--", *changed_py],
-                    source="pyproject.toml:[tool.ruff.format]",
+                    source=source_label,
                     required_fix_hint=(
                         "Run `ruff format` locally and commit the formatting "
                         "changes."
@@ -2159,6 +2180,56 @@ def _sanitized_path(worktree: Path) -> str:
         else:
             clean.append(entry)
     return os.pathsep.join(clean)
+
+
+_RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff\s+format\b")
+
+
+def _ruff_format_signaled_by_ci(worktree: Path) -> bool:
+    """Return True if any CI / pre-commit config in ``worktree`` runs ``ruff format``.
+
+    Codex review pass-6 finding 3: a project may run ``ruff format
+    --check`` in CI using Ruff's default formatter config (no
+    ``[tool.ruff.format]`` section). Without this signal the gate
+    would silently skip ``ruff-format`` and the original CI-parity
+    gap (Bug #2) re-emerges as a false negative — local clean +
+    failing CI. Scan the literal substring ``ruff\\s+format`` across
+    ``.pre-commit-config.yaml``, ``cloudbuild-*-ci.yaml``, and
+    ``.github/workflows/*.yml`` / ``*.yaml`` so projects that opt
+    in via CI alone still get the gate.
+
+    Fail-OPEN: any IO error returns ``False`` so the absence of a
+    signal never blocks clean verdicts. The CI-signal check is
+    intentionally guarded at the call site by a PR-touched check
+    (the same config files in the PR diff disable the signal) so a
+    fork PR cannot poison its way into a gate.
+    """
+    candidates: List[Path] = []
+    pre_commit = worktree / ".pre-commit-config.yaml"
+    if pre_commit.is_file():
+        candidates.append(pre_commit)
+    for cb in sorted(worktree.glob("cloudbuild-*-ci.yaml")):
+        if cb.is_file():
+            candidates.append(cb)
+    workflows_dir = worktree / ".github" / "workflows"
+    if workflows_dir.is_dir():
+        for pattern in ("*.yml", "*.yaml"):
+            for yml in sorted(workflows_dir.glob(pattern)):
+                if yml.is_file():
+                    candidates.append(yml)
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.debug(
+                "ruff-format CI signal read failed for %s: %s",
+                path,
+                type(exc).__name__,
+            )
+            continue
+        if _RUFF_FORMAT_CI_PATTERN.search(text):
+            return True
+    return False
 
 
 def _resolve_tool(tool: str, worktree: Path) -> Optional[str]:

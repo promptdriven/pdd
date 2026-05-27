@@ -2274,19 +2274,25 @@ def _collect_companion_source_of_truth_files(
         return []
 
     changed_set = {Path(p).as_posix() for p in changed}
-    # Codex review pass-5 finding 1: ``architecture.json`` being in the
-    # PR diff does NOT mean each module's architecture entry was
-    # touched. A diff that updates only module B's entry leaves
-    # module A's entry unchanged, but the global ``architecture.json
-    # in changed_set`` signal would still mark every entry as "in
-    # diff" and skip A's companion (losing the drift surface).
-    # Surface the global signal for the reviewer's reference but
-    # do NOT use it to gate emission — only ``prompt_in_diff`` (which
-    # IS per-module) drives the skip. The trade-off is slightly noisier
-    # output when the prompt was co-edited alongside the code, but
-    # missing a drift surface is strictly worse than emitting an
-    # extra row the reviewer can dismiss in one glance.
-    arch_globally_in_diff = "architecture.json" in changed_set
+    # Codex review pass-6 finding 1: gate emission on PER-ENTRY signals
+    # for both companions. ``_arch_entries_changed_set`` returns the
+    # set of code_paths whose architecture entry actually differs
+    # between base and HEAD — not the global "architecture.json was
+    # touched somewhere" signal pass-5 used. This way module A is
+    # only skipped when BOTH (a) its prompt is in the diff AND (b)
+    # its own architecture entry was changed; if either companion is
+    # OUTSIDE the diff at the entry granularity, A's drift surface is
+    # surfaced for the reviewer.
+    base_ref_for_arch = None
+    if pr_metadata:
+        local = pr_metadata.get("base_local_ref")
+        if isinstance(local, str) and local.strip():
+            base_ref_for_arch = local.strip()
+        elif pr_metadata.get("base_ref"):
+            base_ref_for_arch = f"origin/{str(pr_metadata['base_ref']).strip()}"
+    arch_entry_changed_set = _arch_entries_changed_set(
+        worktree, base_ref_for_arch
+    )
     # Build the full eligible set FIRST so the truncation marker (below)
     # can report total_eligible accurately and enumerate the omitted
     # paths. Walking ``mapping`` (the canonical code -> prompt registry)
@@ -2297,18 +2303,18 @@ def _collect_companion_source_of_truth_files(
         if not prompt_path:
             continue
         prompt_in_diff = prompt_path in changed_set
-        # Skip only when the prompt is in the diff — that signal is
-        # per-module and reliable. We do NOT additionally gate on
-        # ``arch_globally_in_diff`` (see comment above on the per-
-        # entry vs global distinction).
-        if prompt_in_diff:
+        arch_entry_in_diff = code_path in arch_entry_changed_set
+        # Skip only when BOTH per-module signals say the companion is
+        # covered by the diff. If either is OUTSIDE the diff, the
+        # drift surface must be surfaced.
+        if prompt_in_diff and arch_entry_in_diff:
             continue
         eligible.append(
             {
                 "code_path": code_path,
                 "prompt_path": prompt_path,
                 "prompt_in_diff": prompt_in_diff,
-                "architecture_in_diff": arch_globally_in_diff,
+                "architecture_in_diff": arch_entry_in_diff,
             }
         )
 
@@ -2728,6 +2734,56 @@ def _run_review(
         worktree,
         pr_metadata=pr_metadata,
     )
+    # Codex review pass-6 finding 2: when truncation forces the prompt
+    # to omit some companion entries, persist the FULL eligible list
+    # as a sidecar JSON artifact under artifacts_dir so the operator
+    # (or a future audit) has the complete record. The prompt
+    # truncation note references this path so the reviewer can refuse
+    # ``clean`` when coverage is incomplete. The artifact is only
+    # written when truncation actually occurred — bounded PRs do not
+    # accumulate extra artifacts.
+    companion_artifact_relpath: Optional[str] = None
+    if any(c.get("__truncated__") for c in companion_source_of_truth):
+        full_eligible = [
+            c for c in companion_source_of_truth if not c.get("__truncated__")
+        ]
+        marker = next(
+            (c for c in companion_source_of_truth if c.get("__truncated__")),
+            None,
+        )
+        # Reconstruct the FULL eligible list by combining the head
+        # (shown) entries with the marker's omitted-path inventory.
+        # The omitted entries' ``prompt_in_diff`` / ``architecture_in
+        # _diff`` flags are unknown from the marker alone, so the
+        # artifact records the shown set (with full per-entry detail)
+        # AND the omitted code-path list under separate keys so the
+        # operator can reconstruct coverage. The marker's
+        # ``omitted_paths_remaining`` count is also persisted.
+        artifact_payload = {
+            "round": round_number,
+            "mode": mode,
+            "shown_companions": full_eligible,
+            "truncation": (
+                {
+                    "total_eligible": marker.get("total_eligible"),
+                    "shown": marker.get("shown"),
+                    "omitted_code_paths_listed": marker.get(
+                        "omitted_code_paths", []
+                    ),
+                    "omitted_paths_remaining": marker.get(
+                        "omitted_paths_remaining", 0
+                    ),
+                }
+                if marker is not None
+                else None
+            ),
+        }
+        artifact_path = (
+            artifacts_dir
+            / f"round-{round_number}-{mode}-companion-source-of-truth.json"
+        )
+        _write_artifact(artifact_path, json.dumps(artifact_payload, indent=2))
+        companion_artifact_relpath = artifact_path.name
     prompt = _review_prompt(
         reviewer=reviewer,
         context=context,
@@ -2739,6 +2795,7 @@ def _run_review(
         fix_result=fix_result,
         candidate_findings=candidate_findings,
         companion_source_of_truth=companion_source_of_truth,
+        companion_artifact_path=companion_artifact_relpath,
     )
     base = f"round-{round_number}-{mode}-{reviewer}"
     _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
@@ -3230,6 +3287,8 @@ def _format_candidate_findings(
 
 def _format_companion_source_of_truth(
     companions: Sequence[Dict[str, Any]],
+    *,
+    artifact_path: Optional[str] = None,
 ) -> str:
     """Render the companion source-of-truth files block for the reviewer.
 
@@ -3241,13 +3300,12 @@ def _format_companion_source_of_truth(
     is nothing to surface so the section disappears from the prompt
     entirely.
 
-    Codex review pass-4 finding 2: when
-    ``_collect_companion_source_of_truth_files`` truncated at
-    ``max_entries`` it appended a synthetic marker
-    (``__truncated__: True``) carrying the full ``omitted_code_paths``
-    list. Render the marker as an explicit "ALSO inspect" note so the
-    reviewer never silently accepts a clean verdict over an omitted
-    drift surface.
+    Codex review pass-4 finding 2 + pass-6 finding 2: when truncation
+    occurs the reviewer prompt CANNOT carry every omitted entry without
+    blowing the context budget. The bounded omitted list + remaining
+    count + sidecar artifact path together let the reviewer either
+    (a) confirm coverage of every listed AND omitted companion via the
+    artifact, or (b) refuse ``clean`` until coverage is complete.
     """
     if not companions:
         return ""
@@ -3272,18 +3330,37 @@ def _format_companion_source_of_truth(
             )
         else:
             extra_note = ""
+        # Codex pass-6 finding 2: surface the sidecar artifact path
+        # explicitly so the reviewer can fetch the FULL eligible list
+        # when coverage requires it, AND must refuse ``clean`` when
+        # coverage of every listed/omitted companion cannot be
+        # confirmed.
+        artifact_note = (
+            f"\n\nThe complete eligible companion list (with the same "
+            "per-entry fields shown above) is persisted as "
+            f"`{artifact_path}` in this round's artifacts directory. "
+            "Open and review every entry in that file. If you cannot "
+            "confirm you reviewed the prompt + architecture entry for "
+            "every listed AND omitted code file in the artifact, REPORT "
+            "a `severity=blocker` finding (reviewer="
+            f"'{'companion-scope'}', area='workflow') instead of a "
+            "clean verdict — silent gaps over an unreviewed companion "
+            "violate the source-of-truth contract."
+            if artifact_path
+            else ""
+        )
         truncation_note = (
-            "\n\n**Truncated review scope (codex pass-4 finding 2).** The "
+            "\n\n**Truncated review scope (codex pass-4 + pass-6 finding 2).** The "
             f"checkup found {total} code files in this PR's diff whose "
-            "prompt OR `architecture.json` entry is OUTSIDE the diff, but "
-            f"only the first {shown} are listed below. You MUST ALSO open "
-            "the prompt and architecture entry for every code file in the "
-            "following omitted list and apply the same review-scope rules. "
-            "Treat the omitted list as part of the JSON above — do not "
-            "issue a clean verdict without confirming you inspected the "
-            "companions for these files as well:\n"
+            "prompt OR per-module `architecture.json` entry is OUTSIDE the diff, "
+            f"but only the first {shown} are listed in the JSON above. The "
+            "first omitted code paths are listed below; further omissions "
+            "are summarised as a remaining count and the full set is "
+            "persisted as a sidecar artifact for explicit reviewer "
+            "coverage:\n"
             f"{json.dumps(omitted, indent=2)}"
-            f"{extra_note}\n"
+            f"{extra_note}"
+            f"{artifact_note}\n"
         )
     return (
         "\n\n## Companion Source-Of-Truth Files To Inspect\n"
@@ -3316,6 +3393,7 @@ def _review_prompt(
     fix_result: Optional[FixResult] = None,
     candidate_findings: Optional[Sequence[Dict[str, Any]]] = None,
     companion_source_of_truth: Optional[Sequence[Dict[str, Any]]] = None,
+    companion_artifact_path: Optional[str] = None,
 ) -> str:
     mode_instruction = (
         "\n\n## Initial Review Instructions\n"
@@ -3355,7 +3433,8 @@ def _review_prompt(
         )
     static_analysis_block = _format_candidate_findings(candidate_findings or [])
     companion_block = _format_companion_source_of_truth(
-        companion_source_of_truth or []
+        companion_source_of_truth or [],
+        artifact_path=companion_artifact_path,
     )
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
@@ -5745,6 +5824,98 @@ def _load_prompt_source_map(
         )
         return None
     return mapping
+
+
+def _arch_entries_changed_set(
+    worktree: Path, base_ref: Optional[str]
+) -> Set[str]:
+    """Return the set of code_paths whose architecture entry differs
+    between ``base_ref`` and HEAD.
+
+    Codex review pass-6 finding 1: ``architecture.json`` being in the
+    PR diff is a GLOBAL signal — it does not tell us which module
+    entries actually changed. The companion-files collector needs a
+    PER-ENTRY signal so it can skip a module only when both its prompt
+    and its architecture entry are genuinely covered by the diff.
+
+    Compares ``git show <base_ref>:architecture.json`` to ``git show
+    HEAD:architecture.json``, parses both via ``extract_modules``, and
+    returns the filepaths whose canonical JSON entry differs (changed
+    fields, added entry, or removed entry). Fail-open: any git/IO/JSON
+    error returns ``set()`` (treat as "no entries changed") so the
+    collector still emits useful output.
+
+    ``base_ref`` may be a literal ref name ("main", "release-1.x"),
+    a fully-qualified ref ("refs/remotes/.../base"), or already
+    prefixed ("origin/main"). The helper tries the supplied form
+    first and then a small set of common fallbacks so production
+    callers (which pass ``base_local_ref`` or ``origin/<base>``) AND
+    unit tests (which build local-only worktrees with ``main``) both
+    resolve.
+    """
+    base = (base_ref or "").strip()
+    if not base:
+        return set()
+
+    def _read_entries(ref: str) -> Optional[Dict[str, str]]:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(worktree), "show", f"{ref}:architecture.json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug(
+                "arch-entries-changed: git show %s failed (%s)",
+                ref,
+                type(exc).__name__,
+            )
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            logger.debug(
+                "arch-entries-changed: parse %s failed (%s)",
+                ref,
+                type(exc).__name__,
+            )
+            return None
+        out: Dict[str, str] = {}
+        for entry in extract_modules(data):
+            filepath = entry.get("filepath")
+            if not isinstance(filepath, str) or not filepath:
+                continue
+            try:
+                out[Path(filepath).as_posix()] = json.dumps(
+                    entry, sort_keys=True
+                )
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    # Try the supplied ref first, then strip an ``origin/`` prefix if
+    # present (so tests that build a local-only worktree with ``main``
+    # still resolve when the production caller would have prefixed
+    # with ``origin/``). Stop at the first ref that resolves.
+    candidates: List[str] = [base]
+    if base.startswith("origin/"):
+        candidates.append(base[len("origin/"):])
+    pre: Optional[Dict[str, str]] = None
+    for cand in candidates:
+        pre = _read_entries(cand)
+        if pre is not None:
+            break
+    if pre is None:
+        return set()
+    post = _read_entries("HEAD")
+    if post is None:
+        return set()
+
+    all_paths = set(pre) | set(post)
+    return {fp for fp in all_paths if pre.get(fp) != post.get(fp)}
 
 
 def _check_prompt_source_guard(

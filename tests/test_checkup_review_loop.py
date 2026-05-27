@@ -12122,16 +12122,20 @@ class TestCompanionSourceOfTruthFiles:
     def test_collector_surfaces_module_when_arch_changed_for_unrelated_module(
         self, tmp_path: Path
     ) -> None:
-        """Codex pass-5 finding 1: ``architecture.json`` being in the
-        PR diff does NOT mean every module's architecture entry is in
-        the diff. The pre-fix code's global ``arch_in_diff`` signal
-        treated any arch.json edit as "all entries are in diff" and
-        skipped companion entries where prompt was also in the diff,
-        hiding drift surfaces for modules whose arch entry was NOT
-        touched. The collector MUST surface module A when its
-        ``prompt_in_diff`` is True but the arch edit was for an
-        unrelated module — gating only on per-module
-        ``prompt_in_diff`` removes the global-signal hazard.
+        """Codex pass-5 finding 1 + pass-6 finding 1: the collector MUST
+        gate emission on PER-ENTRY signals for both companions. When
+        the global ``architecture.json`` file is in the PR diff but
+        module A's specific entry was NOT changed, A's
+        ``architecture_in_diff`` MUST evaluate as False (because the
+        per-entry helper compares pre/post entries) and the collector
+        MUST emit A's companion row even though A's prompt is also in
+        the diff — A's architecture entry is still at-risk of drift.
+
+        Patches ``_arch_entries_changed_set`` to return an empty set
+        (the arch edit affected only some other module B, so no entry
+        in our mapping changed) — that mirrors the production behaviour
+        when only an unrelated module's entry differs between base and
+        HEAD.
         """
         import unittest.mock as mock
         from pathlib import Path as _Path
@@ -12141,7 +12145,9 @@ class TestCompanionSourceOfTruthFiles:
         )
 
         # PR touches A's code + A's prompt + architecture.json (but
-        # the arch edit was for B, not A). B is not in the diff.
+        # the arch edit was for B, not A). B is not in the diff and
+        # A's entry did not change — so the per-entry helper returns
+        # an empty changed-set.
         changed_files = [
             "pdd/a.py",
             "pdd/prompts/a_python.prompt",
@@ -12161,58 +12167,47 @@ class TestCompanionSourceOfTruthFiles:
                 "pdd.checkup_review_loop._load_prompt_source_map",
                 return_value=mapping,
             ),
+            mock.patch(
+                "pdd.checkup_review_loop._arch_entries_changed_set",
+                return_value=set(),  # A's entry did not actually change
+            ),
         ):
             companions = _collect_companion_source_of_truth_files(
                 _Path("/tmp/fake"),
                 pr_metadata=None,
             )
 
-        # Module A's prompt is in the diff so the (codex pass-5 finding
-        # 1) skip-only-on-prompt-in-diff rule means it is NOT emitted —
-        # the reviewer's attention on the prompt covers it. BUT
-        # critically, the previous skip condition (prompt_in_diff AND
-        # arch_in_diff) would have skipped A under the global
-        # arch-in-diff signal regardless. This test pins the new
-        # behaviour: even with architecture.json in the diff, the skip
-        # is governed by ``prompt_in_diff`` alone, and ``architecture
-        # _in_diff`` is reported as informational only (True here)
-        # without affecting emission.
-        # In this scenario the only eligible code files are A (whose
-        # prompt IS in diff → skipped under prompt-in-diff rule) and
-        # B (which isn't in the PR changed_files at all → not iterated).
-        # We expect zero emitted companion entries.
-        assert companions == [], companions
+        # Pass-6 finding 1: A MUST surface because its architecture
+        # entry is at-risk, even though the prompt is in the diff.
+        assert len(companions) == 1, companions
+        entry = companions[0]
+        assert entry["code_path"] == "pdd/a.py"
+        assert entry["prompt_in_diff"] is True
+        # Per-entry signal says A's arch entry did not change → False.
+        assert entry["architecture_in_diff"] is False
 
-        # Now flip the scenario: A's code is in diff but the prompt
-        # is NOT. The pre-fix code would still have skipped A because
-        # ``arch_globally_in_diff and prompt_in_diff`` was the wrong
-        # test (prompt_in_diff False here, so it actually emitted
-        # under the old code too). The point of this scenario is to
-        # confirm the new code emits when prompt_in_diff is False
-        # regardless of the global arch signal.
-        changed_files_2 = ["pdd/a.py", "architecture.json"]
+        # Symmetric check: when A's entry DID change (the per-entry
+        # helper returns {pdd/a.py}) AND A's prompt is in the diff,
+        # both companions are covered and A is correctly skipped.
         with (
             mock.patch(
                 "pdd.checkup_review_loop._pr_changed_files_all",
-                return_value=changed_files_2,
+                return_value=changed_files,
             ),
             mock.patch(
                 "pdd.checkup_review_loop._load_prompt_source_map",
                 return_value=mapping,
             ),
+            mock.patch(
+                "pdd.checkup_review_loop._arch_entries_changed_set",
+                return_value={"pdd/a.py"},
+            ),
         ):
-            companions_2 = _collect_companion_source_of_truth_files(
+            companions_skipped = _collect_companion_source_of_truth_files(
                 _Path("/tmp/fake"),
                 pr_metadata=None,
             )
-
-        assert len(companions_2) == 1
-        entry = companions_2[0]
-        assert entry["code_path"] == "pdd/a.py"
-        assert entry["prompt_in_diff"] is False
-        # ``architecture_in_diff`` is True (informational) but did
-        # NOT gate the emission — that's the key codex pass-5 fix.
-        assert entry["architecture_in_diff"] is True
+        assert companions_skipped == [], companions_skipped
 
     def test_format_renders_truncation_section_explicitly(self) -> None:
         """The formatter MUST render the truncation marker as an

@@ -457,6 +457,106 @@ class TestDiscoverGates:
         # Format gate skipped because [tool.ruff.format] is absent.
         assert "ruff-format" not in names
 
+    def test_emits_ruff_format_when_signaled_by_pre_commit_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-6 finding 3: a project may run ``ruff format``
+        via .pre-commit-config.yaml with Ruff's default formatter
+        config and no `[tool.ruff.format]` section. The gate MUST
+        detect that signal so the original CI-parity gap (Bug #2)
+        does not re-emerge as a local clean + failing CI head.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        args: ['--check']\n"
+            "        # invokes: ruff format --check\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" in names
+        # The gate's source reflects the CI-signal origin so operators
+        # can audit which opt-in branch fired.
+        by_name = {g.name: g for g in gates}
+        assert by_name["ruff-format"].source == "ci-config:ruff format"
+
+    def test_emits_ruff_format_when_signaled_by_github_workflow(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-6 finding 3: ``.github/workflows/*.yml`` is also
+        a valid CI signal source.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text(
+            "jobs:\n"
+            "  lint:\n"
+            "    steps:\n"
+            "      - run: ruff check\n"
+            "      - run: ruff format --check\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" in names
+
+    def test_skips_ruff_format_ci_signal_when_pr_touched_workflow(
+        self, tmp_path: Path
+    ) -> None:
+        """Defence: a PR that adds ``ruff format`` to a workflow file
+        MUST NOT immediately enable the gate (the operator hasn't
+        merged yet, and a fork PR could otherwise smuggle the gate in
+        to delay merge). Skip the CI-signal check when the PR touched
+        the same workflow file.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text(
+            "jobs:\n  lint:\n    steps:\n      - run: ruff format --check\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".github/workflows/ci.yml"),
+            )
+        names = {g.name for g in gates}
+        # Workflow file touched by PR ⇒ CI signal disabled. No
+        # `[tool.ruff.format]` either ⇒ no opt-in remaining ⇒ skip.
+        assert "ruff-format" not in names
+
     def test_emits_ruff_format_when_black_declared_but_ruff_format_opted_in(
         self, tmp_path: Path
     ) -> None:
