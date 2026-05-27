@@ -3003,3 +3003,260 @@ class TestIssue1212Bug5CleanRunConvergence:
             f"Expected [0, 0] push calls across two clean runs, got {push_call_counts}. "
             "Clean runs must be idempotent — each must produce zero commits."
         )
+
+    def test_clean_run_flows_through_finalization(self, tmp_path):
+        """Clean PR run must clear workflow state and reach Checkpoint D.
+
+        Regression for codex round-1 critical finding at line 2534: the no-
+        change branch used to return early before `clear_workflow_state`
+        and before the Checkpoint D PR-head freshness check, leaving stale
+        `.pdd/checkup-state/checkup_state_{N}.json` behind and publishing
+        a clean verdict without the final freshness lease.
+        """
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, "All tests passed.", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+        )
+        # patches[7] is clear_workflow_state.
+        with patches[0], patches[1] as fetch_mock, patches[2], patches[3], \
+             patches[4] as push_mock, patches[5], patches[6], \
+             patches[7] as clear_mock, patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is True, msg
+        # clear_workflow_state must be called on the clean-run path so the
+        # checkup-state JSON does not linger.
+        assert clear_mock.called, (
+            "Clean PR run must route through clear_workflow_state, but "
+            "the no-change branch returned before final cleanup."
+        )
+        # Checkpoint D refetches PR metadata — the fetch must have run
+        # AFTER the entry fetch (≥ 2 invocations) on the clean-run path.
+        assert fetch_mock.call_count >= 2, (
+            "Clean PR run skipped Checkpoint D's PR-head freshness check "
+            f"(saw only {fetch_mock.call_count} _fetch_pr_metadata calls)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Codex round-1 regression coverage — issue #1215 PR loop
+#
+# Finding 1: scope guard must parse the REAL `_format_pr_api_changed_files`
+# row shapes (MODIFIED / ADDED / RENAMED `old -> new` / etc.), not the
+# hand-rolled `- M:` shorthand the older tests used.
+# Finding 2: causal-connection check must allow a `tests/test_x.py` failure
+# to be fixed by editing the corresponding `pdd/x.py` source file when the
+# source file is also part of the PR.
+# ---------------------------------------------------------------------------
+
+
+_PR_META_REAL_API: Dict[str, str] = {
+    **_PR_META_1212,
+    # Real `gh api pulls/{n}/files` rows formatted by
+    # `_format_pr_api_changed_files`.
+    "api_changed_files": (
+        "- MODIFIED: pdd/main.py\n"
+        "- ADDED: pdd/new_feature.py\n"
+        "- RENAMED: old/legacy.py -> pdd/renamed.py\n"
+        "- DELETED: pdd/removed.py\n"
+        "- NOTE: GitHub PR files API list truncated; showing 4 of 99 files."
+    ),
+    "api_changed_files_full": (
+        "- MODIFIED: pdd/main.py\n"
+        "- ADDED: pdd/new_feature.py\n"
+        "- RENAMED: old/legacy.py -> pdd/renamed.py\n"
+        "- DELETED: pdd/removed.py"
+    ),
+}
+
+
+class TestIssue1215ScopeGuardRealApiFormat:
+    """Finding 1: scope guard must parse real API row shapes."""
+
+    def test_modified_row_is_in_scope(self, tmp_path):
+        """A fixer touching a `- MODIFIED:` path is in scope and pushes."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_called_once()
+
+    def test_added_row_is_in_scope(self, tmp_path):
+        """A fixer touching a `- ADDED:` path is in scope and pushes."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/new_feature.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_called_once()
+
+    def test_renamed_row_both_sides_in_scope(self, tmp_path):
+        """A fixer touching either side of a `- RENAMED: old -> new` row is in scope."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        # Touch the NEW path (the post-rename location).
+        new_side = tmp_path / "new-side"
+        new_side.mkdir()
+        patches = _pr_patches_1212(
+            new_side,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/renamed.py"],
+            commit_push_return=(True, "Pushed"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": new_side})
+        push_mock.assert_called_once()
+
+        # Touch the OLD path (the pre-rename location).
+        old_side = tmp_path / "old-side"
+        old_side.mkdir()
+        patches = _pr_patches_1212(
+            old_side,
+            step_side_effect=step_side_effect,
+            git_changed_files=["old/legacy.py"],
+            commit_push_return=(True, "Pushed"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": old_side})
+        push_mock.assert_called_once()
+
+    def test_file_outside_real_api_rows_blocked(self, tmp_path):
+        """A fixer file absent from MODIFIED/ADDED/RENAMED/DELETED rows is rejected."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/unrelated/README.md"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, _, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+
+
+class TestIssue1215CausalConnectionRealisticPytest:
+    """Finding 2: a `tests/test_main.py` failure fixed by `pdd/main.py` must be allowed."""
+
+    def test_test_file_failure_with_source_fix_allowed(self, tmp_path):
+        """Realistic causal pattern: tests fail, source-file fix lands.
+
+        Step 5 surfaces a failing `tests/test_main.py::test_x`, fixer edits
+        `pdd/main.py` (which IS in the PR's changed-file set). The
+        causal-connection guard must NOT refuse this push — the previous
+        narrow check rejected it because the changed file did not appear
+        in the Step 5 failure paths directly.
+        """
+        step5_failure = (
+            "FAILED: pytest run\n"
+            "============ FAILURES ============\n"
+            "_____ tests/test_main.py::test_critical_path _____\n"
+            "AssertionError: expected foo, got bar\n"
+            "short test summary info:\n"
+            "FAILED tests/test_main.py::test_critical_path"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed pdd/main.py to PR branch"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_called_once(), (
+            "Causal-connection guard wrongly rejected a tests/test_main.py "
+            "failure fixed by editing pdd/main.py (which IS in the PR)."
+        )
+
+    def test_unrelated_fixer_still_blocked(self, tmp_path):
+        """Causal guard still blocks fixer files that overlap neither PR nor failure."""
+        step5_failure = (
+            "FAILED: pytest run\n"
+            "FAILED tests/test_main.py::test_x - AssertionError"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_CREATED: plugins/unrelated/x.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/unrelated/x.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, _, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
