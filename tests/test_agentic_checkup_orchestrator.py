@@ -21,7 +21,10 @@ from pdd.agentic_checkup_orchestrator import (
     _get_state_dir,
     _is_step_timeout_failure,
     _next_step,
+    _normalised_failure_signal_text,
     _parse_changed_files,
+    _parse_expansion_items,
+    _parse_failure_signal_block,
     _pr_base_tracking_ref,
     run_agentic_checkup_orchestrator,
 )
@@ -3260,3 +3263,362 @@ class TestIssue1215CausalConnectionRealisticPytest:
 
         push_mock.assert_not_called()
         assert success is False
+
+
+# ---------------------------------------------------------------------------
+# Codex round-2 regression coverage — PR #1215
+#
+# Findings:
+#   1. Scope guard must filter the orchestrator's own ``.pdd/`` artifacts
+#      from `_git_changed_files` output and read PR file list from
+#      `api_changed_files_full` when present (the bounded preview rejected
+#      large PRs).
+#   2. EXPANSION_ITEMS must be a structured, justified allowlist — a blank
+#      or paraphrased marker cannot disable the scope refusal for every
+#      out-of-scope file.
+#   3. Resuming a clean PR run mid-loop must NOT re-enter the fixer just
+#      because the in-memory clean flags are False.
+#   4. Step 5 failure output must be scrubbed BEFORE every persisted
+#      surface (context, step_outputs, GitHub comments), not only console.
+#   5. The ```failure_signal``` block from Step 5 must be parsed and
+#      validated; Step 6 must receive a normalised structured block even
+#      when Step 5 omits or paraphrases it.
+# ---------------------------------------------------------------------------
+
+
+class TestIssue1215Round2ScopeGuardArtifactFiltering:
+    """Round-2 Finding 1: filter non-committable PDD artifacts and use the full API list."""
+
+    def test_pdd_artifact_does_not_poison_clean_run(self, tmp_path):
+        """A clean run with only a ``.pdd/checkup-context/...`` artifact reaches finalization."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[".pdd/checkup-context/pr-changed-files-api.txt"],
+            commit_push_return=(True, "No changes to push."),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert "scope-guard" not in (msg or "").lower(), (
+            "Scope guard wrongly rejected the orchestrator's own .pdd artifact."
+        )
+
+    def test_large_pr_uses_api_changed_files_full(self, tmp_path):
+        """A file beyond the preview but present in api_changed_files_full is in scope."""
+        pr_meta = dict(_PR_META_REAL_API)
+        pr_meta["api_changed_files"] = (
+            "- MODIFIED: pdd/main.py\n"
+            "- NOTE: GitHub PR files API list truncated; showing 1 of 250 files."
+        )
+        pr_meta["api_changed_files_full"] = (
+            "- MODIFIED: pdd/main.py\n"
+            "- MODIFIED: pdd/deep/nested_module.py"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/deep/nested_module.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=pr_meta,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_called_once()
+
+
+class TestIssue1215Round2ExpansionItemsStructured:
+    """Round-2 Finding 2: EXPANSION_ITEMS must be structured and justified."""
+
+    def test_parse_expansion_items_blank_marker_invalid(self):
+        paths, has_justification = _parse_expansion_items(
+            "Some preamble.\nEXPANSION_ITEMS:\nMore notes.\n"
+        )
+        assert paths == set()
+        assert has_justification is False
+
+    def test_parse_expansion_items_none_payload_invalid(self):
+        paths, has_justification = _parse_expansion_items(
+            "EXPANSION_ITEMS: none\n"
+        )
+        assert paths == set()
+        assert has_justification is False
+
+    def test_parse_expansion_items_paths_no_justification(self):
+        paths, has_justification = _parse_expansion_items(
+            "EXPANSION_ITEMS: tests/test_other.py, pdd/utils/helper.py\n"
+            "FILES_MODIFIED: pdd/main.py\n"
+        )
+        assert paths == {"tests/test_other.py", "pdd/utils/helper.py"}
+        assert has_justification is False
+
+    def test_parse_expansion_items_with_inline_justification(self):
+        paths, has_justification = _parse_expansion_items(
+            "EXPANSION_ITEMS: tests/test_other.py — test imports helper.py "
+            "which the PR change to core.py broke\n"
+        )
+        assert paths == {"tests/test_other.py"}
+        assert has_justification is True
+
+    def test_blank_expansion_items_does_not_bypass_scope_guard(self, tmp_path):
+        """A bare ``EXPANSION_ITEMS:`` marker no longer disables the scope refusal."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: plugins/unrelated/x.py\n"
+                    "EXPANSION_ITEMS:\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/unrelated/x.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success_blank, msg_blank, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success_blank is False
+        assert "scope guard" in (msg_blank or "").lower()
+
+    def test_mismatched_expansion_items_still_refuses_uncovered_files(self, tmp_path):
+        """An EXPANSION_ITEMS listing path A does NOT authorise touching path B."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: plugins/uncovered/y.py\n"
+                    "EXPANSION_ITEMS: plugins/covered/x.py — test imports y.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/uncovered/y.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success_mismatch, msg_mismatch, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success_mismatch is False
+        assert "uncovered/y.py" in (msg_mismatch or "")
+
+
+class TestIssue1215Round2ResumeCleanFlags:
+    """Round-2 Finding 3: resuming a clean run must not re-enter the fixer."""
+
+    def test_resume_after_clean_step5_skips_fixer(self, tmp_path):
+        """A resume with last_completed_step=5 and clean cached Steps 3-5 skips Steps 6.x."""
+        from pdd.agentic_checkup_orchestrator import _get_state_dir
+
+        state_dir = _get_state_dir(tmp_path)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = state_dir / "state.json"
+        cached_state = {
+            "issue_number": 99,
+            "issue_url": "https://github.com/o/r/issues/99",
+            "last_completed_step": 5,
+            "step_outputs": {
+                "1": "out-1",
+                "2": "out-2",
+                "3": "out-3",
+                "4": "out-4",
+                "5": "out-5",
+            },
+            "total_cost": 0.0,
+            "model": "gpt-4",
+            "github_comment_id": None,
+            "fix_verify_iteration": 1,
+            "previous_fixes": "",
+            "step_comments": [],
+            "issue_title": "Fix pdd/main.py",
+            "issue_content": "Bug in pdd/main.py causing test failures",
+        }
+        state_path.write_text(json.dumps(cached_state))
+
+        steps_invoked: List[float] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            steps_invoked.append(step_num)
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            commit_push_return=(True, "No changes to push."),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert 6.1 not in steps_invoked, (
+            f"Fixer step 6.1 ran on resume of a clean run: invoked={steps_invoked}"
+        )
+        assert 6.2 not in steps_invoked
+        assert 6.3 not in steps_invoked
+
+
+class TestIssue1215Round2Step5PersistedScrubbing:
+    """Round-2 Finding 4: Step 5 failure output is scrubbed BEFORE persistence."""
+
+    def test_secret_in_step5_failure_not_persisted_to_step6_context(self, tmp_path):
+        """Tokens in Step 5 stderr never reach Step 6 context or persisted state."""
+        secret_token = "ghp_" + "A" * 36
+        step5_failure_text = (
+            f"FAILED tests/test_secrets.py::test_x\n"
+            f"E   subprocess.CalledProcessError: cmd 'curl -H Authorization: token "
+            f"{secret_token} ...'"
+        )
+        captured_step6_contexts: List[Dict] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_failure_text, 0.1, "model")
+            if step_num == 6.1:
+                captured_step6_contexts.append(dict(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured_step6_contexts, "Step 6.1 must run after Step 5 failure"
+        ctx = captured_step6_contexts[0]
+        assert secret_token not in ctx.get("step5_output", ""), (
+            "Step 5 raw token leaked into context['step5_output'] — scrubbing "
+            "did not run before persistence."
+        )
+        assert secret_token not in ctx.get("step5_failure_signal", "")
+
+
+class TestIssue1215Round2FailureSignalValidation:
+    """Round-2 Finding 5: parse/validate the failure_signal block."""
+
+    def test_parse_failure_signal_missing_block(self):
+        fields, missing = _parse_failure_signal_block(
+            "No fenced block at all."
+        )
+        assert fields == {}
+        assert missing == ["__block__"]
+
+    def test_parse_failure_signal_well_formed(self):
+        text = (
+            "Preamble.\n"
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  E   AssertionError: expected 1, got 2\n"
+            "  FAILED tests/test_main.py::test_x\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        assert missing == []
+        assert fields["command"] == "pytest -q"
+        assert fields["status"] == "fail"
+        assert "AssertionError" in fields["output"]
+
+    def test_parse_failure_signal_missing_required_key(self):
+        text = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  E   AssertionError\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        assert "status" in missing
+
+    def test_normalised_signal_synthesises_when_missing(self):
+        raw = "FAILED tests/test_x.py::test_y - AssertionError: 1 != 2"
+        text = _normalised_failure_signal_text(raw, {}, ["__block__"])
+        assert "```failure_signal" in text
+        assert "orchestrator-note" in text
+        assert "AssertionError" in text
+
+    def test_step6_receives_failure_signal_when_step5_omits_block(self, tmp_path):
+        """Step 6 always receives ``context['step5_failure_signal']`` after Step 5 failure."""
+        captured: List[Dict] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED tests/test_x.py::test_y - AssertionError", 0.1, "model")
+            if step_num == 6.1:
+                captured.append(dict(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured, "Step 6.1 must run after Step 5 failure"
+        ctx = captured[0]
+        assert "```failure_signal" in ctx.get("step5_failure_signal", "")
+        assert "__block__" in ctx.get("step5_failure_signal_missing", "")

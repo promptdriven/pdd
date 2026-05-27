@@ -987,6 +987,225 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+def _parse_expansion_items(step6_output: str) -> Tuple[set, bool]:
+    """Parse the ``EXPANSION_ITEMS:`` allowlist from Step 6 output.
+
+    Returns ``(paths, has_justification)``:
+      - ``paths``: the set of file paths explicitly listed on
+        ``EXPANSION_ITEMS:`` lines (commas/whitespace separated, stripped
+        of surrounding backticks/quotes).
+      - ``has_justification``: True when the fixer included a causal
+        justification — either inline on the marker line (``: <paths> —
+        <reason>``) or as text in/below the EXPANSION_ITEMS section.
+
+    Round-2 Finding 2: the old check was ``"EXPANSION_ITEMS:" in
+    step6_out``, which accepts a blank marker (``EXPANSION_ITEMS:`` with
+    no paths) or a marker with paths but no justification. A fixer could
+    use either to silently bypass the scope refusal for any unrelated
+    file. This helper requires BOTH a non-empty path list and a
+    justification before the caller treats the marker as valid.
+    """
+    paths: set = set()
+    justification_segments: List[str] = []
+    if "EXPANSION_ITEMS:" not in step6_output:
+        return paths, False
+
+    lines = step6_output.splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("EXPANSION_ITEMS:"):
+            continue
+        payload = stripped.split(":", 1)[1].strip()
+        # Allow an inline justification after an em-dash, hyphen, or
+        # "because"/"reason"-style suffix on the same line:
+        #   EXPANSION_ITEMS: tests/test_x.py — broken by core.py change
+        inline_paths = payload
+        inline_reason = ""
+        for sep in (" — ", " -- ", " - ", " because ", " reason: "):
+            if sep in payload:
+                inline_paths, _, inline_reason = payload.partition(sep)
+                break
+        if inline_reason.strip():
+            justification_segments.append(inline_reason.strip())
+        # Treat ``none`` / ``n/a`` / empty payload as no expansion.
+        if not inline_paths or inline_paths.lower() in ("none", "n/a", "-"):
+            continue
+        for token in inline_paths.replace(";", ",").split(","):
+            cleaned = token.strip().strip("`'\"")
+            # Skip obvious non-path fragments (sentences, parentheticals).
+            if not cleaned:
+                continue
+            if " " in cleaned and "/" not in cleaned and "\\" not in cleaned:
+                # Reads like prose, not a path — drop it.
+                justification_segments.append(cleaned)
+                continue
+            paths.add(cleaned)
+        # Pull a few trailing non-empty lines as potential justification
+        # text so a multi-line block of reasoning still satisfies the
+        # justification requirement.
+        for follow in lines[idx + 1: idx + 6]:
+            follow_stripped = follow.strip()
+            if not follow_stripped:
+                continue
+            if follow_stripped.startswith("EXPANSION_ITEMS:"):
+                break
+            if follow_stripped.startswith(("FILES_", "PATTERN_", "FIX_")):
+                break
+            justification_segments.append(follow_stripped)
+
+    has_justification = any(
+        len(seg) >= 8 for seg in justification_segments
+    )
+    return paths, has_justification
+
+
+_FAILURE_SIGNAL_REQUIRED_KEYS = (
+    "command",
+    "exit_code",
+    "status",
+    "failing_ids",
+    "artifact_path",
+    "output",
+)
+
+
+def _extract_failure_signal_block(step5_output: str) -> Optional[str]:
+    """Return the raw text inside a `````failure_signal`` fenced block.
+
+    Returns the body (without the fences) when found, otherwise ``None``.
+    Only the LAST such block is returned — the Step 5 prompt requires the
+    block to be the final fenced block of the response.
+    """
+    if not step5_output or "failure_signal" not in step5_output:
+        return None
+    matches = list(
+        re.finditer(
+            r"```failure_signal\s*\n(.*?)```",
+            step5_output,
+            flags=re.DOTALL,
+        )
+    )
+    if not matches:
+        return None
+    return matches[-1].group(1)
+
+
+def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List[str]]:
+    """Parse the structured failure_signal block from Step 5 output.
+
+    Returns ``(fields, missing)``:
+      - ``fields``: dict of recognised keys. Missing keys are absent. The
+        ``output:`` value collects the indented block under the key (each
+        leading two-space indent is stripped) per the prompt's YAML-ish
+        shape.
+      - ``missing``: ordered list of REQUIRED keys not present in the block
+        (or with empty values for required-non-empty keys like ``status``
+        and ``command``). When the block itself is missing,
+        ``missing == ["__block__"]``.
+
+    Round-2 Finding 5: the prompt says Step 5 MUST emit this block and
+    that Step 6 rejects failures without it, but no parsing/validation
+    existed. This helper lets the orchestrator detect missing/malformed
+    blocks and synthesise a normalised structured block for Step 6.
+    """
+    body = _extract_failure_signal_block(step5_output)
+    if body is None:
+        return {}, ["__block__"]
+
+    fields: Dict[str, str] = {}
+    current_key: Optional[str] = None
+    indented_lines: List[str] = []
+
+    def _commit_block_value() -> None:
+        if current_key is None:
+            return
+        fields[current_key] = "\n".join(indented_lines).rstrip()
+
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            if current_key is not None and indented_lines:
+                indented_lines.append("")
+            continue
+        # Recognise ``key: value`` at column 0 (or with ``  key:`` indent
+        # styling tolerated). A continuation of a block scalar is any
+        # line that starts with whitespace.
+        match = re.match(r"^([A-Za-z_]+)\s*:\s*(.*)$", line)
+        if match and not raw_line.startswith((" ", "\t")):
+            _commit_block_value()
+            current_key = match.group(1).strip().lower()
+            value = match.group(2).rstrip()
+            if value == "|":
+                # Block-scalar follows on subsequent indented lines.
+                fields[current_key] = ""
+                indented_lines = []
+            else:
+                fields[current_key] = value
+                current_key = None
+                indented_lines = []
+        else:
+            if current_key is not None:
+                stripped = raw_line[2:] if raw_line.startswith("  ") else raw_line
+                indented_lines.append(stripped)
+    _commit_block_value()
+
+    missing: List[str] = []
+    for key in _FAILURE_SIGNAL_REQUIRED_KEYS:
+        if key not in fields:
+            missing.append(key)
+            continue
+        if key in ("command", "status") and not str(fields[key]).strip():
+            missing.append(key)
+    return fields, missing
+
+
+def _normalised_failure_signal_text(
+    raw_output: str,
+    fields: Dict[str, str],
+    missing: List[str],
+) -> str:
+    """Return a normalised structured block for downstream prompts.
+
+    When the Step 5 agent omits or paraphrases the ``failure_signal``
+    block we still want to hand Step 6 a structured representation
+    instead of letting it invent context (which is what caused the
+    original hallucinated-fix mode). Falls back to a synthesised block
+    that captures the raw output verbatim and flags the missing keys.
+    """
+    if not missing:
+        rendered = "\n".join(
+            f"{key}: {fields.get(key, '')}"
+            for key in _FAILURE_SIGNAL_REQUIRED_KEYS
+            if key != "output"
+        )
+        rendered += "\noutput: |\n"
+        body = fields.get("output", "")
+        for body_line in body.splitlines() or [""]:
+            rendered += f"  {body_line}\n"
+        return f"```failure_signal\n{rendered.rstrip()}\n```"
+
+    # Synthesise: pull any fields we did parse; mark the rest as MISSING.
+    parts = []
+    for key in _FAILURE_SIGNAL_REQUIRED_KEYS:
+        if key == "output":
+            continue
+        value = fields.get(key)
+        if value is None or (key in ("command", "status") and not str(value).strip()):
+            value = "MISSING"
+        parts.append(f"{key}: {value}")
+    rendered = "\n".join(parts)
+    raw_body = fields.get("output") or raw_output or ""
+    rendered += "\noutput: |\n"
+    for body_line in (raw_body.splitlines() or [""])[:200]:
+        rendered += f"  {body_line}\n"
+    rendered += (
+        "\n# orchestrator-note: Step 5 emitted a non-compliant "
+        f"failure_signal block (missing/empty keys: {sorted(missing)}). "
+        "Raw step output is preserved above for Step 6."
+    )
+    return f"```failure_signal\n{rendered.rstrip()}\n```"
+
+
 def _is_provider_failure(output: str) -> bool:
     """Return true when the agent runner exhausted every provider."""
     return "All agent providers failed" in output
@@ -1687,7 +1906,23 @@ def _run_agentic_checkup_orchestrator_inner(
 
         # Use underscore-based key for fractional steps: 6.1 -> "6_1"
         step_key = str(step_num).replace(".", "_")
-        context[f"step{step_key}_output"] = output
+
+        # Round-2 Finding 4: scrub Step 5 output BEFORE every persistence
+        # surface, not just the console log. Step 5 surfaces raw stdout/
+        # stderr (commands, test runners) which can contain tokens, Bearer
+        # headers, or ``https://user:token@host`` URLs. The output below
+        # lands in ``context[f"step{step_key}_output"]`` (passed verbatim
+        # into Step 6/7 prompts), ``step_outputs[step_key]`` (persisted to
+        # local + GitHub workflow state), and any per-step GitHub comment.
+        # Scrubbing only on the console path leaks secrets into all three.
+        persistable_output = output
+        if step_num == 5 and not success and output:
+            persistable_output = _scrub_secrets(output)
+            token = _github_token_from_env()
+            if token:
+                persistable_output = _redact_secret(persistable_output, token)
+
+        context[f"step{step_key}_output"] = persistable_output
 
         # Steps 6.1/6.2/6.3: parse changed files.
         if step_num in (6.1, 6.2, 6.3) and success:
@@ -1704,27 +1939,22 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"but proceeding as no hard stop condition met.[/yellow]"
                 )
             # Always surface Step 5 failure detail — visible even in quiet mode.
-            # Scrub secrets first: test output and command stderr can embed
-            # tokens, Bearer headers, or `https://user:token@host` URLs.
-            if step_num == 5 and output:
-                safe_output = _scrub_secrets(output)
-                token = _github_token_from_env()
-                if token:
-                    safe_output = _redact_secret(safe_output, token)
+            # ``persistable_output`` is already scrubbed when step_num == 5.
+            if step_num == 5 and persistable_output:
                 console.print(
-                    f"[yellow]Step 5 failure detail:\n{safe_output}[/yellow]"
+                    f"[yellow]Step 5 failure detail:\n{persistable_output}[/yellow]"
                 )
         elif not quiet:
             console.print(f"  -> Step {step_num} complete.")
 
         if success:
-            step_outputs[step_key] = output
+            step_outputs[step_key] = persistable_output
             last_completed_step_to_save = step_num
             consecutive_provider_failures = 0
             if description:
-                _maybe_post_step_comment(step_num, description, output, iteration)
+                _maybe_post_step_comment(step_num, description, persistable_output, iteration)
         else:
-            step_outputs[step_key] = f"FAILED: {output}"
+            step_outputs[step_key] = f"FAILED: {persistable_output}"
             if _is_provider_failure(output):
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
@@ -2254,9 +2484,36 @@ def _run_agentic_checkup_orchestrator_inner(
             # test signals. The fixer (6.1/6.2/6.3) is skipped in PR mode only
             # when ALL of them are clean — Steps 3 and 4 can fail before Step
             # 5 succeeds and Step 6 is the right place to fix those failures.
-            step3_clean = False
-            step4_clean = False
-            step5_clean = False
+            #
+            # Round-2 Finding 3: when resuming mid-loop (start_step > 3),
+            # initialise the clean flags from the persisted ``step_outputs``
+            # so a clean Step 3/4/5 cached before the interruption is not
+            # forgotten. Without this, a resume after a clean Step 5 reentered
+            # the fixer with all three flags False and hallucinated changes,
+            # recreating the non-convergent clean-run bug. ``step_outputs[K]``
+            # stores raw success output for clean steps and ``FAILED: …`` for
+            # failures (see ``_handle_step_result``).
+            def _cached_clean(key: str) -> bool:
+                cached = step_outputs.get(key)
+                if not cached:
+                    return False
+                return not cached.startswith("FAILED:")
+
+            step3_clean = (
+                is_first_loop_pass
+                and start_step > 3
+                and _cached_clean("3")
+            )
+            step4_clean = (
+                is_first_loop_pass
+                and start_step > 4
+                and _cached_clean("4")
+            )
+            step5_clean = (
+                is_first_loop_pass
+                and start_step > 5
+                and _cached_clean("5")
+            )
 
             for step_num, name, description in loop_steps:
                 # On first pass through the loop, honour resume (skip
@@ -2318,6 +2575,32 @@ def _run_agentic_checkup_orchestrator_inner(
                     step4_clean = success
                 if step_num == 5:
                     step5_clean = success
+                    # Round-2 Finding 5: parse and validate the
+                    # ``failure_signal`` block on Step 5 failure. If the
+                    # block is missing or malformed, log a warning and
+                    # synthesise a normalised block from the scrubbed raw
+                    # output so Step 6 always receives structured context.
+                    # The scrubbed persistable output lives in
+                    # ``context["step5_output"]`` (see _handle_step_result).
+                    if not success:
+                        step5_persisted = context.get("step5_output", "") or ""
+                        signal_fields, signal_missing = (
+                            _parse_failure_signal_block(step5_persisted)
+                        )
+                        if signal_missing and not quiet:
+                            console.print(
+                                "[yellow]Step 5 failure_signal block "
+                                f"missing/malformed (keys: {sorted(signal_missing)}); "
+                                "synthesising normalised block for Step 6."
+                                "[/yellow]"
+                            )
+                        normalised_signal = _normalised_failure_signal_text(
+                            step5_persisted, signal_fields, signal_missing
+                        )
+                        context["step5_failure_signal"] = normalised_signal
+                        context["step5_failure_signal_missing"] = ",".join(
+                            signal_missing
+                        )
 
                 if step_num == 7:
                     step7_output = output
@@ -2503,7 +2786,22 @@ def _run_agentic_checkup_orchestrator_inner(
                 # used to skip them, opening a #1063/#1081 bypass. Run
                 # 10b first (registry-edit) and 10a second (prompt-
                 # source) to mirror the review-loop ordering.
-                guard_changed_files = _git_changed_files(worktree_path)
+                #
+                # Codex round-2 Finding 1: filter the orchestrator's own
+                # PDD scratch artifacts (e.g. ``.pdd/checkup-context/
+                # pr-changed-files-api.txt`` written by
+                # ``_format_pr_changed_files_for_prompt`` and the
+                # ``.pdd/checkup-pr-<n>/`` working dir) before any scope
+                # or causal guard runs. These files are non-committable
+                # (gitignore covers ``.pdd/*``) but can leak into
+                # ``--untracked-files=all`` output and falsely poison the
+                # scope/causal checks, breaking the clean-run convergence
+                # contract.
+                _raw_guard_changed_files = _git_changed_files(worktree_path)
+                guard_changed_files = [
+                    f for f in _raw_guard_changed_files
+                    if not f.startswith(".pdd/")
+                ]
                 pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
 
                 registry_refusal = _check_architecture_registry_edit_guard(
@@ -2575,7 +2873,18 @@ def _run_agentic_checkup_orchestrator_inner(
                 pr_file_set: set = set()
                 if not no_changes_clean_run:
                     import re as _re
-                    api_files_text = pr_metadata.get("api_changed_files", "")
+                    # Codex round-2 Finding 1: prefer the unbounded
+                    # ``api_changed_files_full`` list when present —
+                    # ``api_changed_files`` is a truncated preview (with a
+                    # ``- NOTE: GitHub PR files API list truncated…``
+                    # footer) so on large PRs valid in-scope files beyond
+                    # the preview were being rejected. Fall back to the
+                    # preview when the full list is unavailable.
+                    api_files_text = (
+                        pr_metadata.get("api_changed_files_full")
+                        or pr_metadata.get("api_changed_files")
+                        or ""
+                    )
                     for match in _re.finditer(
                         r"^-\s+([A-Z]+):\s*(.+?)\s*$",
                         api_files_text,
@@ -2593,15 +2902,47 @@ def _run_agentic_checkup_orchestrator_inner(
                                 pr_file_set.add(new_path)
                         else:
                             pr_file_set.add(value)
-                    out_of_scope = [f for f in guard_changed_files if f not in pr_file_set]
-                    # Check if fixer provided EXPANSION_ITEMS justification in step 6 output.
+                    # Codex round-2 Finding 2: parse EXPANSION_ITEMS as a
+                    # structured allowlist. The previous ``"EXPANSION_ITEMS:"
+                    # in step6_out`` substring check let any blank/
+                    # paraphrased marker silently disable the scope guard.
+                    # Require BOTH a non-empty path list AND a justification
+                    # for the marker to count; only the explicitly listed
+                    # paths bypass the scope refusal.
                     step6_out = step_outputs.get("6_1", "")
-                    has_expansion_items = "EXPANSION_ITEMS:" in step6_out
-                    if out_of_scope and not has_expansion_items:
-                        scope_refusal = (
-                            f"Scope guard: fixer touched files outside PR's changed-file set "
-                            f"without EXPANSION_ITEMS justification: {out_of_scope}"
-                        )
+                    expansion_paths_set, expansion_has_justification = (
+                        _parse_expansion_items(step6_out)
+                    )
+                    has_valid_expansion = bool(expansion_paths_set) and (
+                        expansion_has_justification
+                    )
+                    out_of_scope = [
+                        f for f in guard_changed_files
+                        if f not in pr_file_set
+                        and f not in expansion_paths_set
+                    ]
+                    if out_of_scope:
+                        if has_valid_expansion:
+                            scope_refusal = (
+                                "Scope guard: fixer touched files outside PR's "
+                                "changed-file set; EXPANSION_ITEMS marker was "
+                                "present but did not cover these paths: "
+                                f"{out_of_scope}. Listed expansion paths: "
+                                f"{sorted(expansion_paths_set)}."
+                            )
+                        elif "EXPANSION_ITEMS:" in step6_out:
+                            scope_refusal = (
+                                "Scope guard: fixer emitted an EXPANSION_ITEMS "
+                                "marker but it was empty, blank, or lacked a "
+                                "causal justification. Out-of-scope files: "
+                                f"{out_of_scope}."
+                            )
+                        else:
+                            scope_refusal = (
+                                "Scope guard: fixer touched files outside PR's "
+                                "changed-file set without EXPANSION_ITEMS "
+                                f"justification: {out_of_scope}"
+                            )
                         pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
                         (pr_artifacts_dir / "scope-guard-refusal.txt").write_text(scope_refusal + "\n")
                         step_outputs["pr_push"] = scope_refusal
@@ -2632,16 +2973,13 @@ def _run_agentic_checkup_orchestrator_inner(
                             r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
                             step5_out,
                         ))
-                        expansion_paths: set = set()
-                        if has_expansion_items:
-                            for line in step6_out.splitlines():
-                                if line.strip().startswith("EXPANSION_ITEMS:"):
-                                    payload = line.split(":", 1)[1]
-                                    expansion_paths.update(
-                                        p.strip().strip("`,")
-                                        for p in payload.split(",")
-                                        if p.strip()
-                                    )
+                        # Round-2 Finding 2: reuse the structured expansion
+                        # parse from the scope check; only validated paths
+                        # (non-empty list + justification) contribute to
+                        # the causal OK-set.
+                        expansion_paths = (
+                            expansion_paths_set if has_valid_expansion else set()
+                        )
                         ok_set = pr_file_set | failure_paths | expansion_paths
                         if failure_paths and ok_set:
                             fixer_files_set = set(guard_changed_files)
