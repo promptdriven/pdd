@@ -88,7 +88,7 @@
 % SUMMARY OF GOOD PATTERNS:
     - Use tmp_path fixture for file operations
     - Use monkeypatch fixture for environment variables and attributes
-    - Use pytest.raises() as context manager for exception testing
+    - Use pytest.raises() as context manager for exception testing; prefer `match=r"keyword1|keyword2"` regex patterns over exact-string `match=` arguments for error messages
     - Prefer function-scoped fixtures over module or session scope
     - Use yield in fixtures to ensure cleanup runs even on test failure
 
@@ -317,3 +317,23 @@
 <isolation_example>
 <include>context/pytest_isolation_example.py</include>
 </isolation_example>
+
+% 15. PYTEST.RAISES MATCH PATTERNS:
+    - When asserting that a function raises an exception, prefer regex pattern matching over exact strings for error messages.
+    - Exact strings are fragile: regeneration may reword messages while preserving exception type and behavior.
+
+    - BAD (exact-string match — fails if error message is reworded):
+        with pytest.raises(ValueError, match="Incompatible shapes for matrix multiplication"):
+            multiply(a, b)
+
+    - GOOD (regex pattern on semantic keywords — survives rewording):
+        with pytest.raises(ValueError, match=r"shape|incompatible|dimension"):
+            multiply(a, b)
+
+    - GOOD (type-only assertion when message is an implementation detail):
+        with pytest.raises(ValueError):
+            multiply(a, b)
+
+    - RULE: Use `match=r"keyword1|keyword2"` targeting the key semantic terms (e.g., the operation name, the constraint violated, the domain object).
+    - NEVER use match= with a full verbatim error message string.
+    - If you are unsure which keywords are stable, assert only the exception type.
