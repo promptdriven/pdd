@@ -320,10 +320,12 @@ class PDDCLI(click.Group):
     default=None,
     envvar="PDD_PROVIDER",
     help=(
-        "Pin local-mode model selection to a single provider "
-        "(case-insensitive substring match against the CSV provider/model columns, "
-        "e.g. 'gemini', 'anthropic', 'copilot'). Also reads PDD_PROVIDER. "
-        "Has no effect when running in cloud mode."
+        "Pin local-mode model selection to a single provider. Accepts a "
+        "canonical alias ('openai', 'azure_openai', 'vertex_ai', 'azure_ai', "
+        "'anthropic', 'gemini', 'github_copilot', ...), the exact CSV "
+        "provider name (case-insensitive), or an unambiguous substring; "
+        "ambiguous tokens (e.g. 'azure', 'open') fail loudly. Also reads "
+        "PDD_PROVIDER. Has no effect when running in cloud mode."
     ),
 )
 @click.option(

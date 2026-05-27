@@ -2433,10 +2433,72 @@ def _select_model_candidates(
     provider_pin = (os.environ.get("PDD_PROVIDER", "") or "").strip().lower()
     if provider_pin:
         provider_col = model_df['provider'].astype(str).str.lower()
-        provider_mask = provider_col.str.contains(provider_pin, regex=False, na=False)
-        pinned_df = model_df[provider_mask]
+
+        # Canonical-alias resolution. The substring approach alone causes two
+        # regressions the issue/PR review surfaced:
+        #   * ``PDD_PROVIDER=vertex_ai`` does not appear in any provider
+        #     column ("Google Vertex AI"), so it falls through to the
+        #     model-column fallback, which silently drops bare CSV rows like
+        #     ``gemini-3.1-pro-preview`` that have no ``vertex_ai/`` prefix.
+        #   * ``PDD_PROVIDER=openai`` substring-matches both ``OpenAI`` and
+        #     ``Azure OpenAI``, routing a user who asked for OpenAI to Azure
+        #     when both credentials are present.
+        # Resolve via two alias sources before substring matching: the
+        # provider-prefix table (vertex_ai/, gemini/, anthropic/, azure_ai/)
+        # and a runtime-normalized view of the CSV's distinct provider
+        # values (so "OpenAI" → ``openai``, "Github Copilot" →
+        # ``github_copilot``, "Azure OpenAI" → ``azure_openai``).
+        csv_providers = [
+            str(p).strip()
+            for p in model_df['provider'].dropna().unique()
+            if str(p).strip()
+        ]
+        alias_to_canonical: Dict[str, str] = {
+            re.sub(r'[^a-z0-9]+', '_', p.lower()).strip('_'): p
+            for p in csv_providers
+        }
+        # Prefix-table aliases override CSV-derived ones on conflict (rare in
+        # practice, but the prefix table is the authoritative source for the
+        # provider tokens litellm uses for routing).
+        for prefix, canonical in _PROVIDER_PREFIX_TO_PROVIDER.items():
+            alias_to_canonical[prefix.rstrip('/')] = canonical
+
+        canonical_provider = alias_to_canonical.get(provider_pin)
+        if canonical_provider is None:
+            # Also try a normalized form (e.g. user types ``Github Copilot``
+            # or ``azure-openai`` instead of ``github_copilot``/``azure_openai``).
+            canonical_provider = alias_to_canonical.get(
+                re.sub(r'[^a-z0-9]+', '_', provider_pin).strip('_')
+            )
+
+        pinned_df = pd.DataFrame()
+        if canonical_provider is not None:
+            pinned_df = model_df[provider_col == canonical_provider.lower()]
+
         if pinned_df.empty:
-            # Fall back to model-column match only when no provider matches.
+            # Substring fallback on the provider column. Detect ambiguity so
+            # tokens like ``open`` (matches OpenAI and Azure OpenAI and
+            # OpenRouter) or ``azure`` (matches Azure AI and Azure OpenAI)
+            # fail loudly instead of silently picking the first hit.
+            provider_mask = provider_col.str.contains(provider_pin, regex=False, na=False)
+            matched_providers = sorted({
+                str(p).strip()
+                for p in model_df.loc[provider_mask, 'provider'].dropna()
+                if str(p).strip()
+            })
+            if len(matched_providers) > 1:
+                raise RuntimeError(
+                    f"PDD_PROVIDER='{provider_pin}' is ambiguous; matches multiple "
+                    f"providers: {', '.join(matched_providers)}. "
+                    "Use one of those exact names or its canonical alias "
+                    "(e.g. 'openai', 'azure_openai', 'vertex_ai', 'azure_ai')."
+                )
+            pinned_df = model_df[provider_mask]
+
+        if pinned_df.empty:
+            # Final fallback: model-column substring match. Preserves cases
+            # like a CSV where a provider token only appears as a routing
+            # prefix in the model column.
             model_col = model_df['model'].astype(str).str.lower()
             model_mask = model_col.str.contains(provider_pin, regex=False, na=False)
             pinned_df = model_df[model_mask]

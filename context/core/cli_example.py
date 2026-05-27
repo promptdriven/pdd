@@ -19,6 +19,7 @@ The CLI supports the following global options:
 - --output-cost: Path to CSV file for cost tracking
 - --review-examples: Review few-shot examples before execution
 - --local: Run commands locally instead of cloud
+- --provider: Pin local-mode model selection to a single provider (also reads PDD_PROVIDER)
 - --context: Override automatic context detection
 - --list-contexts: List available contexts and exit
 - --core-dump: Write debug bundle for bug reports
@@ -118,12 +119,21 @@ def example_invoke_with_global_options():
             Default: False
         --local (bool): Run locally instead of cloud
             Default: False
-    
+        --provider (str): Pin local-mode model selection to a single provider.
+            Accepts a canonical alias ('openai', 'azure_openai', 'vertex_ai',
+            'azure_ai', 'anthropic', 'gemini', 'github_copilot', ...), the
+            exact CSV provider name (case-insensitive), or an unambiguous
+            substring. Also reads PDD_PROVIDER. The CLI normalizes the value
+            (strip + lowercase) and stores it in ctx.obj['provider'] and the
+            PDD_PROVIDER environment variable so worker subprocesses inherit
+            the pin. No effect in cloud mode.
+            Default: None
+
     Returns:
         dict: The context object containing all parsed options
     """
     runner = CliRunner()
-    
+
     # Invoke with multiple global options
     # Note: Without a subcommand, CLI shows help and exits gracefully
     result = runner.invoke(cli, [
@@ -132,7 +142,8 @@ def example_invoke_with_global_options():
         '--time', '0.3',
         '--verbose',
         '--force',
-        '--local'
+        '--local',
+        '--provider', 'vertex_ai'
     ])
     
     print("=== CLI Invocation with Global Options ===")

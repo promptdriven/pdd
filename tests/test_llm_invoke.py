@@ -4941,6 +4941,101 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(1.0, "gpt-4", df)
         assert {c["provider"].lower() for c in candidates} == {"google"}
 
+    def _make_bundled_style_df(self, llm_mod, tmp_path):
+        """Mirror the bundled CSV layout the codex review flagged: a
+        ``Google Vertex AI`` provider where most rows have a ``vertex_ai/``
+        prefix in the model column but Gemini Pro is listed bare, alongside
+        side-by-side ``Azure OpenAI`` and ``OpenAI`` rows. Used to verify
+        that PDD_PROVIDER aliases land on the canonical provider rather
+        than a substring near-miss."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Vertex: prefixed Claude (surrogate-base trap), bare Gemini Pro
+            # (the row prior substring matching dropped under
+            # `PDD_PROVIDER=vertex_ai`).
+            "Google Vertex AI,vertex_ai/claude-opus-4-7,5.0,25.0,1561,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,200000,8192,128000\n"
+            "Google Vertex AI,gemini-3.1-pro-preview,2.0,12.0,1461,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            # Azure OpenAI sorts first alphabetically — substring match on
+            # ``openai`` would silently route the user there.
+            "Azure OpenAI,azure/gpt-5.5,5.0,30.0,1450,"
+            "AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,"
+            "True,effort,200000,16384,0\n"
+            "OpenAI,gpt-5.5,5.0,30.0,1450,OPENAI_API_KEY,"
+            "True,effort,200000,16384,0\n"
+        )
+        csv_path = tmp_path / "bundled_style.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_provider_pin_vertex_ai_alias_resolves_to_google_vertex_ai(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for codex review of #1246: ``PDD_PROVIDER=vertex_ai``
+        combined with ``PDD_MODEL_DEFAULT=vertex_ai/gemini-3.1-pro-preview``
+        must select the bare ``gemini-3.1-pro-preview`` row under provider
+        ``Google Vertex AI``. The prior substring approach matched no
+        provider column, fell through to the model-column fallback, and
+        silently dropped the bare Gemini row — surfacing
+        ``vertex_ai/claude-opus-4-7`` instead."""
+        df = self._make_bundled_style_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "vertex_ai")
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3.1-pro-preview", df
+        )
+        assert candidates[0]["model"] == "gemini-3.1-pro-preview"
+        assert {c["provider"] for c in candidates} == {"Google Vertex AI"}
+
+    def test_provider_pin_openai_excludes_azure_openai(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for codex review of #1246: ``PDD_PROVIDER=openai`` must
+        only select rows from provider ``OpenAI``, never from
+        ``Azure OpenAI``. Substring matching on the lowercased provider
+        column conflated the two and routed users to Azure when both
+        credentials were configured."""
+        df = self._make_bundled_style_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "openai")
+        candidates = llm_mod._select_model_candidates(1.0, "gpt-5.5", df)
+        providers = {c["provider"] for c in candidates}
+        assert providers == {"OpenAI"}, providers
+        models = {c["model"] for c in candidates}
+        assert "azure/gpt-5.5" not in models
+
+    def test_provider_pin_azure_alias_distinguishes_azure_ai_from_azure_openai(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """The two ``Azure`` providers in the bundled CSV serve different
+        backends and credentials. A bare ``azure`` is ambiguous and must
+        fail loudly; the canonical alias selects one of them."""
+        df = self._make_bundled_style_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "azure_openai")
+        candidates = llm_mod._select_model_candidates(1.0, "gpt-5.5", df)
+        assert {c["provider"] for c in candidates} == {"Azure OpenAI"}
+
+    def test_provider_pin_ambiguous_substring_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A substring like ``azure`` matches multiple distinct providers
+        in the bundled-style CSV (``Azure OpenAI`` + Vertex rows have no
+        Azure AI here, but adding one would also surface). With this
+        fixture the ambiguity surfaces between Azure OpenAI and OpenAI for
+        ``open`` — both contain it. The pin must raise with the matching
+        provider list instead of silently picking one."""
+        df = self._make_bundled_style_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "open")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-5.5", df)
+        msg = str(excinfo.value).lower()
+        assert "ambiguous" in msg
+        assert "azure openai" in msg
+        assert "openai" in msg
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""
