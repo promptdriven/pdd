@@ -593,16 +593,25 @@ def _git_rev_parse_head(worktree: Path) -> str:
 # the default on parse error). Set to ``0`` to disable the gate entirely.
 DIFF_SIZE_ADDED_LOC_LIMIT = 800
 
+# Codex round-9 Finding 2: a path is treated as "oversized" — and
+# therefore required to carry its OWN justified EXPANSION_ITEMS entry
+# when the total diff exceeds ``DIFF_SIZE_ADDED_LOC_LIMIT`` — when its
+# added lines alone meet or exceed this floor. Small companion edits
+# (e.g. a 5-line test update next to a 600-line refactor) are exempt:
+# the docs and Step 6 prompt both promise "every oversized dirty path",
+# not "every dirty path".
+OVERSIZED_PATH_ADDED_LOC_FLOOR = 50
 
-def _diff_size_added_lines(worktree: Path) -> Optional[int]:
-    """Return total added lines across uncommitted + untracked files.
 
-    Uses ``git diff --numstat`` to count added lines in tracked changes,
-    then adds the line counts of untracked files (numstat ignores them).
-    Binary files report ``-`` in numstat output and contribute zero.
+def _diff_size_added_lines_by_path(worktree: Path) -> Optional[Dict[str, int]]:
+    """Return per-path added line counts for uncommitted + untracked files.
 
-    Returns ``None`` when the git probe fails, so callers fail-degrade
-    rather than blocking pushes on a flaky git invocation.
+    Same probe shape as :func:`_diff_size_added_lines` (which delegates to
+    this helper for the total) but reports the count per file so the
+    pre-push gate can isolate which paths individually pushed the diff
+    over the limit. ``None`` indicates the git probe itself failed —
+    callers fail-degrade rather than blocking pushes on a flaky git
+    invocation.
     """
     try:
         from .checkup_gates import (  # pylint: disable=import-outside-toplevel
@@ -625,16 +634,27 @@ def _diff_size_added_lines(worktree: Path) -> Optional[int]:
         )
         if result.returncode != 0:
             return None
-        added = 0
+        per_path: Dict[str, int] = {}
         for line in result.stdout.splitlines():
             parts = line.split("\t")
             if len(parts) < 3:
                 continue
             added_field = parts[0].strip()
+            path_field = parts[-1].strip()
+            if not path_field:
+                continue
+            # Rename rows look like ``10\t5\told -> new``; the destination
+            # is what's in the working tree, so prefer the post-rename
+            # path for matching against ``guard_changed_files``.
+            if " -> " in path_field:
+                path_field = path_field.split(" -> ", 1)[1].strip()
             if added_field in ("", "-"):
+                # Binary files contribute zero; still record so the gate
+                # sees the path.
+                per_path[path_field] = per_path.get(path_field, 0)
                 continue
             try:
-                added += int(added_field)
+                per_path[path_field] = per_path.get(path_field, 0) + int(added_field)
             except ValueError:
                 continue
 
@@ -656,12 +676,28 @@ def _diff_size_added_lines(worktree: Path) -> Optional[int]:
                 try:
                     if full.is_file():
                         with full.open("rb") as fh:
-                            added += sum(1 for _ in fh)
+                            per_path[rel] = per_path.get(rel, 0) + sum(1 for _ in fh)
                 except OSError:
                     continue
-        return added
+        return per_path
     except (subprocess.TimeoutExpired, OSError):
         return None
+
+
+def _diff_size_added_lines(worktree: Path) -> Optional[int]:
+    """Return total added lines across uncommitted + untracked files.
+
+    Uses ``git diff --numstat`` to count added lines in tracked changes,
+    then adds the line counts of untracked files (numstat ignores them).
+    Binary files report ``-`` in numstat output and contribute zero.
+
+    Returns ``None`` when the git probe fails, so callers fail-degrade
+    rather than blocking pushes on a flaky git invocation.
+    """
+    per_path = _diff_size_added_lines_by_path(worktree)
+    if per_path is None:
+        return None
+    return sum(per_path.values())
 
 
 def _check_prompt_source_guard(
@@ -2908,6 +2944,17 @@ def _run_agentic_checkup_orchestrator_inner(
                     )
                     failure_statuses = {"fail", "error", "failed", "failure"}
                     pass_statuses = {"pass", "ok", "success", "passed", "clean"}
+                    # Codex round-9 Finding 1: ``skipped``/``skip``/empty-
+                    # results statuses mean tests did not run, so we have
+                    # NO verification signal. Round-8 mapped any non-pass
+                    # status to ``logical_failure``, which ran the fixer
+                    # against a non-failure and then allowed a push of
+                    # speculative changes that no test ever validated.
+                    # Treat skipped as a third state: don't run the fixer
+                    # (no failure to act on) but record an "unverified"
+                    # flag that the pre-push gate consumes to refuse the
+                    # push regardless of other guards.
+                    skipped_statuses = {"skipped", "skip", "no_tests", "n/a"}
                     status_value = (
                         str(signal_fields.get("status", "")).strip().lower()
                     )
@@ -2919,16 +2966,28 @@ def _run_agentic_checkup_orchestrator_inner(
                     # through as ``step5_clean=True`` and skipped the
                     # fixer. Fail closed: a missing block (signal_missing
                     # contains "__block__"), an empty status, or any
-                    # status word that is not in the known pass set
-                    # counts as a logical failure.
+                    # status word that is neither a known pass nor a
+                    # known skipped value counts as a logical failure.
                     block_missing = "__block__" in signal_missing
                     status_recognised_pass = status_value in pass_statuses
+                    status_skipped = status_value in skipped_statuses
                     logical_failure = (
                         status_value in failure_statuses
                         or block_missing
-                        or not status_recognised_pass
+                        or (not status_recognised_pass and not status_skipped)
                     )
+                    # For loop-control purposes treat a "skipped" result
+                    # like a clean Step 5 so the fixer is NOT triggered.
+                    # The unverified flag below blocks the eventual push.
                     step5_clean = success and not logical_failure
+                    if success and status_skipped:
+                        # Persist the unverified flag in context so the
+                        # pre-push gate (which sees ``context``) can
+                        # refuse the push without having to re-parse the
+                        # failure_signal block.
+                        context["step5_verification_skipped"] = "1"
+                    else:
+                        context.pop("step5_verification_skipped", None)
 
                     # Codex round-6 Finding 2: a provider-success result whose
                     # embedded failure_signal block declares status: fail used
@@ -3253,6 +3312,47 @@ def _run_agentic_checkup_orchestrator_inner(
                 # outer finalization (clear_workflow_state) gets called.
                 no_changes_clean_run = not guard_changed_files
 
+                # Codex round-9 Finding 1: when Step 5 reported
+                # ``status: skipped`` the test suite never executed, so
+                # we have no verification of whatever the fixer (or
+                # tooling) produced. Refuse the push regardless of
+                # scope/causal/diff-size — those guards check what was
+                # changed, but only Step 5 can prove the changes don't
+                # break anything. Skip the refusal when the worktree is
+                # already clean (nothing to push anyway) so a clean PR
+                # whose tests legitimately were skipped still flows
+                # through the no-op path without a confusing artifact.
+                if (
+                    context.get("step5_verification_skipped") == "1"
+                    and not no_changes_clean_run
+                ):
+                    unverified_refusal = (
+                        "Step 5 verification skipped: the failure_signal "
+                        "block reported a 'skipped' status, so the test "
+                        "suite did not execute against the PR head. "
+                        "Refusing to push fixer/tooling changes "
+                        f"({sorted(guard_changed_files)}) because there is "
+                        "no test evidence that they don't break the PR. "
+                        "Rerun pdd checkup --pr once the test environment "
+                        "is healthy."
+                    )
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir / "verification-skipped-refusal.txt"
+                    ).write_text(unverified_refusal + "\n")
+                    step_outputs["pr_push"] = unverified_refusal
+                    context["pr_push_output"] = unverified_refusal
+                    _save_state()
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{unverified_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
                 # Codex round-3 Finding 2: when Steps 3/4/5 were all clean
                 # the fixer (6.1/6.2/6.3) was skipped, so any dirty files in
                 # the worktree are side effects from non-fixer steps (Step 7
@@ -3498,14 +3598,24 @@ def _run_agentic_checkup_orchestrator_inner(
                     except ValueError:
                         size_limit = DIFF_SIZE_ADDED_LOC_LIMIT
                     if size_limit > 0:
-                        added_lines = _diff_size_added_lines(worktree_path)
+                        per_path_added = _diff_size_added_lines_by_path(worktree_path)
+                        added_lines = (
+                            sum(per_path_added.values())
+                            if per_path_added is not None
+                            else None
+                        )
                         if added_lines is not None and added_lines > size_limit:
-                            # Codex round-5 Finding 3: every oversized
-                            # dirty path must be covered by its OWN
-                            # justified EXPANSION_ITEMS entry. A sibling
-                            # marker's justification no longer waves the
-                            # size gate through for a path that lacks its
-                            # own causal reason.
+                            # Codex round-5 Finding 3 / round-9 Finding 2:
+                            # every OVERSIZED dirty path must be covered
+                            # by its OWN justified EXPANSION_ITEMS entry —
+                            # small companion files (a 5-line test update
+                            # alongside a 600-line refactor) are exempt
+                            # so the gate matches the documented
+                            # "every oversized dirty path" promise. A
+                            # sibling marker's justification still does
+                            # NOT wave the size gate through for an
+                            # oversized path that lacks its own causal
+                            # reason.
                             #
                             # NOTE: this is intentionally stricter than
                             # the scope guard above — the scope guard
@@ -3517,11 +3627,25 @@ def _run_agentic_checkup_orchestrator_inner(
                             # justify a large diff; only an explicit,
                             # path-level justified EXPANSION_ITEMS entry
                             # does.
-                            uncovered_paths = sorted(
-                                set(guard_changed_files) - justified_paths_set
+                            oversized_paths = {
+                                path
+                                for path, count in (per_path_added or {}).items()
+                                if count >= OVERSIZED_PATH_ADDED_LOC_FLOOR
+                            }
+                            uncovered_oversized = sorted(
+                                oversized_paths - justified_paths_set
                             )
+                            # If the total is over but no single file is
+                            # oversized (death-by-a-thousand-cuts), fall
+                            # back to the original strict rule so the
+                            # gate still catches diffuse runaway diffs.
+                            if not oversized_paths:
+                                uncovered_oversized = sorted(
+                                    set(guard_changed_files) - justified_paths_set
+                                )
                             covers_oversized_paths = (
-                                bool(justified_paths_set) and not uncovered_paths
+                                bool(justified_paths_set)
+                                and not uncovered_oversized
                             )
                             if not covers_oversized_paths:
                                 if not justified_paths_set:
@@ -3531,17 +3655,20 @@ def _run_agentic_checkup_orchestrator_inner(
                                 else:
                                     bypass_reason = (
                                         "EXPANSION_ITEMS marker did not cover "
-                                        "every changed path with its own "
-                                        "causal justification; uncovered "
-                                        f"files: {uncovered_paths}. Justified "
+                                        "every oversized changed path "
+                                        f"(>= {OVERSIZED_PATH_ADDED_LOC_FLOOR} "
+                                        "added lines) with its own causal "
+                                        "justification; uncovered oversized "
+                                        f"files: {uncovered_oversized}. Justified "
                                         f"expansion paths: {sorted(justified_paths_set)}"
                                     )
                                 size_refusal = (
                                     "Diff size guard: fixer push would add "
                                     f"{added_lines} lines (limit {size_limit}) "
                                     f"and the bypass is invalid: {bypass_reason}. "
-                                    "Refusing push — a legitimate large change "
-                                    "must declare every changed path under "
+                                    "Refusing push — every oversized changed "
+                                    f"path (>= {OVERSIZED_PATH_ADDED_LOC_FLOOR} "
+                                    "added lines) must be declared under "
                                     "EXPANSION_ITEMS with a causal justification, "
                                     "or the limit must be raised via "
                                     "PDD_CHECKUP_DIFF_LOC_LIMIT."

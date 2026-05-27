@@ -4066,12 +4066,14 @@ class TestIssue1215Round3DiffSizeGate:
             git_changed_files=["pdd/main.py"],
             pr_metadata=dict(_PR_META_REAL_API),
         )
-        # Pretend the worktree shows 100 added lines.
+        # Pretend the worktree shows 100 added lines on the oversized
+        # file. Round-9: the gate now consumes per-path counts via
+        # _diff_size_added_lines_by_path.
         with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
              patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
              patch(
-                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines",
-                 return_value=100,
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines_by_path",
+                 return_value={"pdd/main.py": 100},
              ):
             success, msg, _, _ = run_agentic_checkup_orchestrator(
                 **{**_PR_ARGS_1212, "cwd": tmp_path}
@@ -4113,8 +4115,8 @@ class TestIssue1215Round3DiffSizeGate:
         with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
              patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
              patch(
-                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines",
-                 return_value=100,
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines_by_path",
+                 return_value={"pdd/main.py": 100},
              ):
             run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
 
@@ -4167,8 +4169,8 @@ class TestIssue1215Round3DiffSizeGate:
         with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
              patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
              patch(
-                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines",
-                 return_value=100,
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines_by_path",
+                 return_value={"pdd/main.py": 100},
              ):
             success, msg, _, _ = run_agentic_checkup_orchestrator(
                 **{**_PR_ARGS_1212, "cwd": tmp_path}
@@ -4177,7 +4179,7 @@ class TestIssue1215Round3DiffSizeGate:
         push_mock.assert_not_called()
         assert success is False
         # Refusal must specifically mention that the marker did not cover
-        # every changed path.
+        # the oversized changed path.
         assert "diff size guard" in (msg or "").lower()
         assert "did not cover" in (msg or "").lower(), msg
         assert "pdd/main.py" in (msg or ""), msg
@@ -5067,3 +5069,193 @@ class TestIssue1215Round8ScopeGuardAcceptsStep5FailurePaths:
         )
         push_mock.assert_called_once()
         assert success is True
+
+
+STEP5_SKIPPED_OUTPUT = (
+    "Tests did not run.\n"
+    "```failure_signal\n"
+    "command: pytest -q\n"
+    "exit_code: 0\n"
+    "status: skipped\n"
+    "failing_ids: none\n"
+    "artifact_path: inline\n"
+    "output: |\n"
+    "  pytest collected 0 tests (no tests run)\n"
+    "```"
+)
+
+
+class TestIssue1215Round9Step5Skipped:
+    """Round-9 Finding 1: a Step 5 ``status: skipped`` means tests did
+    not run. The fixer must NOT trigger (no failure to act on), and the
+    pre-push gate must refuse any dirty-file push (no verification)."""
+
+    def test_skipped_status_does_not_invoke_fixer(self, tmp_path):
+        invoked = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, STEP5_SKIPPED_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        fixer_steps = [s for s in invoked if s in (6.1, 6.2, 6.3)]
+        assert not fixer_steps, (
+            "Step 5 'skipped' must not trigger the fixer — "
+            f"invoked: {invoked}"
+        )
+
+    def test_skipped_status_refuses_push_of_dirty_files(self, tmp_path):
+        # Even when a fixer DID somehow run and produced dirty files
+        # (e.g. an earlier iteration before the skip happened, or a
+        # tooling side-effect), the verification-skipped gate must
+        # refuse the push because tests never validated the changes.
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_SKIPPED_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            # An in-scope dirty file is present even though Step 5
+            # skipped — the gate must still refuse.
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "verification skipped" in (msg or "").lower(), msg
+
+
+class TestIssue1215Round9DiffSizeOversizedPathOnly:
+    """Round-9 Finding 2: the diff-size gate must accept a small
+    companion file (below OVERSIZED_PATH_ADDED_LOC_FLOOR) when the
+    oversized file IS justified — the docs/prompt promise 'every
+    oversized dirty path', not 'every dirty path'."""
+
+    def test_small_companion_does_not_require_expansion_coverage(self, tmp_path, monkeypatch):
+        # Default floor=50 lines. Big refactor on pdd/main.py (200
+        # lines) IS justified; small companion tests/test_main.py (5
+        # lines) is NOT — must still be allowed.
+        monkeypatch.setenv("PDD_CHECKUP_DIFF_LOC_LIMIT", "100")
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: pdd/main.py, tests/test_main.py\n"
+                    "EXPANSION_ITEMS: pdd/main.py — rewrite required because the "
+                    "interface changed and the helper had to be refactored.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py", "tests/test_main.py"],
+            commit_push_return=(True, "Pushed 2 files"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines_by_path",
+                 # pdd/main.py is over the per-path floor (50);
+                 # tests/test_main.py is below it. Total = 205 > limit
+                 # 100 — gate fires.
+                 return_value={"pdd/main.py": 200, "tests/test_main.py": 5},
+             ):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_called_once()
+        assert success is True, (
+            "Small companion file must not block the push when the "
+            f"oversized file is justified — msg={msg!r}"
+        )
+
+    def test_diffuse_overflow_with_no_oversized_path_still_requires_coverage(
+        self, tmp_path, monkeypatch
+    ):
+        # Death-by-a-thousand-cuts: many small files together exceed
+        # the limit but no single file is "oversized". Fallback to the
+        # strict every-path rule.
+        monkeypatch.setenv("PDD_CHECKUP_DIFF_LOC_LIMIT", "100")
+
+        # All three paths are IN the PR's changed-file set (per
+        # _PR_META_REAL_API) so the scope guard passes and the
+        # diff-size gate is the one that fires.
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                # All 3 files are listed; only pdd/main.py is justified.
+                return (
+                    True,
+                    "FILES_MODIFIED: pdd/main.py, pdd/new_feature.py, pdd/renamed.py\n"
+                    "EXPANSION_ITEMS: pdd/main.py — needed because the PR "
+                    "change reshaped the call graph.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[
+                "pdd/main.py", "pdd/new_feature.py", "pdd/renamed.py",
+            ],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines_by_path",
+                 # Each file is 40 lines (below the floor=50); total=120
+                 # > limit=100. No single file is oversized → strict
+                 # fallback applies and refuses because not every changed
+                 # path is justified.
+                 return_value={
+                     "pdd/main.py": 40,
+                     "pdd/new_feature.py": 40,
+                     "pdd/renamed.py": 40,
+                 },
+             ):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "diff size guard" in (msg or "").lower(), msg
