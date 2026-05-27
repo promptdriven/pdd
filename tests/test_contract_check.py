@@ -344,6 +344,20 @@ class TestCheckVagueTerms:
         vague = _issues_for_code(result, "VAGUE_TERM")
         assert vague == []
 
+    def test_covers_section_does_not_suppress_vague_terms(self, tmp_path: Path) -> None:
+        prompt = tmp_path / "covers_not_vocab_python.prompt"
+        prompt.write_text(
+            "<covers>\n"
+            "- valid: defined only in covers, not vocabulary\n"
+            "</covers>\n"
+            "<contract_rules>\n"
+            "R1: The system MUST return a valid response.\n"
+            "</contract_rules>\n",
+            encoding="utf-8",
+        )
+        vague = _issues_for_code(check_prompt(prompt), "VAGUE_TERM")
+        assert any(i.term == "valid" for i in vague)
+
 
 # ---------------------------------------------------------------------------
 # TestCheckCoverageEntries  (replaces TestCheckCoverageRefs)
@@ -872,6 +886,50 @@ class TestContractIssueAndResult:
         d = issue.as_dict()
         assert d["interpretations"] == ["Same filename", "Same hash", "Same tenant + hash"]
         assert "tenant" in d["suggestion"]
+
+
+# ---------------------------------------------------------------------------
+# TestRunLlmAmbiguityPass
+# ---------------------------------------------------------------------------
+
+class TestRunLlmAmbiguityPass:
+    def test_llm_pass_does_not_call_preprocess(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import pdd.contract_check as cc
+        from pdd.contract_check import run_llm_ambiguity_pass
+
+        shim = tmp_path / "contract_check.py"
+        shim.write_text("# shim\n", encoding="utf-8")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "contract_check_LLM.prompt").write_text(
+            "Terms: {vague_terms_list}\nContent:\n{contract_content}",
+            encoding="utf-8",
+        )
+
+        target = tmp_path / "rules_python.prompt"
+        target.write_text(
+            "<contract_rules>\n"
+            "R1: The system MUST reject duplicate uploads.\n"
+            "</contract_rules>\n",
+            encoding="utf-8",
+        )
+
+        def _block_preprocess(*_args, **_kwargs) -> str:  # noqa: ANN002
+            raise AssertionError("preprocess must not run during contract lint")
+
+        monkeypatch.setattr(cc, "__file__", str(shim))
+
+        def _fake_llm_invoke(**_kwargs):  # noqa: ANN003
+            return {"result": "[]"}
+
+        import pdd.llm_invoke as llm_invoke_mod
+
+        monkeypatch.setattr("pdd.preprocess.preprocess", _block_preprocess)
+        monkeypatch.setattr(llm_invoke_mod, "llm_invoke", _fake_llm_invoke)
+
+        assert run_llm_ambiguity_pass(target) == []
 
 
 # ---------------------------------------------------------------------------

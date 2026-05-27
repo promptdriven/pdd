@@ -669,7 +669,8 @@ def _parse_formalization_section(formal_text: str) -> list[FormalizationRecord]:
 def _build_vocabulary_terms(sections: dict[str, str]) -> set[str]:
     """Collect defined vocabulary terms from prompt sections."""
     vocab_terms: set[str] = set()
-    for key in ("vocabulary", "glossary", "definitions", "covers"):
+    # ``covers`` is traceability metadata, not a vocabulary waiver (see prompt-lint #829).
+    for key in ("vocabulary", "glossary", "definitions"):
         if key in sections:
             vocab_terms |= extract_vocabulary_terms(sections[key])
     return vocab_terms

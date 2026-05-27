@@ -845,7 +845,6 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
     """
     try:
         from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
-        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
     except ImportError:
         logger.warning("LLM dependencies not available; skipping ambiguity pass.")
         return []
@@ -870,10 +869,10 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
             Path(__file__).parent / "prompts" / "contract_check_LLM.prompt"
         )
         template = prompt_template_path.read_text(encoding="utf-8")
+        # Keep lint read-only: do not preprocess (would execute <shell> in inspected content).
         filled = template.replace("{contract_content}", rules_text).replace(
             "{vague_terms_list}", ", ".join(found_terms)
         )
-        filled = preprocess(filled, recursive=False, double_curly_brackets=False)
 
         result = llm_invoke(
             messages=[{"role": "user", "content": filled}],

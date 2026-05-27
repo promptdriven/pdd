@@ -46,7 +46,7 @@ When present in a prompt file:
 | Section | Purpose |
 |---------|---------|
 | `<contract_rules>` | Testable rules with IDs and modal verbs |
-| `<vocabulary>` | Definitions that suppress vague-term warnings |
+| `<vocabulary>` | Definitions that suppress vague-term warnings (not `<covers>` / story `## Covers`) |
 | `<capabilities>` | What the module may do |
 | `<non_responsibilities>` | Explicit exclusions |
 | `<coverage>` | Story/test/waiver evidence per rule ID |

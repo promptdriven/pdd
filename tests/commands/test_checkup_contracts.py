@@ -17,6 +17,14 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "contract_check"
 REPO_ROOT = Path(__file__).parents[2]
 
 
+def test_checkup_help_without_target() -> None:
+    """``pdd checkup --help`` must work (contract dispatch must not break it)."""
+    result = CliRunner().invoke(checkup, ["--help"], obj={"quiet": True})
+    assert result.exit_code == 0
+    assert "checkup" in result.output.lower()
+    assert "contract" in result.output.lower()
+
+
 def test_contracts_check_top_level_alias_json() -> None:
     """``pdd contracts check`` mirrors ``pdd checkup contract check``."""
     result = CliRunner().invoke(
