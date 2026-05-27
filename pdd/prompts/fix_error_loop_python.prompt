@@ -147,6 +147,9 @@ def fix_error_loop(
     <python_env_detector>
         <include>context/python_env_detector_example.py</include>
     </python_env_detector>
+    <fix_error_loop>
+        <include>pdd/fix_error_loop.py</include>
+    </fix_error_loop>
 </internal_modules>
 
 <include optional>failure_classification_python.prompt</include>
