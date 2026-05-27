@@ -261,6 +261,8 @@ yarn.lock
 !.pdd/meta/llm_invoke_python.json
 !.pdd/meta/preprocess_python.json
 !.pdd/meta/summarize_directory_python.json
+!.pdd/meta/sync_determine_operation_python.json
+!.pdd/meta/update_main_python.json
 .pdd/meta/*_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
 # `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal
