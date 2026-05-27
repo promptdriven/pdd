@@ -330,14 +330,21 @@ pdd --local --provider gemini sync my_module
 PDD_PROVIDER=gemini pdd --local sync my_module
 ```
 
-The value is a case-insensitive substring match against the CSV `provider`
-column first; only if no provider matches does PDD fall back to matching the
-`model` column. So `gemini` selects only `Google Gemini` rows (not
+The value is first resolved via canonical aliases (litellm routing prefixes
+like `vertex_ai`, `azure_ai`, `gemini`, `anthropic`, plus a normalized view of
+distinct CSV provider names such as `azure_openai` and `github_copilot`), then
+falls back to a case-insensitive substring match on the CSV `provider` column,
+and only if both produce no rows does PDD fall back to substring matching on
+the `model` column. So `gemini` selects only `Google Gemini` rows (not
 `github_copilot/gemini-...` cross-routed rows), `anthropic` selects only
 `Anthropic` rows (not AWS Bedrock / OpenRouter rows whose model names include
 `anthropic`), and `vertex_ai` — which is not a provider name but does appear
-as a model-column prefix — still resolves via the fallback. If the pin
-matches no rows in your CSV, PDD aborts with a clear error listing the
+as a model-column prefix — still resolves via the fallback. Both substring
+fallbacks refuse to pick across providers: a token that matches more than one
+distinct provider (e.g. `open` → OpenAI + Azure OpenAI on the provider column,
+`claude` or `gpt` → many providers via the model column) aborts with a list of
+the matched providers so you can pick an unambiguous one. If the pin matches
+no rows in your CSV at all, PDD aborts with a clear error listing the
 available providers — it never silently routes to a different provider.
 
 PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
@@ -707,7 +714,7 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
-- `--provider TEXT`: Pin local-mode model selection to a single provider (case-insensitive substring match against the CSV `provider` / `model` columns, e.g. `gemini`, `anthropic`, `copilot`). Also accepts the `PDD_PROVIDER` environment variable. Has no effect when running in cloud mode.
+- `--provider TEXT`: Pin local-mode model selection to a single provider. Resolves canonical aliases first (`vertex_ai`, `azure_ai`, `gemini`, `anthropic`, plus normalized CSV provider names like `azure_openai`, `github_copilot`), then case-insensitive substring on the CSV `provider` column, then on the `model` column. Both substring fallbacks refuse to pick when the token spans multiple providers — bare tokens like `open` (OpenAI + Azure OpenAI), `claude`, or `gpt` abort listing the matches so you can disambiguate. Also accepts the `PDD_PROVIDER` environment variable. Has no effect when running in cloud mode.
 - `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
 - `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.

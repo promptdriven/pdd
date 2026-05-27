@@ -2423,7 +2423,11 @@ def _select_model_candidates(
     # purpose of "pinning a provider". The model-column fallback is kept
     # for the case where a user types a provider-prefix only present in
     # model names (e.g. ``--provider vertex_ai``); if the user's intent
-    # matches a real provider, that real provider wins.
+    # matches a real provider, that real provider wins. The model-column
+    # fallback is itself guarded by the same multi-provider ambiguity
+    # check as the provider-column substring fallback — bare tokens like
+    # ``claude`` or ``gpt`` substring-match model names across many
+    # providers, so they raise instead of silently routing across them.
     #
     # Pinning is honoured EVEN when the user did not pass --local — the env
     # var is the cross-thread carrier and worker subprocesses inherit it.
@@ -2498,9 +2502,27 @@ def _select_model_candidates(
         if pinned_df.empty:
             # Final fallback: model-column substring match. Preserves cases
             # like a CSV where a provider token only appears as a routing
-            # prefix in the model column.
+            # prefix in the model column. Same ambiguity guard as the
+            # provider-column fallback above — tokens like ``claude`` or
+            # ``gpt`` substring-match model names across many providers
+            # (Bedrock, OpenRouter, Github Copilot, Perplexity, Vercel, ...)
+            # in the bundled CSV. Picking the first one would recreate the
+            # cross-provider wrong-routing class the pin is meant to prevent,
+            # so fail loudly and list the matched providers instead.
             model_col = model_df['model'].astype(str).str.lower()
             model_mask = model_col.str.contains(provider_pin, regex=False, na=False)
+            matched_providers = sorted({
+                str(p).strip()
+                for p in model_df.loc[model_mask, 'provider'].dropna()
+                if str(p).strip()
+            })
+            if len(matched_providers) > 1:
+                raise RuntimeError(
+                    f"PDD_PROVIDER='{provider_pin}' is ambiguous; matches model "
+                    f"names across multiple providers: {', '.join(matched_providers)}. "
+                    "Use one of those exact provider names or its canonical alias "
+                    "(e.g. 'anthropic', 'openai', 'vertex_ai', 'azure_openai')."
+                )
             pinned_df = model_df[model_mask]
         if pinned_df.empty:
             known_providers = sorted({p for p in model_df['provider'].astype(str).str.strip() if p})

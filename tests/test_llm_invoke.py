@@ -5036,6 +5036,57 @@ class TestSelectModelCandidates:
         assert "azure openai" in msg
         assert "openai" in msg
 
+    def test_provider_pin_claude_model_column_ambiguous_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for codex review of #1246: ``PDD_PROVIDER=claude``
+        does not match any provider name in the bundled CSV, so it falls
+        through to the model-column fallback. Without a multi-provider
+        guard on that fallback, ``claude`` would silently route across
+        Anthropic, AWS Bedrock, and OpenRouter (whose model names all
+        contain ``claude``). The pin must raise listing the matched
+        providers so the user can pick an unambiguous one."""
+        df = self._make_cross_routed_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "claude")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "claude-opus-4-7", df)
+        msg = str(excinfo.value).lower()
+        assert "ambiguous" in msg
+        assert "anthropic" in msg
+        assert "aws bedrock" in msg
+        assert "openrouter" in msg
+
+    def test_provider_pin_gpt_model_column_ambiguous_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for codex review of #1246: ``PDD_PROVIDER=gpt`` does
+        not match any provider name, but ``gpt`` substring-matches model
+        names under both OpenAI and Azure OpenAI. The model-column
+        fallback must refuse this and raise listing both providers."""
+        df = self._make_bundled_style_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "gpt")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-5.5", df)
+        msg = str(excinfo.value).lower()
+        assert "ambiguous" in msg
+        assert "azure openai" in msg
+        assert "openai" in msg
+
+    def test_provider_pin_model_column_single_provider_still_resolves(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Counter-test: when the model-column fallback matches rows under
+        exactly one distinct provider, the pin should still resolve
+        successfully — the multi-provider guard must not over-trigger.
+        Here ``pro`` matches no provider name and only one model
+        (``gemini-pro`` under ``google``), so the fallback resolves to a
+        single provider."""
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "pro")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert len(candidates) == 1
+        assert candidates[0]["model"] == "gemini-pro"
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""
