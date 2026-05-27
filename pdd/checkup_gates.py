@@ -1429,26 +1429,26 @@ def _discover_python_gates(
         # ``--gate-allow`` filtering still works and the failure surfaces
         # under its own ``ruff-format`` name in the report.
         #
-        # Codex pass-4 finding 3: a project may use ruff for LINTING
-        # while running a different formatter (typically black). Firing
-        # ``ruff format --check`` against such a project would block
-        # clean verdicts on formatting rules CI does not enforce — a
-        # false-positive blocker. Tighten the trigger to an EXPLICIT
-        # opt-in signal: either ``[tool.ruff.format]`` is declared (the
-        # canonical way to express "yes, I use ruff format") OR
-        # ``[tool.black]`` is absent (no rival formatter declared, so
-        # the ruff toolchain is the only formatter available). Both
-        # conditions still require the lint gate's existing
-        # prerequisites (changed_py, ruff binary on PATH,
-        # ``[tool.ruff]`` present, no Python tool-config touched).
-        if _tool_section_present("ruff.format") or not _tool_section_present(
-            "black"
-        ):
+        # Codex pass-4 finding 3 + pass-5 finding 3: a project may use
+        # ruff for LINTING while running black (with or without a
+        # declared ``[tool.black]`` section — black runs on defaults).
+        # Firing ``ruff format --check`` against such a project would
+        # block clean verdicts on formatting CI does not enforce.
+        # Require EXPLICIT opt-in via ``[tool.ruff.format]`` — the
+        # canonical way to express "yes, I use ruff format". A project
+        # using ruff format with the default config will trivially add
+        # an empty ``[tool.ruff.format]`` section to opt in; a project
+        # using black has no reason to declare it. Pass-4's
+        # "no [tool.black] → opt-in by default" heuristic is dropped
+        # because black runs on defaults and many projects never
+        # declare it, producing the false-positive blocker pass-5
+        # called out.
+        if _tool_section_present("ruff.format"):
             gates.append(
                 Gate(
                     name="ruff-format",
                     cmd=[ruff_abs, "format", "--check", "--", *changed_py],
-                    source="pyproject.toml:[tool.ruff]",
+                    source="pyproject.toml:[tool.ruff.format]",
                     required_fix_hint=(
                         "Run `ruff format` locally and commit the formatting "
                         "changes."

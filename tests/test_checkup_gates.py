@@ -313,23 +313,25 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "ruff" not in names
 
-    def test_emits_ruff_format_when_ruff_configured(
+    def test_emits_ruff_format_when_ruff_format_section_declared(
         self, tmp_path: Path
     ) -> None:
-        """Issue #1433 Bug #2: ``[tool.ruff]`` enables BOTH ``ruff check``
-        AND ``ruff format --check``. The pre-fix gate emitted only the
-        lint check, so PRs that failed CI's ``ruff format --check`` step
-        could still ride a clean checkup verdict to a not-mergeable
-        state. The format gate must use the same conditions as the lint
-        gate (configured, binary present, no tool-config touched) and
-        keep ``--`` end-of-options separator + absolute tool path.
+        """Issue #1433 Bug #2 + codex pass-5 finding 3: the
+        ``ruff-format`` gate requires EXPLICIT opt-in via
+        ``[tool.ruff.format]``. Bare ``[tool.ruff]`` is not enough —
+        too many projects use ruff for linting while running black
+        (which works on defaults without a ``[tool.black]`` section).
+        Require the explicit section so the gate fires only on
+        projects that demonstrably use ruff format.
         """
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "pyproject.toml").write_text(
-            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+            "[tool.ruff]\nline-length = 100\n"
+            "[tool.ruff.format]\nquote-style = \"double\"\n",
+            encoding="utf-8",
         )
         with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
@@ -348,14 +350,16 @@ class TestDiscoverGates:
             f"ruff-format `--` must precede file path: {cmd}"
         )
 
-    def test_skips_ruff_format_when_pyproject_touched_by_pr(
+    def test_skips_ruff_format_when_only_ruff_lint_declared(
         self, tmp_path: Path
     ) -> None:
-        """Iter-32 Findings 2 + 3 parity: ``python_tool_config_touched``
-        gates ALL three Python tool gates. The new ``ruff-format`` gate
-        must respect the same skip — a PR that edits ``pyproject.toml``
-        could otherwise poison ``[tool.ruff.format]`` to make the
-        format check pass over real divergence.
+        """Codex pass-5 finding 3: bare ``[tool.ruff]`` without
+        ``[tool.ruff.format]`` is ambiguous — many projects use ruff
+        for linting + black (or default tooling) for formatting. Skip
+        ruff-format unless the explicit opt-in section is present.
+        Pre-fix code also fired on the "[tool.black] absent" signal,
+        which produced false positives because black runs on defaults
+        without a declared section.
         """
         from pdd.checkup_gates import discover_gates
 
@@ -363,6 +367,37 @@ class TestDiscoverGates:
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "pyproject.toml").write_text(
             "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        # Lint gate fires (ruff is configured + binary present).
+        assert "ruff" in names
+        # Format gate skipped because [tool.ruff.format] absent.
+        assert "ruff-format" not in names
+
+    def test_skips_ruff_format_when_pyproject_touched_by_pr(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-32 Findings 2 + 3 parity: ``python_tool_config_touched``
+        gates ALL three Python tool gates. The new ``ruff-format`` gate
+        must respect the same skip — a PR that edits ``pyproject.toml``
+        could otherwise poison ``[tool.ruff.format]`` to make the
+        format check pass over real divergence. Uses explicit
+        ``[tool.ruff.format]`` opt-in so the test legitimately
+        exercises the config-touched skip path (pass-5 finding 3
+        requires the explicit section to trigger the gate).
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n"
+            "[tool.ruff.format]\nquote-style = \"double\"\n",
+            encoding="utf-8",
         )
         with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
@@ -391,15 +426,18 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "ruff-format" not in names
 
-    def test_skips_ruff_format_when_black_also_declared(
+    def test_skips_ruff_format_when_ruff_lint_plus_black_no_opt_in(
         self, tmp_path: Path
     ) -> None:
-        """Codex review pass-4 finding 3: a project may declare
-        ``[tool.ruff]`` for LINTING while running black for formatting.
-        Firing ``ruff format --check`` would block clean verdicts on
-        formatting rules CI does not enforce. When ``[tool.black]``
-        is declared the gate MUST skip ``ruff-format`` (ruff lint still
-        fires).
+        """Codex review pass-4 finding 3 (refined by pass-5 finding 3):
+        a project may declare ``[tool.ruff]`` for LINTING while
+        running black for formatting. Firing ``ruff format --check``
+        would block clean verdicts on formatting rules CI does not
+        enforce. Under the pass-5 explicit-opt-in rule (require
+        ``[tool.ruff.format]``) the format gate skips this
+        configuration regardless of whether ``[tool.black]`` is
+        declared — the absence of ``[tool.ruff.format]`` is the
+        deciding signal.
         """
         from pdd.checkup_gates import discover_gates
 
@@ -416,7 +454,7 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         # Lint gate still fires (ruff configured + binary present).
         assert "ruff" in names
-        # Format gate skipped because black is also declared.
+        # Format gate skipped because [tool.ruff.format] is absent.
         assert "ruff-format" not in names
 
     def test_emits_ruff_format_when_black_declared_but_ruff_format_opted_in(

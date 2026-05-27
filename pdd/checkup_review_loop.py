@@ -2274,7 +2274,19 @@ def _collect_companion_source_of_truth_files(
         return []
 
     changed_set = {Path(p).as_posix() for p in changed}
-    arch_in_diff = "architecture.json" in changed_set
+    # Codex review pass-5 finding 1: ``architecture.json`` being in the
+    # PR diff does NOT mean each module's architecture entry was
+    # touched. A diff that updates only module B's entry leaves
+    # module A's entry unchanged, but the global ``architecture.json
+    # in changed_set`` signal would still mark every entry as "in
+    # diff" and skip A's companion (losing the drift surface).
+    # Surface the global signal for the reviewer's reference but
+    # do NOT use it to gate emission — only ``prompt_in_diff`` (which
+    # IS per-module) drives the skip. The trade-off is slightly noisier
+    # output when the prompt was co-edited alongside the code, but
+    # missing a drift surface is strictly worse than emitting an
+    # extra row the reviewer can dismiss in one glance.
+    arch_globally_in_diff = "architecture.json" in changed_set
     # Build the full eligible set FIRST so the truncation marker (below)
     # can report total_eligible accurately and enumerate the omitted
     # paths. Walking ``mapping`` (the canonical code -> prompt registry)
@@ -2285,17 +2297,18 @@ def _collect_companion_source_of_truth_files(
         if not prompt_path:
             continue
         prompt_in_diff = prompt_path in changed_set
-        # Only surface entries where at least ONE companion is missing
-        # from the diff — when prompt + arch are both in the diff the
-        # reviewer's normal attention window already covers them.
-        if prompt_in_diff and arch_in_diff:
+        # Skip only when the prompt is in the diff — that signal is
+        # per-module and reliable. We do NOT additionally gate on
+        # ``arch_globally_in_diff`` (see comment above on the per-
+        # entry vs global distinction).
+        if prompt_in_diff:
             continue
         eligible.append(
             {
                 "code_path": code_path,
                 "prompt_path": prompt_path,
                 "prompt_in_diff": prompt_in_diff,
-                "architecture_in_diff": arch_in_diff,
+                "architecture_in_diff": arch_globally_in_diff,
             }
         )
 
@@ -2306,14 +2319,26 @@ def _collect_companion_source_of_truth_files(
     # a synthetic marker describing what was omitted. The formatter
     # MUST render the marker as an explicit "ALSO inspect" note so the
     # reviewer knows the listed entries are not the complete set.
+    #
+    # Codex review pass-5 finding 2: the omitted-paths list MUST itself
+    # be bounded. Pass-4's dump-everything approach defeated the
+    # original 200-entry cap — a 1000-file PR with 800 eligible would
+    # have spilled 600 paths into the reviewer prompt and blown the
+    # context budget. Cap the omitted-paths list at half of
+    # ``max_entries`` (so total visible list stays bounded at
+    # ``max_entries * 1.5`` items) and report the remainder as a count.
     head = eligible[:max_entries]
-    omitted = eligible[max_entries:]
+    omitted_entries = eligible[max_entries:]
+    omitted_paths_cap = max(1, max_entries // 2)
+    omitted_paths_shown = [entry["code_path"] for entry in omitted_entries[:omitted_paths_cap]]
+    omitted_paths_remaining = max(0, len(omitted_entries) - omitted_paths_cap)
     head.append(
         {
             "__truncated__": True,
             "total_eligible": len(eligible),
             "shown": max_entries,
-            "omitted_code_paths": [entry["code_path"] for entry in omitted],
+            "omitted_code_paths": omitted_paths_shown,
+            "omitted_paths_remaining": omitted_paths_remaining,
         }
     )
     return head
@@ -3233,6 +3258,20 @@ def _format_companion_source_of_truth(
         omitted = truncation.get("omitted_code_paths", [])
         total = truncation.get("total_eligible", len(real_entries) + len(omitted))
         shown = truncation.get("shown", len(real_entries))
+        # Codex pass-5 finding 2: ``omitted_paths_remaining`` is the
+        # count of omitted paths beyond the bounded shown-list; render
+        # it as "... and N more" instead of dumping every path so the
+        # reviewer prompt stays within a predictable context budget.
+        remaining = truncation.get("omitted_paths_remaining", 0)
+        if remaining > 0:
+            extra_note = (
+                f"\n\n(And {remaining} more omitted code-file path(s) are "
+                "not listed — narrow the PR scope or rerun checkup against "
+                "a subset to ensure full review coverage of those "
+                "companions.)"
+            )
+        else:
+            extra_note = ""
         truncation_note = (
             "\n\n**Truncated review scope (codex pass-4 finding 2).** The "
             f"checkup found {total} code files in this PR's diff whose "
@@ -3243,7 +3282,8 @@ def _format_companion_source_of_truth(
             "Treat the omitted list as part of the JSON above — do not "
             "issue a clean verdict without confirming you inspected the "
             "companions for these files as well:\n"
-            f"{json.dumps(omitted, indent=2)}\n"
+            f"{json.dumps(omitted, indent=2)}"
+            f"{extra_note}\n"
         )
     return (
         "\n\n## Companion Source-Of-Truth Files To Inspect\n"
