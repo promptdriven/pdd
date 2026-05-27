@@ -1,63 +1,57 @@
 """
-Main orchestrator for `pdd setup`.
-
-Implements a two-phase flow designed for minimal user friction:
-  Phase 1 — Interactive CLI bootstrap (0–2 user inputs)
-  Phase 2 — Deterministic auto-configuration (pure Python, no LLM calls)
+Orchestrates pdd setup with OpenCode- and Antigravity-aware CLI bootstrap and
+deterministic model configuration.
 """
+
 from __future__ import annotations
 
 import getpass
 import os
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from rich.console import Console as _RichConsole
+from rich.console import Console
 
 from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 
-_console = _RichConsole(highlight=False)
+_console = Console(highlight=False)
 
-# ANSI escape codes for coloring (works without rich)
+# ANSI escape codes (the spec mandates these literal sequences)
 CYAN = "\033[36m"
 WHITE = "\033[37m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
+YELLOW = "\033[33m"
+GREEN = "\033[32m"
+RED = "\033[31m"
+DIM = "\033[2m"
+
 LIGHT_HORIZONTAL = "\u2500"
 
-# Top providers shown when prompting for an API key (order = display order)
-_PROMPT_PROVIDERS = [
-    ("anthropic", "Anthropic", "ANTHROPIC_API_KEY"),
-    ("gemini", "Google Gemini", "GEMINI_API_KEY"),
-    ("openai", "OpenAI", "OPENAI_API_KEY"),
-    ("deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
-]
 
+# ---------------------------------------------------------------------------
+# Banner
+# ---------------------------------------------------------------------------
 
 def _print_pdd_logo() -> None:
-    """Print the PDD logo in ASCII art with ANSI colors."""
-    logo = "\n".join(
-        [
-            "  +xxxxxxxxxxxxxxx+",
-            "xxxxxxxxxxxxxxxxxxxxx+",
-            "xxx                 +xx+            PROMPT",
-            "xxx      x+           xx+           DRIVEN",
-            "xxx        x+         xxx           DEVELOPMENT\u00a9",
-            "xxx         x+        xx+",
-            "xxx        x+         xx+           THE LAST",
-            "xxx      x+          xxx            PROGRAMMING LANGUAGE",
-            "xxx                +xx+ ",
-            "xxx     +xxxxxxxxxxx+",
-            "xxx   +xx+",
-            "xxx  +xx+",
-            "xxx+xx+                             WWW.PROMPTDRIVEN.AI",
-            "xxxx+",
-            "xx+",
-        ]
-    )
-    print(f"{CYAN}{logo}{RESET}")
-    print()
+    """Print the PDD ASCII art logo, tagline, positioning, and setup intro."""
+    logo_lines = [
+        "",
+        "    ____  ____  ____",
+        "   / __ \\/ __ \\/ __ \\",
+        "  / /_/ / / / / / / /",
+        " / ____/ /_/ / /_/ /",
+        "/_/   /_____/_____/",
+        "",
+        "       THE LAST",
+        " PROGRAMMING LANGUAGE",
+        "",
+    ]
+    for line in logo_lines:
+        print(f"{CYAN}{line}{RESET}")
     print(f"{BOLD}{WHITE}{PDD_FULL_TAGLINE}{RESET}")
     print(f"{WHITE}{PDD_POSITIONING}{RESET}")
     print()
@@ -65,976 +59,817 @@ def _print_pdd_logo() -> None:
     print()
 
 
-def run_setup() -> None:
-    """Main entry point for pdd setup. Two-phase flow with post-setup menu."""
-    from pdd.cli_detector import detect_and_bootstrap_cli, CliBootstrapResult, _has_provider_oauth
-
-    # ── Banner ────────────────────────────────────────────────────────────
-    _print_pdd_logo()
-
-    try:
-        # ── Phase 1 — CLI Bootstrap (interactive, 0–2 user inputs) ────────
-        results: list[CliBootstrapResult] = detect_and_bootstrap_cli()
-
-        for result in results:
-            if result.skipped:
-                pass
-            elif not result.api_key_configured and not _has_provider_oauth(result.provider):
-                # Issue #813 follow-up: only warn when neither an API key nor
-                # a stored OAuth credential is present. Claude Max users with
-                # `claude auth login` (and similar) have a valid auth path that
-                # this warning previously misrepresented as missing.
-                _console.print(
-                    f"[yellow]Note: No credentials configured for {result.cli_name or 'the CLI'} "
-                    "(no API key in env, no stored OAuth login). "
-                    "The agent may have limited capability.[/yellow]"
-                )
-
-        # ── Phase 2 — Deterministic Auto-Configuration ────────────────────
-        auto_result = _run_auto_phase(results)
-
-        if auto_result:
-            found_keys, _model_summary = auto_result
-            # Offer post-setup menu before final summary
-            try:
-                choice = input(
-                    "\n  Press Enter to finish, or 'm' for more options: "
-                ).strip()
-            except (EOFError, KeyboardInterrupt):
-                choice = ""
-
-            menu_was_opened = bool(choice)
-            if menu_was_opened:
-                _run_options_menu()
-        else:
-            found_keys: list[tuple[str, str]] = []
-            menu_was_opened = True
-            _console.print("\n  [yellow]Setup incomplete. Use the menu to configure manually.[/yellow]")
-            _run_options_menu()
-
-        # Issue #813 P4 review: the options menu's "Add a provider" path
-        # writes new keys to ~/.pdd/api-env.{shell} and os.environ via
-        # _save_key_to_api_env, but the in-memory ``found_keys`` snapshot was
-        # captured before the menu ran. Without a refresh, an OAuth-only
-        # user who adds an API key through the menu still hits the
-        # OAuth-only quick-start ("no API key, do not run pdd generate")
-        # in the final summary — the opposite of what the user just did.
-        # Rescan silently so the summary reflects post-menu state.
-        if menu_was_opened:
-            found_keys = _scan_for_api_keys_quiet()
-
-        # ── Final summary (after menu, so it reflects any changes) ────────
-        _print_exit_summary(found_keys, results)
-
-    except KeyboardInterrupt:
-        print("\nSetup interrupted — exiting.")
-        return
-
-
-# ---------------------------------------------------------------------------
-# Phase 2 — Deterministic auto-configuration
-# ---------------------------------------------------------------------------
-
 def _print_step_banner(title: str) -> None:
-    """Print a cyan banner for a setup step."""
-    print(f"\n{CYAN}{LIGHT_HORIZONTAL * 40}{RESET}")
-    print(f"{CYAN}{BOLD}{title}{RESET}")
-    print(f"{CYAN}{LIGHT_HORIZONTAL * 40}{RESET}")
+    """Print a cyan banner above a step heading."""
+    line = LIGHT_HORIZONTAL * 60
+    print()
+    print(f"{CYAN}{line}{RESET}")
+    print(f"{CYAN}{title}{RESET}")
+    print(f"{CYAN}{line}{RESET}")
 
 
-def _run_auto_phase(cli_results=None) -> Optional[Tuple[List[Tuple[str, str]], Dict[str, int]]]:
-    """Run 3 deterministic setup steps.
+# ---------------------------------------------------------------------------
+# Filesystem / source-finding helpers
+# ---------------------------------------------------------------------------
 
-    Returns (found_keys, model_summary) on success, or None on failure.
+def _ref_csv_path() -> Path:
+    """Path to the reference llm_model.csv that ships with the package."""
+    return Path(__file__).resolve().parent / "data" / "llm_model.csv"
+
+
+def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
+    """Silently rescan for API keys after the menu may have added some.
+
+    Mirrors the source-finding logic of step 1 (env → ~/.pdd/api-env.<shell>
+    → project/home .env) but emits no console output, so the post-menu
+    refresh doesn't double-print the per-key listing already shown in step 1.
+
+    Returns:
+        List of (key_name, source_label) tuples. Only includes keys whose
+        VALUE is non-empty after .strip() (Issue #813 round-10).
     """
+    from pdd.provider_manager import expand_api_key_vars, _read_csv
+    from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
+
+    ref_csv = _ref_csv_path()
+    if not ref_csv.exists():
+        return []
+
+    rows = _read_csv(ref_csv)
+    candidates: set = set()
+    for r in rows:
+        api_key_field = r.get("api_key", "")
+        if api_key_field:
+            candidates.update(expand_api_key_vars(api_key_field))
+
+    shell = _detect_shell() or "bash"
+    api_env_path = Path.home() / ".pdd" / f"api-env.{shell}"
+    env_file_vars: Dict[str, str] = {}
+    if api_env_path.exists():
+        try:
+            env_file_vars = _parse_api_env_file(api_env_path) or {}
+        except Exception:
+            env_file_vars = {}
+
+    dotenv_vals: Dict[str, str] = {}
     try:
-        # Step 1: Scan API keys
-        _print_step_banner("Scanning for API keys...")
-        found_keys = _step1_scan_keys(cli_results=cli_results)
-        print()
-        _console.print("[blue]Press Enter to continue to the next step...[/blue]", end="")
-        input()
+        import dotenv  # type: ignore
+        for p in [Path.cwd() / ".env", Path.home() / ".env"]:
+            if p.exists():
+                vals = dotenv.dotenv_values(p) or {}
+                # Last one wins; only override with non-empty
+                for k, v in vals.items():
+                    if v is not None:
+                        dotenv_vals[k] = v
+    except ImportError:
+        pass
 
-        # Step 2: Configure models + .pddrc
-        _print_step_banner("Configuring models...")
-        model_summary = _step2_configure_models_and_pddrc(found_keys)
-        print()
-        _console.print("[blue]Press Enter to continue to the next step...[/blue]", end="")
-        input()
+    found: List[Tuple[str, str]] = []
+    for var in sorted(candidates):
+        val_os = os.environ.get(var)
+        if val_os and val_os.strip():
+            found.append((var, "shell environment"))
+            continue
 
-        # Step 3: Test + summary
-        _print_step_banner("Testing and summarizing...")
-        _step3_test_and_summary(found_keys, model_summary, cli_results)
+        val_env_file = env_file_vars.get(var)
+        if val_env_file and str(val_env_file).strip():
+            found.append((var, f"~/.pdd/api-env.{shell}"))
+            continue
 
-        return (found_keys, model_summary)
+        val_dotenv = dotenv_vals.get(var)
+        if val_dotenv and str(val_dotenv).strip():
+            found.append((var, ".env file"))
 
-    except Exception as exc:
-        _console.print(f"\n[yellow]Auto-configuration failed: {exc}[/yellow]")
-        return None
+    return found
 
 
 # ---------------------------------------------------------------------------
 # Step 1 — Scan for API keys
 # ---------------------------------------------------------------------------
 
-def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
-    """Return ``[(key_name, source_label), …]`` from all scan sources, no output.
+def _prompt_for_api_key() -> List[Tuple[str, str]]:
+    """Interactively prompt the user to add one or more API keys.
 
-    Mirrors the source-finding logic in ``_step1_scan_keys`` (env →
-    ``~/.pdd/api-env.{shell}`` → project/home ``.env``) but emits nothing to
-    the console. Used by the post-options-menu refresh in ``run_setup`` so
-    keys added via "Add a provider" surface in the final exit summary's
-    OAuth-only branch decision (Issue #813 P4 review). Re-running the
-    printable ``_step1_scan_keys`` would double-print the per-key listing.
+    Returns:
+        List of (key_name, source_label) for newly added keys.
     """
-    from pdd.provider_manager import _read_csv, parse_api_key_vars
-    from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
+    from pdd.provider_manager import (
+        _read_csv,
+        _save_key_to_api_env,
+        preferred_api_key_name,
+    )
 
-    pdd_dir = Path.home() / ".pdd"
-    ref_path = Path(__file__).parent / "data" / "llm_model.csv"
-    try:
-        ref_rows = _read_csv(ref_path)
-    except (OSError, FileNotFoundError):
+    print("To continue setup, add at least one API key.")
+    ref_csv = _ref_csv_path()
+    if not ref_csv.exists():
         return []
 
-    all_vars: List[str] = []
-    seen: set = set()
-    for row in ref_rows:
-        for var in parse_api_key_vars(row.get("api_key", "").strip()):
-            if var and var not in seen:
-                seen.add(var)
-                all_vars.append(var)
+    rows = _read_csv(ref_csv)
+    pairs: Dict[Tuple[str, str], None] = {}
+    for r in rows:
+        provider = (r.get("provider") or "").strip()
+        api_key = (r.get("api_key") or "").strip()
+        # Only single-var providers via this quick-add flow
+        if provider and api_key and "|" not in api_key:
+            pairs[(provider, preferred_api_key_name(api_key))] = None
 
-    dotenv_vals: Dict[str, str] = {}
-    try:
-        from dotenv import dotenv_values
-        for env_path in [Path.cwd() / ".env", Path.home() / ".env"]:
-            if env_path.is_file():
-                for k, v in dotenv_values(env_path).items():
-                    if v is not None and k not in dotenv_vals:
-                        dotenv_vals[k] = v
-    except ImportError:
-        pass
+    prov_list = sorted(pairs.keys(), key=lambda x: x[0].lower())
+    added: List[Tuple[str, str]] = []
 
-    shell_name = _detect_shell()
-    api_env_vals: Dict[str, str] = {}
-    api_env_label = ""
-    if shell_name:
-        api_env_vals = _parse_api_env_file(pdd_dir / f"api-env.{shell_name}")
-        api_env_label = f"~/.pdd/api-env.{shell_name}"
+    while True:
+        print()
+        print("Select a provider to configure:")
+        for i, (prov, key_name) in enumerate(prov_list, 1):
+            print(f"  {i}. {prov} ({key_name})")
+        skip_num = len(prov_list) + 1
+        print(f"  {skip_num}. Skip")
 
-    # Issue #813 round-10: same rule as `_step1_scan_keys._find_source`. A
-    # name with empty/whitespace value is not a usable key — it must not
-    # short-circuit the OAuth-only quick-start.
-    found: List[Tuple[str, str]] = []
-    for var in all_vars:
-        env_val = os.environ.get(var, "")
-        if env_val and env_val.strip():
-            found.append((var, "shell environment"))
+        choice = input("Enter number (Enter to skip): ").strip()
+        if not choice:
+            break
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            print("Invalid choice.")
             continue
-        api_env_val = api_env_vals.get(var, "")
-        if api_env_val and api_env_val.strip():
-            found.append((var, api_env_label))
+        if idx == len(prov_list):
+            break
+        if not (0 <= idx < len(prov_list)):
+            print("Invalid choice.")
             continue
-        dotenv_val = dotenv_vals.get(var, "")
-        if dotenv_val and dotenv_val.strip():
-            found.append((var, ".env file"))
-    return found
+        prov, key_name = prov_list[idx]
+        val = getpass.getpass(f"{key_name}: ").strip()
+        if val:
+            try:
+                _save_key_to_api_env(key_name, val)
+            except Exception as e:
+                print(f"Warning: failed to persist key: {e}")
+            os.environ[key_name] = val
+            added.append((key_name, "just added"))
+            print(f"{GREEN}✓ Saved {key_name}{RESET}")
+        else:
+            print("Skipped (empty).")
+
+        again = input("Add another key? [y/N]: ").strip().lower()
+        if again != "y":
+            break
+
+    return added
 
 
-def _step1_scan_keys(cli_results=None) -> List[Tuple[str, str]]:
-    """Scan API key env vars referenced in the reference CSV across all sources.
+def _step1_scan_keys(cli_results: Optional[List[Any]] = None) -> List[Tuple[str, str]]:
+    """Step 1 — scan for API keys; print summary; optionally prompt the user."""
+    _print_step_banner("Step 1: Scanning for API keys")
 
-    Returns list of (key_name, source_label) for keys that were found.
-    Multi-credential providers (pipe-delimited api_key) are displayed as
-    grouped provider lines; single-var providers as individual lines.
-
-    Issue #813: when ``cli_results`` shows that at least one bootstrapped CLI
-    has a stored OAuth/subscription credential (Claude Max keychain,
-    ~/.gemini OAuth, ~/.codex/auth.json), the "no API keys found" prompt is
-    skipped — those credentials are a valid auth path and pushing the user
-    to add ANTHROPIC_API_KEY undoes the protection this PR provides.
-    """
-    from pdd.provider_manager import _read_csv, parse_api_key_vars
-    from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
-    from pdd.cli_detector import _has_provider_oauth
-
-    # Ensure ~/.pdd exists
     pdd_dir = Path.home() / ".pdd"
     pdd_dir.mkdir(parents=True, exist_ok=True)
 
-    # Gather unique api_key field values from the reference CSV
-    ref_path = Path(__file__).parent / "data" / "llm_model.csv"
-    ref_rows = _read_csv(ref_path)
+    from pdd.provider_manager import expand_api_key_vars, _read_csv
+    from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
 
-    # Build two sets: single-var keys and multi-var provider groups
-    single_var_keys: set = set()             # e.g. {"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
-    multi_var_providers: Dict[str, List[str]] = {}  # provider_name -> [var1, var2, ...]
-    all_individual_vars: set = set()         # every individual var across all providers
+    shell = _detect_shell() or "bash"
+    ref_csv = _ref_csv_path()
+    if not ref_csv.exists():
+        print("Reference model CSV not found; cannot scan for API keys.")
+        return []
 
-    for row in ref_rows:
-        api_key_field = row.get("api_key", "").strip()
-        if not api_key_field:
+    ref_rows = _read_csv(ref_csv)
+
+    # Group by provider so multi-var providers can be displayed together
+    provider_vars: Dict[str, List[str]] = {}
+    provider_api_field: Dict[str, str] = {}
+    for r in ref_rows:
+        provider = (r.get("provider") or "").strip() or "unknown"
+        api_field = (r.get("api_key") or "").strip()
+        if not api_field:
             continue
-        env_vars = parse_api_key_vars(api_key_field)
-        if len(env_vars) == 1:
-            single_var_keys.add(env_vars[0])
-            all_individual_vars.add(env_vars[0])
-        elif len(env_vars) > 1:
-            provider = row.get("provider", "").strip() or api_key_field
-            if provider not in multi_var_providers:
-                multi_var_providers[provider] = env_vars
-            for v in env_vars:
-                all_individual_vars.add(v)
+        vars_ = expand_api_key_vars(api_field)
+        if not vars_:
+            continue
+        provider_vars.setdefault(provider, [])
+        for v in vars_:
+            if v not in provider_vars[provider]:
+                provider_vars[provider].append(v)
+        provider_api_field[provider] = api_field
 
-    # Load all credential sources once
+    api_env_path = Path.home() / ".pdd" / f"api-env.{shell}"
+    env_file_vars: Dict[str, str] = {}
+    if api_env_path.exists():
+        try:
+            env_file_vars = _parse_api_env_file(api_env_path) or {}
+        except Exception:
+            env_file_vars = {}
+
     dotenv_vals: Dict[str, str] = {}
     try:
-        from dotenv import dotenv_values
-        for env_path in [Path.cwd() / ".env", Path.home() / ".env"]:
-            if env_path.is_file():
-                vals = dotenv_values(env_path)
+        import dotenv  # type: ignore
+        for p in [Path.cwd() / ".env", Path.home() / ".env"]:
+            if p.exists():
+                vals = dotenv.dotenv_values(p) or {}
                 for k, v in vals.items():
-                    if v is not None and k not in dotenv_vals:
+                    if v is not None:
                         dotenv_vals[k] = v
     except ImportError:
         pass
 
-    shell_name = _detect_shell()
-    api_env_vals: Dict[str, str] = {}
-    api_env_label = ""
-    if shell_name:
-        api_env_path = pdd_dir / f"api-env.{shell_name}"
-        api_env_vals = _parse_api_env_file(api_env_path)
-        api_env_label = f"~/.pdd/api-env.{shell_name}"
-
-    def _find_source(var: str) -> Optional[str]:
-        # Issue #813 round-10: count a key as found only when its VALUE is
-        # non-empty after stripping. A bare `ANTHROPIC_API_KEY=` in env or a
-        # blank line in `.env` passes name-only membership checks but yields
-        # nothing usable to litellm — counting such entries as "found" defeats
-        # the OAuth-only quick-start branch and leaves the user with the
-        # standard `pdd generate` recommendation that will fail at runtime.
-        env_val = os.environ.get(var, "")
-        if env_val and env_val.strip():
+    def _source_for(var: str) -> Optional[str]:
+        val_os = os.environ.get(var)
+        if val_os and val_os.strip():
             return "shell environment"
-        api_env_val = api_env_vals.get(var, "")
-        if api_env_val and api_env_val.strip():
-            return api_env_label
-        dotenv_val = dotenv_vals.get(var, "")
-        if dotenv_val and dotenv_val.strip():
+        val_env_file = env_file_vars.get(var)
+        if val_env_file and str(val_env_file).strip():
+            return f"~/.pdd/api-env.{shell}"
+        val_dotenv = dotenv_vals.get(var)
+        if val_dotenv and str(val_dotenv).strip():
             return ".env file"
         return None
 
-    found_keys: List[Tuple[str, str]] = []
-
-    # --- Multi-var providers: grouped display ---
-    for provider_name, env_vars in sorted(multi_var_providers.items()):
-        found_vars = []
-        missing_vars = []
-        for var in env_vars:
-            source = _find_source(var)
-            if source:
-                found_vars.append(var)
-                found_keys.append((var, source))
+    found: List[Tuple[str, str]] = []
+    # Iterate providers in a stable order
+    for provider in sorted(provider_vars.keys(), key=lambda s: s.lower()):
+        vars_ = provider_vars[provider]
+        if "|" in provider_api_field.get(provider, ""):
+            # Multi-var provider — grouped display
+            present_pairs: List[Tuple[str, str]] = []
+            missing: List[str] = []
+            for v in vars_:
+                src = _source_for(v)
+                if src is not None:
+                    present_pairs.append((v, src))
+                else:
+                    missing.append(v)
+            if not present_pairs:
+                continue  # Skip providers with 0 found
+            total = len(vars_)
+            n_set = len(present_pairs)
+            if missing:
+                print(f"  {YELLOW}! {provider}: {n_set}/{total} vars set "
+                      f"(missing {len(missing)}){RESET}")
             else:
-                missing_vars.append(var)
+                print(f"  {GREEN}✓ {provider}: {n_set}/{total} vars set{RESET}")
+            found.extend(present_pairs)
+        else:
+            # Single-var provider — aligned individual lines
+            for v in vars_:
+                src = _source_for(v)
+                if src is not None:
+                    print(f"  {GREEN}✓ {provider:<28}{RESET} ({src})")
+                    found.append((v, src))
 
-        if not found_vars and not missing_vars:
-            continue
+    print()
+    print(f"  {len(found)} API key(s) found.")
 
-        total = len(env_vars)
-        found_count = len(found_vars)
-        if found_count == total:
-            _console.print(f"  [green]✓[/green] {provider_name}: {found_count}/{total} vars set")
-        elif found_count > 0:
-            missing_str = ", ".join(missing_vars)
-            _console.print(
-                f"  [yellow]![/yellow] {provider_name}: {found_count}/{total} vars set"
-                f" (missing: {missing_str})"
-            )
-        # If found_count == 0, skip — nothing to show for this provider
-
-    # --- Single-var providers: individual display ---
-    sorted_single = sorted(single_var_keys)
-    max_name_len = max((len(k) for k in sorted_single), default=20) if sorted_single else 20
-    for key_name in sorted_single:
-        source = _find_source(key_name)
-        if source:
-            found_keys.append((key_name, source))
-            _console.print(f"  [green]✓[/green] {key_name:<{max_name_len}s}   {source}")
-
-    if not found_keys:
-        # Issue #813: don't prompt OAuth-only users to add an API key.
-        # If any selected CLI has a stored OAuth/subscription credential,
-        # the agentic workflows can run without an env-var API key, so
-        # skip the "add at least one API key" pressure.
-        oauth_providers = []
+    if not found:
+        # Decide whether to prompt based on whether any CLI has OAuth.
+        from pdd.cli_detector import _has_cli_oauth
+        oauth_providers: List[str] = []
         if cli_results:
             for r in cli_results:
-                if not getattr(r, "skipped", False) and getattr(r, "provider", "") \
-                   and _has_provider_oauth(r.provider):
-                    oauth_providers.append(r.provider)
+                if getattr(r, "skipped", False):
+                    continue
+                cli_name = getattr(r, "cli_name", None)
+                if cli_name and _has_cli_oauth(cli_name):
+                    oauth_providers.append(getattr(r, "provider", cli_name))
+
         if oauth_providers:
-            providers_str = ", ".join(sorted(set(oauth_providers)))
-            _console.print(
-                f"  [green]✓[/green] No API keys in env, but stored OAuth/subscription "
-                f"credentials detected ({providers_str}). Skipping API-key prompt."
-            )
-            _console.print(
-                "  [dim]Add an API key later via `pdd setup` if you want fallback billing "
-                "for non-OAuth providers.[/dim]\n"
-            )
+            count = len(set(oauth_providers))
+            print(f"{GREEN}✓ stored OAuth/subscription/config credentials detected "
+                  f"for {count} provider(s). No API key needed for the agentic CLI.{RESET}")
+            print(f"{DIM}Hint: re-run `pdd setup` later to add an API key "
+                  f"for direct litellm-backed commands.{RESET}")
         else:
-            _console.print("  [yellow]✗ No API keys found.[/yellow]\n")
-            found_keys = _prompt_for_api_key()
+            print("No API keys found.")
+            added = _prompt_for_api_key()
+            found.extend(added)
 
-    print(f"\n  {len(found_keys)} API key(s) found.")
+    print(f"{DIM}You can edit your global API keys in ~/.pdd/api-env.{shell}{RESET}")
 
-    api_env_path = pdd_dir / f"api-env.{shell_name}" if shell_name else pdd_dir / "api-env.bash"
-    _console.print(f"  [dim]You can edit your global API keys in {api_env_path}[/dim]")
-
-    return found_keys
-
-
-def _prompt_for_api_key() -> List[Tuple[str, str]]:
-    """Interactively ask the user to add at least one API key.
-
-    Called when no keys are found during scanning. Saves the key to
-    ~/.pdd/api-env.{shell} and loads it into the current session.
-    Returns list of (key_name, source_label) for newly added keys.
-    """
-    from pdd.provider_manager import _read_csv, _save_key_to_api_env
-
-    added_keys: List[Tuple[str, str]] = []
-    api_env_label = f"~/.pdd/api-env.{os.path.basename(os.environ.get('SHELL', 'bash'))}"
-
-    # Build provider list from reference CSV
-    ref_path = Path(__file__).parent / "data" / "llm_model.csv"
-    ref_rows = _read_csv(ref_path)
-    # Collect unique (provider_display, api_key_env_var) pairs
-    seen = set()
-    all_providers: List[Tuple[str, str]] = []
-    for row in ref_rows:
-        provider = row.get("provider", "").strip()
-        api_key = row.get("api_key", "").strip()
-        if provider and api_key and (provider, api_key) not in seen:
-            seen.add((provider, api_key))
-            all_providers.append((provider, api_key))
-    all_providers.sort(key=lambda x: x[0])
-
-    while True:
-        print("  To continue setup, add at least one API key.")
-        print("  Providers:")
-        for i, (display, env_var) in enumerate(all_providers, 1):
-            print(f"    {i}) {display:<25s} ({env_var})")
-        skip_idx = len(all_providers) + 1
-        print(f"    {skip_idx}) Skip (continue without keys)")
-
-        try:
-            choice = input(f"\n  Select provider [1-{skip_idx}]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
-        # Parse choice
-        try:
-            choice_num = int(choice)
-        except ValueError:
-            _console.print(f"  [yellow]Invalid input. Enter a number 1-{skip_idx}.[/yellow]\n")
-            continue
-
-        if choice_num == skip_idx:
-            break
-
-        if 1 <= choice_num <= len(all_providers):
-            display, env_var = all_providers[choice_num - 1]
-        else:
-            _console.print(f"  [yellow]Invalid input. Enter a number 1-{skip_idx}.[/yellow]\n")
-            continue
-
-        # Prompt for the key value (masked)
-        try:
-            key_value = getpass.getpass(f"  Paste your {env_var}: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
-        if not key_value:
-            _console.print("  [yellow]No key entered, skipping.[/yellow]\n")
-            continue
-
-        # Save to api-env file and load into current session
-        _save_key_to_api_env(env_var, key_value)
-        added_keys.append((env_var, api_env_label))
-        _console.print(f"  [green]✓[/green] {env_var} saved to {api_env_label}")
-        _console.print(f"  [green]✓[/green] Loaded into current session\n")
-
-        # Ask if they want to add another
-        try:
-            another = input("  Add another key? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
-        if another not in ("y", "yes"):
-            break
-        print()
-
-    return added_keys
+    return found
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — Configure models + .pddrc
+# Step 2 — Configure Models + .pddrc
 # ---------------------------------------------------------------------------
 
-def _step2_configure_models_and_pddrc(
-    found_keys: List[Tuple[str, str]],
-) -> Dict[str, int]:
-    """Match found API keys to reference models, write user CSV, and ensure .pddrc.
+def _normalize_row_for_configured_keys(
+    row: Dict[str, str],
+    found_key_names: List[str],
+) -> Dict[str, str]:
+    """Return a row whose api_key field matches the configured Google alias."""
+    normalized = dict(row)
+    if (
+        (normalized.get("api_key") or "").strip() == "GEMINI_API_KEY"
+        and "GOOGLE_API_KEY" in set(found_key_names)
+    ):
+        normalized["api_key"] = "GOOGLE_API_KEY"
+    return normalized
 
-    Returns {provider_display_name: model_count} for the summary.
-    """
+
+def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, int]:
+    """Filter reference CSV → user CSV; offer to create .pddrc."""
+    _print_step_banner("Step 2: Configuring models and .pddrc")
+
     from pdd.provider_manager import (
         _read_csv,
         _write_csv_atomic,
         _get_user_csv_path,
+        api_key_requirements_satisfied,
     )
     from pdd.pddrc_initializer import _detect_language, _build_pddrc_content
 
-    found_key_names = {k for k, _ in found_keys}
+    ref_csv = _ref_csv_path()
+    configured_models: List[Dict[str, str]] = []
+    if ref_csv.exists():
+        rows = _read_csv(ref_csv)
+        for r in rows:
+            api_key = (r.get("api_key") or "").strip()
+            provider = (r.get("provider") or "").strip()
+            base_url = (r.get("base_url") or "").strip()
+            # Skip local
+            if provider in ("lm_studio", "ollama"):
+                continue
+            if "127.0.0.1" in base_url or "localhost" in base_url:
+                continue
+            if not api_key:
+                # Device flow — always include
+                configured_models.append(r)
+            else:
+                if api_key_requirements_satisfied(api_key, found_key_names):
+                    configured_models.append(
+                        _normalize_row_for_configured_keys(r, found_key_names)
+                    )
 
-    # Read reference CSV
-    ref_path = Path(__file__).parent / "data" / "llm_model.csv"
-    ref_rows = _read_csv(ref_path)
-
-    # Filter reference rows to those whose api_key env vars are all found.
-    # Supports pipe-delimited multi-var fields (e.g. "VAR1|VAR2|VAR3").
-    # Empty api_key (device flow / local) matches automatically.
-    # Skip local-only rows (lm_studio, ollama, localhost base_url).
-    from pdd.provider_manager import parse_api_key_vars
-
-    matching_rows: List[Dict[str, str]] = []
-    for row in ref_rows:
-        api_key_col = row.get("api_key", "").strip()
-        provider = row.get("provider", "").strip().lower()
-        base_url = row.get("base_url", "").strip()
-
-        # Skip local models
-        if provider in ("lm_studio", "ollama"):
-            continue
-        if base_url and ("localhost" in base_url or "127.0.0.1" in base_url):
-            continue
-
-        # Match: all individual env vars must be in found_key_names
-        env_vars = parse_api_key_vars(api_key_col)
-        if not env_vars:
-            # Empty api_key = device flow (e.g. GitHub Copilot) — always match
-            matching_rows.append(row)
-        elif all(v in found_key_names for v in env_vars):
-            matching_rows.append(row)
-
-    # Read existing user CSV and deduplicate (create if missing)
-    user_csv_path = _get_user_csv_path()
-    user_csv_path.parent.mkdir(parents=True, exist_ok=True)
-    existing_rows = _read_csv(user_csv_path)
-    existing_models = {r.get("model", "").strip() for r in existing_rows}
-
-    new_rows: List[Dict[str, str]] = []
-    for row in matching_rows:
-        if row.get("model", "").strip() not in existing_models:
-            new_rows.append(row)
-
-    # Count by provider for display
-    provider_counts: Dict[str, int] = {}
-    all_rows = existing_rows + new_rows
-    for row in all_rows:
-        provider = row.get("provider", "Unknown").strip()
-        if row.get("api_key", "").strip():
-            provider_counts[provider] = provider_counts.get(provider, 0) + 1
-
-    # Write merged result
-    if new_rows:
-        _write_csv_atomic(user_csv_path, all_rows)
-        _console.print(f"  [green]✓[/green] {len(new_rows)} new model(s) added to {user_csv_path}")
-    else:
-        _console.print(f"  [green]✓[/green] All matching models already lodaed in {user_csv_path}")
-
-    total = sum(provider_counts.values())
-    _console.print(f"  [green]✓[/green] {total} model(s) configured")
-    for provider, count in sorted(provider_counts.items()):
-        s = "s" if count != 1 else ""
-        print(f"      {provider}: {count} model{s}")
-
-    # ── Check .pddrc ─────────────────────────────────────────────────────
-    cwd = Path.cwd()
-    pddrc_path = cwd / ".pddrc"
-    if pddrc_path.exists():
-        _console.print(f"  [green]✓[/green] .pddrc detected at {pddrc_path}")
-    else:
-        print()
-        _console.print("  [bold].pddrc[/bold] configures where PDD puts generated code, tests, and examples.")
-        _console.print("  It lives in your project root and lets you define contexts for different")
-        _console.print("  parts of your codebase (e.g. frontend vs backend).")
-        print()
+    user_csv = _get_user_csv_path()
+    existing: List[Dict[str, str]] = []
+    if user_csv.exists():
         try:
-            answer = input("  Create .pddrc in this project? [y/Enter to skip] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
+                existing = [
+                    _normalize_row_for_configured_keys(row, found_key_names)
+                    for row in _read_csv(user_csv)
+                ]
+        except Exception:
+            existing = []
 
-        if answer in ("y", "yes"):
-            language = _detect_language(cwd) or "python"
-            content = _build_pddrc_content(language)
-            try:
-                pddrc_path.write_text(content, encoding="utf-8")
-                _console.print(f"  [green]✓[/green] Created .pddrc at {pddrc_path} (detected: {language})")
-            except OSError as exc:
-                _console.print(f"  [yellow]✗ Failed to create .pddrc: {exc}[/yellow]")
+    existing_models = {(r.get("model") or "").strip() for r in existing}
+    new_rows = []
+    for r in configured_models:
+        m = (r.get("model") or "").strip()
+        if m and m not in existing_models:
+            new_rows.append(r)
+            existing_models.add(m)
+
+    combined = existing + new_rows
+    try:
+        _write_csv_atomic(user_csv, combined)
+    except Exception as e:
+        print(f"Warning: failed to write user CSV: {e}")
+
+    provider_counts: Dict[str, int] = {}
+    for r in combined:
+        p = (r.get("provider") or "unknown").strip()
+        provider_counts[p] = provider_counts.get(p, 0) + 1
+
+    if new_rows:
+        print(f"  {GREEN}✓ {len(new_rows)} new model(s) added to {user_csv}{RESET}")
+    else:
+        if combined:
+            print(f"  All matching models already present in {user_csv}.")
         else:
-            _console.print("  [dim]Skipped .pddrc creation. You can create one later with pdd setup.")
+            print(f"  No matching cloud models for the configured keys.")
+
+    print(f"  {GREEN}✓ {len(combined)} model(s) configured total{RESET}")
+    for p, c in sorted(provider_counts.items()):
+        print(f"    {p}: {c} model(s)")
+
+    print()
+    pddrc_path = Path.cwd() / ".pddrc"
+    if pddrc_path.exists():
+        print(f"  {GREEN}✓ .pddrc detected at {pddrc_path}{RESET}")
+    else:
+        print("  No .pddrc found in this project.")
+        print(f"  {DIM}A .pddrc tells pdd which language to default to and "
+              f"where to look for prompts/code.{RESET}")
+        ans = input("Create .pddrc in this project? [y/Enter to skip]: ").strip().lower()
+        if ans == "y":
+            lang = _detect_language(Path.cwd()) or "python"
+            try:
+                content = _build_pddrc_content(lang)
+                pddrc_path.write_text(content, encoding="utf-8")
+                print(f"  {GREEN}✓ Created .pddrc for {lang}.{RESET}")
+            except Exception as e:
+                print(f"  Could not create .pddrc: {e}")
+        else:
+            print(f"  {DIM}Skipped .pddrc creation.{RESET}")
 
     return provider_counts
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — Test one model + print summary
+# Step 3 — Test + summary
 # ---------------------------------------------------------------------------
 
-def _step3_test_and_summary(
-    found_keys: List[Tuple[str, str]],
-    model_summary: Dict[str, int],
-    cli_results=None,
-) -> None:
-    """Test the first available cloud model and print the final summary."""
-    from pdd.provider_manager import _read_csv, _get_user_csv_path, parse_api_key_vars
+def _step3_test_and_summary(found_key_names: List[str],
+                            provider_counts: Dict[str, int]) -> Dict[str, Any]:
+    """Pick a cloud model, test it with a timeout, then print a summary."""
+    _print_step_banner("Step 3: Testing and summarizing")
 
-    user_csv_path = _get_user_csv_path()
-    rows = _read_csv(user_csv_path)
-    test_result = "Skipped (no models configured)"
-
-    # Pick first cloud model that has all auth configured.
-    # Uses the pipe-delimited api_key convention: check every env var is set.
-    cloud_row = None
-    for row in rows:
-        api_key_field = row.get("api_key", "").strip()
-        env_vars = parse_api_key_vars(api_key_field)
-        if not env_vars:
-            # Empty = device flow (e.g. GitHub Copilot) — pick it
-            cloud_row = row
-            break
-        if all(os.getenv(v, "") for v in env_vars):
-            cloud_row = row
-            break
-
-    if cloud_row:
-        test_model = cloud_row.get("model", "")
-        try:
-            import litellm  # noqa: F401
-            from pdd.model_tester import _run_test
-            import threading
-            import time as time_module
-
-            sys.stdout.write(f"  Testing {test_model}...")
-            sys.stdout.flush()
-
-            # Run in a thread so we can print dots while waiting
-            test_result_holder: list = [None]
-
-            def _do_test() -> None:
-                test_result_holder[0] = _run_test(cloud_row)
-
-            t = threading.Thread(target=_do_test, daemon=True)
-            t.start()
-
-            elapsed = 0.0
-            while t.is_alive() and elapsed < 8.0:
-                t.join(timeout=1.0)
-                if t.is_alive():
-                    sys.stdout.write(".")
-                    sys.stdout.flush()
-                    elapsed += 1.0
-
-            sys.stdout.write("\n")
-            if t.is_alive():
-                result = {
-                    "success": False,
-                    "duration_s": elapsed,
-                    "cost": 0.0,
-                    "error": "Request timed out (8s)",
-                    "tokens": None,
-                }
-            else:
-                result = test_result_holder[0] or {
-                    "success": False,
-                    "duration_s": 0.0,
-                    "cost": 0.0,
-                    "error": "Unknown error",
-                    "tokens": None,
-                }
-
-            if result["success"]:
-                test_result = f"[green]✓[/green] {test_model} responded OK ({result['duration_s']:.1f}s)"
-            else:
-                test_result = f"[yellow]✗ {test_model} failed: {result['error']}[/yellow]"
-        except ImportError:
-            test_result = "[yellow]Skipped (litellm not installed)[/yellow]"
-    _console.print(f"  {test_result}")
-
-    # ── Summary ───────────────────────────────────────────────────────────
-    print()
-    _console.print("  [bold green]PDD Setup Complete![/bold green]")
-    print()
-
-    # CLIs
-    if cli_results:
-        from pdd.cli_detector import _has_provider_oauth
-        configured = [r for r in cli_results if not r.skipped and r.cli_name]
-        skipped = [r for r in cli_results if r.skipped]
-        if configured:
-            names = ", ".join(r.cli_name for r in configured)
-            # Issue #813 follow-up: a CLI with stored OAuth (Claude Max,
-            # Gemini OAuth, Codex ChatGPT login) is fully configured even
-            # without an API-key env var. Only flag CLIs missing both.
-            no_creds = [
-                r for r in configured
-                if not r.api_key_configured and not _has_provider_oauth(r.provider)
-            ]
-            if no_creds:
-                no_creds_names = ", ".join(r.cli_name for r in no_creds)
-                _console.print(f"    CLI:       [green]✓[/green] {names} configured ([yellow]{no_creds_names} missing credentials (no API key, no OAuth)[/yellow])")
-            else:
-                _console.print(f"    CLI:       [green]✓[/green] {names} configured")
-        elif skipped:
-            _console.print("    CLI:       [yellow]✗[/yellow] skipped")
-        else:
-            _console.print("    CLI:       [dim]not configured[/dim]")
-    else:
-        _console.print("    CLI:       [dim]not configured[/dim]")
-
-    # API Keys
-    if found_keys:
-        _console.print(f"    API Keys:  [green]\u2713[/green] {len(found_keys)} found")
-    else:
-        _console.print("    API Keys:  [red]\u2717[/red] 0 found")
-
-    # Models
-    total_models = sum(model_summary.values())
-    parts = ", ".join(f"{p}: {c}" for p, c in sorted(model_summary.items()))
-    if parts:
-        print(f"    Models:    {total_models} configured ({parts}) in {_get_user_csv_path()}")
-    else:
-        print(f"    Models:    {total_models} configured in {_get_user_csv_path()}")
-
-    # .pddrc
-    pddrc_path = Path.cwd() / ".pddrc"
-    if pddrc_path.exists():
-        _console.print("    .pddrc:    [green]\u2713[/green] exists")
-    else:
-        _console.print("    .pddrc:    [red]\u2717[/red] not created")
-
-    # Test
-    _console.print(f"    Test:      {test_result}")
-
-    # Exit summary is handled by run_setup after the options menu
-
-
-# ---------------------------------------------------------------------------
-# Exit summary — files, quick start, tips
-# ---------------------------------------------------------------------------
-
-_FAT_DIVIDER = "\u2501" * 80   # ━
-_THIN_DIVIDER = "\u2500" * 80  # ─
-_BULLET = "\u2022"             # •
-
-_SUCCESS_PYTHON_TEMPLATE = """\
-Write a python script to print "You did it, <Username>!!!" to the console.
-Do not write anything except that message.
-Capitalize the username."""
-
-
-def _create_sample_prompt() -> str:
-    """Create the sample prompt file if it doesn't exist. Returns the filename."""
-    prompt_file = Path("success_python.prompt")
-    if not prompt_file.exists():
-        prompt_file.write_text(_SUCCESS_PYTHON_TEMPLATE)
-    return str(prompt_file)
-
-
-def _print_exit_summary(found_keys: List[Tuple[str, str]], cli_results=None) -> None:
-    """Write PDD-SETUP-SUMMARY.txt and print QUICK START + LEARN MORE to terminal."""
-    from pdd.api_key_scanner import _detect_shell
-
-    shell = _detect_shell() or "bash"
-    pdd_dir = Path.home() / ".pdd"
-    api_env_path = pdd_dir / f"api-env.{shell}"
-    user_csv_path = pdd_dir / "llm_model.csv"
-    sample_prompt = _create_sample_prompt()
-
-    # Build valid_keys dict: key_name -> actual value
-    valid_keys: Dict[str, str] = {}
-    for key_name, _source in found_keys:
-        val = os.environ.get(key_name, "")
-        if val.strip():
-            valid_keys[key_name] = val
-
-    # Determine which files were created/configured
-    saved_files: List[str] = []
-    if api_env_path.exists():
-        saved_files.append(str(api_env_path))
-    if user_csv_path.exists():
-        saved_files.append(str(user_csv_path))
-
-    created_pdd_dir = pdd_dir.exists()
-
-    # Check if shell init file was updated
-    from pdd.provider_manager import _get_shell_rc_path
-    rc_path = _get_shell_rc_path()
-    init_file_updated: Optional[str] = None
-    if rc_path and rc_path.exists():
-        rc_content = rc_path.read_text(encoding="utf-8")
-        if "api-env" in rc_content:
-            init_file_updated = str(rc_path)
-
-    # Source command
-    if shell == "sh":
-        source_cmd = f". {api_env_path}"
-    else:
-        source_cmd = f"source {api_env_path}"
-
-    # Quick-start tailoring (Issue #813 P2 / P3 review): when no API keys are
-    # configured anywhere but a CLI has a stored OAuth login, the standard
-    # quick-start `pdd generate success_python.prompt` would fail — `pdd
-    # generate` routes through litellm and needs an API key, not the agentic
-    # CLI's OAuth credential. Don't advertise a doomed command.
-    #
-    # Use ``found_keys`` (the full scan: os.environ + ~/.pdd/api-env +
-    # project .env) rather than ``valid_keys`` (env-loaded subset). A key
-    # discovered in a project `.env` is loaded by `llm_invoke` via dotenv at
-    # runtime, so the user CAN run `pdd generate` even when nothing is in
-    # `os.environ` yet — basing the OAuth-only branch on `valid_keys` would
-    # misclassify them and print the wrong guidance.
-    from pdd.cli_detector import _has_provider_oauth
-    oauth_only_setup = not found_keys and bool(cli_results) and any(
-        not getattr(r, "skipped", False)
-        and getattr(r, "provider", "")
-        and _has_provider_oauth(r.provider)
-        for r in cli_results
+    from pdd.provider_manager import (
+        _read_csv,
+        _get_user_csv_path,
+        api_key_requirements_satisfied,
     )
 
-    if oauth_only_setup:
-        quick_start_lines: List[str] = [
-            "QUICK START:",
-            "",
-            "Setup detected an OAuth-backed agentic CLI but no API key. PDD has",
-            "two command families with different auth paths:",
-            "",
-            "1. Issue-driven agentic commands — work NOW with your OAuth login:",
-            "     pdd generate <issue-url>    scaffold architecture/prompts from a PRD issue",
-            "     pdd change <issue-url>      drive a feature/refactor from a GitHub issue",
-            "     pdd bug <issue-url>         investigate and reproduce a reported bug",
-            "     pdd fix <issue-url>         fix code from a GitHub issue",
-            "     pdd test <issue-url>        generate tests for an issue",
-            "     pdd checkup <issue-url>     audit a module against an issue",
-            "   These dispatch through your installed CLI (claude/codex/gemini)",
-            "   and use its stored OAuth/subscription credential — no API key",
-            "   needed.",
-            "",
-            "2. Direct prompt commands — require an API key:",
-            "     pdd generate <prompt-file>, pdd test <prompt>, pdd fix <prompt>,",
-            "     pdd sync <prompt-or-issue> (sync's generate step calls litellm",
-            "       even with an issue URL — it is not a pure agentic command),",
-            "     pdd crash, etc.",
-            "   These call the LLM via litellm and need ANTHROPIC_API_KEY /",
-            "   GEMINI_API_KEY / OPENAI_API_KEY in env. Re-run `pdd setup` and",
-            "   add a key (or pick 'm' next time → 'Add a provider') to enable",
-            "   them.",
-        ]
+    user_csv = _get_user_csv_path()
+    test_row: Optional[Dict[str, str]] = None
+    if user_csv.exists():
+        for r in _read_csv(user_csv):
+            api_key = (r.get("api_key") or "").strip()
+            provider = (r.get("provider") or "").strip()
+            base_url = (r.get("base_url") or "").strip()
+            if provider in ("lm_studio", "ollama"):
+                continue
+            if "127.0.0.1" in base_url or "localhost" in base_url:
+                continue
+            if not api_key:
+                test_row = r
+                break
+            if api_key_requirements_satisfied(api_key, found_key_names):
+                test_row = r
+                break
+
+    test_summary: Dict[str, Any] = {
+        "ran": False,
+        "success": False,
+        "message": "",
+        "model": None,
+    }
+
+    if not test_row:
+        print("  No cloud model with all credentials set; skipping live test.")
+        test_summary["message"] = "no eligible model"
     else:
-        quick_start_lines = [
-            "QUICK START:",
-            "",
-            "1. Generate code from the sample prompt:",
-            "   pdd generate success_python.prompt",
-        ]
+        try:
+            import litellm  # type: ignore # noqa: F401
+            has_litellm = True
+        except ImportError:
+            has_litellm = False
 
-    # ── Build full summary (saved to file) ───────────────────────────────
-    lines: List[str] = []
-    lines.append("")
-    lines.append("")
-    lines.append(_FAT_DIVIDER)
-    lines.append("PDD Setup Complete!")
-    lines.append(_FAT_DIVIDER)
-    lines.append("")
-
-    # CLIs configured
-    lines.append("CLIs Configured:")
-    lines.append("")
-    if cli_results:
-        configured = [r for r in cli_results if not r.skipped and r.cli_name]
-        if configured:
-            for r in configured:
-                # Issue #813 round-10: render OAuth/subscription credential
-                # when stored OAuth login is detected. Previously this branch
-                # only checked api_key_configured, so an OAuth-backed CLI
-                # showed "no API key" — technically true but the same
-                # misleading framing this PR exists to remove.
-                if r.api_key_configured:
-                    key_status = "API key set"
-                elif _has_provider_oauth(r.provider):
-                    key_status = "OAuth/subscription credential configured"
-                else:
-                    key_status = "no credentials"
-                lines.append(f"  {r.cli_name} ({r.provider}) — {key_status}")
+        if not has_litellm:
+            print("  litellm not installed; skipping live test.")
+            test_summary["message"] = "litellm not installed"
         else:
-            lines.append("  None")
-    else:
-        lines.append("  None")
-    lines.append("")
+            model_name = test_row.get("model") or "(unknown)"
+            test_summary["model"] = model_name
+            print(f"  Testing {model_name}", end="", flush=True)
 
-    # API Keys configured
-    lines.append("API Keys Configured:")
-    lines.append("")
-    if valid_keys:
-        for kn, kv in valid_keys.items():
-            masked = f"{kv[:8]}...{kv[-4:]}" if len(kv) > 12 else "***"
-            lines.append(f"  {kn}: {masked}")
-    else:
-        lines.append("  None")
-    lines.append("")
+            from pdd.model_tester import _run_test
+            result_container: Dict[str, Any] = {}
+            stop_event = threading.Event()
 
-    # Files created
-    lines.append("Files created and configured:")
-    lines.append("")
+            def spinner() -> None:
+                while not stop_event.is_set():
+                    if stop_event.wait(1.0):
+                        return
+                    if not stop_event.is_set():
+                        try:
+                            sys.stdout.write(".")
+                            sys.stdout.flush()
+                        except Exception:
+                            pass
 
-    file_descriptions: List[Tuple[str, str]] = []
-    if created_pdd_dir:
-        file_descriptions.append(("~/.pdd/", "PDD configuration directory"))
-    for fp in saved_files:
-        if "api-env." in fp:
-            file_descriptions.append((fp, f"API environment variables ({shell} shell)"))
-        elif "llm_model.csv" in fp:
-            file_descriptions.append((fp, "LLM model configuration"))
-    file_descriptions.append((sample_prompt, "Sample prompt for testing"))
-    if init_file_updated:
-        file_descriptions.append((init_file_updated, "Shell startup file (updated to source API environment)"))
-    file_descriptions.append(("PDD-SETUP-SUMMARY.txt", "This summary"))
+            spinner_thread = threading.Thread(target=spinner, daemon=True)
+            spinner_thread.start()
 
-    max_path_len = max(len(p) for p, _ in file_descriptions) if file_descriptions else 0
-    for fp, desc in file_descriptions:
-        lines.append(f"{fp:<{max_path_len + 2}}{desc}")
+            def worker() -> None:
+                try:
+                    result_container["result"] = _run_test(test_row)
+                except Exception as e:  # pragma: no cover
+                    result_container["result"] = {
+                        "success": False, "duration_s": 0.0, "cost": 0.0,
+                        "error": str(e), "tokens": None,
+                    }
 
-    lines.append("")
-    lines.append(_THIN_DIVIDER)
-    lines.append("")
-    lines.extend(quick_start_lines)
-    lines.append("")
-    lines.append(_THIN_DIVIDER)
-    lines.append("")
-    lines.append("LEARN MORE:")
-    lines.append("")
-    lines.append(f"{_BULLET} PDD documentation: pdd --help")
-    lines.append(f"{_BULLET} PDD website: https://promptdriven.ai/")
-    lines.append(f"{_BULLET} Discord community: https://discord.gg/Yp4RTh8bG7")
-    lines.append("")
-    lines.append("TIPS:")
-    lines.append("")
-    lines.append(f"{_BULLET} Start with simple prompts and gradually increase complexity")
-    lines.append(f"{_BULLET} Try out 'pdd test' with your prompt+code to create test(s) pdd can use to automatically verify and fix your output code")
-    lines.append(f"{_BULLET} Try out 'pdd example' with your prompt+code to create examples which help pdd do better")
-    lines.append("")
-    lines.append(f"{_BULLET} As you get comfortable, learn configuration settings, including the .pddrc file, PDD_GENERATE_OUTPUT_PATH, and PDD_TEST_OUTPUT_PATH")
-    lines.append(f"{_BULLET} For larger projects, use Makefiles and/or 'pdd sync'")
-    lines.append(f"{_BULLET} For ongoing substantial projects, learn about llm_model.csv and the --strength,")
-    lines.append(f"  --temperature, and --time options to optimize model cost, latency, and output quality")
-    lines.append("")
-    lines.append(f"{_BULLET} Use 'pdd --help' to explore all available commands")
-    lines.append("")
-    lines.append(f"Problems? Shout out on our Discord for help! https://discord.gg/Yp4RTh8bG7")
+            wt = threading.Thread(target=worker, daemon=True)
+            wt.start()
+            wt.join(timeout=8.0)
 
-    if api_env_path.exists():
-        lines.append("")
-        lines.append(_THIN_DIVIDER)
-        lines.append("")
-        lines.append("IMPORTANT: To use your API keys in this terminal session, run:")
-        lines.append(f"    {source_cmd}")
-        lines.append("")
-        lines.append("New terminal windows will load keys automatically.")
+            stop_event.set()
+            spinner_thread.join(timeout=1.0)
+            print()
 
-    summary_text = "\n".join(lines)
+            if wt.is_alive():
+                print(f"  {RED}✗ Test timed out after 8s.{RESET}")
+                test_summary["ran"] = True
+                test_summary["success"] = False
+                test_summary["message"] = "timed out"
+            else:
+                result = result_container.get("result") or {}
+                test_summary["ran"] = True
+                if result.get("success"):
+                    dur = result.get("duration_s", 0.0)
+                    print(f"  {GREEN}✓ {model_name} responded OK "
+                          f"({dur:.1f}s){RESET}")
+                    test_summary["success"] = True
+                    test_summary["message"] = (
+                        f"{model_name} responded OK ({dur:.1f}s)"
+                    )
+                else:
+                    err = result.get("error") or "Unknown error"
+                    print(f"  {RED}✗ {model_name} test failed: {err}{RESET}")
+                    test_summary["message"] = err
 
-    # Write PDD-SETUP-SUMMARY.txt
-    summary_path = Path("PDD-SETUP-SUMMARY.txt")
-    summary_path.write_text(summary_text, encoding="utf-8")
+    return test_summary
 
-    # ── Print only QUICK START + LEARN MORE to terminal ──────────────────
-    print()
-    print()
-    _console.print("[bold green]Completed setup.[/bold green]")
-    print()
-    print(_THIN_DIVIDER)
-    print()
-    for line in quick_start_lines:
-        print(line)
-    print()
-    print(_THIN_DIVIDER)
-    print()
-    print("LEARN MORE:")
-    print()
-    print(f"{_BULLET} PDD documentation: pdd --help")
-    print(f"{_BULLET} PDD website: https://promptdriven.ai/")
-    print(f"{_BULLET} Discord community: https://discord.gg/Yp4RTh8bG7")
-    print()
-    _console.print(f"[dim]Full summary saved to PDD-SETUP-SUMMARY.txt[/dim]")
-    print()
-    if api_env_path.exists():
-        _console.print(
-            f"[bold yellow]Important:[/bold yellow] For updates to API keys in this terminal session, run:\n"
-            f"\n    {source_cmd}\n\n"
-            f"[dim]New terminal windows will load updated keys automatically.[/dim]"
-        )
+
+# ---------------------------------------------------------------------------
+# Auto phase + menu
+# ---------------------------------------------------------------------------
+
+def _run_auto_phase(cli_results: List[Any]) -> Optional[Dict[str, Any]]:
+    """Run the 3 deterministic steps with Press-Enter pauses. Returns context
+    dict on success, or None on failure."""
+    try:
+        found_keys = _step1_scan_keys(cli_results)
+        found_key_names = [k for k, _ in found_keys]
+
+        input("\nPress Enter to continue to the next step...")
+        provider_counts = _step2_configure_models_and_pddrc(found_key_names)
+
+        input("\nPress Enter to continue to the next step...")
+        test_summary = _step3_test_and_summary(found_key_names, provider_counts)
+
         print()
+        print(f"{BOLD}{GREEN}PDD Setup Complete!{RESET}")
+        print()
+        return {
+            "found_keys": found_keys,
+            "provider_counts": provider_counts,
+            "test_summary": test_summary,
+        }
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        print(f"{RED}Error during auto-configuration: {e}{RESET}")
+        return None
 
-
-# ---------------------------------------------------------------------------
-# Options menu (post-setup or fallback)
-# ---------------------------------------------------------------------------
 
 def _run_options_menu() -> None:
-    """Menu loop for manual configuration options."""
-    print()
-
+    """Two-item options menu. Press Enter to finish."""
     from pdd.provider_manager import add_provider_from_registry
     from pdd.model_tester import test_model_interactive
 
     while True:
-        print("  Options:")
-        print("    1. Add a provider")
-        print("    2. Test a model")
         print()
-
-        try:
-            choice = input("  Select an option (Enter to finish): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
+        print(f"{BOLD}Options:{RESET}")
+        print("  1. Add a provider")
+        print("  2. Test a model")
+        choice = input("Select an option (Enter to finish): ").strip()
         if not choice:
             break
-
-        if choice == "1":
-            try:
+        try:
+            if choice == "1":
                 add_provider_from_registry()
-            except Exception as exc:
-                print(f"  Error adding provider: {exc}")
-        elif choice == "2":
-            try:
+            elif choice == "2":
                 test_model_interactive()
-            except Exception as exc:
-                print(f"  Error testing model: {exc}")
-        else:
-            _console.print("  [yellow]Invalid option. Please enter 1 or 2.[/yellow]")
+            else:
+                print(f"  {YELLOW}Invalid option.{RESET}")
+        except Exception as e:
+            print(f"  Error: {e}")
 
+
+# ---------------------------------------------------------------------------
+# Exit summary
+# ---------------------------------------------------------------------------
+
+def _mask_key(key_name: str) -> str:
+    """Return a masked label (we never have the value here)."""
+    return key_name
+
+
+def _cli_credential_label(r: Any) -> str:
+    """Return the per-CLI credential label.
+
+    Priority (Issue #813 round-10):
+        1. api_key_configured == True            → "API key set"
+        2. _has_cli_oauth(cli_name) == True      → "OAuth/subscription/config credential configured"
+        3. neither                                → "no credentials"
+    """
+    from pdd.cli_detector import _has_cli_oauth
+    if getattr(r, "api_key_configured", False):
+        return "API key set"
+    cli_name = getattr(r, "cli_name", None)
+    if cli_name and _has_cli_oauth(cli_name):
+        return "OAuth/subscription/config credential configured"
+    return "no credentials"
+
+
+def _build_quick_start_lines(oauth_only_setup: bool) -> List[str]:
+    """Build the quick-start text as a list of strings, used in both the
+    summary file and the terminal print so the two views stay in sync."""
+    if oauth_only_setup:
+        return [
+            "Setup detected an OAuth/subscription/config-backed agentic CLI but no API key was "
+            "found in your environment.",
+            "",
+            "1) Issue-driven agentic commands (work NOW with OAuth):",
+            "   These dispatch through the configured agentic CLI",
+            "   (claude/codex/agy/gemini/opencode) as a subprocess and use its",
+            "   stored OAuth/subscription/config credential. No API key required.",
+            "     pdd generate <issue-url>",
+            "     pdd change   <issue-url>",
+            "     pdd bug      <issue-url>",
+            "     pdd fix      <issue-url>",
+            "     pdd test     <issue-url>",
+            "     pdd checkup  <issue-url>",
+            "",
+            "2) Direct prompt commands (require an env-var API key):",
+            "   These call litellm directly and need ANTHROPIC_API_KEY /",
+            "   OPENAI_API_KEY / GEMINI_API_KEY (etc.) to be set.",
+            "     pdd generate <prompt-file>",
+            "     pdd test     <prompt>",
+            "     pdd fix      <prompt>",
+            "     pdd sync     <prompt-or-issue>",
+            "   To enable these, re-run `pdd setup` and add an API key",
+            "   (or use the post-setup options menu's \"Add a provider\").",
+        ]
+    return [
+        "Generate code from the sample prompt:",
+        "  pdd generate success_python.prompt",
+    ]
+
+
+def _print_exit_summary(found_keys: List[Tuple[str, str]],
+                        cli_results: Optional[List[Any]] = None) -> None:
+    """Write PDD-SETUP-SUMMARY.txt and print a condensed terminal summary."""
+    cli_results = cli_results or []
+
+    # Create the sample success_python.prompt if absent
+    sample_file = Path.cwd() / "success_python.prompt"
+    if not sample_file.exists():
+        try:
+            sample_file.write_text(
+                "% Sample PDD prompt\n"
+                "Write a Python script that prints \"Hello from PDD!\".\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    # OAuth-only branch detection — based on the full found_keys scan
+    # (env + ~/.pdd/api-env + .env), NOT on os.environ alone. See spec
+    # round-10 / P4 review.
+    has_oauth_cli = False
+    for r in cli_results:
+        if getattr(r, "skipped", False):
+            continue
+        try:
+            from pdd.cli_detector import _has_cli_oauth
+            cli_name = getattr(r, "cli_name", None)
+            if cli_name and _has_cli_oauth(cli_name):
+                has_oauth_cli = True
+                break
+        except Exception:
+            pass
+
+    oauth_only_setup = (not found_keys) and has_oauth_cli
+
+    quick_start_lines = _build_quick_start_lines(oauth_only_setup)
+
+    # ---- Write PDD-SETUP-SUMMARY.txt ----
+    summary_path = Path.cwd() / "PDD-SETUP-SUMMARY.txt"
+    lines: List[str] = []
+    lines.append("PDD Setup Complete")
+    lines.append("==================")
+    lines.append("")
+    lines.append("CLIs Configured:")
+    if not cli_results or all(getattr(r, "skipped", False) for r in cli_results):
+        lines.append("  (none)")
+    else:
+        for r in cli_results:
+            if getattr(r, "skipped", False):
+                continue
+            label = _cli_credential_label(r)
+            name = getattr(r, "cli_name", "?") or "?"
+            lines.append(f"  - {name}: {label}")
+    lines.append("")
+    lines.append("API Keys Configured:")
+    if not found_keys:
+        lines.append("  (none)")
+    else:
+        for k, s in found_keys:
+            lines.append(f"  - {_mask_key(k)}  ({s})")
+    lines.append("")
+    lines.append("Files Created / Updated:")
+    lines.append(f"  - {sample_file}")
+    lines.append(f"  - {summary_path}")
+    lines.append("")
+    lines.append("QUICK START")
+    lines.append("-----------")
+    for q in quick_start_lines:
+        lines.append(q)
+    lines.append("")
+    lines.append("Learn More:")
+    lines.append("  - pdd --help")
+    lines.append("  - https://promptdriven.ai/")
+    lines.append("  - Discord: https://discord.gg/Yp4RTh8bG7")
+    lines.append("")
+
+    # api-env reminder, included in BOTH file and terminal
+    try:
+        from pdd.api_key_scanner import _detect_shell
+        shell = _detect_shell() or "bash"
+    except Exception:
+        shell = "bash"
+    api_env_path = Path.home() / ".pdd" / f"api-env.{shell}"
+    if api_env_path.exists():
+        lines.append("Important:")
+        lines.append(f"  Run `source ~/.pdd/api-env.{shell}` for the keys to "
+                     "take effect in this terminal.")
+        lines.append("  (New terminal windows will load them automatically.)")
+        lines.append("")
+
+    try:
+        summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception as e:
+        print(f"Could not write summary file: {e}")
+
+    # ---- Print condensed terminal summary ----
+    print()
+    print(f"{BOLD}{CYAN}{LIGHT_HORIZONTAL * 60}{RESET}")
+    print(f"{BOLD}QUICK START:{RESET}")
+    for q in quick_start_lines:
+        print(q)
+    print(f"{BOLD}{CYAN}{LIGHT_HORIZONTAL * 60}{RESET}")
+
+    print()
+    print(f"{BOLD}LEARN MORE:{RESET}")
+    print("  - pdd --help")
+    print("  - https://promptdriven.ai/")
+    print("  - Discord: https://discord.gg/Yp4RTh8bG7")
+
+    if api_env_path.exists():
         print()
+        print(f"{BOLD}{YELLOW}Important:{RESET} "
+              f"run `source ~/.pdd/api-env.{shell}` for keys to take effect "
+              f"in this terminal session.")
+        print(f"{DIM}(New terminal windows will load keys automatically.){RESET}")
+
+    print()
+    print(f"{DIM}Full summary saved to {summary_path}{RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def run_setup() -> None:
+    """Main entry point for `pdd setup`."""
+    try:
+        _print_pdd_logo()
+
+        from pdd.cli_detector import detect_and_bootstrap_cli, _has_cli_oauth
+
+        _print_step_banner("Phase 1: Agentic CLI Bootstrap")
+        cli_results = detect_and_bootstrap_cli()
+
+        # CLI bootstrap warnings (yellow) only when BOTH api_key and OAuth absent
+        for r in cli_results or []:
+            if getattr(r, "skipped", False):
+                continue
+            api_key_ok = bool(getattr(r, "api_key_configured", False))
+            cli_name_r = getattr(r, "cli_name", None)
+            oauth_ok = False
+            try:
+                oauth_ok = bool(cli_name_r and _has_cli_oauth(cli_name_r))
+            except Exception:
+                oauth_ok = False
+            if not api_key_ok and not oauth_ok:
+                name = cli_name_r or "?"
+                print(f"{YELLOW}No credentials configured for {name}: "
+                      f"set an API key or sign in via the CLI.{RESET}")
+
+        context = _run_auto_phase(cli_results)
+
+        if context is None:
+            # Failure path — fall back to options menu
+            msg = "Setup incomplete. Use the menu to configure manually."
+            _console.print(f"[yellow]{msg}[/yellow]")
+            print(f"{YELLOW}{msg}{RESET}")
+            _run_options_menu()
+            found_keys = _scan_for_api_keys_quiet()
+        else:
+            found_keys = context.get("found_keys", [])
+            ans = input("Press Enter to finish, or 'm' for more options: ").strip()
+            if ans:
+                _run_options_menu()
+                # Refresh: menu may have added a key
+                found_keys = _scan_for_api_keys_quiet()
+
+        _print_exit_summary(found_keys, cli_results)
+    except KeyboardInterrupt:
+        print()
+        print("Setup interrupted — exiting.")
+        return
 
 
 if __name__ == "__main__":
