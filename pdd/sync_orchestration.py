@@ -40,6 +40,9 @@ from .operation_log import (
     save_fingerprint,
     save_run_report,
     clear_run_report,
+    get_log_path,
+    get_run_report_path,
+    get_fingerprint_path,
 )
 from .sync_determine_operation import (
     sync_determine_operation,
@@ -637,7 +640,8 @@ def _build_auto_deps_rollback(prompt_path: Path, temp_output: Path) -> Operation
 # --- State Management Wrappers ---
 
 def _save_run_report_atomic(report: Dict[str, Any], basename: str, language: str,
-                    atomic_state: Optional['AtomicStateUpdate'] = None):
+                    atomic_state: Optional['AtomicStateUpdate'] = None,
+                    paths: Optional[Dict[str, Path]] = None):
     """Save a run report to the metadata directory, supporting atomic updates.
 
     Args:
@@ -645,14 +649,17 @@ def _save_run_report_atomic(report: Dict[str, Any], basename: str, language: str
         basename: The module basename.
         language: The programming language.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
+        paths: Optional path hints (Issue #1211) routing the file under the
+            subproject's .pdd/meta when run CWD lives above the subproject.
     """
     if atomic_state:
-        # Buffer for atomic write
-        report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
+        # Buffer for atomic write — resolve via the same project-root-aware
+        # helper as the direct path so atomic writes don't bypass #1211.
+        report_file = get_run_report_path(basename, language, paths=paths)
         atomic_state.set_run_report(report, report_file)
     else:
         # Direct write using operation_log
-        save_run_report(basename, language, report)
+        save_run_report(basename, language, report, paths=paths)
 
 def _save_fingerprint_atomic(basename: str, language: str, operation: str,
                                paths: Dict[str, Path], cost: float, model: str,
@@ -682,7 +689,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         if include_deps_override is not None:
             stored_deps = include_deps_override
         else:
-            prev_fp = read_fingerprint(basename, language)
+            prev_fp = read_fingerprint(basename, language, paths=paths)
             stored_deps = prev_fp.include_deps if prev_fp else None
         current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
         # If override provided and current extraction found nothing, use the override
@@ -700,7 +707,10 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             include_deps=current_hashes.get('include_deps'),  # Issue #522
         )
 
-        fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
+        # Issue #1211: route the atomic fingerprint file through the
+        # paths-aware helper so subprojects whose .pddrc is below run CWD
+        # get the file under <subproject>/.pdd/meta, not parent CWD.
+        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
     else:
         # Direct write using operation_log
@@ -1635,7 +1645,10 @@ def _create_synthetic_run_report_for_agentic_success(
 
     # Save the report
     # NOTE: Must use _run.json (not _run_report.json) to match read_run_report() in sync_determine_operation.py
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
+    # Issue #1211: route via paths-aware helper so subproject meta dir is used.
+    report_file = get_run_report_path(
+        basename, language, paths={"test": test_file}
+    )
     if atomic_state:
         atomic_state.set_run_report(asdict(report), report_file)
     else:
@@ -1814,7 +1827,10 @@ def _execute_tests_and_create_run_report(
                     test_hash=test_hash,
                     test_files=test_file_hashes,  # Bug #156
                 )
-                _save_run_report_atomic(asdict(report), basename, language, atomic_state)
+                _save_run_report_atomic(
+                    asdict(report), basename, language, atomic_state,
+                    paths={"test": test_file},
+                )
                 return report
 
             effective_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(test_file.parent)
@@ -1857,7 +1873,9 @@ def _execute_tests_and_create_run_report(
             test_files=test_file_hashes,  # Bug #156
         )
 
-    _save_run_report_atomic(asdict(report), basename, language, atomic_state)
+    _save_run_report_atomic(
+        asdict(report), basename, language, atomic_state, paths={"test": test_file}
+    )
     return report
 
 def _create_mock_context(**kwargs) -> click.Context:
@@ -1869,7 +1887,9 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
+    # Issue #1211: resolve via paths-aware helper. Without explicit paths
+    # we get CWD-upward .pddrc detection — covers the most common case.
+    log_file = get_log_path(basename, language)
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -2451,7 +2471,7 @@ def sync_orchestration(
                             coverage=0.0,
                             test_hash=current_hashes.get('test_hash')
                         )
-                        _save_run_report_atomic(asdict(synthetic_report), basename, language)
+                        _save_run_report_atomic(asdict(synthetic_report), basename, language, paths=pdd_files)
                         continue
 
                     current_function_name_ref[0] = operation
@@ -2783,7 +2803,7 @@ def sync_orchestration(
                                                 coverage=0.0,
                                                 test_hash=test_hash
                                             )
-                                            _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
+                                            _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                                         skipped_operations.append('crash')
                                         continue
                                     
@@ -2824,7 +2844,7 @@ def sync_orchestration(
                                                     exit_code=0, tests_passed=1, tests_failed=0, coverage=0.0,
                                                     test_hash=test_hash
                                                 )
-                                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
+                                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                                             result = (True, 0.0, 'auto-fix')
                                             success = True
                                             actual_cost = 0.0
@@ -3327,7 +3347,7 @@ def sync_orchestration(
                                     coverage=0.0,
                                     test_hash=test_hash
                                 )
-                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
+                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                             else:
                                 # Re-run example to verify crash fix worked (Python only)
                                 try:
@@ -3352,7 +3372,7 @@ def sync_orchestration(
                                      # Include test_hash for staleness detection
                                      test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                      report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
-                                     _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
+                                     _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                                 except Exception as e:
                                      # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
                                      error_msg = f"Post-crash verification failed: {e}"
@@ -3370,7 +3390,7 @@ def sync_orchestration(
                                     coverage=0.0,
                                     test_hash=test_hash
                                 )
-                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
+                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
 
                         if success and operation == 'fix':
                             # Re-run tests to update run_report after successful fix
@@ -3388,7 +3408,7 @@ def sync_orchestration(
                                     coverage=0.0,
                                     test_hash=test_hash
                                 )
-                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
+                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                             elif pdd_files['test'].exists():
                                 _execute_tests_and_create_run_report(
                                     pdd_files['test'],

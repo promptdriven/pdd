@@ -242,19 +242,22 @@ def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:
 
 
 def append_log_entry(
-    basename: str, 
-    language: str, 
-    entry: Dict[str, Any]
+    basename: str,
+    language: str,
+    entry: Dict[str, Any],
+    paths: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Append a single entry to the module's sync log.
-    
+
     Args:
         basename: Module basename.
         language: Module language.
         entry: Dictionary of data to log.
+        paths: Optional path hints (issue #1211); when given, the log file
+            is anchored at the subproject's .pdd/meta even if cwd is above it.
     """
-    log_path = get_log_path(basename, language)
+    log_path = get_log_path(basename, language, paths=paths)
     
     # Ensure standard fields exist
     if "timestamp" not in entry:
@@ -366,9 +369,10 @@ def save_fingerprint(
     from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
     from . import __version__
 
-    # Issue #1211: resolve `paths` first so the project-root detector can use
-    # them. Without this, `get_fingerprint_path` and `read_fingerprint` below
-    # only see CWD and miss a subproject .pddrc that lives BELOW run CWD.
+    # Issue #983: when the caller provides `paths`, use them directly — do
+    # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
+    # caller-supplied paths to detect the subproject root so the meta dir
+    # anchors at the .pddrc rather than the run CWD.
     if not paths:
         from .sync_determine_operation import get_pdd_file_paths
         try:
@@ -405,11 +409,17 @@ def save_fingerprint(
         console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
 
 
-def save_run_report(basename: str, language: str, report_data: Dict[str, Any]) -> None:
+def save_run_report(
+    basename: str,
+    language: str,
+    report_data: Dict[str, Any],
+    paths: Optional[Dict[str, Any]] = None,
+) -> None:
     """
     Save a run report (test results) to the state file.
+    `paths` (issue #1211) routes the file under the subproject meta dir.
     """
-    path = get_run_report_path(basename, language)
+    path = get_run_report_path(basename, language, paths=paths)
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2)
@@ -418,11 +428,15 @@ def save_run_report(basename: str, language: str, report_data: Dict[str, Any]) -
         console.print(f"[yellow]Warning: Failed to save run report to {path}: {e}[/yellow]")
 
 
-def clear_run_report(basename: str, language: str) -> None:
+def clear_run_report(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Any]] = None,
+) -> None:
     """
     Remove an existing run report if it exists.
     """
-    path = get_run_report_path(basename, language)
+    path = get_run_report_path(basename, language, paths=paths)
     if path.exists():
         try:
             os.remove(path)
@@ -430,9 +444,13 @@ def clear_run_report(basename: str, language: str) -> None:
             pass
 
 
-def _clear_run_report_before_fingerprint(basename: str, language: str) -> bool:
+def _clear_run_report_before_fingerprint(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Any]] = None,
+) -> bool:
     """Clear stale run report and verify it is gone before fingerprint update."""
-    path = get_run_report_path(basename, language)
+    path = get_run_report_path(basename, language, paths=paths)
     console = Console()
 
     try:
@@ -444,7 +462,7 @@ def _clear_run_report_before_fingerprint(basename: str, language: str) -> bool:
         )
         return False
 
-    clear_run_report(basename, language)
+    clear_run_report(basename, language, paths=paths)
     if not had_run_report:
         return True
 
@@ -492,8 +510,13 @@ def log_operation(
                         prompt_file = first_arg
 
             basename, language = (None, None)
+            # Issue #1211: track the prompt path so metadata writes anchor at
+            # the subproject's .pdd/meta even when the user invoked the
+            # command from above the subproject root.
+            log_paths: Optional[Dict[str, Any]] = None
             if prompt_file:
                 basename, language = infer_module_identity(prompt_file)
+                log_paths = {"prompt": prompt_file}
 
             entry = create_manual_log_entry(operation=operation)
             start_time = time.time()
@@ -521,7 +544,7 @@ def log_operation(
 
                 update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
                 if basename and language:
-                    append_log_entry(basename, language, entry)
+                    append_log_entry(basename, language, entry, paths=log_paths)
                     if success:
                         fingerprint_allowed = True
                         # Clear the stale run report only after the command
@@ -533,11 +556,18 @@ def log_operation(
                         # (issue #1057).
                         if clears_run_report:
                             fingerprint_allowed = _clear_run_report_before_fingerprint(
-                                basename, language
+                                basename, language, paths=log_paths
                             )
                         if updates_fingerprint and fingerprint_allowed:
-                            save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
+                            save_fingerprint(
+                                basename,
+                                language,
+                                operation=operation,
+                                paths=log_paths,
+                                cost=cost,
+                                model=model,
+                            )
                         if updates_run_report and isinstance(result, dict):
-                            save_run_report(basename, language, result)
+                            save_run_report(basename, language, result, paths=log_paths)
         return wrapper
     return decorator

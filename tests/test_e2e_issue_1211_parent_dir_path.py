@@ -322,6 +322,67 @@ def test_e2e_fix_basename_flows_into_subproject_fingerprint_path(
     )
 
 
+def test_e2e_decorator_metadata_writes_anchor_at_subproject(tmp_path, monkeypatch):
+    """Reviewer round-3: the @log_operation decorator infers prompt_file
+    but then calls append_log_entry / save_fingerprint / save_run_report
+    without path hints. With the decorator anchored at parent CWD and the
+    .pddrc inside the subproject, all three writes must land under the
+    subproject's .pdd/meta — not under the parent run CWD."""
+    from pdd.operation_log import (
+        log_operation,
+        save_fingerprint,
+        save_run_report,
+        append_log_entry,
+        get_log_path,
+        get_fingerprint_path,
+        get_run_report_path,
+        infer_module_identity,
+    )
+
+    repo_root = tmp_path / "repo_root"
+    repo_root.mkdir()
+    subproject = repo_root / "extensions" / "github_pdd_app"
+    subproject.mkdir(parents=True)
+    (subproject / ".pddrc").write_text(_PDDRC_NESTED_APP, encoding="utf-8")
+    prompt = subproject / "prompts" / "src" / "routers" / "webhook_handlers_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("p", encoding="utf-8")
+
+    monkeypatch.chdir(repo_root)
+
+    # The decorator builds paths={"prompt": prompt_file} from the inferred
+    # prompt file. Simulate the writes the decorator does and verify each
+    # one anchors at the subproject .pdd/meta.
+    basename, language = infer_module_identity(str(prompt))
+    paths_hint = {"prompt": prompt}
+    expected_meta = subproject / ".pdd" / "meta"
+
+    save_fingerprint(basename, language, operation="generate", paths=paths_hint)
+    save_run_report(basename, language, {"exit_code": 0, "tests_passed": 1,
+                                          "tests_failed": 0, "coverage": 95.0,
+                                          "timestamp": "2026-05-27T00:00:00Z"},
+                    paths=paths_hint)
+    append_log_entry(basename, language,
+                     {"timestamp": "2026-05-27T00:00:00Z", "operation": "generate"},
+                     paths=paths_hint)
+
+    fp = get_fingerprint_path(basename, language, paths=paths_hint)
+    rr = get_run_report_path(basename, language, paths=paths_hint)
+    lg = get_log_path(basename, language, paths=paths_hint)
+    for kind, path in (("fingerprint", fp), ("run_report", rr), ("log", lg)):
+        assert str(path).startswith(str(expected_meta)), (
+            f"{kind} path {path!r} must live under subproject meta dir "
+            f"{expected_meta!r} — decorator metadata writes are not anchored"
+        )
+        assert path.exists(), f"{kind} file {path!r} must exist after write"
+
+    # No orphan .pdd/meta under the parent CWD.
+    assert not (repo_root / ".pdd" / "meta").exists(), (
+        "Parent repo root must not have an orphan .pdd/meta after decorator "
+        "writes anchored via paths hint"
+    )
+
+
 def test_e2e_fingerprint_anchors_at_subproject_when_pddrc_lives_below_cwd(
     tmp_path, monkeypatch
 ):
