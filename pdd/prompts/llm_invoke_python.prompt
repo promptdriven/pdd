@@ -110,6 +110,7 @@
     - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).
     - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override, optional 'base_url' for custom API endpoints.
     - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
+    - **Provider pin (`PDD_PROVIDER`)**: When the `PDD_PROVIDER` env var is set and non-empty in the local execution path, narrow the candidate set BEFORE strength-based selection: keep only rows whose `provider` or `model` column contains the pinned token as a case-insensitive substring (so values like `gemini`, `google`, `copilot`, `anthropic` all work against the existing CSV). Match against `provider` first, then `model`, to handle CSVs that use bare model names with provider routing prefixes (e.g. `vertex_ai/gemini-3.1-pro-preview`). If the resulting set is empty, raise `RuntimeError` listing the distinct `provider` values present in the loaded CSV so the user can correct the pin instead of silently falling back to a different provider. The pin filter does NOT change the soft-fallback semantics for an unknown base model — surrogate selection runs after the provider filter, against the filtered set.
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to next highest ELO on failure.
@@ -211,7 +212,20 @@
       validation or post-call ContextWindowExceededError), include actionable details in the
       RuntimeError: token count, model context limits attempted, usage percentage, and guidance
       to reduce prompt size or use a model with a larger context window.
-    - After exhausting all candidates: Raise RuntimeError.
+    - After exhausting all candidates: Raise RuntimeError. When `PDD_PROVIDER` was set for this
+      run, include the pinned provider token in the message so users can tell at a glance that
+      candidates were narrowed by the pin and not by an empty CSV.
+    - **Permanent-rejection classifier (`_is_permanent_invalid_request_error`)**: Used to fast-fail
+      the cascade when the request shape itself is wrong (e.g. `thinking.type` enforced by Anthropic
+      Opus 4.7). Keep the allow-list of marker phrases conservative. Copilot
+      `Github_copilotException` "model not supported" variants — both `"the requested model is not
+      supported"` (the verbatim litellm-wrapped text seen for `github_copilot/gpt-5.1` when the
+      account lacks entitlement) and `"is not supported for this model"` (a related phrasing) —
+      MUST NOT be classified as permanent. Those failures are account-specific to one provider's
+      model row and the next CSV candidate may succeed. Use a more specific marker for the
+      Anthropic shape issue (e.g. `"thinking.type"` plus `"unsupported parameter"`) so the
+      classifier still catches request-shape problems while allowing model-not-entitled errors to
+      cascade. Closes #1202.
 
 % Attempted-Models History:
     - Maintain a per-call chronological `attempted_models: list[str]` initialized to `[]` at the
