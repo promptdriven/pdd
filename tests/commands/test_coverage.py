@@ -71,7 +71,8 @@ class TestCoverageBasic:
         prompt = _write(tmp_path, "foo_python.prompt", REFUND_PROMPT)
         runner = CliRunner()
         result = runner.invoke(coverage_cmd, ["--contracts", str(prompt)])
-        assert "foo_python.prompt" in result.output
+        clean_output = result.output.replace("\n", "").replace(" ", "")
+        assert "foo_python.prompt" in clean_output
 
     def test_output_contains_rule_ids(self, tmp_path):
         prompt = _write(tmp_path, "foo_python.prompt", REFUND_PROMPT)
@@ -167,6 +168,22 @@ class TestCoverageJsonOutput:
         assert "rules" in item
         assert "summary" in item
         assert "error" in item
+        assert "read_errors" in item
+
+    def test_stories_alias_matches_stories_dir(self, tmp_path):
+        prompt = _write(tmp_path, "foo_python.prompt", REFUND_PROMPT)
+        runner = CliRunner()
+        none_dir = str(tmp_path / "none")
+        result_dir = runner.invoke(
+            coverage_cmd,
+            ["--contracts", "--stories-dir", none_dir, "--tests-dir", none_dir, str(prompt)],
+        )
+        result_alias = runner.invoke(
+            coverage_cmd,
+            ["--contracts", "--stories", none_dir, "--tests-dir", none_dir, str(prompt)],
+        )
+        assert result_dir.exit_code == result_alias.exit_code
+        assert "R1" in result_alias.output
 
     def test_json_rule_item_keys(self, tmp_path):
         result = self._run_json(tmp_path, REFUND_PROMPT)
@@ -234,7 +251,7 @@ class TestCoverageMissingFile:
         assert "error" in parsed
 
     def test_missing_file_error_message(self, tmp_path):
-        runner = CliRunner(mix_stderr=False)
+        runner = CliRunner()
         result = runner.invoke(
             coverage_cmd, ["--contracts", str(tmp_path / "nonexistent.prompt")]
         )
@@ -425,7 +442,7 @@ class TestCoverageCliRegistration:
             {
                 "PDD_PATH": str(REPO_ROOT / "pdd"),
                 "PYTHONPATH": str(REPO_ROOT),
-                "PDD_AUTO_UPDATE": "true",
+                "PDD_AUTO_UPDATE": "false",
             }
         )
         result = subprocess.run(

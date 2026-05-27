@@ -12,7 +12,7 @@
 </vocabulary>
 
 <contract_rules>
-R1: The system MUST reject duplicate uploads gracefully.
+R1: The system MUST reject duplicate uploads with a graceful rejection.
 R2: The system MUST only accept uploads from authorized users.
 R3: The system MUST return a valid response on successful upload.
 R4: The system MUST NOT allow active sessions to exceed 10 uploads per day.

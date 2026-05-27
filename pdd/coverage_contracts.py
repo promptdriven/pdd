@@ -21,6 +21,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .contract_ir import (
+    COVERAGE_REF_RE,
+    _WAIVER_REF_RE,
+    _extract_markdown_sections,
+    extract_sections as _extract_sections,
+    parse_coverage_block as _parse_coverage_block,
+    parse_rule_ids as _parse_rule_ids,
+    parse_waiver_rule_map as _parse_waiver_rule_map,
+    rule_ids_from_covers as _rule_ids_from_covers,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -35,54 +46,15 @@ STATUS_WAIVED = "waived"
 STATUS_FAILED = "failed"
 
 # ---------------------------------------------------------------------------
-# Section extraction
+# Markdown section helper (uses contract_ir heading index)
 # ---------------------------------------------------------------------------
-
-_XML_SECTION_RE = re.compile(
-    r"<(?P<tag>[a-zA-Z_][a-zA-Z0-9_]*)>\s*(?P<body>.*?)\s*</(?P=tag)>",
-    re.DOTALL,
-)
-
-_MARKDOWN_HEADING_RE = re.compile(
-    r"^#{1,3}\s+(?P<heading>.+?)\s*$",
-    re.MULTILINE,
-)
-
-
-def _extract_sections(text: str) -> dict[str, str]:
-    """Return tag-name → inner text for all XML-style sections found."""
-    sections: dict[str, str] = {}
-    for section_match in _XML_SECTION_RE.finditer(text):
-        tag = section_match.group("tag").lower()
-        body = section_match.group("body")
-        sections[tag] = body
-    return sections
 
 
 def _extract_markdown_section(text: str, heading: str) -> str:
-    """
-    Return the text under a specific markdown heading until the next heading.
-    Case-insensitive heading match.
-    """
-    pattern = re.compile(
-        r"^#{1,3}\s+" + re.escape(heading) + r"\s*$(.*?)(?=^#{1,3}\s|\Z)",
-        re.MULTILINE | re.DOTALL | re.IGNORECASE,
-    )
-    match = pattern.search(text)
-    return match.group(1).strip() if match else ""
+    """Return body under a markdown ## / ### heading (case-insensitive)."""
+    return _extract_markdown_sections(text).get(heading.strip().lower(), "")
 
-# ---------------------------------------------------------------------------
-# Rule ID patterns (mirrors contract_check.py)
-# ---------------------------------------------------------------------------
 
-_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
-_SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
-_COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
-_CROSS_MODULE_REF_RE = re.compile(
-    r"([\w./\-]+\.prompt)#(R-?\d+|RULE-?\d+)\b", re.IGNORECASE
-)
-_WAIVER_ID_RE = re.compile(r"^(W-?\d+):", re.IGNORECASE)
-_WAIVER_REF_RE = re.compile(r"\bWAIVED\s+(W-?\d+)\b", re.IGNORECASE)
 _STORY_PROMPTS_META_RE = re.compile(
     r"<!--\s*pdd-story-prompts:\s*(?P<prompts>.*?)\s*-->",
     re.IGNORECASE,
@@ -132,6 +104,7 @@ class CoverageResult:
     rules: list[RuleCoverage] = field(default_factory=list)
     has_contract_rules: bool = False
     error: Optional[str] = None
+    read_errors: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> dict[str, int]:
@@ -157,99 +130,10 @@ class CoverageResult:
             "path": str(self.path),
             "has_contract_rules": self.has_contract_rules,
             "error": self.error,
+            "read_errors": self.read_errors,
             "rules": [r.as_dict() for r in self.rules],
             "summary": self.summary,
         }
-
-# ---------------------------------------------------------------------------
-# Section parsers
-# ---------------------------------------------------------------------------
-
-
-def _parse_rule_ids(rules_text: str) -> list[str]:
-    """
-    Extract rule IDs from a <contract_rules> block in declaration order.
-
-    Supports R1, R-001, RULE1, and sequential 1./2. numbering.
-    Returns IDs normalised to upper-case, e.g. "R1", "R-001".
-    Unnumbered bullet rules are skipped (no ID to track).
-    """
-    rule_ids: list[str] = []
-    seen: set[str] = set()
-
-    for line in rules_text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        explicit = _EXPLICIT_ID_RE.match(stripped)
-        seq = _SEQ_ID_RE.match(stripped)
-
-        if explicit:
-            rid = explicit.group(1).upper()
-        elif seq:
-            rid = f"S-{int(seq.group(1)):03d}"
-        else:
-            continue
-
-        if rid not in seen:
-            seen.add(rid)
-            rule_ids.append(rid)
-
-    return rule_ids
-
-
-def _parse_waiver_rule_map(waivers_text: str) -> dict[str, str]:
-    """
-    Return mapping rule_id → waiver_id from a <waivers> block.
-
-    Parses:
-        W1:
-          Rule: R4
-          ...
-    """
-    rule_to_waiver: dict[str, str] = {}
-    current_waiver_id: Optional[str] = None
-
-    for line in waivers_text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        waiver_header = _WAIVER_ID_RE.match(stripped)
-        if waiver_header:
-            current_waiver_id = waiver_header.group(1).upper()
-            continue
-        if current_waiver_id and stripped.lower().startswith("rule:"):
-            rule_val = stripped[5:].strip().upper()
-            # Normalise to bare R<N> form
-            ref_match = _COVERAGE_REF_RE.search(rule_val)
-            if ref_match:
-                rule_to_waiver[ref_match.group(1).upper()] = current_waiver_id
-
-    return rule_to_waiver
-
-
-def _parse_coverage_block(coverage_text: str) -> dict[str, str]:
-    """
-    Parse a <coverage> block into a mapping rule_id → evidence_text.
-
-    Handles formats:
-        R1: story__foo.md
-        R2: test_bar (tests/test_baz.py)
-        R3: TODO add idempotency story
-        R4: WAIVED W1
-    """
-    entries: dict[str, str] = {}
-    for line in coverage_text.splitlines():
-        stripped = line.strip().lstrip("-* ")
-        if not stripped:
-            continue
-        ref_match = _COVERAGE_REF_RE.match(stripped)
-        if ref_match:
-            rid = ref_match.group(1).upper()
-            rest = stripped[ref_match.end():].lstrip(":").strip()
-            entries[rid] = rest
-    return entries
 
 # ---------------------------------------------------------------------------
 # Story evidence scanner
@@ -264,8 +148,9 @@ def _prompt_basename(path: Path) -> str:
 def _story_links_prompt(story_text: str, prompt_name: str) -> bool:
     """
     Return True if the story's pdd-story-prompts metadata mentions prompt_name.
-    If the metadata comment is absent, the story is considered potentially
-    linked to any prompt (broad match).
+
+    Stories without ``<!-- pdd-story-prompts: ... -->`` are not linked to any
+    prompt (strict scoping — avoids false positives across the story corpus).
     """
     meta_match = _STORY_PROMPTS_META_RE.search(story_text)
     if not meta_match:
@@ -279,34 +164,10 @@ def _story_links_prompt(story_text: str, prompt_name: str) -> bool:
     )
 
 
-def _rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
-    """
-    Extract rule IDs referenced in a ## Covers block for a given prompt.
-
-    Handles both formats:
-      - R1: description                       (single-prompt)
-      - prompts/foo.prompt#R3: description    (cross-module)
-    """
-    ids: set[str] = set()
-    for line in covers_text.splitlines():
-        stripped = line.strip().lstrip("-* ")
-        if not stripped:
-            continue
-        # Cross-module: prompt.prompt#R3
-        for cross_match in _CROSS_MODULE_REF_RE.finditer(stripped):
-            ref_file = cross_match.group(1).rsplit("/", 1)[-1]
-            if ref_file.lower() == prompt_name.lower():
-                ids.add(cross_match.group(2).upper())
-        if not _CROSS_MODULE_REF_RE.search(stripped):
-            # Single-prompt format — any R<N> reference counts
-            for ref_match in _COVERAGE_REF_RE.finditer(stripped):
-                ids.add(ref_match.group(1).upper())
-    return ids
-
-
 def scan_story_evidence(
     stories_dir: Path,
     prompt_path: Path,
+    read_errors: Optional[list[str]] = None,
 ) -> dict[str, list[str]]:
     """
     Scan story__*.md files (recursively) and return a mapping
@@ -325,7 +186,9 @@ def scan_story_evidence(
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         try:
             story_text = story_path.read_text(encoding="utf-8")
-        except OSError:
+        except OSError as exc:
+            if read_errors is not None:
+                read_errors.append(f"{story_path.name}: {exc}")
             continue
 
         if not _story_links_prompt(story_text, prompt_name):
@@ -347,6 +210,7 @@ def scan_story_evidence(
 def scan_story_validation_failures(
     stories_dir: Path,
     prompt_path: Path,
+    read_errors: Optional[list[str]] = None,
 ) -> dict[str, list[str]]:
     """
     Return rule_id -> validation failure descriptions for linked stories.
@@ -366,9 +230,8 @@ def scan_story_validation_failures(
         try:
             story_text = story_path.read_text(encoding="utf-8")
         except OSError as exc:
-            failures.setdefault("__story_read_error__", []).append(
-                f"{story_path.name}: {exc}"
-            )
+            if read_errors is not None:
+                read_errors.append(f"{story_path.name}: {exc}")
             continue
 
         if not _story_links_prompt(story_text, prompt_name):
@@ -408,7 +271,10 @@ def scan_story_validation_failures(
 # No fuzzy or semantic matching is performed.
 
 
-def scan_test_evidence(tests_dir: Path) -> dict[str, list[str]]:
+def scan_test_evidence(
+    tests_dir: Path,
+    read_errors: Optional[list[str]] = None,
+) -> dict[str, list[str]]:
     """
     Heuristically scan test files for rule ID references.
 
@@ -425,7 +291,9 @@ def scan_test_evidence(tests_dir: Path) -> dict[str, list[str]]:
     for test_file in sorted(tests_dir.rglob("test_*.py")):
         try:
             source = test_file.read_text(encoding="utf-8")
-        except OSError:
+        except OSError as exc:
+            if read_errors is not None:
+                read_errors.append(f"{test_file.name}: {exc}")
             continue
 
         _scan_test_file(source, evidence)
@@ -433,7 +301,10 @@ def scan_test_evidence(tests_dir: Path) -> dict[str, list[str]]:
     return evidence
 
 
-def scan_test_validation_failures(tests_dir: Path) -> dict[str, list[str]]:
+def scan_test_validation_failures(
+    tests_dir: Path,
+    read_errors: Optional[list[str]] = None,
+) -> dict[str, list[str]]:
     """
     Return rule_id -> validation failure descriptions for test files.
 
@@ -450,9 +321,8 @@ def scan_test_validation_failures(tests_dir: Path) -> dict[str, list[str]]:
         try:
             source = test_file.read_text(encoding="utf-8")
         except OSError as exc:
-            failures.setdefault("__test_read_error__", []).append(
-                f"{test_file.name}: {exc}"
-            )
+            if read_errors is not None:
+                read_errors.append(f"{test_file.name}: {exc}")
             continue
 
         try:
@@ -477,7 +347,7 @@ def _rule_ids_from_test_source(source: str) -> set[str]:
         ids.add(f"R{digit}")
     for comment_match in _TEST_COMMENT_RE.finditer(source):
         ids.add(comment_match.group(1).upper())
-    for ref_match in _COVERAGE_REF_RE.finditer(source):
+    for ref_match in COVERAGE_REF_RE.finditer(source):
         ids.add(ref_match.group(1).upper())
     return ids
 
@@ -533,7 +403,7 @@ def _scan_test_file(source: str, evidence: dict[str, list[str]]) -> None:  # pyl
         docstring = ast.get_docstring(node)
         if docstring:
             first_line = docstring.splitlines()[0][:120]
-            for doc_match in _COVERAGE_REF_RE.finditer(first_line):
+            for doc_match in COVERAGE_REF_RE.finditer(first_line):
                 rid = doc_match.group(1).upper()
                 evidence.setdefault(rid, [])
                 if fname not in evidence[rid]:
@@ -719,15 +589,17 @@ def build_coverage(
     waivers_text = sections.get("waivers", "")
     waiver_map = _parse_waiver_rule_map(waivers_text) if waivers_text else {}
 
-    story_evidence = scan_story_evidence(stories_dir, path)
-    test_evidence = scan_test_evidence(tests_dir)
+    read_errors: list[str] = []
+    story_evidence = scan_story_evidence(stories_dir, path, read_errors=read_errors)
+    test_evidence = scan_test_evidence(tests_dir, read_errors=read_errors)
     validation_failures: dict[str, list[str]] = {}
     for source in (
-        scan_story_validation_failures(stories_dir, path),
-        scan_test_validation_failures(tests_dir),
+        scan_story_validation_failures(stories_dir, path, read_errors=read_errors),
+        scan_test_validation_failures(tests_dir, read_errors=read_errors),
     ):
         for rid, messages in source.items():
             validation_failures.setdefault(rid, []).extend(messages)
+    result.read_errors = read_errors
 
     for rid in rule_ids:
         rule_cov = _classify_rule(

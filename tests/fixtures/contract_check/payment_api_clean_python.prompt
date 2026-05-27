@@ -17,7 +17,7 @@ You are a Python developer. Implement the payment processing module.
 R1 - Idempotency guard
 
 For every POST /charges request,
-the system MUST reject duplicate charges gracefully
+the system MUST reject duplicate charges with a graceful rejection
 when the idempotency_key matches an existing charge created within the last 24 hours.
 
 This rule is violated if the system creates a second charge row or returns HTTP 200.

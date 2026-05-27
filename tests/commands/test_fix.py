@@ -94,8 +94,8 @@ del (
     _templates_module,
     _real_theme,
     _real_handle_error,
+    _commands_package,
 )
-del _commands_package
 
 
 @pytest.fixture

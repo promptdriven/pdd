@@ -1,3 +1,4 @@
+import io
 import pytest
 import sys
 import os
@@ -14,6 +15,27 @@ from pdd.update_main import (
     find_and_resolve_all_pairs,
     update_main,
 )
+
+
+def _patch_update_main_wide_console(monkeypatch) -> io.StringIO:
+    """Route Rich output through a wide in-memory console (avoids truncated headers)."""
+    from rich.console import Console as _Console
+
+    _um = sys.modules["pdd.update_main"]
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        _um,
+        "console",
+        _Console(
+            file=buf,
+            theme=_um.custom_theme,
+            width=240,
+            force_terminal=True,
+            legacy_windows=False,
+        ),
+    )
+    return buf
+
 
 @pytest.fixture
 def mock_ctx():
@@ -4075,13 +4097,9 @@ def test_repo_mode_summary_table_includes_metadata_column_when_sync_metadata_tru
     mock_is_changed,
     mock_arch,
     temp_git_repo,
-    capsys,
     monkeypatch,
 ):
-    # Force a wide console so Rich doesn't truncate the Metadata column header.
-    from rich.console import Console as _Console
-    _um = sys.modules["pdd.update_main"]
-    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
+    summary_buf = _patch_update_main_wide_console(monkeypatch)
 
     def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
         return {
@@ -4112,9 +4130,9 @@ def test_repo_mode_summary_table_includes_metadata_column_when_sync_metadata_tru
         )
 
     assert result is not None
-    captured = capsys.readouterr()
-    assert "Metadata" in captured.out
-    assert "synced" in captured.out
+    summary_out = summary_buf.getvalue()
+    assert "Metadata" in summary_out
+    assert "synced" in summary_out
 
 
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
@@ -4129,13 +4147,9 @@ def test_repo_mode_summary_table_metadata_column_shows_skipped_when_sync_metadat
     mock_is_changed,
     mock_arch,
     temp_git_repo,
-    capsys,
     monkeypatch,
 ):
-    # Force a wide console so Rich doesn't truncate the Metadata column header.
-    from rich.console import Console as _Console
-    _um = sys.modules["pdd.update_main"]
-    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
+    summary_buf = _patch_update_main_wide_console(monkeypatch)
 
     def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
         return {
@@ -4167,9 +4181,9 @@ def test_repo_mode_summary_table_metadata_column_shows_skipped_when_sync_metadat
 
     assert result is not None
     assert mock_sync.call_count == 0
-    captured = capsys.readouterr()
-    assert "Metadata" in captured.out
-    assert "skipped" in captured.out
+    summary_out = summary_buf.getvalue()
+    assert "Metadata" in summary_out
+    assert "skipped" in summary_out
 
 
 # --- Regression: PRD sync must still run with sync_metadata=True (PR #920) ---
@@ -4334,12 +4348,9 @@ def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
     mock_git_changed,
     mock_is_changed,
     temp_git_repo,
-    capsys,
     monkeypatch,
 ):
-    from rich.console import Console as _Console
-    _um = sys.modules["pdd.update_main"]
-    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
+    summary_buf = _patch_update_main_wide_console(monkeypatch)
 
     def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
         return {
@@ -4385,8 +4396,8 @@ def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
         )
 
     assert result is not None
-    captured = capsys.readouterr()
-    assert "partial:architecture" in captured.out, captured.out
+    summary_out = summary_buf.getvalue()
+    assert "partial:architecture" in summary_out, summary_out
 
 
 def _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd):

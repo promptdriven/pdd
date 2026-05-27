@@ -780,6 +780,40 @@ class TestBuildCoverage:
         assert "rules" in d
         assert "summary" in d
         assert "error" in d
+        assert "read_errors" in d
+        assert d["read_errors"] == []
+
+    def test_read_errors_surface_when_story_unreadable(self, tmp_path, monkeypatch):
+        prompt = _make_prompt(tmp_path, """\
+            <contract_rules>
+            R1 - Rule
+            The system MUST do X.
+            </contract_rules>
+        """)
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        story = stories_dir / "story__linked.md"
+        story.write_text(
+            "<!-- pdd-story-prompts: "
+            + prompt.name
+            + " -->\n## Covers\n- R1: covers rule\n",
+            encoding="utf-8",
+        )
+        original_read_text = Path.read_text
+
+        def _read_text(self, *args, **kwargs):
+            if self.name == "story__linked.md":
+                raise OSError("permission denied")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _read_text)
+        result = build_coverage(
+            prompt,
+            stories_dir=stories_dir,
+            tests_dir=tmp_path / "none",
+        )
+        assert result.read_errors
+        assert any("story__linked.md" in message for message in result.read_errors)
 
 
 class TestBuildCoverageDirectory:

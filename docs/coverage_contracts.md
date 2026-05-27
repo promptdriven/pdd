@@ -19,7 +19,7 @@ pdd checkup coverage --json prompts/
 
 # Custom story and test directories
 pdd checkup coverage \
-    --stories-dir user_stories \
+    --stories user_stories \
     --tests-dir   tests \
     prompts/refund_payment_python.prompt
 ```
@@ -97,7 +97,7 @@ R6: WAIVED W1
 
 ### 2. Story `## Covers` sections
 
-Story files (`story__*.md`) are scanned **recursively** in `--stories-dir`.
+Story files (`story__*.md`) are scanned **recursively** in `--stories-dir` (alias `--stories`).
 A story is linked to a prompt if it contains:
 
 ```markdown
@@ -169,11 +169,12 @@ Failed rules are gaps and make the command exit `1`, the same as `unchecked`, `s
 
 | Code | Meaning |
 |------|---------|
-| `0` | All rules are `checked` or `waived` |
-| `1` | At least one rule is `unchecked`, `story-only`, `test-only`, or `failed` |
-| `2` | Error (file not found, unreadable prompt) |
+| `0` | All rules are `checked` or `waived`; no scanner read errors |
+| `1` | Coverage gaps (`unchecked`, `story-only`, `test-only`, `failed`) and/or unreadable story/test files under the scan directories |
+| `2` | Fatal error (missing `TARGET`, unreadable prompt file) |
 
 Exit code `1` is intended for CI gating — teams can choose to enforce it or not.
+Prompt-level failures use exit `2` so coverage gaps on other files are not masked in directory runs.
 
 ---
 
@@ -196,6 +197,9 @@ This means `pdd checkup coverage` is safe to run against any repository, even th
 
 ## JSON schema
 
+Coverage JSON is a single object envelope. **`pdd contracts check --json`** returns a
+top-level **array** of contract-check results instead (one object per prompt/story scan).
+
 ```json
 {
   "results": [
@@ -203,6 +207,7 @@ This means `pdd checkup coverage` is safe to run against any repository, even th
       "path": "prompts/refund_payment_python.prompt",
       "has_contract_rules": true,
       "error": null,
+      "read_errors": [],
       "rules": [
         {
           "rule_id": "R1",
@@ -251,7 +256,8 @@ This means `pdd checkup coverage` is safe to run against any repository, even th
 |-------|------|-------------|
 | `path` | `string` | Absolute or relative path to the prompt file |
 | `has_contract_rules` | `bool` | `false` for legacy prompts |
-| `error` | `string\|null` | Non-null if the file could not be read |
+| `error` | `string\|null` | Non-null if the prompt file could not be read (exit `2`) |
+| `read_errors` | `list[string]` | Story/test files that could not be read under `--stories` / `--tests-dir` (exit `1`) |
 | `rules` | `list[Rule]` | Coverage entry per rule |
 | `summary` | `object` | Per-status counts |
 

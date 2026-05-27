@@ -1,4 +1,4 @@
-"""Deterministic contract checks used by ``pdd checkup contract check``."""
+"""Deterministic contract checks for ``pdd contracts check`` and ``pdd checkup contract check``."""
 from __future__ import annotations
 
 import json
@@ -18,12 +18,12 @@ def _exit_code(results: list[ContractResult], *, strict: bool) -> int:
     return 1 if warnings else 0
 
 
-@click.group(name="contract")
-def contracts_group() -> None:
-    """Contract authoring quality utilities."""
+@click.group(name="contracts")
+def contracts_cli() -> None:
+    """Deterministic contract section checks for prompt files."""
 
 
-@contracts_group.command("check")
+@contracts_cli.command("check")
 @click.argument("target", type=click.Path(exists=True))
 @click.option("--json", "as_json", is_flag=True, default=False, help="Output results as JSON.")
 @click.option(

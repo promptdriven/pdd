@@ -80,6 +80,7 @@ If the tests fail, let the agentic loop fix it (`make fix MODULE=my_feature` or 
 ### Step 5: Contract and Coverage Checkup (when applicable)
 After tests pass for the module, run any project-specific contract or coverage gates before the full agentic checkup:
 
+- **Contract sections**: use [`pdd checkup contract check`](contract_check.md) (or `pdd contracts check`) on prompts with `<contract_rules>`, `<coverage>`, and `<waivers>`.
 - **Contract / architecture alignment**: use `pdd checkup --validate-arch-includes` (and your project's contract-compile workflow, if configured) to confirm `architecture.json`, prompt `<include>` tags, and generated artifacts stay aligned.
 - **Coverage**: use `pdd test` / `make test` with coverage targets from `.pddrc` or `pdd generate --coverage-report` where your project defines them; treat coverage gaps as prompt or test debt, not something lint replaces.
 
