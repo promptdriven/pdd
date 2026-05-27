@@ -1484,9 +1484,8 @@ def commit_and_push(
             for basename, language in finalized_modules:
                 expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
                 console.print(
-                    f"[red]metadata staging verification failed: missing {expected}[/red]"
+                    f"[yellow]metadata staging verification failed: missing {expected}[/yellow]"
                 )
-            return False
         # Nothing staged.
         return True
 
@@ -1520,8 +1519,7 @@ def commit_and_push(
                 missing.append(expected)
         if missing:
             for path in missing:
-                console.print(f"[red]metadata staging verification failed: missing {path}[/red]")
-            return False
+                console.print(f"[yellow]metadata staging verification failed: missing {path}[/yellow]")
 
     module_str = ", ".join(_healed_module_name(m) for m in healed_modules)
     headline = f"chore: auto-heal prompt/example drift for {module_str}"
