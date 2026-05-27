@@ -1069,28 +1069,27 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
-def _parse_expansion_items(step6_output: str) -> Tuple[set, bool]:
+def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
     """Parse the ``EXPANSION_ITEMS:`` allowlist from Step 6 output.
 
-    Returns ``(paths, has_justification)``:
-      - ``paths``: the set of file paths explicitly listed on
-        ``EXPANSION_ITEMS:`` lines (commas/whitespace separated, stripped
-        of surrounding backticks/quotes).
-      - ``has_justification``: True when the fixer included a causal
-        justification — either inline on the marker line (``: <paths> —
-        <reason>``) or as text in/below the EXPANSION_ITEMS section.
+    Returns ``(paths, justified_paths)``:
+      - ``paths``: the set of all file paths explicitly listed on
+        ``EXPANSION_ITEMS:`` lines.
+      - ``justified_paths``: the subset of ``paths`` whose own marker
+        carried a causal justification — either inline on the marker
+        line (``: <paths> — <reason>``) or as trailing prose lines
+        beneath the marker block.
 
-    Round-2 Finding 2: the old check was ``"EXPANSION_ITEMS:" in
-    step6_out``, which accepts a blank marker (``EXPANSION_ITEMS:`` with
-    no paths) or a marker with paths but no justification. A fixer could
-    use either to silently bypass the scope refusal for any unrelated
-    file. This helper requires BOTH a non-empty path list and a
-    justification before the caller treats the marker as valid.
+    Codex round-5 Finding 3: justification must be tracked per marker
+    entry, not globally. A fixer can otherwise list an unrelated path on
+    one ``EXPANSION_ITEMS:`` line and then satisfy the justification
+    check with a *different* justified marker entry, bypassing the
+    out-of-scope guard for the unrelated path.
     """
     paths: set = set()
-    justification_segments: List[str] = []
+    justified_paths: set = set()
     if "EXPANSION_ITEMS:" not in step6_output:
-        return paths, False
+        return paths, justified_paths
 
     lines = step6_output.splitlines()
     for idx, line in enumerate(lines):
@@ -1107,21 +1106,25 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, bool]:
             if sep in payload:
                 inline_paths, _, inline_reason = payload.partition(sep)
                 break
+        # Per-marker justification segments accumulate ONLY for this
+        # marker so a sibling marker's reason cannot whitelist the paths
+        # listed here.
+        marker_segments: List[str] = []
         if inline_reason.strip():
-            justification_segments.append(inline_reason.strip())
+            marker_segments.append(inline_reason.strip())
         # Treat ``none`` / ``n/a`` / empty payload as no expansion.
-        if not inline_paths or inline_paths.lower() in ("none", "n/a", "-"):
-            continue
-        for token in inline_paths.replace(";", ",").split(","):
-            cleaned = token.strip().strip("`'\"")
-            # Skip obvious non-path fragments (sentences, parentheticals).
-            if not cleaned:
-                continue
-            if " " in cleaned and "/" not in cleaned and "\\" not in cleaned:
-                # Reads like prose, not a path — drop it.
-                justification_segments.append(cleaned)
-                continue
-            paths.add(cleaned)
+        marker_paths: set = set()
+        if inline_paths and inline_paths.lower() not in ("none", "n/a", "-"):
+            for token in inline_paths.replace(";", ",").split(","):
+                cleaned = token.strip().strip("`'\"")
+                # Skip obvious non-path fragments (sentences, parentheticals).
+                if not cleaned:
+                    continue
+                if " " in cleaned and "/" not in cleaned and "\\" not in cleaned:
+                    # Reads like prose, not a path — drop it.
+                    marker_segments.append(cleaned)
+                    continue
+                marker_paths.add(cleaned)
         # Pull a few trailing non-empty lines as potential justification
         # text so a multi-line block of reasoning still satisfies the
         # justification requirement.
@@ -1133,12 +1136,16 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, bool]:
                 break
             if follow_stripped.startswith(("FILES_", "PATTERN_", "FIX_")):
                 break
-            justification_segments.append(follow_stripped)
+            marker_segments.append(follow_stripped)
 
-    has_justification = any(
-        len(seg) >= 8 for seg in justification_segments
-    )
-    return paths, has_justification
+        paths.update(marker_paths)
+        marker_has_justification = any(
+            len(seg) >= 8 for seg in marker_segments
+        )
+        if marker_has_justification:
+            justified_paths.update(marker_paths)
+
+    return paths, justified_paths
 
 
 _FAILURE_SIGNAL_REQUIRED_KEYS = (
@@ -1308,26 +1315,44 @@ def _read_failure_signal_artifact(
         raw_bytes = candidate_resolved.read_bytes()
     except OSError:
         return None
-    truncated_bytes = raw_bytes[:_ARTIFACT_OUTPUT_MAX_BYTES]
-    text = truncated_bytes.decode("utf-8", errors="replace")
-    truncated_lines = text.splitlines()[:_ARTIFACT_OUTPUT_MAX_LINES]
+    # Codex round-5 Finding 4: decode AND scrub the full artifact body
+    # before any truncation. Slicing raw bytes first leaves a
+    # recognisable ``ghp_AB...`` fragment when a token straddles the
+    # byte cutoff — the scrub regex never sees the full token, so it
+    # cannot redact the fragment. Scrub everything, then truncate the
+    # already-safe text.
+    full_text = raw_bytes.decode("utf-8", errors="replace")
+    token = _github_token_from_env()
+
+    def _scrub(value: str) -> str:
+        scrubbed_value = _scrub_secrets(value)
+        if token:
+            scrubbed_value = _redact_secret(scrubbed_value, token)
+        return scrubbed_value
+
+    scrubbed_full = _scrub(full_text)
+    scrubbed_lines = scrubbed_full.splitlines()
+    truncated_lines = scrubbed_lines[:_ARTIFACT_OUTPUT_MAX_LINES]
     body = "\n".join(truncated_lines)
-    truncation_note = ""
-    if (
+    if len(body.encode("utf-8", errors="replace")) > _ARTIFACT_OUTPUT_MAX_BYTES:
+        body_bytes = body.encode("utf-8", errors="replace")[:_ARTIFACT_OUTPUT_MAX_BYTES]
+        body = body_bytes.decode("utf-8", errors="replace")
+    needs_truncation_note = (
         len(raw_bytes) > _ARTIFACT_OUTPUT_MAX_BYTES
-        or len(text.splitlines()) > _ARTIFACT_OUTPUT_MAX_LINES
-    ):
+        or len(scrubbed_lines) > _ARTIFACT_OUTPUT_MAX_LINES
+    )
+    truncation_note = ""
+    if needs_truncation_note:
+        # Scrub the artifact path before echoing it back — a hostile or
+        # buggy run could embed a token in the directory name.
+        safe_path = _scrub(value)
         truncation_note = (
             "\n# orchestrator-note: artifact truncated for prompt "
             f"budget (cap: {_ARTIFACT_OUTPUT_MAX_LINES} lines / "
             f"{_ARTIFACT_OUTPUT_MAX_BYTES} bytes; full log at "
-            f"{value})."
+            f"{safe_path})."
         )
-    scrubbed = _scrub_secrets(body)
-    token = _github_token_from_env()
-    if token:
-        scrubbed = _redact_secret(scrubbed, token)
-    return scrubbed + truncation_note
+    return body + truncation_note
 
 
 def _normalised_failure_signal_text(
@@ -2098,16 +2123,17 @@ def _run_agentic_checkup_orchestrator_inner(
         # Use underscore-based key for fractional steps: 6.1 -> "6_1"
         step_key = str(step_num).replace(".", "_")
 
-        # Round-2 Finding 4: scrub Step 5 output BEFORE every persistence
-        # surface, not just the console log. Step 5 surfaces raw stdout/
-        # stderr (commands, test runners) which can contain tokens, Bearer
-        # headers, or ``https://user:token@host`` URLs. The output below
-        # lands in ``context[f"step{step_key}_output"]`` (passed verbatim
-        # into Step 6/7 prompts), ``step_outputs[step_key]`` (persisted to
-        # local + GitHub workflow state), and any per-step GitHub comment.
-        # Scrubbing only on the console path leaks secrets into all three.
+        # Round-2 Finding 4 + codex round-5 Finding 2: scrub Step 5
+        # output BEFORE every persistence surface, on ALL result paths.
+        # The provider-success/tests-failing path is the common case in
+        # CI — failure_signal blocks frequently embed redacted-looking
+        # but actually-live tokens (curl headers, env exports, CI logs).
+        # Scrubbing only when ``not success`` leaked credentials into
+        # ``context['step5_output']``, ``step_outputs['5']``, and any
+        # per-step GitHub comment whenever the provider call itself
+        # completed normally.
         persistable_output = output
-        if step_num == 5 and not success and output:
+        if step_num == 5 and output:
             persistable_output = _scrub_secrets(output)
             token = _github_token_from_env()
             if token:
@@ -2786,19 +2812,27 @@ def _run_agentic_checkup_orchestrator_inner(
                 if step_num == 4:
                     step4_clean = success
                 if step_num == 5:
-                    step5_clean = success
-                    # Round-2 Finding 5: parse and validate the
-                    # ``failure_signal`` block on Step 5 failure. If the
-                    # block is missing or malformed, log a warning and
-                    # synthesise a normalised block from the scrubbed raw
-                    # output so Step 6 always receives structured context.
-                    # The scrubbed persistable output lives in
-                    # ``context["step5_output"]`` (see _handle_step_result).
-                    if not success:
-                        step5_persisted = context.get("step5_output", "") or ""
-                        signal_fields, signal_missing = (
-                            _parse_failure_signal_block(step5_persisted)
-                        )
+                    # Codex round-5 Finding 1: a provider-success result
+                    # whose embedded ``failure_signal`` block declares
+                    # ``status: fail`` still means tests failed. Treating
+                    # provider success as cleanliness lets PR mode skip
+                    # the fixer (Steps 6.1/6.2/6.3) and report a passing
+                    # verdict with broken code on the PR head. Always
+                    # parse the block and derive the logical outcome from
+                    # ``status``, then combine it with provider success
+                    # for ``step5_clean``.
+                    step5_persisted = context.get("step5_output", "") or ""
+                    signal_fields, signal_missing = (
+                        _parse_failure_signal_block(step5_persisted)
+                    )
+                    failure_statuses = {"fail", "error", "failed", "failure"}
+                    status_value = (
+                        str(signal_fields.get("status", "")).strip().lower()
+                    )
+                    logical_failure = status_value in failure_statuses
+                    step5_clean = success and not logical_failure
+
+                    if not step5_clean:
                         # Codex round-4 Finding 3: when Step 5 leaves
                         # ``output:`` empty and points to a file via
                         # ``artifact_path:``, the orchestrator must read
@@ -3172,47 +3206,34 @@ def _run_agentic_checkup_orchestrator_inner(
                                 pr_file_set.add(new_path)
                         else:
                             pr_file_set.add(value)
-                    # Codex round-2 Finding 2: parse EXPANSION_ITEMS as a
-                    # structured allowlist. The previous ``"EXPANSION_ITEMS:"
-                    # in step6_out`` substring check let any blank/
-                    # paraphrased marker silently disable the scope guard.
-                    # Require BOTH a non-empty path list AND a justification
-                    # for the marker to count; only the explicitly listed
-                    # paths bypass the scope refusal.
+                    # Codex round-5 Finding 3: parse EXPANSION_ITEMS into
+                    # (paths, justified_paths). Only paths whose OWN marker
+                    # entry carried a causal justification bypass the
+                    # out-of-scope refusal — a fixer cannot list an
+                    # unrelated path on one marker line and let a sibling
+                    # marker's justification cover for it.
                     step6_out = step_outputs.get("6_1", "")
-                    expansion_paths_set, expansion_has_justification = (
+                    expansion_paths_set, justified_paths_set = (
                         _parse_expansion_items(step6_out)
-                    )
-                    has_valid_expansion = bool(expansion_paths_set) and (
-                        expansion_has_justification
-                    )
-                    # Codex round-3 Finding 1: only subtract expansion paths
-                    # from the out-of-scope list when the EXPANSION_ITEMS
-                    # marker is BOTH non-empty AND carries a causal
-                    # justification. Listing an unrelated file under
-                    # ``EXPANSION_ITEMS:`` with no reason was bypassing the
-                    # scope refusal entirely.
-                    allowed_expansion = (
-                        expansion_paths_set if has_valid_expansion else set()
                     )
                     out_of_scope = [
                         f for f in guard_changed_files
                         if f not in pr_file_set
-                        and f not in allowed_expansion
+                        and f not in justified_paths_set
                     ]
                     if out_of_scope:
-                        if has_valid_expansion:
+                        if justified_paths_set:
                             scope_refusal = (
                                 "Scope guard: fixer touched files outside PR's "
                                 "changed-file set; EXPANSION_ITEMS marker was "
                                 "present but did not cover these paths: "
-                                f"{out_of_scope}. Listed expansion paths: "
-                                f"{sorted(expansion_paths_set)}."
+                                f"{out_of_scope}. Justified expansion paths: "
+                                f"{sorted(justified_paths_set)}."
                             )
                         elif "EXPANSION_ITEMS:" in step6_out:
                             scope_refusal = (
                                 "Scope guard: fixer emitted an EXPANSION_ITEMS "
-                                "marker but it was empty, blank, or lacked a "
+                                "marker but no listed path carried its own "
                                 "causal justification. Out-of-scope files: "
                                 f"{out_of_scope}."
                             )
@@ -3252,13 +3273,11 @@ def _run_agentic_checkup_orchestrator_inner(
                             r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
                             step5_out,
                         ))
-                        # Round-2 Finding 2: reuse the structured expansion
-                        # parse from the scope check; only validated paths
-                        # (non-empty list + justification) contribute to
-                        # the causal OK-set.
-                        expansion_paths = (
-                            expansion_paths_set if has_valid_expansion else set()
-                        )
+                        # Codex round-5 Finding 3: reuse the per-path
+                        # justified expansion set from the scope check;
+                        # only paths whose OWN marker carried a causal
+                        # justification contribute to the causal OK-set.
+                        expansion_paths = justified_paths_set
                         ok_set = pr_file_set | failure_paths | expansion_paths
                         if failure_paths and ok_set:
                             fixer_files_set = set(guard_changed_files)
@@ -3302,17 +3321,12 @@ def _run_agentic_checkup_orchestrator_inner(
                     if size_limit > 0:
                         added_lines = _diff_size_added_lines(worktree_path)
                         if added_lines is not None and added_lines > size_limit:
-                            # Codex round-4 Finding 4: the bypass must
-                            # actually JUSTIFY the oversized diff, not just
-                            # contain any unrelated justified entry. A
-                            # ``has_valid_expansion`` flag is true the
-                            # moment EXPANSION_ITEMS lists any path with a
-                            # reason, even one that does not touch the
-                            # files contributing to the oversized diff.
-                            # Require every worktree-dirty file to appear
-                            # in the justified expansion list so the
-                            # operator (or fixer) cannot wave the size
-                            # gate through by citing a tangential path.
+                            # Codex round-5 Finding 3: every oversized
+                            # dirty path must be covered by its OWN
+                            # justified EXPANSION_ITEMS entry. A sibling
+                            # marker's justification no longer waves the
+                            # size gate through for a path that lacks its
+                            # own causal reason.
                             #
                             # NOTE: this is intentionally stricter than
                             # the scope guard above — the scope guard
@@ -3321,25 +3335,27 @@ def _run_agentic_checkup_orchestrator_inner(
                             # in-scope by the PR itself. The size guard
                             # cares about the SIZE of the change, so
                             # in-scope membership does not implicitly
-                            # justify a large diff; only an explicit
-                            # path-level EXPANSION_ITEMS entry does.
+                            # justify a large diff; only an explicit,
+                            # path-level justified EXPANSION_ITEMS entry
+                            # does.
                             uncovered_paths = sorted(
-                                set(guard_changed_files) - expansion_paths_set
+                                set(guard_changed_files) - justified_paths_set
                             )
                             covers_oversized_paths = (
-                                has_valid_expansion and not uncovered_paths
+                                bool(justified_paths_set) and not uncovered_paths
                             )
                             if not covers_oversized_paths:
-                                if not has_valid_expansion:
+                                if not justified_paths_set:
                                     bypass_reason = (
                                         "no justified EXPANSION_ITEMS marker"
                                     )
                                 else:
                                     bypass_reason = (
                                         "EXPANSION_ITEMS marker did not cover "
-                                        "every changed path; uncovered files: "
-                                        f"{uncovered_paths}. Listed expansion "
-                                        f"paths: {sorted(expansion_paths_set)}"
+                                        "every changed path with its own "
+                                        "causal justification; uncovered "
+                                        f"files: {uncovered_paths}. Justified "
+                                        f"expansion paths: {sorted(justified_paths_set)}"
                                     )
                                 size_refusal = (
                                     "Diff size guard: fixer push would add "

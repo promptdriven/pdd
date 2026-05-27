@@ -3402,34 +3402,34 @@ class TestIssue1215Round2ExpansionItemsStructured:
     """Round-2 Finding 2: EXPANSION_ITEMS must be structured and justified."""
 
     def test_parse_expansion_items_blank_marker_invalid(self):
-        paths, has_justification = _parse_expansion_items(
+        paths, justified_paths = _parse_expansion_items(
             "Some preamble.\nEXPANSION_ITEMS:\nMore notes.\n"
         )
         assert paths == set()
-        assert has_justification is False
+        assert justified_paths == set()
 
     def test_parse_expansion_items_none_payload_invalid(self):
-        paths, has_justification = _parse_expansion_items(
+        paths, justified_paths = _parse_expansion_items(
             "EXPANSION_ITEMS: none\n"
         )
         assert paths == set()
-        assert has_justification is False
+        assert justified_paths == set()
 
     def test_parse_expansion_items_paths_no_justification(self):
-        paths, has_justification = _parse_expansion_items(
+        paths, justified_paths = _parse_expansion_items(
             "EXPANSION_ITEMS: tests/test_other.py, pdd/utils/helper.py\n"
             "FILES_MODIFIED: pdd/main.py\n"
         )
         assert paths == {"tests/test_other.py", "pdd/utils/helper.py"}
-        assert has_justification is False
+        assert justified_paths == set()
 
     def test_parse_expansion_items_with_inline_justification(self):
-        paths, has_justification = _parse_expansion_items(
+        paths, justified_paths = _parse_expansion_items(
             "EXPANSION_ITEMS: tests/test_other.py — test imports helper.py "
             "which the PR change to core.py broke\n"
         )
         assert paths == {"tests/test_other.py"}
-        assert has_justification is True
+        assert justified_paths == {"tests/test_other.py"}
 
     def test_blank_expansion_items_does_not_bypass_scope_guard(self, tmp_path):
         """A bare ``EXPANSION_ITEMS:`` marker no longer disables the scope refusal."""
@@ -4146,3 +4146,293 @@ class TestIssue1215Round3DiffSizeGate:
         assert "diff size guard" in (msg or "").lower()
         assert "did not cover" in (msg or "").lower(), msg
         assert "pdd/main.py" in (msg or ""), msg
+
+
+class TestIssue1215Round5Step5LogicalOutcome:
+    """Round-5 Finding 1: derive Step 5 cleanliness from the failure_signal
+    status, not from provider success. A provider-success result that
+    embeds ``status: fail`` must NOT skip the fixer."""
+
+    def test_provider_success_with_fail_status_runs_fixer(self, tmp_path):
+        """Provider returns success=True; failure_signal.status=fail —
+        Step 6.1 MUST still be invoked.
+
+        Codex round-5 evidence: ``_run_single_step`` returning
+        ``success=True`` plus ``failure_signal.status: fail`` invoked
+        ``[1,2,3,4,5,7]`` and never called Step 6 on the broken code.
+        """
+        steps_invoked: List[float] = []
+        step5_payload = (
+            "Ran tests (provider call succeeded).\n"
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  E   AssertionError: expected 1, got 2\n"
+            "  FAILED tests/test_main.py::test_x\n"
+            "```\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            steps_invoked.append(step_num)
+            if step_num == 5:
+                return (True, step5_payload, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert 6.1 in steps_invoked, (
+            "Step 6.1 must run when Step 5 reports status: fail even on "
+            f"provider success; invoked={steps_invoked}"
+        )
+
+    def test_provider_success_with_pass_status_skips_fixer(self, tmp_path):
+        """A clean Step 5 (status: pass) on the provider-success path
+        keeps the old optimisation: skip the fixer when 3/4/5 are clean."""
+        steps_invoked: List[float] = []
+        step5_payload = (
+            "Tests passed.\n"
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 0\n"
+            "status: pass\n"
+            "failing_ids: \n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "```\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            steps_invoked.append(step_num)
+            if step_num == 5:
+                return (True, step5_payload, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            commit_push_return=(True, "No changes to push."),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert 6.1 not in steps_invoked, (
+            f"Clean Step 5 must skip Step 6 on a clean PR run; invoked={steps_invoked}"
+        )
+
+
+class TestIssue1215Round5Step5SecretScrubbingAlwaysOn:
+    """Round-5 Finding 2: scrub Step 5 output on EVERY result, not just
+    provider failures. A provider-success result with a token in the
+    failure_signal output must not leak to context, step_outputs, or
+    GitHub step comments."""
+
+    def test_token_scrubbed_when_provider_succeeds_but_tests_fail(self, tmp_path):
+        """Provider succeeds, failure_signal.status=fail, output contains a
+        token — token must not appear in context['step5_output'],
+        context['step5_failure_signal'], or any captured comment body."""
+        secret_token = "ghp_" + "B" * 36
+        step5_payload = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            f"  curl -H 'Authorization: token {secret_token}' https://api.example/test\n"
+            "  FAILED tests/test_main.py::test_x\n"
+            "```\n"
+        )
+        captured_step6_contexts: List[Dict] = []
+        captured_comment_bodies: List[str] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, step5_payload, 0.1, "model")
+            if step_num == 6.1:
+                captured_step6_contexts.append(dict(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        def fake_post_step_comment(*, body, **kwargs):
+            captured_comment_bodies.append(body)
+            return True
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+                 side_effect=fake_post_step_comment,
+             ):
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured_step6_contexts, "Step 6.1 must run after Step 5 logical failure"
+        ctx = captured_step6_contexts[0]
+        assert secret_token not in ctx.get("step5_output", ""), (
+            "Token leaked into context['step5_output'] — provider-success path "
+            "is not scrubbed."
+        )
+        assert secret_token not in ctx.get("step5_failure_signal", ""), (
+            "Token leaked into the normalised failure_signal block passed to Step 6."
+        )
+        joined_comments = "\n".join(captured_comment_bodies)
+        assert secret_token not in joined_comments, (
+            "Token leaked into a captured per-step GitHub comment body."
+        )
+
+
+class TestIssue1215Round5ExpansionItemsPerPathJustification:
+    """Round-5 Finding 3: each EXPANSION_ITEMS path must carry its OWN
+    causal justification. A justified marker citing one path no longer
+    whitelists unrelated paths listed by other markers."""
+
+    def test_parse_returns_only_justified_paths_in_second_slot(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/unjustified.py\n"
+            "EXPANSION_ITEMS: plugins/justified.py — broken by core.py change\n"
+        )
+        paths, justified_paths = _parse_expansion_items(text)
+        assert paths == {"plugins/unjustified.py", "plugins/justified.py"}
+        assert justified_paths == {"plugins/justified.py"}
+
+    def test_scope_guard_refuses_unjustified_sibling(self, tmp_path):
+        """A fixer modifying an unjustified EXPANSION_ITEMS path is refused
+        even when a sibling marker IS justified."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                # Two markers — only the second is justified. The fixer
+                # modifies the unjustified one, which must be refused.
+                return (
+                    True,
+                    "FILES_MODIFIED: plugins/unjustified.py\n"
+                    "EXPANSION_ITEMS: plugins/unjustified.py\n"
+                    "EXPANSION_ITEMS: plugins/justified.py — needed because "
+                    "the PR's core change altered the interface this plugin "
+                    "consumes.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/unjustified.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "scope guard" in (msg or "").lower()
+        assert "plugins/unjustified.py" in (msg or "")
+
+
+class TestIssue1215Round5ArtifactSecretBoundary:
+    """Round-5 Finding 4: scrub the FULL artifact body before truncation,
+    and scrub the artifact path itself before echoing it in the truncation
+    note."""
+
+    def test_token_straddling_byte_cutoff_is_scrubbed(self, tmp_path, monkeypatch):
+        """A ghp_ token straddling the byte cutoff must be scrubbed —
+        truncating first would leave a recognisable ``ghp_AB...`` fragment
+        that no longer matches the regex."""
+        from pdd.agentic_checkup_orchestrator import _read_failure_signal_artifact
+
+        # Tighten the cap so we don't have to write a 256KB file.
+        monkeypatch.setattr(
+            "pdd.agentic_checkup_orchestrator._ARTIFACT_OUTPUT_MAX_BYTES",
+            64,
+        )
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        # 60 bytes of padding then a 40-char ghp_ token. The cutoff at 64
+        # bytes falls inside the token, so naive truncate-then-scrub would
+        # leak a recognisable prefix.
+        padding = "a" * 60
+        token = "ghp_" + "C" * 36
+        artifact_full = wt / "log.txt"
+        artifact_full.write_text(padding + token + "\ntail line\n", encoding="utf-8")
+
+        result = _read_failure_signal_artifact("log.txt", wt)
+        assert result is not None
+        # The raw token, even any 8+ char prefix recognisable as a token,
+        # must not appear in the returned string.
+        assert token not in result, (
+            "Full token leaked; scrub did not run on the full body before truncation."
+        )
+        assert "ghp_" + "C" * 4 not in result, (
+            "Recognisable ghp_ fragment leaked across the truncation boundary."
+        )
+        # Truncation note must be emitted because the scrubbed body is
+        # still > 64 bytes.
+        assert "orchestrator-note" in result
+
+    def test_token_in_artifact_path_is_scrubbed(self, tmp_path, monkeypatch):
+        """A ghp_ token embedded in the artifact_path value must not be
+        echoed back unredacted in the truncation note."""
+        from pdd.agentic_checkup_orchestrator import _read_failure_signal_artifact
+
+        monkeypatch.setattr(
+            "pdd.agentic_checkup_orchestrator._ARTIFACT_OUTPUT_MAX_BYTES",
+            16,
+        )
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        # Create a directory whose name contains a token.
+        leaky_dir_name = "ghp_" + "D" * 36
+        leaky_dir = wt / leaky_dir_name
+        leaky_dir.mkdir()
+        artifact_full = leaky_dir / "log.txt"
+        # Body large enough to trigger truncation note.
+        artifact_full.write_text("x" * 200, encoding="utf-8")
+
+        rel_path = f"{leaky_dir_name}/log.txt"
+        result = _read_failure_signal_artifact(rel_path, wt)
+        assert result is not None
+        assert "orchestrator-note" in result, (
+            "Truncation note must fire — the artifact exceeds the byte cap."
+        )
+        # The token must not survive in the truncation note's path echo.
+        assert "ghp_" + "D" * 36 not in result, (
+            "Raw token in artifact_path leaked into the truncation note."
+        )
