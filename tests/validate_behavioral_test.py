@@ -74,6 +74,45 @@ def _get_call_names(node: ast.AST) -> set[str]:
     return names
 
 
+def _has_pytest_fixture_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return whether a function is explicitly marked as a pytest fixture."""
+    for decorator in node.decorator_list:
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Name) and target.id == "fixture":
+            return True
+        if isinstance(target, ast.Attribute) and target.attr == "fixture":
+            return True
+    return False
+
+
+def _fixture_aliases_for_public_functions(
+    tree: ast.AST,
+    public_funcs: set[str],
+) -> set[str]:
+    """Find fixtures that return a callable public API from the source.
+
+    Generated behavioral tests commonly import the source lazily inside a
+    fixture and return ``module.public_function`` so capture/patch setup is in
+    place before invocation. A test call to that fixture parameter is still a
+    real behavioral invocation.
+    """
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not _has_pytest_fixture_decorator(node):
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Return):
+                continue
+            value = child.value
+            if isinstance(value, ast.Name) and value.id in public_funcs:
+                aliases.add(node.name)
+            elif isinstance(value, ast.Attribute) and value.attr in public_funcs:
+                aliases.add(node.name)
+    return aliases
+
+
 def check_python_ast(test_path: str, source_path: str) -> list[str]:
     """AST-level analysis of a Python test file.
 
@@ -138,6 +177,7 @@ def check_python_ast(test_path: str, source_path: str) -> list[str]:
         # Exclude dunder methods and private helpers — focus on public API
         public_funcs = {f for f in source_funcs if not f.startswith("_")}
         if public_funcs:
+            callable_aliases = _fixture_aliases_for_public_functions(tree, public_funcs)
             # Collect all function calls made inside test functions
             test_calls: set[str] = set()
             for node in ast.walk(tree):
@@ -146,7 +186,7 @@ def check_python_ast(test_path: str, source_path: str) -> list[str]:
                         test_calls.update(_get_call_names(node))
 
             # Check if ANY public function from the buggy source is called
-            called_source_funcs = public_funcs & test_calls
+            called_source_funcs = (public_funcs | callable_aliases) & test_calls
             if not called_source_funcs:
                 issues.append(
                     f"No test function calls any public function from the source "
