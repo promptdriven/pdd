@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+_ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
+
 
 def _derive_git_aligned_version() -> str | None:
     """Return tag-aligned development version for the current git checkout."""
@@ -44,7 +46,7 @@ def _derive_git_aligned_version() -> str | None:
 def _load_package_version() -> str:
     """Return a version aligned with current tag strategy."""
     try:
-        dist_version = _metadata_version("pdd-cli")
+        dist_version = _ORIGINAL_DISTRIBUTION("pdd-cli").version
     except PackageNotFoundError:
         dist_version = "0.0.0+unknown"
 
@@ -69,26 +71,10 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-_ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
-
-
 def _distribution_with_project_version(name: str):
     """Expose pdd-cli metadata version consistent with ``__version__``."""
     if name == "pdd-cli":
-        return SimpleNamespace(version=__version__)
-    return _ORIGINAL_DISTRIBUTION(name)
-
-
-_importlib_metadata.distribution = _distribution_with_project_version
-
-
-_ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
-
-
-def _distribution_with_project_version(name: str):
-    """Expose pdd-cli metadata version consistent with ``__version__``."""
-    if name == "pdd-cli":
-        return SimpleNamespace(version=__version__)
+        return SimpleNamespace(version=get_version())
     return _ORIGINAL_DISTRIBUTION(name)
 
 

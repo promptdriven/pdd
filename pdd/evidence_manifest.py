@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
-from . import __version__
+from . import get_version
 from .coverage_contracts import build_coverage
 from .operation_log import infer_module_identity
 
@@ -224,7 +224,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         "run": {
             "id": run_id,
             "command": command,
-            "pdd_version": __version__,
+            "pdd_version": get_version(),
             "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
         },
         "prompt": prompt,

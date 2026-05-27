@@ -20,6 +20,7 @@ def _schema() -> dict:
 
 
 def test_writes_schema_valid_run_and_latest_manifest(tmp_path: Path) -> None:
+    """Verify that a valid evidence manifest is written according to the schema."""
     prompt = tmp_path / "prompts" / "refund_python.prompt"
     output = tmp_path / "src" / "refund.py"
     include = tmp_path / "context" / "policy.prompt"
@@ -55,6 +56,7 @@ def test_writes_schema_valid_run_and_latest_manifest(tmp_path: Path) -> None:
 
 
 def test_output_hash_changes_with_output_content(tmp_path: Path) -> None:
+    """Assert output hashes change dynamically when the file contents are updated."""
     prompt = tmp_path / "prompts" / "receipt_python.prompt"
     output = tmp_path / "receipt.py"
     prompt.parent.mkdir()
@@ -81,6 +83,7 @@ def test_output_hash_changes_with_output_content(tmp_path: Path) -> None:
 
 
 def test_dynamic_prompt_records_expansion_as_unavailable(tmp_path: Path) -> None:
+    """Check that dynamic prompts with non-deterministic tags are flagged correctly."""
     prompt = tmp_path / "prompts" / "dynamic_python.prompt"
     prompt.parent.mkdir()
     prompt.write_text("<shell>date</shell>\n", encoding="utf-8")
