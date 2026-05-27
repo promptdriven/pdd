@@ -322,6 +322,46 @@ def test_e2e_fix_basename_flows_into_subproject_fingerprint_path(
     )
 
 
+def test_e2e_fingerprint_anchors_at_subproject_when_pddrc_lives_below_cwd(
+    tmp_path, monkeypatch
+):
+    """Reviewer scenario (round 2): the subproject .pddrc lives BELOW the
+    run CWD, e.g. repo_root/extensions/github_pdd_app/.pddrc.
+
+    Upward-from-CWD detection is useless here because the .pddrc is in a
+    sibling/child path. The metadata helpers must instead seed detection
+    from the prompt/code/test paths the caller already has.
+    """
+    repo_root = tmp_path / "repo_root"
+    repo_root.mkdir()
+    subproject = repo_root / "extensions" / "github_pdd_app"
+    subproject.mkdir(parents=True)
+    pddrc = subproject / ".pddrc"
+    pddrc.write_text(_PDDRC_NESTED_APP, encoding="utf-8")
+    prompt = subproject / "prompts" / "src" / "routers" / "webhook_handlers_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("p", encoding="utf-8")
+
+    monkeypatch.chdir(repo_root)
+
+    # No project_root passed, but paths hint includes the prompt — the
+    # detector should walk up from the prompt to find the subproject .pddrc.
+    fp_path = get_fingerprint_path(
+        "webhook_handlers", "python", paths={"prompt": prompt}
+    )
+    expected = subproject / ".pdd" / "meta"
+    assert str(fp_path).startswith(str(expected)), (
+        f"Fingerprint {fp_path!r} must anchor at the subproject meta dir "
+        f"{expected!r}; without paths-aware detection it would land under "
+        f"{repo_root!r}/.pdd/meta"
+    )
+    # And no orphan meta dir at the parent repo root.
+    assert not (repo_root / ".pdd" / "meta").exists(), (
+        "Parent repo root must not get an orphan .pdd/meta when the "
+        "subproject .pddrc is reachable from the prompt path"
+    )
+
+
 def test_e2e_fingerprint_auto_detects_subproject_root_from_parent_cwd(
     tmp_path, monkeypatch
 ):

@@ -54,24 +54,23 @@ def get_pdd_dir():
     """Get the .pdd directory relative to current working directory."""
     return Path.cwd() / '.pdd'
 
-def get_meta_dir(project_root=None):
+def get_meta_dir(project_root=None, paths=None):
     """Get the metadata directory.
 
     Resolution order (Issue #1211):
       1. Explicit `project_root` argument
-      2. Nearest .pddrc walking up from CWD (auto-detected subproject root)
-      3. Run CWD (legacy behavior)
+      2. .pddrc reachable upward from any path in `paths`
+         (handles a subproject .pddrc that lives BELOW run CWD)
+      3. .pddrc reachable upward from CWD
+      4. Run CWD (legacy behavior)
     """
     if project_root is not None:
         return Path(project_root) / '.pdd' / 'meta'
     try:
-        from .operation_log import _detect_project_root
+        from .operation_log import _resolve_meta_dir
     except ImportError:  # direct (non-package) import path
-        from operation_log import _detect_project_root  # type: ignore
-    detected = _detect_project_root()
-    if detected is not None and detected != Path.cwd().resolve():
-        return detected / '.pdd' / 'meta'
-    return get_pdd_dir() / 'meta'
+        from operation_log import _resolve_meta_dir  # type: ignore
+    return _resolve_meta_dir(project_root=None, paths=paths)
 
 def get_locks_dir():
     """Get the locks directory."""
@@ -1514,9 +1513,18 @@ def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str
     return hasher.hexdigest()
 
 
-def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
-    """Reads and validates the JSON fingerprint file."""
-    meta_dir = get_meta_dir()
+def read_fingerprint(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> Optional[Fingerprint]:
+    """Reads and validates the JSON fingerprint file.
+
+    `paths` (Issue #1211): when provided, the meta directory is resolved
+    via upward .pddrc detection from those file paths so subprojects whose
+    .pddrc lives BELOW run CWD are honored.
+    """
+    meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     

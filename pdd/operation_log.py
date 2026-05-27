@@ -36,25 +36,71 @@ def _detect_project_root(start: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
-def _resolve_meta_dir(project_root: Optional[Path] = None) -> Path:
-    """Return the .pdd/meta directory, honoring explicit project_root,
-    then a discovered subproject .pddrc, then falling back to run CWD."""
+def _detect_project_root_from_paths(
+    paths: Optional[Dict[str, Any]],
+) -> Optional[Path]:
+    """Find a project root by walking up from each candidate file path.
+
+    `paths` is the dict that flows through save_fingerprint / sync (keys
+    like 'prompt', 'code', 'example', 'test'). When the .pddrc lives
+    *below* the run CWD (a subproject), upward-from-CWD detection fails;
+    walking up from a known file path inside the subproject succeeds.
+    Returns the first reachable .pddrc directory.
+    """
+    if not paths:
+        return None
+    for candidate in paths.values():
+        if not candidate:
+            continue
+        try:
+            hint = Path(candidate)
+        except TypeError:
+            continue
+        if not hint.exists():
+            continue
+        detected = _detect_project_root(hint)
+        if detected is not None:
+            return detected
+    return None
+
+
+def _resolve_meta_dir(
+    project_root: Optional[Path] = None,
+    paths: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Return the .pdd/meta directory.
+
+    Resolution order:
+      1. Explicit `project_root` argument
+      2. .pddrc reachable upward from any path in `paths`
+         (handles the case where the subproject lives BELOW run CWD)
+      3. .pddrc reachable upward from CWD
+      4. Run CWD (legacy)
+    """
     if project_root is not None:
         return Path(project_root) / PDD_DIR / "meta"
-    detected = _detect_project_root()
-    if detected is not None and detected != Path.cwd().resolve():
+    detected = _detect_project_root_from_paths(paths)
+    if detected is None:
+        detected = _detect_project_root()
+        if detected is not None and detected == Path.cwd().resolve():
+            detected = None
+    if detected is not None:
         return detected / PDD_DIR / "meta"
     return Path(META_DIR)
 
 
-def ensure_meta_dir(project_root: Optional[Path] = None) -> None:
+def ensure_meta_dir(
+    project_root: Optional[Path] = None,
+    paths: Optional[Dict[str, Any]] = None,
+) -> None:
     """Ensure the .pdd/meta directory exists.
 
-    When project_root is supplied, creates .pdd/meta under that root instead
-    of relative to the run CWD. When unset, auto-detects the subproject root
-    by walking up to the nearest .pddrc (Issue #1211).
+    When project_root is supplied, creates .pdd/meta under that root.
+    Otherwise auto-detects via `_resolve_meta_dir` (Issue #1211): tries
+    upward from each path in `paths` first (so a subproject .pddrc BELOW
+    run CWD is found), then walks up from CWD, then falls back to CWD.
     """
-    os.makedirs(_resolve_meta_dir(project_root), exist_ok=True)
+    os.makedirs(_resolve_meta_dir(project_root, paths=paths), exist_ok=True)
 
 
 def _safe_basename(basename: str) -> str:
@@ -66,27 +112,50 @@ def _safe_basename(basename: str) -> str:
     return basename.replace('/', '_')
 
 
-def get_log_path(basename: str, language: str) -> Path:
-    """Get the path to the sync log for a specific module."""
-    ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_sync.log"
+def get_log_path(
+    basename: str,
+    language: str,
+    project_root: Optional[Path] = None,
+    paths: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Get the path to the sync log for a specific module.
+
+    Honors `project_root` if given; otherwise resolves the meta dir via
+    upward .pddrc detection seeded by `paths` (Issue #1211).
+    """
+    ensure_meta_dir(project_root=project_root, paths=paths)
+    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language}_sync.log"
 
 
-def get_fingerprint_path(basename: str, language: str, project_root: Optional[Path] = None) -> Path:
+def get_fingerprint_path(
+    basename: str,
+    language: str,
+    project_root: Optional[Path] = None,
+    paths: Optional[Dict[str, Any]] = None,
+) -> Path:
     """Get the path to the fingerprint JSON file for a specific module.
 
-    When project_root is supplied, returns a path under that root. When
-    omitted, auto-detects the subproject root via the nearest .pddrc; falls
-    back to the run CWD when no .pddrc is reachable.
+    When `project_root` is supplied, returns a path under that root. When
+    omitted, auto-detects via `_resolve_meta_dir` (Issue #1211): walks up
+    from any file path in `paths` first (so a subproject .pddrc BELOW
+    run CWD is found), then up from CWD, then falls back to CWD.
     """
-    ensure_meta_dir(project_root=project_root)
-    return _resolve_meta_dir(project_root) / f"{_safe_basename(basename)}_{language}.json"
+    ensure_meta_dir(project_root=project_root, paths=paths)
+    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language}.json"
 
 
-def get_run_report_path(basename: str, language: str) -> Path:
-    """Get the path to the run report file for a specific module."""
-    ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_run.json"
+def get_run_report_path(
+    basename: str,
+    language: str,
+    project_root: Optional[Path] = None,
+    paths: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Get the path to the run report file for a specific module.
+
+    Same project-root resolution as get_fingerprint_path (Issue #1211).
+    """
+    ensure_meta_dir(project_root=project_root, paths=paths)
+    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language}_run.json"
 
 
 def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]:
@@ -297,11 +366,9 @@ def save_fingerprint(
     from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
     from . import __version__
 
-    path = get_fingerprint_path(basename, language)
-
-    # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language)
-    stored_deps = prev_fp.include_deps if prev_fp else None
+    # Issue #1211: resolve `paths` first so the project-root detector can use
+    # them. Without this, `get_fingerprint_path` and `read_fingerprint` below
+    # only see CWD and miss a subproject .pddrc that lives BELOW run CWD.
     if not paths:
         from .sync_determine_operation import get_pdd_file_paths
         try:
@@ -309,6 +376,12 @@ def save_fingerprint(
         except (ImportError, OSError, ValueError) as e:
             logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
             paths = {}
+
+    path = get_fingerprint_path(basename, language, paths=paths)
+
+    # Issue #522: Pass stored include deps for prompt hash calculation
+    prev_fp = read_fingerprint(basename, language, paths=paths)
+    stored_deps = prev_fp.include_deps if prev_fp else None
     current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
 
     # Create Fingerprint with same format as _save_fingerprint_atomic
