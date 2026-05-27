@@ -3246,6 +3246,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
 - **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
 - **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").
+- **`PDD_PROVIDER`**: Pins local-mode model selection to a single provider (e.g., `anthropic`, `vertex_ai`, `azure_ai`, `gemini`). Uses the same resolution rules as the `--provider` flag — `--provider` on the CLI takes precedence, then this env var. Has no effect in cloud mode. No default.
 
 #### Agentic Workflow Variables
 
