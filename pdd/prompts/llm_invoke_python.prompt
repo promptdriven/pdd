@@ -108,6 +108,7 @@
 
 % Model Selection:
     - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).
+    - Default-first mode: if `$PDD_MODEL_DEFAULT_FIRST` is one of `1`, `true`, `yes`, or `on`, `_select_model_candidates` must try the resolved `$PDD_MODEL_DEFAULT` row first, then keep the normal fallback candidates after it. Strict default mode: if `$PDD_MODEL_DEFAULT_STRICT` is truthy, return only the resolved default row. If either mode is enabled and the base model cannot be resolved from the CSV, raise `ValueError`. This is for non-interactive Cloud Run executors that pin a known-good ADC-backed model but may still need fallback providers after the default fails.
     - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override, optional 'base_url' for custom API endpoints.
     - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
     - strength < 0.5: Interpolate by cost from base down to cheapest.
@@ -123,6 +124,7 @@
     - Empty: device flow or local model — no key needed, skip check. Exception: `github_copilot/` models in `PDD_FORCE` mode must check for an existing OAuth token at the path resolved from `GITHUB_COPILOT_TOKEN_DIR` (default `~/.config/litellm/github_copilot`) / `GITHUB_COPILOT_API_KEY_FILE` (default `api-key.json`). If the token file does not exist, skip the model to prevent litellm from hanging on an interactive device flow.
     - If missing and `PDD_FORCE` env var is set, skip model (non-interactive mode).
     - For single-var: prompt user via `input()`, sanitize key, set env var, save to .env file.
+    - For single-var providers, also accept an llm_invoke-only alias named `PDD_LLM_INVOKE_<ENV_VAR>` (for example `PDD_LLM_INVOKE_ANTHROPIC_API_KEY`). Prefer the normal env var when both exist. When the alias exists, pass its value as `api_key=` to LiteLLM without exporting the normal provider env var; this lets host processes provide direct fallback keys without letting agent CLIs auto-detect and shadow their selected auth mode.
     - .env save: Replace key in-place (no comment + append). Remove old commented versions of the same key. Preserve all other content.
     - Mark key as newly acquired for retry logic on auth errors.
 

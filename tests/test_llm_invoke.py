@@ -4818,6 +4818,138 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
 
+    def test_default_first_model_keeps_high_strength_on_configured_base(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Cloud executor regression: a high-strength sync run pinned to a
+        Vertex/ADC default must try that default before direct Anthropic or
+        Fireworks fallback rows."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Google,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,"
+            "VERTEX_CREDENTIALS,True,effort,1000000,8192,0\n"
+            "Anthropic,claude-sonnet-4-6,3.0,15.0,1525,"
+            "ANTHROPIC_API_KEY,True,budget,200000,8192,16000\n"
+            "Google,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1495,"
+            "VERTEX_CREDENTIALS,True,effort,1000000,8192,0\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,"
+            "ANTHROPIC_API_KEY,True,budget,200000,8192,16000\n"
+            "Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,"
+            "0.95,4.0,1529,FIREWORKS_API_KEY,False,none,200000,8192,0\n"
+        )
+        csv_path = tmp_path / "cloud_models.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        non_strict = llm_mod._select_model_candidates(
+            0.85, "vertex_ai/gemini-3.5-flash", df
+        )
+        assert non_strict[0]["api_key"] in {"ANTHROPIC_API_KEY", "FIREWORKS_API_KEY"}
+
+        monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
+        default_first = llm_mod._select_model_candidates(
+            0.85, "vertex_ai/gemini-3.5-flash", df
+        )
+        assert default_first[0]["model"] == "vertex_ai/gemini-3.5-flash"
+        assert default_first[0]["api_key"] == "VERTEX_CREDENTIALS"
+        assert any(
+            candidate["api_key"] in {"ANTHROPIC_API_KEY", "FIREWORKS_API_KEY"}
+            for candidate in default_first[1:]
+        )
+
+    def test_default_first_model_requires_configured_base(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
+        with pytest.raises(ValueError, match="default-first"):
+            llm_mod._select_model_candidates(0.5, "missing-base-model", df)
+
+    def test_strict_default_model_disables_fallbacks(self, llm_mod, tmp_path, monkeypatch):
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_MODEL_DEFAULT_STRICT", "1")
+        candidates = llm_mod._select_model_candidates(1.0, "gpt-4", df)
+        assert [candidate["model"] for candidate in candidates] == ["gpt-4"]
+
+    def test_llm_invoke_alias_satisfies_single_provider_key(
+        self, llm_mod, monkeypatch
+    ):
+        """A direct fallback key can be namespaced for llm_invoke without
+        exposing the normal env var to agent CLIs."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", "sk-ant-alias-test")
+        acquired = {}
+        assert llm_mod._ensure_api_key(
+            {"model": "claude-sonnet-4-6", "api_key": "ANTHROPIC_API_KEY"},
+            acquired,
+            verbose=False,
+        )
+        assert acquired["ANTHROPIC_API_KEY"] is False
+
+    def test_llm_invoke_alias_does_not_satisfy_multi_provider_key(
+        self, llm_mod, monkeypatch
+    ):
+        """Pipe-delimited providers must use normal env vars because LiteLLM
+        reads multi-credential auth directly from os.environ."""
+        env_vars = [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+        ]
+        for env_var in env_vars:
+            monkeypatch.delenv(env_var, raising=False)
+            monkeypatch.setenv(f"PDD_LLM_INVOKE_{env_var}", f"alias-{env_var}")
+
+        acquired = {}
+        assert not llm_mod._ensure_api_key(
+            {
+                "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+                "api_key": "|".join(env_vars),
+            },
+            acquired,
+            verbose=False,
+        )
+        assert "|".join(env_vars) not in acquired
+
+    def test_llm_invoke_alias_is_passed_to_litellm(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Anthropic,claude-sonnet-4-6,3.0,15.0,1525,"
+            "ANTHROPIC_API_KEY,True,budget,200000,8192,16000\n"
+        )
+        csv_path = tmp_path / "anthropic_models.csv"
+        csv_path.write_text(content)
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", "sk-ant-alias-test")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-sonnet-4-6")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return create_mock_litellm_response("ok", model_name="claude-sonnet-4-6")
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            result = llm_mod.llm_invoke(
+                prompt="Say {word}",
+                input_json={"word": "ok"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert result["result"] == "ok"
+        assert captured_kwargs["api_key"] == "sk-ant-alias-test"
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""
