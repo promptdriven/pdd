@@ -159,9 +159,19 @@ def mock_env():
     # don't depend on the developer's `~/.local/share/opencode/auth.json` or
     # `~/.config/opencode/opencode.json`. Environment-variable signals (which
     # tests do set explicitly) are still honored by `_has_opencode_credentials`.
+    # PR #1153 round-3: ``get_available_agents`` now pairs the resolved
+    # Google CLI binary (agy / gemini) with the matching OAuth file via the
+    # per-binary predicates rather than the combined helper. Mock all three
+    # so a developer's real ``~/.gemini/oauth_creds.json`` does not leak
+    # availability into tests that explicitly assume "no OAuth".
     with (
         patch.dict(os.environ, {}, clear=True),
         patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=False),
+        patch("pdd.agentic_common._has_agy_oauth_credentials", return_value=False),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=False,
+        ),
         patch("pdd.agentic_common._opencode_auth_file_has_credentials", return_value=False),
         patch("pdd.agentic_common._iter_opencode_config_texts", return_value=[]),
     ):
@@ -220,7 +230,9 @@ def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock
     """Test when all agents are available."""
     mock_shutil_which.return_value = "/usr/bin/fake"
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-    os.environ["GEMINI_API_KEY"] = "AIza..."
+    # GOOGLE_API_KEY is accepted by both agy and legacy gemini, so google is
+    # available regardless of which binary auto-mode selects.
+    os.environ["GOOGLE_API_KEY"] = "AIza..."
     os.environ["OPENAI_API_KEY"] = "sk-..."
 
     agents = get_available_agents()
@@ -549,7 +561,9 @@ def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_
     """Test fallback from Anthropic (failure) to Google (success)."""
     # Setup availability for both
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["GEMINI_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini; safe to use here
+    # regardless of which Google binary auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     
     # Setup subprocess responses
     # First call (Anthropic) fails
@@ -653,7 +667,7 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
     Specific test for Gemini cached token logic.
     Flash Pricing: Input $0.35, Cached Multiplier 0.5 (so $0.175 effective).
     """
-    mock_shutil_which.return_value = "/bin/gemini"
+    mock_shutil_which.side_effect = lambda name: "/bin/gemini" if name == "gemini" else None
     os.environ["GEMINI_API_KEY"] = "key"
     # Force only google to be available
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["google"]):
@@ -927,9 +941,10 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     This test verifies that such false positives are rejected and that the
     system falls back to a provider that performs real work.
     """
-    mock_shutil_which.return_value = "/bin/exe"
+    mock_shutil_which.side_effect = lambda name: "/bin/exe" if name in ("claude", "gemini") else None
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
+    os.environ["PDD_GOOGLE_CLI"] = "gemini"
 
     # First provider (Anthropic): Returns "success" with $0.00 cost and minimal output
     # This is a false positive - no work was actually done
@@ -951,15 +966,11 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     google_real_success.stderr = ""
 
     def run_side_effect(cmd, **kwargs):
-        # Check if CLI path contains the provider name (e.g., /bin/exe contains "exe")
-        # Since _find_cli_binary is mocked to return "/bin/exe", we need a different approach
-        # Check the command path or any element for provider identification
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        if "anthropic" in str(kwargs.get('env', {}).get('_provider', '')) or cmd == ["/bin/exe", "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]:
+        if "--dangerously-skip-permissions" in cmd:
             # Anthropic command pattern
-            if "--dangerously-skip-permissions" in cmd:
-                return anthropic_false_positive
-        if "--yolo" in cmd:  # Gemini command pattern
+            return anthropic_false_positive
+        if "--yolo" in cmd or "--print" in cmd:
+            # Legacy Gemini CLI (--yolo) or Antigravity CLI (--print)
             return google_real_success
         return MagicMock(returncode=1)
 
@@ -1015,7 +1026,17 @@ def test_get_available_agents_google_gemini_cli_oauth(
     """Gemini CLI stored OAuth credentials are sufficient for Google provider."""
     mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
 
-    with patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True):
+    # PR #1153 round-3: availability now pairs the resolved binary with the
+    # matching per-binary OAuth predicate. The resolved binary here is the
+    # legacy ``gemini``, so the legacy OAuth predicate is what gates the
+    # signal; patch both helpers to keep the combined one consistent.
+    with (
+        patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=True,
+        ),
+    ):
         agents = get_available_agents()
 
     assert "google" in agents
@@ -1074,8 +1095,10 @@ def test_get_available_agents_google_vertex_ai_adc_auth(mock_shutil_which, mock_
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
-    mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini binaries, ensuring
+    # google is available regardless of which one auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
 
     agents = get_available_agents()
@@ -1354,8 +1377,9 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     Should trigger fallback.
     """
     # Setup availability for Anthropic and Google
-    mock_shutil_which.return_value = "/bin/cmd"
+    mock_shutil_which.side_effect = lambda name: "/bin/cmd" if name in ("claude", "gemini") else None
     mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["PDD_GOOGLE_CLI"] = "gemini"
     
     # 1. Anthropic: Success but suspicious (0 cost, short output)
     suspicious_response = MagicMock()
@@ -1400,7 +1424,9 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     _, kwargs = mock_subprocess_run.call_args
     stdin_content = kwargs.get("input", "")
     assert "Instruction" in stdin_content
-    assert ".agentic_prompt_" in stdin_content  # Self-referential instruction is in content
+    assert "You have full file access" in stdin_content
+    assert "Read the file" not in stdin_content
+    assert ".agentic_prompt_" not in stdin_content
 
     # Verify no temp files remain in tmp_path
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
@@ -1827,11 +1853,25 @@ class TestCliDiscoveryBug:
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
         monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+        # PR #1153 round-3: `get_available_agents` now pairs the resolved
+        # binary with the matching OAuth predicate. This test installs only
+        # the legacy `gemini` binary, so the legacy OAuth predicate is the
+        # one that gates availability; the combined helper is patched too
+        # for backward-compat with any caller that still reads it.
         monkeypatch.setattr(
             "pdd.agentic_common._has_gemini_oauth_credentials",
             lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_agy_oauth_credentials",
+            lambda: False,
         )
 
         npm_bin = tmp_path / ".npm-global" / "bin"
@@ -2976,6 +3016,11 @@ class TestFindStateCommentPagination:
                 f"Without it, GitHub API only returns first 30 comments. "
                 f"Command was: {args}"
             )
+            assert "--slurp" in args, (
+                f"gh api command missing --slurp flag. "
+                f"Without it, paginated REST pages may be emitted as multiple JSON documents. "
+                f"Command was: {args}"
+            )
 
     # ---- Test 2: Behavioral — state comment beyond 30 is found ----
 
@@ -3003,10 +3048,34 @@ class TestFindStateCommentPagination:
             assert comment_id == 1035  # 1000 + 35
             assert state["last_completed_step"] == 35
 
+    def test_find_state_comment_flattens_slurped_pages(self, tmp_path):
+        """``gh api --paginate --slurp`` wraps REST pages in an outer list."""
+        mock_comments = _make_mock_comments(42, state_positions=[35])
+        pages = [mock_comments[:30], mock_comments[30:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=json.dumps(pages),
+            )
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+            assert result is not None
+            comment_id, state = result
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
+
     # ---- Test 3: Returns first matching state comment ----
 
-    def test_find_state_comment_returns_first_match(self, tmp_path):
-        """When multiple state comments exist, returns the first one found."""
+    def test_find_state_comment_returns_highest_id_match(self, tmp_path):
+        """When multiple state comments exist, returns the one with the highest id.
+
+        GitHub assigns monotonically increasing comment ids. Under a duplicate-
+        marker hazard (two workers both POST a state comment, or an old run's
+        comment was never cleared) the highest id corresponds to the most recently
+        written state, which is what a normal resume should load.
+        """
         mock_comments = _make_mock_comments(42, state_positions=[10, 35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
@@ -3019,9 +3088,9 @@ class TestFindStateCommentPagination:
 
             assert result is not None
             comment_id, state = result
-            # Should return the first match (position 10), not the later one
-            assert comment_id == 1010
-            assert state["last_completed_step"] == 10
+            # Should return the highest-id match (position 35 → id 1035), not first
+            assert comment_id == 1035
+            assert state["last_completed_step"] == 35
 
     # ---- Test 4: No state comment exists ----
 
@@ -7492,3 +7561,210 @@ class TestPostStepCommentOnce:
             )
             assert result is False
             assert posted == set()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate state-marker hazard — issue #1149 round 2
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    _find_all_state_comments,
+    github_clear_state,
+    github_save_state,
+)
+
+
+class TestDuplicateStateCommentHandling:
+    """Verify that the dedupe path closes the race window where two
+    valid state comments coexist (e.g. a concurrent worker re-created
+    one in the gap between a clean-restart pre-clear and our first
+    save). The legacy ``_find_state_comment`` returns only the first
+    match; a future normal resume picking it can silently load stale
+    step outputs from the older marker."""
+
+    def test_find_all_returns_every_matching_marker_id(self, tmp_path):
+        """``_find_all_state_comments`` MUST return every comment id
+        whose body carries the workflow's state marker, not just the
+        first. This is what makes the dedupe sweep / clear-all possible.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(mock_comments))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007], (
+            f"Expected every matching id [1002, 1005, 1007]; got {ids!r}"
+        )
+
+    def test_find_all_flattens_slurped_pages(self, tmp_path):
+        """The duplicate-marker sweep must see matches on every slurped page."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+        pages = [mock_comments[:4], mock_comments[4:]]
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(pages))
+            ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
+
+        assert ids == [1002, 1005, 1007]
+
+    def test_github_clear_state_deletes_all_matching_markers(self, tmp_path):
+        """``github_clear_state`` must DELETE every comment carrying
+        the marker — leaving any one behind reintroduces the silent
+        stale-state hazard."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        deletes: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0)
+            if cmd[:2] == ["gh", "api"] and "-X" in cmd and cmd[cmd.index("-X") + 1] == "DELETE":
+                deletes.append(cmd[2])  # capture the issues/comments/<id> path
+                return m
+            # The LIST call (no -X DELETE) — return the mock comments
+            m.stdout = json.dumps(mock_comments)
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            ok = github_clear_state("owner", "repo", 481, "bug", tmp_path)
+
+        assert ok is True
+        deleted_ids = sorted(
+            int(p.rsplit("/", 1)[-1]) for p in deletes
+        )
+        assert deleted_ids == [1002, 1005, 1007], (
+            f"Expected DELETE for all three marker comments; "
+            f"saw {deleted_ids!r} from {deletes!r}"
+        )
+
+    def test_github_save_state_dedupe_adopts_newest_and_deletes_rest(self, tmp_path):
+        """When ``dedupe=True`` and ``comment_id is None`` and multiple
+        existing state markers are found, ``github_save_state`` must
+        (1) PATCH the highest-id marker in place with the new state and
+        (2) DELETE the older markers — converging to exactly one state
+        comment regardless of prior races."""
+        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
+
+        actions: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            # LIST call: no -X PATCH/DELETE/POST → return comments
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            # Capture the comment-id from the URL when present
+            target = next((p for p in cmd if "/comments/" in p), None)
+            cid = int(target.rsplit("/", 1)[-1]) if target else None
+            actions.append((verb, cid))
+            if verb == "POST":
+                # POST shouldn't happen in this scenario — flag it loudly
+                m.stdout = json.dumps({"id": 9999})
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 7, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # Adopted the highest-id existing marker (1007).
+        assert returned_id == 1007, (
+            f"Expected dedupe to adopt the most-recent marker (1007); got {returned_id!r}"
+        )
+        verbs = [v for v, _ in actions]
+        assert "POST" not in verbs, (
+            f"Expected dedupe to adopt-and-PATCH, not POST a new marker; saw verbs={verbs!r}"
+        )
+        patched = [cid for v, cid in actions if v == "PATCH"]
+        deleted = [cid for v, cid in actions if v == "DELETE"]
+        assert patched == [1007], f"PATCH should hit 1007 only; got {patched!r}"
+        assert sorted(deleted) == [1002, 1005], (
+            f"DELETE should hit the two older markers (1002, 1005); got {sorted(deleted)!r}"
+        )
+
+    def test_github_save_state_dedupe_false_skips_find_all(self, tmp_path):
+        """``dedupe=False`` (the default) MUST preserve the original
+        behavior: blind POST with no list-comments side effect. We pay
+        the find-all cost only when the caller opts in."""
+        listed: list = []
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout=json.dumps({"id": 5000}))
+            # The LIST call has no -X (it's a GET to /comments)
+            if "-X" not in cmd and "/issues/" in " ".join(cmd) and "/comments" in " ".join(cmd):
+                listed.append(cmd)
+                m.stdout = json.dumps([])
+            return m
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect):
+            github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 1, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=False,
+            )
+
+        assert listed == [], (
+            f"dedupe=False should NOT list comments; saw {len(listed)} list calls"
+        )
+
+    def test_github_save_state_dedupe_logs_warning_on_delete_failure(self, tmp_path):
+        """When ``dedupe=True`` and stale comments cannot be deleted, the
+        function must log a warning to stderr and still return ``keep_id``.
+
+        The PATCH to the highest-id comment succeeded, so the new state is
+        durably written. The warning lets operators diagnose residual stale
+        markers without treating a cleanup hiccup as a save failure.
+        """
+        mock_comments = _make_mock_comments(8, state_positions=[3, 6])
+
+        def side_effect(args, **kwargs):
+            cmd = list(args)
+            m = MagicMock(returncode=0, stdout="{}")
+            if "-X" not in cmd:
+                m.stdout = json.dumps(mock_comments)
+                return m
+            verb = cmd[cmd.index("-X") + 1]
+            if verb == "DELETE":
+                m.returncode = 1  # Simulate delete failure
+            return m
+
+        import io
+        stderr_capture = io.StringIO()
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), \
+             patch("subprocess.run", side_effect=side_effect), \
+             patch("sys.stderr", stderr_capture):
+            returned_id = github_save_state(
+                "owner", "repo", 481, "bug",
+                {"last_completed_step": 6, "step_outputs": {}},
+                tmp_path,
+                comment_id=None,
+                dedupe=True,
+            )
+
+        # PATCH succeeded → keep_id returned even though delete failed
+        assert returned_id == 1006, (
+            f"Expected keep_id=1006 despite delete failure; got {returned_id!r}"
+        )
+        warning_text = stderr_capture.getvalue()
+        assert "could not be deleted" in warning_text, (
+            f"Expected delete-failure warning on stderr; got: {warning_text!r}"
+        )
+        assert "1003" in warning_text, (
+            f"Expected stale id 1003 named in warning; got: {warning_text!r}"
+        )

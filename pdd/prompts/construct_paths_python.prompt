@@ -132,6 +132,10 @@
    - For fix/crash/verify commands, resolve per-output input_file_dirs mapping output keys to
      their corresponding input file directories (e.g., output_code→code_file, output_test→unit_test_file).
    - Handle --format option for example command: 'md' forces .md extension, 'code' keeps language extension.
+     Issue #1205: the example command's own wrapper (`context_generator_main`) honors any user-supplied
+     suffix on `--output` verbatim when `--format code` is in effect; `construct_paths` itself does not
+     rewrite an explicit user-supplied extension. `BUILTIN_EXT_MAP` includes the canonical mapping
+     `'markdown': '.md'` (not `.markdown`) so default-path generation also lands on `.md`.
 
 8. Overwrite Confirmation: If output files exist and not force:
    - Use confirm_callback if provided, else click.confirm.

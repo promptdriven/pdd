@@ -127,6 +127,24 @@ def test_happy_path_execution(mock_dependencies: Tuple[Any, ...], tmp_path: Path
     assert call_kwargs["issue_number"] == 1
     assert "Title: Bug in calculation" in call_kwargs["issue_content"]
     assert "--- Comment by helper ---" in call_kwargs["issue_content"]
+    assert call_kwargs["clean_restart"] is False
+
+
+def test_clean_restart_forwarded_to_orchestrator(mock_dependencies: Tuple[Any, ...]) -> None:
+    """run_agentic_bug should pass clean_restart through to the orchestrator."""
+    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
+    mock_subprocess.return_value = MagicMock(
+        stdout='{"title": "T", "body": "B", "user": {"login": "u"}}',
+        returncode=0,
+    )
+
+    success, _, _, _, _ = run_agentic_bug(
+        "https://github.com/owner/repo/issues/1",
+        clean_restart=True,
+    )
+
+    assert success is True
+    assert mock_orchestrator.call_args.kwargs["clean_restart"] is True
 
 
 def test_gh_cli_missing(mock_dependencies: Tuple[Any, ...]) -> None:
