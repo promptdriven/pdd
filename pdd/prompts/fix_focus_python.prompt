@@ -1,5 +1,3 @@
-<include>context/python_preamble.prompt</include>
-
 <pdd-reason>Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction — zero I/O, zero LLM calls.</pdd-reason>
 
 <pdd-interface>
@@ -28,7 +26,7 @@ This module provides AST-based helpers that `fix_error_loop` uses when a dev uni
 - Does not own the threshold logic (that belongs to `fix_error_loop`).
 
 ### Requirements:
-1. **`DiagnosisResult` model:** A Pydantic v2 model with `suspected_functions: list[str]` (names of functions the LLM believes are broken) and `confidence: float` (0.0–1.0). Used as the structured return type for Phase 1 diagnosis results passed in from `fix_error_loop`.
+1. **`DiagnosisResult` model:** A Pydantic v2 model with `suspected_functions: list[str]` (names of functions the LLM believes are broken) and `confidence: float` (0.0–1.0). Used by `fix_error_loop` as the structured output type for Phase 1 LLM diagnosis results; `fix_error_loop` receives this from the Phase 1 LLM call and then passes `suspected_functions` to `extract_function_slices`.
 
 2. **`extract_skeleton(source: str) -> str`:** Parse `source` with `ast.parse`; return a string containing only function and method definitions with their signatures, decorators, docstrings, and type annotations — bodies replaced by `...`. If parsing fails, return `""`.
 
