@@ -2464,11 +2464,23 @@ def _select_model_candidates(
             re.sub(r'[^a-z0-9]+', '_', p.lower()).strip('_'): p
             for p in csv_providers
         }
-        # Prefix-table aliases override CSV-derived ones on conflict (rare in
-        # practice, but the prefix table is the authoritative source for the
-        # provider tokens litellm uses for routing).
+        # Prefix-table aliases fill in litellm routing tokens (e.g.
+        # ``vertex_ai`` → ``Google Vertex AI``) when the CSV does not
+        # already provide an exact match for that token. CSV-derived
+        # aliases take precedence: a CSV using a short exact name like
+        # ``Gemini`` (CSV-derived alias ``gemini``) must keep mapping
+        # ``gemini`` → ``Gemini`` so the pin selects the row that exists
+        # rather than the prefix table's canonical ``Google Gemini`` which
+        # has no rows here. Prefix-table entries that don't collide with a
+        # CSV-derived alias still apply so a pin like ``anthropic`` against
+        # a Bedrock-only CSV resolves to canonical ``Anthropic`` and raises
+        # the loud "no rows for that provider" error below instead of
+        # silently routing to Bedrock via the model-column fallback.
         for prefix, canonical in _PROVIDER_PREFIX_TO_PROVIDER.items():
-            alias_to_canonical[prefix.rstrip('/')] = canonical
+            alias = prefix.rstrip('/')
+            if alias in alias_to_canonical:
+                continue
+            alias_to_canonical[alias] = canonical
 
         canonical_provider = alias_to_canonical.get(provider_pin)
         if canonical_provider is None:

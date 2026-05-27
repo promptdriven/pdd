@@ -5070,6 +5070,36 @@ class TestSelectModelCandidates:
         models = {c["model"] for c in candidates}
         assert "azure/gpt-5.5" not in models
 
+    def test_provider_pin_csv_exact_name_wins_over_prefix_table(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for codex rereview of #1246: a custom CSV that uses
+        the exact short provider name ``Gemini`` plus ``PDD_PROVIDER=gemini``
+        must select that row. The prior implementation unconditionally
+        overrode the CSV-derived ``gemini`` → ``Gemini`` alias with the
+        prefix-table mapping ``gemini`` → ``Google Gemini``, then raised
+        because no ``Google Gemini`` rows exist in this CSV. CSV-derived
+        aliases now win on conflict; the prefix table only fills in tokens
+        the CSV does not already define."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Gemini,gemini-3.1-pro-preview,2.0,12.0,1461,GEMINI_API_KEY,"
+            "True,effort,1000000,8192,0\n"
+            "OpenAI,gpt-5.5,5.0,30.0,1450,OPENAI_API_KEY,"
+            "True,effort,200000,16384,0\n"
+        )
+        csv_path = tmp_path / "exact_gemini.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        monkeypatch.setenv("PDD_PROVIDER", "gemini")
+        candidates = llm_mod._select_model_candidates(
+            0.5, "gemini-3.1-pro-preview", df
+        )
+        providers = {c["provider"] for c in candidates}
+        assert providers == {"Gemini"}, providers
+
     def test_provider_pin_strips_whitespace_in_provider_column(
         self, llm_mod, tmp_path, monkeypatch
     ):

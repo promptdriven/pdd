@@ -39,14 +39,51 @@ _pdd() {
     local checkup_opts="--validate-arch-includes --project-root --strict --no-fix --timeout-adder --start-step --no-github-state --pr --issue --review-loop --review-only --reviewers --reviewer --fixer --reviewer-fallback --fixer-fallback --max-review-rounds --max-review-cost --max-review-minutes --require-all-reviewers-clean --no-require-all-reviewers-clean --continue-on-reviewer-limit --fallback-reviewer-on-failure --require-final-fresh-review --no-require-final-fresh-review --blocking-severities --clean-reviewer-states"
     local pytest_output_opts="--json-only"
 
+    # Canonical provider aliases for --provider value completion. Mirrors
+    # the aliases documented in the CLI --provider help text and the
+    # _PROVIDER_PREFIX_TO_PROVIDER + CSV-derived alias tables in
+    # llm_invoke._select_model_candidates.
+    local provider_values="anthropic openai azure_openai azure_ai vertex_ai gemini github_copilot openrouter perplexity"
+
+    # --provider value completion: anywhere on the command line, when the
+    # previous token is --provider, suggest provider names instead of
+    # falling through to global options or the subcommand-specific case.
+    if [[ $prev == "--provider" ]]; then
+        COMPREPLY=($(compgen -W "$provider_values" -- "$cur"))
+        return
+    fi
+
     # Complete global options before command
     if [[ $cword -eq 1 ]]; then
         COMPREPLY=($(compgen -W "$global_opts $commands" -- "$cur"))
         return
     fi
 
+    # Treat --provider <value> as transparent for subcommand-context
+    # detection: pdd --provider openai generate ... should still complete
+    # "generate" options, not fall through to the default-case fallback
+    # because words[1] is "--provider".
+    local cmd_index=1
+    while [[ $cmd_index -lt $cword ]]; do
+        local tok=${words[$cmd_index]}
+        if [[ $tok == "--provider" ]]; then
+            cmd_index=$((cmd_index + 2))
+            continue
+        fi
+        if [[ $tok == --* ]]; then
+            cmd_index=$((cmd_index + 1))
+            continue
+        fi
+        break
+    done
+    if [[ $cmd_index -ge $cword ]]; then
+        COMPREPLY=($(compgen -W "$global_opts $commands" -- "$cur"))
+        return
+    fi
+    local subcommand=${words[$cmd_index]}
+
     # Complete command-specific options
-    case ${words[1]} in
+    case $subcommand in
         generate)
             # If completing the value for -e/--env, suggest environment variable names (with and without '=')
             if [[ $prev == "-e" || $prev == "--env" ]]; then
