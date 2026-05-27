@@ -2328,10 +2328,12 @@ def run_agentic_bug_orchestrator(
                         if not quiet:
                             console.print(
                                 f"[yellow]  → Capping LLM classification to "
-                                f"{_MAX_GREP_RESULTS} files; the remaining "
-                                f"{len(overflow_files)} overflow file(s) will "
-                                f"default to NEEDS_FIX as PATTERN_SEARCH-overflow "
-                                f"siblings (not LLM-reviewed)[/yellow]"
+                                f"{_MAX_GREP_RESULTS} files. The remaining "
+                                f"{len(overflow_files)} overflow file(s) will be "
+                                f"recorded as PATTERN_SEARCH_OVERFLOW candidates "
+                                f"(no evidence, NOT folded into FIX_LOCATIONS or "
+                                f"step6_expansion_items — review manually if a "
+                                f"broader audit is desired)[/yellow]"
                             )
                             for of in overflow_files[:5]:
                                 console.print(f"[yellow]    (overflow) {of}[/yellow]")
@@ -2415,25 +2417,27 @@ def run_agentic_bug_orchestrator(
                     # step6_expansion_items so Step 8/9 plan tests for them.
                     sibling_evidence: List[Tuple[str, str]] = []
 
-                    # Tag for overflow-defaulted entries so Step 8/9 see they
-                    # were NOT LLM-reviewed (the cap means they bypassed the
-                    # retry context window). Defaulted-but-vetted entries (the
-                    # cap-fitted set with no explicit SAFE_EVIDENCE) carry an
-                    # empty reason.
-                    _OVERFLOW_REASON = "PATTERN_SEARCH overflow — not LLM-reviewed"
-
+                    # Overflow policy (PR #1210 round 6, per issue #1208 spec):
+                    # "Every expanded item has machine-readable evidence as
+                    # either NEEDS_FIX or SAFE_EVIDENCE" and "Broad analogous
+                    # audits remain opt-in rather than default behavior."
+                    # Files beyond the LLM retry cap have NO evidence (the LLM
+                    # never saw them) so they MUST NOT default into
+                    # FIX_LOCATIONS or step6_expansion_items — that would
+                    # coerce a broad audit. Instead the orchestrator emits a
+                    # PATTERN_SEARCH_OVERFLOW marker so the gap is loud rather
+                    # than silent: users see N candidates exceeded the cap and
+                    # can opt-in to manual review or a broader audit.
                     if retry_success:
                         needs_fix, safe = _parse_classification_evidence(retry_output)
 
-                        # MERGE semantics: original UNION new_needs_fix UNION defaults
-                        # Uses _merge_fix_locations for basename normalization so
-                        # "agentic_update.py" (LLM) and "pdd/agentic_update.py" (grep)
-                        # are treated as the same file. Pass the full grep set
-                        # (cap + overflow) so overflow files also default to
-                        # NEEDS_FIX in FIX_LOCATIONS — PR #1210 scope-completeness
-                        # contract.
+                        # MERGE only against the LLM-classified set (cap-fitted).
+                        # _merge_fix_locations applies the conservative
+                        # NEEDS_FIX default to any cap-fitted file the LLM did
+                        # not explicitly classify as SAFE — those have evidence
+                        # ("LLM looked at them but did not mark them safe").
                         merged = _merge_fix_locations(
-                            fix_locs, needs_fix, safe, all_grep_unclassified
+                            fix_locs, needs_fix, safe, unclassified_filenames
                         )
 
                         # Capture (path, reason) for sibling expansion. Reuse the
@@ -2455,62 +2459,39 @@ def run_agentic_bug_orchestrator(
                             if fname in sibling_keys:
                                 continue
                             if _is_llm_classified(
-                                fname, needs_fix, safe, all_grep_unclassified
+                                fname, needs_fix, safe, unclassified_filenames
                             ):
                                 # SAFE means skip; explicit NEEDS_FIX is
                                 # already in sibling_evidence above.
                                 continue
                             sibling_evidence.append((fname, ""))
 
-                        # Overflow files were never sent to the LLM. They must
-                        # still flow into step6_expansion_items because the
-                        # grep already classified them as candidate siblings —
-                        # silently dropping them would let Step 8/9 miss real
-                        # same-root-cause siblings on broad (>50-match) bugs.
-                        for fname in overflow_unclassified:
-                            if fname in sibling_keys:
-                                continue
-                            sibling_evidence.append((fname, _OVERFLOW_REASON))
-
                         # Log which unclassified files were defaulted to NEEDS_FIX
                         if not quiet:
                             for fname in unclassified_filenames:
                                 if not _is_llm_classified(
-                                    fname, needs_fix, safe, all_grep_unclassified
+                                    fname, needs_fix, safe, unclassified_filenames
                                 ):
                                     console.print(
                                         f"[yellow]    → {fname} has no classification "
                                         f"evidence, defaulting to NEEDS_FIX[/yellow]"
                                     )
-                            for fname in overflow_unclassified:
-                                console.print(
-                                    f"[yellow]    → {fname} overflowed retry cap, "
-                                    f"defaulting to NEEDS_FIX (not LLM-reviewed)[/yellow]"
-                                )
 
                     else:
                         # Retry failed (rate limit, network error, LLM failure).
-                        # Apply conservative default: all grep-discovered files
-                        # are added to FIX_LOCATIONS since we can't classify them.
+                        # Apply conservative default for the cap-fitted set only —
+                        # those files were intended to be classified but weren't.
+                        # Overflow files are handled via PATTERN_SEARCH_OVERFLOW
+                        # below regardless of retry success/failure.
                         merged = _merge_fix_locations(
-                            fix_locs, [], [], all_grep_unclassified
+                            fix_locs, [], [], unclassified_filenames
                         )
-                        sibling_evidence = [
-                            (f, "") for f in unclassified_filenames
-                        ] + [
-                            (f, _OVERFLOW_REASON) for f in overflow_unclassified
-                        ]
+                        sibling_evidence = [(f, "") for f in unclassified_filenames]
                         if not quiet:
                             for fname in unclassified_filenames:
                                 console.print(
                                     f"[yellow]    → {fname} unclassified (retry failed), "
                                     f"defaulting to NEEDS_FIX[/yellow]"
-                                )
-                            for fname in overflow_unclassified:
-                                console.print(
-                                    f"[yellow]    → {fname} overflowed retry cap "
-                                    f"(retry failed), defaulting to NEEDS_FIX "
-                                    f"(not LLM-reviewed)[/yellow]"
                                 )
 
                     context["fix_locations"] = ", ".join(merged)
@@ -2570,6 +2551,22 @@ def run_agentic_bug_orchestrator(
                             step_output = step_output + f"\nNEEDS_FIX: {sib_path} | {reason_text}"
                     if promoted_scope:
                         step_output = step_output + f"\nSCOPE_CLASSIFICATION: {promoted_scope}"
+                    # PATTERN_SEARCH_OVERFLOW: emit a structured marker so the
+                    # gap is visible without coercing a broad audit. Per issue
+                    # #1208, expanded items require evidence; overflow files
+                    # have none, so they MUST NOT default into expansion items.
+                    # Listing them in the marker makes the candidate set
+                    # actionable for opt-in follow-up (manual review or a
+                    # second targeted PATTERN_SEARCH).
+                    if overflow_unclassified:
+                        overflow_list = ", ".join(overflow_unclassified)
+                        step_output = step_output + (
+                            f"\nPATTERN_SEARCH_OVERFLOW: "
+                            f"{len(overflow_unclassified)} candidate(s) exceeded "
+                            f"the LLM retry cap ({_MAX_GREP_RESULTS}) and were "
+                            f"NOT classified; review manually if a broader audit "
+                            f"is desired: {overflow_list}"
+                        )
                     context["step6_output"] = step_output
 
                     if not quiet:

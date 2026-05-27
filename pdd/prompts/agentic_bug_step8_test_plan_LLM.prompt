@@ -145,7 +145,13 @@ Step 6's independent analysis identified these items beyond what the issue propo
 {step6_expansion_items}
 ```
 
-If this value is not `none`, your test plan MUST include at least one test for each listed item. These were found by Step 6's root cause analysis independently of the issue body — the issue author identified only a subset of the problem.
+If this value is not `none`, your test plan must cover every listed item — but HOW you cover them depends on `{scope_classification}`:
+
+- `LOCALIZED`: expansion items are unusual here (the scope is single-site); cover each one with its own behavioral test through its own entry point.
+- `SIBLING_PATTERN`: cover each item with its own dedicated behavioral test through its own entry point (per the SIBLING_PATTERN rule above). One parametrized test across all siblings is acceptable only when it genuinely exercises each sibling's code path independently.
+- `CROSS_CUTTING`: do NOT plan per-item tests against each call site. The expansion items are the call sites that share the root cause; plan tests against the centralized mechanism (one or two integration tests showing the mechanism applies through different entry points), and treat the expansion list as the surface those integration tests must collectively prove — not a per-item test checklist. Adding N per-call-site tests on CROSS_CUTTING is an anti-pattern that defeats the centralization the classification calls for.
+
+In all three cases the expansion items found by Step 6's independent analysis must influence the plan — the issue author identified only a subset of the problem. The classification governs the SHAPE of that coverage, not whether to cover.
 
 % Cross-Step Consistency Check
 
@@ -175,7 +181,7 @@ Your test plan must verify **observable behavior**, not code structure.
 
 - Tests should be specific enough to catch this exact bug
 - Tests should not be so brittle they break with valid changes
-- **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones. Additionally, if `{step6_expansion_items}` is not `none`, your plan MUST also cover every listed expansion item — these were identified by Step 6's independent analysis beyond what the issue describes.
+- **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones. Additionally, if `{step6_expansion_items}` is not `none`, your plan MUST also cover every listed expansion item via the SHAPE the `{scope_classification}` mandates above (per-item tests for `LOCALIZED`/`SIBLING_PATTERN`; centralized-mechanism integration tests that collectively cover the call sites for `CROSS_CUTTING`).
 - **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
 - **Code path check**: For each root cause, ask "through which code paths can this be reached?" (first-run execution, resume from checkpoint, retry after failure, error recovery, different entry points). If the same data is processed in multiple paths, test each one. A fix that corrects the first-run path but leaves the resume path broken is incomplete — the tests should catch that. Cross-reference Step 6's sibling bugs to ensure every independently-discovered bug has test coverage.
 - **Call-boundary coverage check**: The fix locations are: `{fix_locations}`. If there are multiple files, the test plan MUST include tests for BOTH sides of the call boundary — mock the callee and verify the caller passes the right arguments, AND test the callee directly.

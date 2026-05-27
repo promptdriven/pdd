@@ -212,7 +212,11 @@ When incorporating reproduction tests:
 
 % Test Count Verification
 
-Step 8 planned {planned_test_count} tests. You MUST generate exactly that many `def test_` (or `async def test_`) functions with real assertions. Before finishing, count your test functions and verify the count matches. Do NOT generate stub functions that contain only `pass`, `...`, or a docstring with no assertions.
+Step 8 planned {planned_test_count} tests. This count is a FLOOR, not a ceiling: you MUST generate AT LEAST that many `def test_` (or `async def test_`) functions with real assertions, plus any additional `# Scope addition:` tests required by the SIBLING_PATTERN / expansion-item rules above when Step 8's plan missed a confirmed sibling. The exact-count rule would otherwise contradict the explicit "generate the missing test anyway" instructions in the scope sections, leaving the model with no consistent way to honor both. Before finishing:
+
+- Count your test functions. The count MUST be ≥ `{planned_test_count}`.
+- Each test beyond `{planned_test_count}` MUST carry a `# Scope addition:` comment that names which confirmed sibling / expansion item it covers and notes it was absent from Step 8's plan. This makes the addition auditable by Step 10.
+- Do NOT generate stub functions that contain only `pass`, `...`, or a docstring with no assertions — every test you count must carry a real assertion.
 
 % Your Task
 
