@@ -1,0 +1,515 @@
+{
+  "valid": false,
+  "issues": [
+    {
+      "module": "resurface_check_Python.prompt",
+      "issue_type": "missing_file",
+      "description": "File defined in architecture.json does not exist: extensions/recruiting/resurface_check.py"
+    },
+    {
+      "module": "run_generated_python.prompt",
+      "issue_type": "missing_file",
+      "description": "File defined in architecture.json does not exist: pdd/run_generated.py"
+    },
+    {
+      "module": "prompt_tester_python.prompt",
+      "issue_type": "missing_file",
+      "description": "File defined in architecture.json does not exist: pdd/prompt_tester.py"
+    },
+    {
+      "module": "path_resolution_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'resolve_include' declared in interface not found in pdd/path_resolution.py"
+    },
+    {
+      "module": "path_resolution_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'resolve_prompt_template' declared in interface not found in pdd/path_resolution.py"
+    },
+    {
+      "module": "path_resolution_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'resolve_data_file' declared in interface not found in pdd/path_resolution.py"
+    },
+    {
+      "module": "path_resolution_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'resolve_project_root' declared in interface not found in pdd/path_resolution.py"
+    },
+    {
+      "module": "get_jwt_token_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'verify_firebase_token' declared in interface not found in pdd/get_jwt_token.py"
+    },
+    {
+      "module": "get_jwt_token_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'verify_github_oauth' declared in interface not found in pdd/get_jwt_token.py"
+    },
+    {
+      "module": "get_jwt_token_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'create_signed_jwt' declared in interface not found in pdd/get_jwt_token.py"
+    },
+    {
+      "module": "get_jwt_token_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'verify_signed_jwt' declared in interface not found in pdd/get_jwt_token.py"
+    },
+    {
+      "module": "get_jwt_token_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'extract_bearer_token' declared in interface not found in pdd/get_jwt_token.py"
+    },
+    {
+      "module": "logo_animation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'update_progress' declared in interface not found in pdd/logo_animation.py"
+    },
+    {
+      "module": "logo_animation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'set_new_transition' declared in interface not found in pdd/logo_animation.py"
+    },
+    {
+      "module": "process_csv_change_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'mock_change' declared in interface not found in pdd/process_csv_change.py"
+    },
+    {
+      "module": "process_csv_change_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'mock_get_extension' declared in interface not found in pdd/process_csv_change.py"
+    },
+    {
+      "module": "fix_code_loop_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'stream_pipe' declared in interface not found in pdd/fix_code_loop.py"
+    },
+    {
+      "module": "fix_code_loop_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'dummy_fix_code_module_errors' declared in interface not found in pdd/fix_code_loop.py"
+    },
+    {
+      "module": "fix_code_loop_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'run_agentic_crash' declared in interface not found in pdd/fix_code_loop.py"
+    },
+    {
+      "module": "fix_code_loop_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'get_language' declared in interface not found in pdd/fix_code_loop.py"
+    },
+    {
+      "module": "fix_code_loop_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'default_verify_cmd_for' declared in interface not found in pdd/fix_code_loop.py"
+    },
+    {
+      "module": "sync_determine_operation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function '__enter__' declared in interface not found in pdd/sync_determine_operation.py"
+    },
+    {
+      "module": "sync_determine_operation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function '__exit__' declared in interface not found in pdd/sync_determine_operation.py"
+    },
+    {
+      "module": "sync_determine_operation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'acquire' declared in interface not found in pdd/sync_determine_operation.py"
+    },
+    {
+      "module": "sync_determine_operation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'release' declared in interface not found in pdd/sync_determine_operation.py"
+    },
+    {
+      "module": "agentic_fix_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'get_agent_command' declared in interface not found in pdd/agentic_fix.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'load_sync_log' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'create_sync_log_entry' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'update_sync_log_entry' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'append_sync_log' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'log_sync_event' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function '__enter__' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function '__exit__' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'set_run_report' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'set_fingerprint' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'read_pipe' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'get_confirm_callback' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'sync_worker_logic' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'confirming_callback' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "sync_orchestration_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'headless_confirming_callback' declared in interface not found in pdd/sync_orchestration.py"
+    },
+    {
+      "module": "pytest_output_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'pytest_runtest_logreport' declared in interface not found in pdd/pytest_output.py"
+    },
+    {
+      "module": "pytest_output_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'pytest_sessionfinish' declared in interface not found in pdd/pytest_output.py"
+    },
+    {
+      "module": "pytest_output_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'capture_logs' declared in interface not found in pdd/pytest_output.py"
+    },
+    {
+      "module": "pytest_output_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'get_logs' declared in interface not found in pdd/pytest_output.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'compose' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'on_button_pressed' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'action_confirm_yes' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'action_confirm_no' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'compose' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'on_mount' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'on_button_pressed' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'on_input_submitted' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'action_cancel' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'readable' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'writable' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'readline' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'read' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'set_prompt' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'write' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'flush' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'captured_logs' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'write' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'flush' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'captured_logs' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'compose' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'on_mount' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'run_worker_task' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'update_animation' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'request_confirmation' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'request_input' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'schedule_modal' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "sync_tui_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'schedule_modal' declared in interface not found in pdd/sync_tui.py"
+    },
+    {
+      "module": "template_registry_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'alias' declared in interface not found in pdd/template_registry.py"
+    },
+    {
+      "module": "template_registry_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'register' declared in interface not found in pdd/template_registry.py"
+    },
+    {
+      "module": "sync_animation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'update_dynamic_state' declared in interface not found in pdd/sync_animation.py"
+    },
+    {
+      "module": "sync_animation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'set_box_colors' declared in interface not found in pdd/sync_animation.py"
+    },
+    {
+      "module": "sync_animation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'get_elapsed_time_str' declared in interface not found in pdd/sync_animation.py"
+    },
+    {
+      "module": "sync_animation_python.prompt",
+      "issue_type": "missing_export",
+      "description": "Function 'get_emoji_for_box' declared in interface not found in pdd/sync_animation.py"
+    },
+    {
+      "module": "auto_deps_main_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'auto_deps_main_python.prompt' depends on 'construct_paths_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "auto_deps_main_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'auto_deps_main_python.prompt' depends on 'validate_prompt_includes_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "auto_deps_main_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'auto_deps_main_python.prompt' depends on 'auto_deps_architecture_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "update_main_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'update_main_python.prompt' depends on 'construct_paths_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "update_main_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'update_main_python.prompt' depends on 'config_resolution_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "fix_errors_from_unit_tests_LLM.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'fix_errors_from_unit_tests_LLM.prompt' depends on 'conflicts_in_prompts_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "agentic_test_orchestrator_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'agentic_test_orchestrator_python.prompt' depends on 'load_prompt_template_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "prompt_lint_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'prompt_lint_python.prompt' depends on 'prompt_lint_LLM.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "ci_drift_heal_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'ci_drift_heal_python.prompt' depends on 'user_story_tests_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "core/cli_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'core/cli_python.prompt' depends on 'dump_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "core/cli_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'core/cli_python.prompt' depends on 'errors_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "core/cli_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'core/cli_python.prompt' depends on 'utils_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "core/cli_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'core/cli_python.prompt' depends on 'duplicate_cli_guard_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "llm_invoke_python.prompt",
+      "issue_type": "broken_architecture_dependency",
+      "description": "Module 'llm_invoke_python.prompt' depends on 'server/token_counter_python.prompt', which is not defined in architecture.json"
+    },
+    {
+      "module": "sync_main_python.prompt -> sync_orchestration_python.prompt -> operation_log_python.prompt -> sync_determine_operation_python.prompt -> sync_main_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: sync_main_python.prompt -> sync_orchestration_python.prompt -> operation_log_python.prompt -> sync_determine_operation_python.prompt -> sync_main_python.prompt"
+    },
+    {
+      "module": "sync_orchestration_python.prompt -> operation_log_python.prompt -> sync_orchestration_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: sync_orchestration_python.prompt -> operation_log_python.prompt -> sync_orchestration_python.prompt"
+    },
+    {
+      "module": "cmd_test_main_python.prompt -> commands/generate_python.prompt -> cmd_test_main_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: cmd_test_main_python.prompt -> commands/generate_python.prompt -> cmd_test_main_python.prompt"
+    },
+    {
+      "module": "checkup_review_loop_python.prompt -> agentic_checkup_orchestrator_python.prompt -> checkup_review_loop_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: checkup_review_loop_python.prompt -> agentic_checkup_orchestrator_python.prompt -> checkup_review_loop_python.prompt"
+    },
+    {
+      "module": "agentic_checkup_orchestrator_python.prompt -> agentic_checkup_python.prompt -> agentic_checkup_orchestrator_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: agentic_checkup_orchestrator_python.prompt -> agentic_checkup_python.prompt -> agentic_checkup_orchestrator_python.prompt"
+    },
+    {
+      "module": "checkup_review_loop_python.prompt -> agentic_checkup_orchestrator_python.prompt -> agentic_checkup_python.prompt -> checkup_review_loop_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: checkup_review_loop_python.prompt -> agentic_checkup_orchestrator_python.prompt -> agentic_checkup_python.prompt -> checkup_review_loop_python.prompt"
+    },
+    {
+      "module": "checkup_review_loop_python.prompt -> agentic_checkup_orchestrator_python.prompt -> checkup_gates_python.prompt -> checkup_review_loop_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: checkup_review_loop_python.prompt -> agentic_checkup_orchestrator_python.prompt -> checkup_gates_python.prompt -> checkup_review_loop_python.prompt"
+    },
+    {
+      "module": "agentic_e2e_fix_orchestrator_python.prompt -> checkup_review_loop_python.prompt -> agentic_e2e_fix_orchestrator_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: agentic_e2e_fix_orchestrator_python.prompt -> checkup_review_loop_python.prompt -> agentic_e2e_fix_orchestrator_python.prompt"
+    },
+    {
+      "module": "agentic_e2e_fix_orchestrator_python.prompt -> ci_validation_python.prompt -> agentic_e2e_fix_orchestrator_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: agentic_e2e_fix_orchestrator_python.prompt -> ci_validation_python.prompt -> agentic_e2e_fix_orchestrator_python.prompt"
+    },
+    {
+      "module": "setup_tool_python.prompt -> cli_detector_python.prompt -> setup_tool_python.prompt",
+      "issue_type": "circular_import",
+      "description": "Circular import cycle detected: setup_tool_python.prompt -> cli_detector_python.prompt -> setup_tool_python.prompt"
+    }
+  ]
+}

@@ -80,3 +80,17 @@ def test_version_matches_expected_for_current_state():
             f"Between tags after v{latest}, expected pdd.__version__ to start with "
             f"{expected_prefix!r}, got {pdd.__version__!r}"
         )
+
+
+def test_pep440_version_regex_validation():
+    """Verify that _PEP440_VERSION matches valid PEP 440 formats, including 2-component dev versions, and rejects invalid ones."""
+    # Valid PEP 440 versions expected by the regex
+    assert _PEP440_VERSION.match("0.1.dev1")
+    assert _PEP440_VERSION.match("0.1.0")
+    assert _PEP440_VERSION.match("1.2.3")
+    assert _PEP440_VERSION.match("1.2.3.dev4")
+    assert _PEP440_VERSION.match("10.20.rc2")
+    
+    # Invalid or unsupported versions
+    assert not _PEP440_VERSION.match("abc")
+    assert not _PEP440_VERSION.match("1")
