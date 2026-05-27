@@ -1600,7 +1600,7 @@ def update_main(
         table.add_column("Cost", justify="right")
         table.add_column("Model")
         table.add_column("Error", style="error")
-        table.add_column("Metadata")
+        table.add_column("Metadata", min_width=24, no_wrap=True)
 
         models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):
