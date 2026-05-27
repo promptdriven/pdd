@@ -148,24 +148,36 @@ def test_e2e_fix_from_parent_cwd_resolves_outputs_under_subproject(
 
     assert language == "python"
 
-    # Every output must live under the subproject, NOT under parent_cwd.
-    subproject_str = str(layout["subproject"])
-    parent_cwd_str = str(layout["parent_cwd"])
-    for key, value in output_file_paths.items():
-        assert value.startswith(subproject_str), (
-            f"Output {key}={value!r} should be under subproject "
-            f"{subproject_str!r}, not orphaned"
-        )
-        assert not value.startswith(parent_cwd_str + "/"), (
-            f"Output {key}={value!r} leaked into parent_cwd "
-            f"{parent_cwd_str!r}; this is the issue #1211 orphan bug"
-        )
-
-    # The code output must include the prompt's subdir chain.
-    assert "src/routers/webhook_handlers" in output_file_paths["output_code"], (
-        f"output_code={output_file_paths['output_code']!r} dropped the "
-        "'src/routers/' prefix — _extract_basename is not using the "
-        "subdir-aware variant"
+    # Exact path equality: parent-cwd invocation must produce output paths
+    # equal to running fix from the subproject itself. Weaker assertions
+    # (startswith / substring "src/routers/webhook_handlers") let the
+    # double-nested ".../src/routers/src/routers/..." regression pass.
+    subproject = layout["subproject"]
+    expected_code = str(
+        subproject
+        / "src"
+        / "routers"
+        / "webhook_handlers_test_webhook_handlers_fixed.py"
+    )
+    expected_test = str(
+        subproject
+        / "tests"
+        / "test_webhook_handlers_test_webhook_handlers_fixed.py"
+    )
+    expected_results = str(
+        subproject
+        / "src"
+        / "routers"
+        / "webhook_handlers_test_webhook_handlers_fix_results.log"
+    )
+    assert output_file_paths["output_code"] == expected_code, (
+        f"output_code={output_file_paths['output_code']!r} != {expected_code!r}"
+    )
+    assert output_file_paths["output_test"] == expected_test, (
+        f"output_test={output_file_paths['output_test']!r} != {expected_test!r}"
+    )
+    assert output_file_paths["output_results"] == expected_results, (
+        f"output_results={output_file_paths['output_results']!r} != {expected_results!r}"
     )
 
 
@@ -206,7 +218,7 @@ contexts:
     )
     monkeypatch.chdir(layout["parent_cwd"])
 
-    _, _, output_file_paths, language = construct_paths(
+    resolved_config, _, output_file_paths, language = construct_paths(
         input_file_paths={
             "prompt_file": str(layout["prompt"]),
             "code_file": str(layout["code"]),
@@ -220,20 +232,27 @@ contexts:
     )
 
     assert language == "python"
-    code_out = output_file_paths["output_code"]
-
-    # Must contain the subdir BELOW the configured prompts_dir.
-    assert "services/foo" in code_out, (
-        f"output_code={code_out!r} should include 'services/foo' (subdir "
-        f"relative to prompts_dir='prompts/backend')"
+    # The named context from the subproject's .pddrc must be the one loaded —
+    # NOT the implicit "default" fallback that fires when no .pddrc was found.
+    assert resolved_config.get("_matched_context") == "backend", (
+        f"_matched_context={resolved_config.get('_matched_context')!r} — "
+        "expected 'backend' from the subproject .pddrc; 'default' means the "
+        ".pddrc was never loaded (issue #1211)"
     )
-    # Must NOT double-nest by treating 'backend' as a subdir of 'prompts/'.
-    # i.e., we must not see '/backend/services/foo' as a SUBDIR appended to
-    # the configured generate_output_path of 'backend/src/'.
-    assert "backend/src/backend/services" not in code_out, (
-        f"output_code={code_out!r} double-nested 'backend/' because the "
-        "subdir helper anchored on literal 'prompts/' instead of the "
-        "configured prompts_dir 'prompts/backend'"
+
+    # Exact path equality on the code output: the basename anchor must be
+    # the configured prompts_dir (subdir='services/foo'), and the output must
+    # land at backend/src/services/foo_test_foo_fixed.py — without any
+    # double-nesting of 'backend/' or 'services/'.
+    expected_code = str(
+        layout["subproject"]
+        / "backend"
+        / "src"
+        / "services"
+        / "foo_test_foo_fixed.py"
+    )
+    assert output_file_paths["output_code"] == expected_code, (
+        f"output_code={output_file_paths['output_code']!r} != {expected_code!r}"
     )
 
 
@@ -303,6 +322,41 @@ def test_e2e_fix_basename_flows_into_subproject_fingerprint_path(
     )
 
 
+def test_e2e_fingerprint_auto_detects_subproject_root_from_parent_cwd(
+    tmp_path, monkeypatch
+):
+    """Issue #1211 secondary symptom — callers that *don't* pass
+    project_root must still anchor .pdd/meta at the subproject's .pddrc,
+    not at the parent run CWD.
+
+    Production callers (operation_log.save_fingerprint,
+    sync_determine_operation.read_fingerprint) don't thread project_root
+    through every site, so the metadata helpers must auto-detect the
+    subproject root by walking up to the nearest .pddrc.
+    """
+    shared_root = tmp_path / "shared_root"
+    shared_root.mkdir()
+    inner_parent = shared_root / "parent_cwd"
+    inner_parent.mkdir()
+    inner_subproject = shared_root / "sub"
+    inner_subproject.mkdir()
+    (shared_root / ".pddrc").write_text(_PDDRC_NESTED_APP, encoding="utf-8")
+    monkeypatch.chdir(inner_parent)
+
+    fp_path_no_root = get_fingerprint_path("foo", "python")
+    expected_meta_dir = shared_root / ".pdd" / "meta"
+    assert str(fp_path_no_root).startswith(str(expected_meta_dir)), (
+        f"Auto-detected fingerprint path {fp_path_no_root!r} must live "
+        f"under the shared root with .pddrc ({expected_meta_dir!r}), not "
+        "under the parent run CWD"
+    )
+    # And no orphan .pdd/meta under the parent CWD.
+    assert not (inner_parent / ".pdd" / "meta").exists(), (
+        "Parent run CWD must not get an orphan .pdd/meta when a .pddrc "
+        "exists upward"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test 4: Issue #1211 orphan matrix — parametrized over the six real prompts
 # documented in the issue from pdd_cloud PR #1707.
@@ -336,13 +390,18 @@ def test_e2e_fix_issue_1211_orphan_matrix(
       - lives under <subproject>/src/...   (not <parent_cwd>/*)
       - contains the full expected subdir chain from the issue table
     """
+    # Real-world usage has the code/test files at paths that mirror the
+    # prompt's subdir chain. Placing them at the matching location ensures
+    # `input_file_dirs` carries the deepest valid directory.
+    code_rel = f"{expected_subdir}.py"
+    test_basename = expected_subdir.rsplit("/", 1)[-1]
+    test_rel = f"tests/test_{test_basename}.py"
     layout = _build_subproject(
         tmp_path,
         pddrc_body=_PDDRC_NESTED_APP,
         prompt_rel=prompt_rel,
-        # code_rel just needs to exist; its content is irrelevant.
-        code_rel="src/placeholder.py",
-        test_rel="tests/test_placeholder.py",
+        code_rel=code_rel,
+        test_rel=test_rel,
     )
     monkeypatch.chdir(layout["parent_cwd"])
 
@@ -360,16 +419,13 @@ def test_e2e_fix_issue_1211_orphan_matrix(
     )
 
     code_out = output_file_paths["output_code"]
-    subproject_str = str(layout["subproject"])
-    parent_cwd_str = str(layout["parent_cwd"])
 
-    assert code_out.startswith(subproject_str), (
-        f"[{prompt_rel}] output_code={code_out!r} not under subproject"
+    # Exact path equality: the fixed file must land next to the original
+    # code file at the prompt's mirrored subdir, with no orphan prefix and
+    # no double-nesting of the subdir chain.
+    expected_code = str(
+        layout["subproject"] / f"{expected_subdir}_test_{test_basename}_fixed.py"
     )
-    assert not code_out.startswith(parent_cwd_str + "/"), (
-        f"[{prompt_rel}] output_code={code_out!r} leaked into parent cwd"
-    )
-    assert expected_subdir in code_out, (
-        f"[{prompt_rel}] output_code={code_out!r} missing subdir chain "
-        f"{expected_subdir!r}"
+    assert code_out == expected_code, (
+        f"[{prompt_rel}] output_code={code_out!r} != {expected_code!r}"
     )

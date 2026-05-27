@@ -57,11 +57,20 @@ def get_pdd_dir():
 def get_meta_dir(project_root=None):
     """Get the metadata directory.
 
-    When project_root is supplied, returns a path under that root instead of
-    relative to the run CWD.
+    Resolution order (Issue #1211):
+      1. Explicit `project_root` argument
+      2. Nearest .pddrc walking up from CWD (auto-detected subproject root)
+      3. Run CWD (legacy behavior)
     """
     if project_root is not None:
         return Path(project_root) / '.pdd' / 'meta'
+    try:
+        from .operation_log import _detect_project_root
+    except ImportError:  # direct (non-package) import path
+        from operation_log import _detect_project_root  # type: ignore
+    detected = _detect_project_root()
+    if detected is not None and detected != Path.cwd().resolve():
+        return detected / '.pdd' / 'meta'
     return get_pdd_dir() / 'meta'
 
 def get_locks_dir():

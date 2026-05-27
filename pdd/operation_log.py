@@ -20,14 +20,41 @@ PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
 
 
+def _detect_project_root(start: Optional[Path] = None) -> Optional[Path]:
+    """Walk up from `start` (or CWD) to find the nearest .pddrc.
+
+    Returns the directory containing the .pddrc, or None if no .pddrc is
+    reachable upward. Used by the metadata helpers to anchor .pdd/meta at
+    the subproject root rather than the run CWD when the two diverge.
+    """
+    base = (start or Path.cwd()).resolve()
+    if base.is_file():
+        base = base.parent
+    for candidate in [base] + list(base.parents):
+        if (candidate / ".pddrc").is_file():
+            return candidate
+    return None
+
+
+def _resolve_meta_dir(project_root: Optional[Path] = None) -> Path:
+    """Return the .pdd/meta directory, honoring explicit project_root,
+    then a discovered subproject .pddrc, then falling back to run CWD."""
+    if project_root is not None:
+        return Path(project_root) / PDD_DIR / "meta"
+    detected = _detect_project_root()
+    if detected is not None and detected != Path.cwd().resolve():
+        return detected / PDD_DIR / "meta"
+    return Path(META_DIR)
+
+
 def ensure_meta_dir(project_root: Optional[Path] = None) -> None:
     """Ensure the .pdd/meta directory exists.
 
     When project_root is supplied, creates .pdd/meta under that root instead
-    of relative to the run CWD.
+    of relative to the run CWD. When unset, auto-detects the subproject root
+    by walking up to the nearest .pddrc (Issue #1211).
     """
-    meta_dir = str(project_root / PDD_DIR / "meta") if project_root else META_DIR
-    os.makedirs(meta_dir, exist_ok=True)
+    os.makedirs(_resolve_meta_dir(project_root), exist_ok=True)
 
 
 def _safe_basename(basename: str) -> str:
@@ -48,12 +75,12 @@ def get_log_path(basename: str, language: str) -> Path:
 def get_fingerprint_path(basename: str, language: str, project_root: Optional[Path] = None) -> Path:
     """Get the path to the fingerprint JSON file for a specific module.
 
-    When project_root is supplied, returns a path under that root instead of
-    relative to the run CWD.
+    When project_root is supplied, returns a path under that root. When
+    omitted, auto-detects the subproject root via the nearest .pddrc; falls
+    back to the run CWD when no .pddrc is reachable.
     """
     ensure_meta_dir(project_root=project_root)
-    meta_dir = (project_root / PDD_DIR / "meta") if project_root else Path(META_DIR)
-    return meta_dir / f"{_safe_basename(basename)}_{language}.json"
+    return _resolve_meta_dir(project_root) / f"{_safe_basename(basename)}_{language}.json"
 
 
 def get_run_report_path(basename: str, language: str) -> Path:
