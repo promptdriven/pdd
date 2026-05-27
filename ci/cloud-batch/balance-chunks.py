@@ -122,7 +122,16 @@ def _build_units(
 
 
 def cmd_assign(args: argparse.Namespace) -> None:
-    """Assign test files (and per-class sub-units of heavy files) to a chunk."""
+    """Assign test files (and per-class sub-units of heavy files) to a chunk.
+
+    Heavy-file splitting is **opt-in** via ``PDD_BALANCE_SPLIT_HEAVY=1``.
+    Default behaviour ships heavy files whole (matching legacy packing) so
+    chunk-level test ordering does not change unexpectedly — the rebalance
+    can expose latent ordering flakes in tests that mutate global state
+    (env vars, working directory, monkey patches that leak past teardown).
+    Set the env var explicitly to activate the splitter once the relevant
+    flakes are addressed.
+    """
     with open(args.durations) as f:
         durations = json.load(f)
 
@@ -130,8 +139,15 @@ def cmd_assign(args: argparse.Namespace) -> None:
     if not files:
         return
 
+    if os.getenv("PDD_BALANCE_SPLIT_HEAVY") != "1":
+        # Splitting disabled — treat every file as below the threshold so
+        # the packer emits files whole, preserving legacy behaviour.
+        heavy_threshold = float("inf")
+    else:
+        heavy_threshold = args.heavy_threshold
+
     default_duration = _median_known_duration(durations)
-    units = _build_units(files, durations, args.heavy_threshold, default_duration)
+    units = _build_units(files, durations, heavy_threshold, default_duration)
     chunks = _greedy_pack_units(units, args.num_chunks)
 
     if args.chunk_index >= len(chunks):

@@ -185,6 +185,81 @@ def test_seed_emits_per_class_for_heavy_file(bc, tmp_path):
     assert out["tests/test_heavy_seed.py::test_module_level"] == pytest.approx(100.0, abs=0.5)
 
 
+def test_assign_splitter_disabled_by_default(bc, tmp_path, monkeypatch, capsys):
+    """Default (no PDD_BALANCE_SPLIT_HEAVY env var) must emit heavy files
+    whole — matches legacy packing so test ordering inside chunks does
+    not change unexpectedly."""
+    monkeypatch.delenv("PDD_BALANCE_SPLIT_HEAVY", raising=False)
+    test_file = tmp_path / "tests" / "test_heavy_gated.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "class TestA:\n    def test_one(self): pass\n"
+        "class TestB:\n    def test_two(self): pass\n"
+    )
+    durations_path = tmp_path / "test-durations.json"
+    durations_path.write_text(json.dumps({
+        "tests/test_heavy_gated.py": 600.0,
+        "tests/test_heavy_gated.py::TestA": 300.0,
+        "tests/test_heavy_gated.py::TestB": 300.0,
+    }))
+
+    args = type("A", (), {
+        "test_dir": "tests/",
+        "chunk_index": 0,
+        "num_chunks": 1,
+        "durations": str(durations_path),
+        "heavy_threshold": 100.0,
+    })()
+    import os
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        bc.cmd_assign(args)
+    finally:
+        os.chdir(cwd)
+    out = capsys.readouterr().out.strip().splitlines()
+    # Without the env var, splitting is off — file emitted whole.
+    assert out == ["tests/test_heavy_gated.py"]
+
+
+def test_assign_splitter_activates_with_env(bc, tmp_path, monkeypatch, capsys):
+    """With PDD_BALANCE_SPLIT_HEAVY=1 the per-class splitter activates."""
+    monkeypatch.setenv("PDD_BALANCE_SPLIT_HEAVY", "1")
+    test_file = tmp_path / "tests" / "test_heavy_gated.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "class TestA:\n    def test_one(self): pass\n"
+        "class TestB:\n    def test_two(self): pass\n"
+    )
+    durations_path = tmp_path / "test-durations.json"
+    durations_path.write_text(json.dumps({
+        "tests/test_heavy_gated.py": 600.0,
+        "tests/test_heavy_gated.py::TestA": 300.0,
+        "tests/test_heavy_gated.py::TestB": 300.0,
+    }))
+
+    args = type("A", (), {
+        "test_dir": "tests/",
+        "chunk_index": 0,
+        "num_chunks": 1,
+        "durations": str(durations_path),
+        "heavy_threshold": 100.0,
+    })()
+    import os
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        bc.cmd_assign(args)
+    finally:
+        os.chdir(cwd)
+    out = set(capsys.readouterr().out.strip().splitlines())
+    # Splitter on — file emitted as per-class units, not whole.
+    assert out == {
+        "tests/test_heavy_gated.py::TestA",
+        "tests/test_heavy_gated.py::TestB",
+    }
+
+
 def test_seed_skips_files_below_threshold(bc, tmp_path):
     test_file = tmp_path / "tests" / "test_light.py"
     test_file.parent.mkdir(parents=True)
