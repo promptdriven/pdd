@@ -132,6 +132,11 @@ def _run_interactive_capture(tmp_path, csv_content, user_inputs, monkeypatch,
 
 SIMPLE_CSV = "provider,model,api_key,input,output\nOpenAI,gpt-5,OPENAI_API_KEY,3.0,15.0\n"
 
+GEMINI_CSV = (
+    "provider,model,api_key,input,output\n"
+    "Google Gemini,gemini/gemini-3-flash-preview,GEMINI_API_KEY,0.5,3.0\n"
+)
+
 TWO_MODEL_CSV = (
     "provider,model,api_key,input,output\n"
     "OpenAI,gpt-5,OPENAI_API_KEY,3.0,15.0\n"
@@ -278,6 +283,19 @@ def test_successful_test_passes_api_key_for_single_var(tmp_path, monkeypatch):
     )
     call_kwargs = mock_comp.call_args[1]
     assert call_kwargs["api_key"] == "sk-test123"
+
+
+def test_google_api_key_satisfies_gemini_api_key_row(tmp_path, monkeypatch):
+    """Gemini catalog rows can run with the universal GOOGLE_API_KEY alias."""
+    mock_comp = MagicMock(return_value=_mock_litellm_success())
+    output, _ = _run_interactive_capture(
+        tmp_path, GEMINI_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+        env_vars={"GOOGLE_API_KEY": "google-test123"},
+    )
+    call_kwargs = mock_comp.call_args[1]
+    assert call_kwargs["api_key"] == "google-test123"
+    assert "✓ Found (GOOGLE_API_KEY)" in output
 
 
 def test_multi_var_provider_no_api_key_kwarg(tmp_path, monkeypatch):

@@ -82,8 +82,8 @@ def check_prerequisites() -> bool:
 
     Uses get_available_agents() which detects:
     - Claude CLI (subscription auth, no API key needed)
-    - API keys (ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY)
-    - Vertex AI auth (GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_GENAI_USE_VERTEXAI)
+    - Google Gemini/Antigravity CLI auth, API keys, or Vertex AI env auth
+    - OpenAI Codex CLI auth or OPENAI_API_KEY
     """
     available = get_available_agents()
 
@@ -92,7 +92,7 @@ def check_prerequisites() -> bool:
         print("   Please ensure one of the following:")
         print("   - Claude CLI is installed (for Anthropic subscription users)")
         print("   - ANTHROPIC_API_KEY is set")
-        print("   - GEMINI_API_KEY or GOOGLE_API_KEY is set (with gemini CLI)")
+        print("   - agy/gemini is signed in, or a Google API key/Vertex env auth is set")
         print("   - OPENAI_API_KEY is set (with codex CLI)")
         return False
 

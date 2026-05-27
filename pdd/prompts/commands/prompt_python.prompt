@@ -1,5 +1,7 @@
 <pdd-reason>Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.</pdd-reason>
 
+<pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+
 % Write `pdd/commands/prompt.py`, implementing the shared `prompt_lint` command used by `pdd checkup lint`.
 
 <include>context/python_preamble.prompt</include>

@@ -144,18 +144,29 @@ def test_save_api_key_writes_under_sandbox_only(tmp_path, monkeypatch):
 
     from pdd.cli_detector import _save_api_key
 
-    ok = _save_api_key("TEST_KEY_SHOULD_NOT_LEAK", "test-value", "bash")
-    assert ok, "_save_api_key should succeed in the sandbox"
+    # Force shell detection to bash so the test is deterministic across hosts
+    # — `_save_api_key` no longer accepts a shell-name argument and instead
+    # reads it via `_get_shell_info()`.
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+    _save_api_key("TEST_KEY_SHOULD_NOT_LEAK", "test-value")
 
     pdd_dir = tmp_path / ".pdd"
     assert pdd_dir.is_dir(), f"_save_api_key did not create {pdd_dir}"
-    api_env = pdd_dir / "api-env.bash"
-    assert api_env.is_file(), f"_save_api_key did not write {api_env}"
-    assert "TEST_KEY_SHOULD_NOT_LEAK" in api_env.read_text(), (
-        "api-env.bash missing the test key"
+    api_env_candidates = list(pdd_dir.glob("api-env.*"))
+    assert api_env_candidates, (
+        f"_save_api_key did not write any api-env.* file under {pdd_dir}"
     )
-    sandbox_rc = tmp_path / ".bashrc"
-    assert sandbox_rc.exists(), (
-        f"_save_api_key did not write {sandbox_rc} — it likely wrote to "
-        f"the developer's real ~/.bashrc."
+    assert any(
+        "TEST_KEY_SHOULD_NOT_LEAK" in candidate.read_text()
+        for candidate in api_env_candidates
+    ), "no api-env.* file contains the test key"
+    rc_candidates = [
+        tmp_path / ".bashrc",
+        tmp_path / ".zshrc",
+        tmp_path / ".config" / "fish" / "config.fish",
+    ]
+    assert any(rc.exists() for rc in rc_candidates), (
+        f"_save_api_key did not write any shell rc under {tmp_path} — it "
+        f"likely wrote to the developer's real shell rc."
     )

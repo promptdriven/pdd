@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from rich.console import Console
 from rich.table import Table
@@ -42,6 +42,63 @@ def parse_api_key_vars(api_key_field: str) -> List[str]:
     if not api_key_field or not api_key_field.strip():
         return []
     return [v.strip() for v in api_key_field.split("|") if v.strip()]
+
+
+GOOGLE_API_KEY_ALIASES = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
+
+
+def api_key_aliases(key_name: str) -> List[str]:
+    """Return env var names that can satisfy a catalog credential name."""
+    key_name = (key_name or "").strip()
+    if not key_name:
+        return []
+    if key_name in GOOGLE_API_KEY_ALIASES:
+        return list(GOOGLE_API_KEY_ALIASES)
+    return [key_name]
+
+
+def expand_api_key_vars(api_key_field: str) -> List[str]:
+    """Split an api_key field and include accepted aliases for each var."""
+    expanded: List[str] = []
+    for key_name in parse_api_key_vars(api_key_field):
+        for alias in api_key_aliases(key_name):
+            if alias not in expanded:
+                expanded.append(alias)
+    return expanded
+
+
+def api_key_requirements_satisfied(
+    api_key_field: str,
+    configured_key_names: Iterable[str],
+) -> bool:
+    """Return True when every required CSV key has a configured key or alias."""
+    configured = {k for k in configured_key_names if k}
+    required = parse_api_key_vars(api_key_field)
+    if not required:
+        return False
+    return all(any(alias in configured for alias in api_key_aliases(key)) for key in required)
+
+
+def resolve_api_key_from_env(
+    key_name: str,
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a key value from env, accepting aliases such as GOOGLE_API_KEY."""
+    if env is None:
+        env = os.environ
+    for alias in api_key_aliases(key_name):
+        value = env.get(alias)
+        if value and str(value).strip():
+            return str(value).strip(), alias
+    return None, None
+
+
+def preferred_api_key_name(key_name: str) -> str:
+    """Return the env var PDD should prompt/save for a catalog key."""
+    key_name = (key_name or "").strip()
+    if key_name in GOOGLE_API_KEY_ALIASES:
+        return "GOOGLE_API_KEY"
+    return key_name
 
 
 def is_multi_credential(api_key_field: str) -> bool:
@@ -628,17 +685,25 @@ def add_provider_from_registry() -> bool:
         return False
 
     selected_provider = sorted_providers[choice - 1]
-    api_key_var = str(provider_info[selected_provider]["api_key"]) or None
+    catalog_api_key_var = str(provider_info[selected_provider]["api_key"]) or None
+    api_key_var = preferred_api_key_name(catalog_api_key_var or "") if catalog_api_key_var else None
 
     # ── Step 2: Provider authentication ──────────────────────────────
 
     if selected_provider in COMPLEX_AUTH_PROVIDERS:
         _setup_complex_provider(selected_provider)
     elif api_key_var:
-        existing_source = _is_key_set(api_key_var)
+        existing_key_var = api_key_var
+        existing_source = None
+        for alias in api_key_aliases(catalog_api_key_var or api_key_var):
+            source = _is_key_set(alias)
+            if source:
+                existing_key_var = alias
+                existing_source = source
+                break
         if existing_source:
             console.print(
-                f"  [green]{api_key_var} is already set ({existing_source}).[/green]"
+                f"  [green]{existing_key_var} is already set ({existing_source}).[/green]"
             )
             if Confirm.ask("Update the key?", default=False):
                 key_value = Prompt.ask(f"Enter new value for {api_key_var}")
