@@ -2436,7 +2436,10 @@ def _select_model_candidates(
     # path.
     provider_pin = (os.environ.get("PDD_PROVIDER", "") or "").strip().lower()
     if provider_pin:
-        provider_col = model_df['provider'].astype(str).str.lower()
+        # Strip and lowercase so a CSV row with leading/trailing whitespace
+        # in the provider column (e.g. ``" OpenAI "``) still matches the
+        # canonical alias derived from the stripped csv_providers below.
+        provider_col = model_df['provider'].astype(str).str.strip().str.lower()
 
         # Canonical-alias resolution. The substring approach alone causes two
         # regressions the issue/PR review surfaced:
@@ -2478,6 +2481,23 @@ def _select_model_candidates(
         pinned_df = pd.DataFrame()
         if canonical_provider is not None:
             pinned_df = model_df[provider_col == canonical_provider.lower()]
+            if pinned_df.empty:
+                # The user pinned a recognised canonical provider (alias
+                # resolved cleanly), but the CSV has no exact provider rows
+                # for it. Falling through to substring fallbacks here would
+                # silently route to a different provider whose model column
+                # happens to contain the alias token (e.g. ``gemini`` matching
+                # ``github_copilot/gemini-3-pro-preview``), reopening the
+                # wrong-routing class this pin is meant to close. Fail loudly.
+                known_providers = sorted({
+                    p for p in model_df['provider'].astype(str).str.strip() if p
+                })
+                raise RuntimeError(
+                    f"PDD_PROVIDER='{provider_pin}' resolved to canonical provider "
+                    f"'{canonical_provider}' but no rows for that provider exist in "
+                    f"the LLM model CSV. Available providers: "
+                    f"{', '.join(known_providers) or '(none)'}"
+                )
 
         if pinned_df.empty:
             # Substring fallback on the provider column. Detect ambiguity so

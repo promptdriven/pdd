@@ -14,7 +14,7 @@ _pdd() {
     cword=$COMP_CWORD
 
     # Global options
-    local global_opts="--force --strength --time --temperature --verbose --quiet --output-cost --review-examples --local --context --list-contexts --help --version"
+    local global_opts="--force --strength --time --temperature --verbose --quiet --output-cost --review-examples --local --provider --context --list-contexts --help --version"
 
     # Commands
     local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync checkup setup install_completion pytest-output"

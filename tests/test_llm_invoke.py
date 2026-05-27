@@ -4834,15 +4834,27 @@ class TestSelectModelCandidates:
         assert len(candidates) == 1
         assert candidates[0]["model"] == "claude-3"
 
-    def test_provider_pin_matches_model_column(self, llm_mod, tmp_path, monkeypatch):
-        """Pin substring is allowed to match the model column too — covers CSVs
-        like the bundled one where ``provider='Google Vertex AI'`` carries a
-        bare ``gemini-3.1-pro-preview`` row (no provider-prefix on model)."""
+    def test_provider_pin_canonical_alias_without_provider_rows_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """If a canonical alias (e.g. ``gemini`` → ``Google Gemini``) resolves
+        but the CSV has no rows for that exact provider, the pin must raise
+        with a clear message instead of silently falling through to the
+        model-column substring fallback. Regression for codex round-2 review
+        of #1246: a user-customized CSV with only ``Github Copilot,
+        github_copilot/gemini-3-pro-preview,...`` and ``PDD_PROVIDER=gemini``
+        would otherwise silently route to Github Copilot, reopening the
+        cross-provider wrong-routing class the pin is meant to close."""
         df = self._make_df(llm_mod, tmp_path)
         monkeypatch.setenv("PDD_PROVIDER", "gemini")
-        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
-        assert len(candidates) == 1
-        assert candidates[0]["model"] == "gemini-pro"
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        msg = str(excinfo.value)
+        assert "gemini" in msg.lower()
+        assert "google gemini" in msg.lower()
+        # The error must list available providers so the user can correct it.
+        assert "anthropic" in msg.lower()
+        assert "openai" in msg.lower()
 
     def test_provider_pin_unknown_raises_with_known_providers(self, llm_mod, tmp_path, monkeypatch):
         df = self._make_df(llm_mod, tmp_path)
@@ -4913,6 +4925,57 @@ class TestSelectModelCandidates:
         assert providers == {"google gemini"}, providers
         models = {c["model"] for c in candidates}
         assert "github_copilot/gemini-3-pro-preview" not in models
+
+    def test_provider_pin_gemini_alias_only_copilot_csv_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for codex round-2 review of #1246: a user-customized
+        CSV that only contains ``Github Copilot, github_copilot/gemini-...``
+        plus ``PDD_PROVIDER=gemini`` must NOT silently route to Github
+        Copilot via the model-column substring fallback. Because ``gemini``
+        is a canonical alias that resolves to ``Google Gemini`` and that
+        provider has no rows in this CSV, the pin must raise."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Github Copilot,github_copilot/gemini-3-pro-preview,0.0,0.0,1438,,"
+            "True,none,128000,8192,0\n"
+        )
+        csv_path = tmp_path / "copilot_only.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        monkeypatch.setenv("PDD_PROVIDER", "gemini")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        msg = str(excinfo.value)
+        assert "google gemini" in msg.lower()
+        assert "github copilot" in msg.lower()
+
+    def test_provider_pin_anthropic_alias_only_bedrock_csv_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Companion regression: a CSV containing only AWS Bedrock rows with
+        ``bedrock/anthropic.claude-...`` model names plus ``PDD_PROVIDER=
+        anthropic`` must NOT silently fall through to Bedrock. ``anthropic``
+        is a canonical alias whose exact provider rows are missing here, so
+        raise instead of cross-routing."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "AWS Bedrock,bedrock/anthropic.claude-opus-4,15.0,75.0,1500,"
+            "AWS_ACCESS_KEY_ID,True,none,200000,8192,0\n"
+        )
+        csv_path = tmp_path / "bedrock_only.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        monkeypatch.setenv("PDD_PROVIDER", "anthropic")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "claude-opus-4", df)
+        msg = str(excinfo.value)
+        assert "anthropic" in msg.lower()
+        assert "aws bedrock" in msg.lower()
 
     def test_provider_pin_falls_back_to_model_column_when_provider_unmatched(
         self, llm_mod, tmp_path, monkeypatch
@@ -5006,6 +5069,35 @@ class TestSelectModelCandidates:
         assert providers == {"OpenAI"}, providers
         models = {c["model"] for c in candidates}
         assert "azure/gpt-5.5" not in models
+
+    def test_provider_pin_strips_whitespace_in_provider_column(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression: a hand-edited CSV may have leading/trailing whitespace
+        in the provider column (``" OpenAI "``). Canonical-alias resolution
+        builds aliases from stripped provider names, so the alias resolves
+        to the un-stripped ``"OpenAI"`` from the row, but the exact-match
+        compare ran against an un-stripped lowercased provider column —
+        which made the exact match miss and forced a fallthrough into the
+        ambiguous substring fallback. The provider column must be stripped
+        before comparison so the pin resolves cleanly."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            " OpenAI ,gpt-5.5,5.0,30.0,1450,OPENAI_API_KEY,"
+            "True,effort,200000,16384,0\n"
+            "Azure OpenAI,azure/gpt-5.5,5.0,30.0,1450,"
+            "AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,"
+            "True,effort,200000,16384,0\n"
+        )
+        csv_path = tmp_path / "whitespace_provider.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        monkeypatch.setenv("PDD_PROVIDER", "openai")
+        candidates = llm_mod._select_model_candidates(1.0, "gpt-5.5", df)
+        providers = {c["provider"].strip() for c in candidates}
+        assert providers == {"OpenAI"}, providers
 
     def test_provider_pin_azure_alias_distinguishes_azure_ai_from_azure_openai(
         self, llm_mod, tmp_path, monkeypatch

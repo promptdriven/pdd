@@ -18,6 +18,7 @@
 %   --verbose: Increase output verbosity.
 %   --quiet: Decrease output verbosity.
 %   --time <float>: Specifies a timeout duration in seconds for the operation (e.g., --time 0.5 or --time 10).
+%   --provider <name>: Pin local-mode model selection to a single provider (also reads PDD_PROVIDER). Accepts a canonical alias (``openai``, ``azure_openai``, ``vertex_ai``, ``azure_ai``, ``anthropic``, ``gemini``, ``github_copilot``, ...), the exact CSV provider name (case-insensitive), or an unambiguous substring. ``--provider`` must appear in the global options list so it is offered alongside other globals; argument completion can be left to a free string.
 %   (Other global options as per the full README.md)
 %
 % Commands:
