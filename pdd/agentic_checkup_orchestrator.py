@@ -1146,15 +1146,19 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
                 marker_paths.add(cleaned)
         # Pull a few trailing non-empty lines as potential justification
         # text so a multi-line block of reasoning still satisfies the
-        # justification requirement. Codex round-6 Finding 1: arbitrary
-        # trailing prose (e.g. a closing "All done." sentence) used to
-        # qualify as justification on length alone, letting the fixer
-        # bypass scope by emitting any marker plus any padding text.
-        # Restrict trailing capture to lines that look like they belong
-        # to THIS marker: indented continuations, bullets, an explicit
-        # JUSTIFICATION:/REASON:/BECAUSE: prefix, lines that mention one
-        # of the marker's own paths, or lines containing a causal
-        # keyword. Plain unrelated prose no longer counts.
+        # justification requirement. Codex round-6 Finding 1 / round-7
+        # Finding 1: arbitrary trailing prose (e.g. a closing "All done."
+        # sentence) used to qualify as justification on length alone,
+        # letting the fixer bypass scope by emitting any marker plus any
+        # padding text. Round-6 tried to fix this by treating indented
+        # or bulleted continuations as inherently per-marker — but that
+        # is still bypassable with "  All done." or "- All done.". The
+        # tightened rule requires SEMANTIC content: a line counts as a
+        # per-marker justification only when it carries a JUSTIFICATION:
+        # /REASON:/BECAUSE: prefix, mentions one of the marker's own
+        # paths (full path or basename), or contains a causal keyword.
+        # Bare indentation/bullets without those signals no longer
+        # qualifies.
         marker_path_tokens: set = set()
         for path in marker_paths:
             marker_path_tokens.add(path)
@@ -1169,22 +1173,27 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
                 break
             if follow_stripped.startswith(("FILES_", "PATTERN_", "FIX_")):
                 break
-            is_continuation = (
-                follow.startswith((" ", "\t"))
-                or follow_stripped.startswith(("- ", "* ", "+ ", "> "))
-            )
-            lowered = follow_stripped.lower()
+            # Strip a leading bullet/blockquote marker so the semantic
+            # checks below see the actual content (mentions/keyword) of
+            # a "- because foo broke" continuation.
+            content = follow_stripped
+            for bullet in ("- ", "* ", "+ ", "> "):
+                if content.startswith(bullet):
+                    content = content[len(bullet):].strip()
+                    break
+            lowered = content.lower()
             has_prefix = lowered.startswith(
                 ("justification:", "reason:", "because:", "rationale:", "why:")
             )
-            mentions_path = any(tok in follow_stripped for tok in marker_path_tokens)
+            mentions_path = any(tok in content for tok in marker_path_tokens)
             has_causal_keyword = any(
                 kw in lowered for kw in _EXPANSION_CAUSAL_KEYWORDS
             )
-            if not (is_continuation or has_prefix or mentions_path or has_causal_keyword):
-                # Unrelated trailing prose — not a per-marker justification.
+            if not (has_prefix or mentions_path or has_causal_keyword):
+                # Trailing prose without semantic per-marker content
+                # (even when indented or bulleted) — not a justification.
                 continue
-            marker_segments.append(follow_stripped)
+            marker_segments.append(content)
 
         paths.update(marker_paths)
         marker_has_justification = any(
@@ -2753,15 +2762,17 @@ def _run_agentic_checkup_orchestrator_inner(
         # by other steps or tooling. Non-PR mode skips the side-effect refusal
         # path entirely (regular checkup commits its fixes the usual way).
         #
-        # Codex round-6 Finding 3: a resume that skips ahead (start_step > 6)
-        # bypasses the assignment at line ~2772 that would otherwise flip the
+        # Codex round-6 Finding 3 / round-7 Finding 2: a resume that skips
+        # ahead bypasses the assignment that would otherwise flip the
         # flag — without honouring persisted fixer state the side-effect
-        # guard would then refuse the dirty changes the previous run's fixer
-        # produced. Seed from step_outputs so a resumed iteration recognises
-        # that the fixer already executed.
-        fixer_invoked = (
-            any(k in step_outputs for k in ("6_1", "6_2", "6_3"))
-            or start_step > 6
+        # guard would refuse the dirty changes the previous run's fixer
+        # produced. Seed ONLY from persisted ``step_outputs`` so a manual
+        # ``--start-step 7`` (no prior fixer execution, no persisted 6_x
+        # outputs) does NOT bypass the side-effect guard for dirty files
+        # left by tooling. The earlier ``or start_step > 6`` clause made
+        # that bypass possible.
+        fixer_invoked = any(
+            k in step_outputs for k in ("6_1", "6_2", "6_3")
         )
 
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
