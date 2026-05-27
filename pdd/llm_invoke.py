@@ -2650,8 +2650,10 @@ def _select_model_candidates(
 
     if strength == 0.5:
         # target_model = base_model
-        # Sort remaining by ELO descending as fallback
-        available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
+        # Sort remaining by ELO closest to base (continuity limit of the > 0.5 branch:
+        # as strength → 0.5 from above, the interpolated target ELO collapses to base_elo).
+        base_elo = base_model['coding_arena_elo']
+        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - base_elo)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
         # Ensure effective base model is first if it exists (supports surrogate base)
         effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
