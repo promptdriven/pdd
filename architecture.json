@@ -2446,7 +2446,7 @@
     }
   },
   {
-    "reason": "Iteratively fixes errors until tests pass.",
+    "reason": "Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.",
     "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
     "dependencies": [
       "failure_classification_python.prompt"
@@ -2464,44 +2464,14 @@
       "module": {
         "functions": [
           {
-            "name": "escape_brackets",
-            "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py') -> Tuple[bool, bool, str, str, str, float, str]",
-            "returns": "Tuple[bool, bool, str, str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "run_pytest_on_file",
-            "signature": "(test_file: str) -> tuple[int, int, int, str]",
-            "returns": "tuple[int, int, int, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "format_log_for_output",
-            "signature": "(log_structure)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
