@@ -37,14 +37,15 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 2. **split**:
    - Doc: "Split large dev units into smaller, more manageable ones."
-   - **Agentic (default)**: 1 arg (`target_file`). Calls `run_agentic_split(target_file, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Exit(1) on failure.
+   - **Agentic (default)**: 1 arg (`target_file`). Calls `run_agentic_split(target_file, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
    - Options (agentic mode): `--diagnose` (steps 0-2 only), `--propose-only` (steps 0-4 only), `--delete-dead` (opt-in dead symbol deletion), `--force-split` (override LEAVE_ALONE diagnosis), `--no-verify` (skip test gate, dev only), `--skip-regen-gate` (skip regen, dev only, logged loudly), `--experimental-language` (opt-in for non-Python), `--no-github-state`, `--timeout-adder` (0.0), `--intent` (reduce|parallel|reuse|tests; skips step 0), `--no-phase-extraction` (skip phase helpers), `--strangler` (sequence N orchestrator passes; see issue #1402 for per-child enforcement), `--max-cost USD` (Issue #1384: help text "Abort if total cost would cross USD threshold."; aborts cleanly with resumable state when accumulated cost crosses threshold; type `click.FloatRange(min=0.01)`, default `None`).
    - **Legacy (`--legacy`)**: 3 args (`input_prompt`, `input_code`, `example_code`, all `exists=True`). Options: `--output-sub`, `--output-modified`. Calls `split_main` with named file arguments and `ctx`.
 
 3. **change**:
    - Doc: "Modify an input prompt file based on a change prompt or issue."
-   - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`.
-   - **Agentic (default)**: 1 arg (issue_url). Calls `run_agentic_change(use_github_state=not no_github_state, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Exit(1) on failure.
+   - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`, `--clean-restart`.
+   - **Agentic (default)**: 1 arg (issue_url). Calls `run_agentic_change(use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
+   - **`--clean-restart` flag** (agentic mode only): Boolean flag (default `False`). Help text: "Discard any persisted solving state for this issue and start a fresh full pdd-issue flow from the default base branch, ignoring any previously generated change/issue-N branch artifacts. Use when recovering from a stopped or wrong-model run." Validation: MUST raise `click.UsageError` when combined with `--manual` ("--clean-restart is only valid in agentic mode and cannot be used with --manual") or when the single agentic argument is not a GitHub issue URL ("--clean-restart can only be used with an agentic GitHub issue URL."). When set, forwarded to `run_agentic_change` as `clean_restart=True`; otherwise passes `clean_restart=False`.
    - **Manual (`--manual`)**:
      - `--csv`: 2 args (change_file, input_code: directory).
      - Standard: 3 args (change_file, input_code: file, input_prompt).

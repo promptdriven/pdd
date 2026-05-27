@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -2373,3 +2374,239 @@ class TestTrustedStepCommentPosting:
             success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
 
         assert success is True
+
+
+class TestRefreshPrBaseRefTimeout:
+    """Iter-20 Finding 3: the base-ref fetch MUST be bounded so a
+    stalled transport (auth prompt, dead remote, transient hang)
+    cannot hold the review loop forever. The deterministic-gate
+    layer's own ``gate_timeout`` does NOT apply to this subprocess
+    because the fetch runs BEFORE gate discovery.
+    """
+
+    def test_passes_timeout_to_subprocess_run(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        recorded = {}
+
+        def fake_run(args, **kwargs):
+            recorded["args"] = args
+            recorded["kwargs"] = kwargs
+            return sp.CompletedProcess(args, 0, b"", b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "release-1.4"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        assert "timeout" in recorded["kwargs"], (
+            "subprocess.run MUST be called with a timeout kwarg so a stalled "
+            "fetch cannot hang the review loop"
+        )
+        assert recorded["kwargs"]["timeout"] > 0
+        assert md.get("base_local_ref") == "refs/remotes/pdd-checkup/pr-1/base"
+
+    def test_timeout_expired_populates_base_ref_fetch_error(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        def fake_run(args, **kwargs):
+            raise sp.TimeoutExpired(cmd=args, timeout=60)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "release-1.4"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        # MUST be caught and surfaced as base_ref_fetch_error so the
+        # review-loop's iter-19 fail-closed path kicks in. MUST NOT
+        # leak as an unhandled TimeoutExpired exception.
+        assert "base_ref_fetch_error" in md
+        assert "timed out" in md["base_ref_fetch_error"].lower()
+        assert "base_local_ref" not in md
+
+    def test_called_process_error_scrubs_secrets_from_stderr(self, tmp_path):
+        """``_refresh_pr_base_ref`` MUST
+        route the failed-fetch stderr through ``_scrub_secrets`` (regex
+        catch-all) BEFORE storing it on ``pr_metadata`` or printing it
+        to the console. Env-token redaction alone misses credentials
+        supplied by the git credential helper, GitHub App installation
+        tokens minted at runtime, embedded ``https://<user>:<token>@host``
+        basic-auth, and verbose-transport ``Bearer`` headers. The
+        console.print output and ``pr_metadata["base_ref_fetch_error"]``
+        both flow into long-term log capture and the rendered checkup
+        report — they are public surfaces.
+        """
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        # stderr carrying a GitHub App installation token (`ghs_…`)
+        # that is NOT in process env — would slip past the env-token
+        # redaction unless the regex scrub runs.
+        leaky_stderr = (
+            "remote: Invalid username or token. "
+            "Token ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 has expired\n"
+            "fatal: Authentication failed for "
+            "'https://x-access-token:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/o/r.git/'\n"
+        )
+
+        def fake_run(args, **kwargs):
+            raise sp.CalledProcessError(
+                returncode=128, cmd=args, output="", stderr=leaky_stderr
+            )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="upstream",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._github_token_from_env",
+            return_value="",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "main"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        stored = md["base_ref_fetch_error"]
+        # Both token shapes MUST be redacted even though the env is empty.
+        assert "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in stored
+        assert "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" not in stored
+        assert "[REDACTED]" in stored
+        # Surrounding context (the operator-useful diagnostic) survives.
+        assert "Authentication failed" in stored or "expired" in stored.lower()
+
+    def test_called_process_error_scrubs_generic_url_userinfo(self, tmp_path):
+        """Generic ``scheme://user:password@host`` basic-auth credentials
+        in git stderr MUST be scrubbed even when the password does not
+        match any prefix-anchored token pattern (custom internal token
+        shape, runtime-minted App installation token, credential-helper
+        PAT). The URL-userinfo regex uses lookbehind/lookahead around
+        ``://``…``@`` so the scheme + host stay readable for diagnostics
+        while the credential payload is replaced.
+        """
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import _refresh_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        # Generic basic-auth URL whose password is a custom token shape
+        # — does NOT start with ghp_/ghs_/sk-/etc., would slip past
+        # every other pattern unless URL-userinfo redaction runs.
+        leaky_stderr = (
+            "fatal: Authentication failed for "
+            "'https://x-access-token:customToken123456789@github.com/o/r.git/'\n"
+        )
+
+        def fake_run(args, **kwargs):
+            raise sp.CalledProcessError(
+                returncode=128, cmd=args, output="", stderr=leaky_stderr
+            )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="upstream",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._github_token_from_env",
+            return_value="",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            md = {"base_ref": "main"}
+            _refresh_pr_base_ref(tmp_path, "o", "r", 1, md, quiet=True)
+
+        stored = md["base_ref_fetch_error"]
+        # The generic-shape credential MUST NOT survive verbatim.
+        assert "customToken123456789" not in stored
+        assert "x-access-token:customToken123456789" not in stored
+        # Scheme + host remain readable so the diagnostic is still useful.
+        assert "github.com/o/r.git" in stored
+        assert "[REDACTED]" in stored
+
+    def test_refresh_pr_base_ref_uses_trusted_git_under_dot_path(
+        self, tmp_path, monkeypatch
+    ):
+        """Greg PR #1095 review: the base-ref refresh is part of the
+        gates-on flow and must not execute a PR-controlled ``./git`` shim
+        before gate discovery starts.
+        """
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_base_tracking_ref,
+            _refresh_pr_base_ref,
+        )
+
+        remote = tmp_path / "remotes" / "o" / "r.git"
+        seed = tmp_path / "seed"
+        worktree = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "init", "--bare", "-q", "-b", "main", str(remote)],
+            check=True,
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=seed, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "base",
+                "-q",
+            ],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "main"], cwd=seed, check=True)
+        subprocess.run(["git", "clone", "-q", str(remote), str(worktree)], check=True)
+
+        shim = worktree / "git"
+        marker = worktree / "marker"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f"echo shim >> {marker}\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        monkeypatch.setenv("PATH", f".{os.pathsep}{os.environ.get('PATH', '')}")
+
+        md = {"base_ref": "main"}
+        _refresh_pr_base_ref(worktree, "o", "r", 1, md, quiet=True)
+
+        assert md.get("base_local_ref") == _pr_base_tracking_ref(1)
+        assert "base_ref_fetch_error" not in md
+        assert not marker.exists()

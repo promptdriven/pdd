@@ -250,8 +250,15 @@ def test_execute_pdd_command_success():
         assert output.result == "Done"
 
 def test_get_pdd_command_fallback():
-    """Test that get_pdd_command returns None if import fails or command not found."""
-    # We can't easily force an ImportError inside the function without complex mocking of sys.modules,
-    # but we can test the fallback for an unknown name.
+    """Test unknown commands return None."""
+    # We can't easily force an ImportError here without complex sys.modules
+    # mocking, but we can test the fallback for an unknown name.
     cmd = get_pdd_command("definitely_not_a_real_command")
     assert cmd is None
+
+
+def test_get_pdd_command_known_exports():
+    """Known server-executable commands resolve through pdd.commands exports."""
+    for command_name in ("sync", "update", "bug", "generate", "test", "fix", "detect"):
+        cmd = get_pdd_command(command_name)
+        assert isinstance(cmd, click.Command), command_name

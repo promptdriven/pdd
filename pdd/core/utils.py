@@ -101,3 +101,16 @@ def _run_setup_utility() -> None:
     result = subprocess.run([sys.executable, "-m", "pdd.setup_tool"])
     if result.returncode not in (0, None):
         raise RuntimeError(f"Setup utility exited with status {result.returncode}")
+
+
+def should_show_model(model: Optional[str]) -> bool:
+    """Return True when the given model name is meaningful enough to display."""
+    if not model:
+        return False
+    return model.strip().lower() not in {"", "unknown", "n/a"}
+
+
+def echo_model_line(model: Optional[str]) -> None:
+    """Echo a `Model: <name>` line iff the model name is meaningful."""
+    if should_show_model(model):
+        click.echo(f"Model: {model}")

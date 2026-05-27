@@ -42,7 +42,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from rich.console import Console
 
 from .agentic_change import _run_gh_command
-from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
+from .agentic_checkup_orchestrator import (
+    _get_git_root,
+    _refresh_pr_base_ref,
+    _setup_pr_worktree,
+)
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
@@ -200,6 +204,20 @@ _SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:AKIA|ASIA|ABIA)[A-Z0-9]{16}\b"),
     # Slack tokens — diagnostics tools occasionally include them.
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+    # Embedded basic-auth credentials in a URL:
+    # ``scheme://user:password@host``. Git stderr on a failed fetch
+    # routinely echoes the remote URL verbatim; the credential helper
+    # / runtime-minted installation token / configured PAT may be
+    # baked into the URL with a generic shape (custom-length internal
+    # token, ``x-access-token:<arbitrary>``) that none of the
+    # prefix-anchored patterns above can recognise. Use a lookbehind
+    # for ``://`` and a lookahead for ``@`` so the userinfo gets
+    # replaced while the scheme and host stay readable
+    # (``https://[REDACTED]@github.com/o/r.git``). The char classes
+    # exclude whitespace, ``/``, ``:`` (left side) and ``@`` so a
+    # path that happens to contain ``://`` followed by text and an
+    # ``@`` literal cannot trip a false match.
+    re.compile(r"(?<=://)[^\s:/@]+:[^\s/@]+(?=@)"),
 )
 
 
@@ -651,6 +669,22 @@ class ReviewLoopConfig:
     # at the end of the field list so positional callers keep working
     # unchanged.
     fixer_fallback: Optional[str] = None
+    # APPENDED — Issue #1092 deterministic gates. When ``enable_gates``
+    # is True (the default), every clean-exit site in
+    # ``run_checkup_review_loop`` routes through
+    # ``_enforce_gates_before_clean`` which runs ``pdd.checkup_gates``
+    # over the loop-owned PR worktree. A failing local gate (e.g.
+    # ``prettier --check`` on a worktree the LLM reviewer declared
+    # clean) injects synthetic blocker findings tagged
+    # ``reviewer="gate:<name>"`` so the loop refuses the clean verdict
+    # and the fixer addresses the deterministic failure. ``gate_timeout``
+    # is the per-gate wall-clock cap in seconds. ``gate_allow`` is a
+    # forward-compatibility hook that lets the operator opt extra gate
+    # names into discovery. MUST stay at the end of the field list so
+    # positional callers keep working unchanged.
+    enable_gates: bool = True
+    gate_timeout: float = 60.0
+    gate_allow: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -747,6 +781,17 @@ class ReviewLoopState:
     # → missing on stale head) would erase the only signal that the
     # re-fetch was attempted.
     final_refetch_attempted: bool = False
+    # Issue #1092. One entry per ``_enforce_gates_before_clean``
+    # invocation, in execution order. Each entry is a dict with
+    # ``round`` (int), ``mode`` (str — e.g. "review", "verify",
+    # "review-only", "fallback-review", "review-pending"), and
+    # ``results`` (list of ``GateResult.to_dict()`` payloads — both
+    # passed and failed gates). Drives the rendered
+    # ``### Deterministic Gates`` section and the ``gates`` field of
+    # ``final-state.json``. Empty when ``config.enable_gates`` is
+    # False. Kept at the end of the field list so positional
+    # construction stays stable.
+    gate_runs: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -809,11 +854,88 @@ def run_checkup_review_loop(
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
+    # Issue #1092: gates need the PR's actual base_ref so
+    # ``git-diff-check`` runs against the real PR range. Review-only
+    # historically short-circuited the metadata fetch (review-only never
+    # pushed, so the push metadata felt unnecessary), but that path
+    # also dropped ``base_ref`` and left gates unable to compute the PR
+    # range. Fetch metadata whenever gates are enabled, even in
+    # review-only mode, so non-main-base PRs do not silently lose the
+    # PR-range guarantee.
+    skip_metadata = config.review_only and not config.enable_gates
     pr_metadata = (
         {}
-        if config.review_only
+        if skip_metadata
         else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
     )
+    # Issue #1092: refresh the PR's base ref into the dedicated
+    # ``refs/remotes/pdd-checkup/pr-<N>/base`` local ref so the
+    # deterministic gate layer's ``git-diff-check`` runs against the
+    # real PR range. We reuse the orchestrator's
+    # ``_refresh_pr_base_ref`` helper (already used by the legacy
+    # checkup orchestrator at the PR-base-resolution boundary) so the
+    # fetched ref lives in a dedicated namespace and does NOT mutate
+    # the user's ``refs/remotes/origin/*`` tracking refs. On success
+    # the helper populates ``pr_metadata['base_local_ref']`` with the
+    # resolved ref; on a documented fetch failure
+    # (``CalledProcessError`` or ``TimeoutExpired``) it populates
+    # ``pr_metadata['base_ref_fetch_error']`` and the loop's
+    # ``_enforce_gates_before_clean`` engages its fail-closed path.
+    # Iter-23 Finding 1: when ``_fetch_pr_metadata`` itself failed
+    # (gh outage, auth error, invalid JSON, network) it returns ``{}``
+    # or a partial payload with no ``base_ref``. The pre-fix
+    # ``if pr_metadata.get("base_ref")`` guard then short-circuited
+    # the refresh, never set ``base_ref_fetch_error``, and gates ran
+    # with a None ``base_ref`` — silently falling back to
+    # ``origin/main`` / worktree-only ``git diff --check``. Fail
+    # closed by populating ``base_ref_fetch_error`` so the same
+    # ``gate:base-ref`` blocker that iter-19 added for the refresh
+    # path also fires for the metadata-fetch path.
+    if config.enable_gates and not skip_metadata:
+        # ``pr_metadata`` is a typed ``Dict[str, str]`` so we can
+        # safely set the sentinel even when the dict is empty (which
+        # is exactly the failure surface we want to catch).
+        if not isinstance(pr_metadata, dict):
+            pr_metadata = {}
+        if not pr_metadata.get("base_ref"):
+            pr_metadata["base_ref_fetch_error"] = (
+                "_fetch_pr_metadata returned no usable base_ref "
+                "(gh API failure, auth error, or invalid JSON); "
+                "refusing to compute PR-range gates against an "
+                "unverified base"
+            )
+    if config.enable_gates and pr_metadata and pr_metadata.get("base_ref"):
+        try:
+            _refresh_pr_base_ref(
+                worktree,
+                context.pr_owner,
+                context.pr_repo,
+                context.pr_number,
+                pr_metadata,
+                quiet,
+            )
+        except Exception as exc:  # noqa: BLE001 - defensive
+            # An UNEXPECTED exception from the helper (anything other
+            # than the documented CalledProcessError/TimeoutExpired
+            # branches it handles itself) MUST still set
+            # ``base_ref_fetch_error`` so the gate layer's fail-closed
+            # path engages — otherwise the loop would silently fall
+            # back to ``origin/main`` or the worktree-only
+            # ``git diff --check``, which is the exact gap iter-19
+            # closed in the documented-failure path. Scrub before
+            # storing so CI/cloud log capture cannot harvest tokens
+            # from the unhandled exception text.
+            # Scrub BEFORE the debug log: ``logger.debug`` writes to
+            # the same stderr stream CI/cloud log capture harvests, so
+            # logging raw ``exc`` text first would leak any token
+            # embedded in the exception message even though the
+            # downstream ``base_ref_fetch_error`` value is scrubbed.
+            scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+            logger.debug("gates: PR base-ref refresh failed: %s", scrubbed_exc)
+            pr_metadata["base_ref_fetch_error"] = (
+                f"unexpected exception in _refresh_pr_base_ref: {scrubbed_exc}"
+            )
+            pr_metadata.pop("base_local_ref", None)
     # Capture the SHA the reviewer will actually see in the worktree.
     # This is the comparison target for the R-V5 re-fetch when a
     # reviewer path returns ``clean`` without ever invoking a fixer
@@ -948,6 +1070,38 @@ def run_checkup_review_loop(
                             break
                         state.active_reviewer = fallback_result.reviewer
                         if fallback_result.status == "clean":
+                            # Issue #1092: deterministic gates must pass
+                            # before any clean verdict, including the
+                            # fallback-reviewer-clean path. A fallback
+                            # promoted to ``clean`` cannot override a
+                            # failing local gate. Gate findings are
+                            # recorded under the fallback's identity so
+                            # the audit trail shows which reviewer the
+                            # gates were validating against.
+                            gate_findings = _enforce_gates_before_clean(
+                                state=state,
+                                config=config,
+                                worktree=worktree,
+                                artifacts_dir=artifacts_dir,
+                                round_number=round_number,
+                                mode="fallback-review",
+                                pr_metadata=pr_metadata,
+                                reviewer=fallback_result.reviewer,
+                            )
+                            if gate_findings:
+                                _record_gate_findings(state, gate_findings)
+                                state.reviewer_status[fallback_result.reviewer] = "findings"
+                                # The fallback reviewer is now the active
+                                # reviewer for the rest of the loop;
+                                # feed the gate findings to the fixer on
+                                # the next iteration rather than declaring
+                                # clean. Without this, a fallback clean
+                                # on top of a failing prettier gate would
+                                # ship.
+                                reviewer = fallback_result.reviewer
+                                fallback_used = True
+                                pending_findings = list(gate_findings)
+                                continue
                             state.fresh_final_status = "clean"
                             state.stop_reason = (
                                 f"Primary reviewer {reviewer} unavailable "
@@ -982,22 +1136,88 @@ def run_checkup_review_loop(
                         "Review-only mode: primary reviewer reported findings."
                     )
                 else:
-                    _mark_reviewer_findings_fixed(state, reviewer)
-                    state.reviewer_status[reviewer] = "clean"
-                    state.fresh_final_status = "clean"
-                    state.stop_reason = (
-                        "Review-only mode: primary reviewer reported no findings."
+                    # Issue #1092: deterministic gates must pass before
+                    # declaring a clean review-only verdict. Review-only
+                    # is non-mutating (no fixer runs), so a failing gate
+                    # surfaces in the report as a blocker finding and
+                    # the reviewer status stays at ``findings`` — the
+                    # operator runs the suggested local command and
+                    # commits the fix themselves.
+                    gate_findings = _enforce_gates_before_clean(
+                        state=state,
+                        config=config,
+                        worktree=worktree,
+                        artifacts_dir=artifacts_dir,
+                        round_number=round_number,
+                        mode="review-only",
+                        pr_metadata=pr_metadata,
+                        reviewer=reviewer,
                     )
+                    if gate_findings:
+                        _record_gate_findings(state, gate_findings)
+                        state.reviewer_status[reviewer] = "findings"
+                        state.stop_reason = (
+                            "Review-only mode: deterministic gates "
+                            "reported findings."
+                        )
+                    else:
+                        _mark_reviewer_findings_fixed(state, reviewer)
+                        state.reviewer_status[reviewer] = "clean"
+                        state.fresh_final_status = "clean"
+                        state.stop_reason = (
+                            "Review-only mode: primary reviewer reported no findings."
+                        )
                 break
             if not fix_findings:
-                _mark_reviewer_findings_fixed(state, reviewer)
-                state.reviewer_status[reviewer] = "clean"
-                break
+                # Issue #1092: deterministic gates gate the round-start
+                # clean exit too. A reviewer that says "no actionable
+                # findings" on its FIRST pass cannot override a failing
+                # local check; promote gate failures to the next-round
+                # findings set and continue the loop.
+                gate_findings = _enforce_gates_before_clean(
+                    state=state,
+                    config=config,
+                    worktree=worktree,
+                    artifacts_dir=artifacts_dir,
+                    round_number=round_number,
+                    mode="review",
+                    pr_metadata=pr_metadata,
+                    reviewer=reviewer,
+                )
+                if gate_findings:
+                    _record_gate_findings(state, gate_findings)
+                    # Treat the gate findings as the fixer's input for
+                    # this round; do NOT break clean.
+                    fix_findings = list(gate_findings) + fix_findings
+                else:
+                    _mark_reviewer_findings_fixed(state, reviewer)
+                    state.reviewer_status[reviewer] = "clean"
+                    break
         else:
             fix_findings = _actionable_findings(state, pending_findings)
             if not fix_findings:
-                state.reviewer_status[reviewer] = "clean"
-                break
+                # Issue #1092: same enforcement on the "pending findings
+                # filtered to empty" early-exit path. Verifier reports
+                # everything fixed, but a deterministic gate may still
+                # fail (e.g. a fixer that addressed code-level findings
+                # but left prettier red). Re-run gates and route their
+                # findings into the next fixer pass.
+                gate_findings = _enforce_gates_before_clean(
+                    state=state,
+                    config=config,
+                    worktree=worktree,
+                    artifacts_dir=artifacts_dir,
+                    round_number=round_number,
+                    mode="review-pending",
+                    pr_metadata=pr_metadata,
+                    reviewer=reviewer,
+                )
+                if gate_findings:
+                    _record_gate_findings(state, gate_findings)
+                    fix_findings = list(gate_findings)
+                else:
+                    state.reviewer_status[reviewer] = "clean"
+                    break
 
         state.reviewer_status[reviewer] = "findings"
         # Capture the worktree HEAD BEFORE the primary fixer runs so the
@@ -1395,6 +1615,28 @@ def run_checkup_review_loop(
             state.reviewer_status[reviewer] = "findings"
             continue
 
+        # Issue #1092: the verifier just declared the PR clean after the
+        # fixer's push, but a deterministic gate may still fail (e.g. a
+        # whitespace error the LLM verifier overlooked, or a prettier
+        # mismatch the fixer didn't address). Re-run gates one last time;
+        # if any fail, prepend them to ``pending_findings`` and keep the
+        # loop going.
+        gate_findings = _enforce_gates_before_clean(
+            state=state,
+            config=config,
+            worktree=worktree,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            mode="verify",
+            pr_metadata=pr_metadata,
+            reviewer=reviewer,
+        )
+        if gate_findings:
+            _record_gate_findings(state, gate_findings)
+            state.reviewer_status[reviewer] = "findings"
+            pending_findings = list(gate_findings)
+            continue
+
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
         state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
@@ -1521,6 +1763,22 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     return normalized
 
 
+def _run_trusted_gate_git(
+    worktree: Path,
+    args: Sequence[str],
+    **kwargs: Any,
+) -> subprocess.CompletedProcess:
+    """Run git for deterministic-gate support without consulting worktree PATH."""
+    from .checkup_gates import _build_subprocess_env, _resolve_trusted_git
+
+    git_cmd = _resolve_trusted_git(worktree)
+    if not git_cmd:
+        raise FileNotFoundError("trusted git binary not found on sanitized PATH")
+    kwargs.setdefault("cwd", worktree)
+    kwargs.setdefault("env", _build_subprocess_env(worktree))
+    return subprocess.run([git_cmd, *args], **kwargs)
+
+
 def _pr_changed_python_files(
     worktree: Path,
     pr_metadata: Optional[Dict[str, Any]],
@@ -1535,11 +1793,15 @@ def _pr_changed_python_files(
     flagged as never firing.
 
     Resolution order for the base ref:
-      1. ``pr_metadata['base_ref']`` if set -- typically the value
+      1. ``pr_metadata['base_local_ref']`` if set -- the dedicated
+         tracking ref (``refs/remotes/pdd-checkup/pr-<N>/base``)
+         populated by ``_refresh_pr_base_ref`` for the PR's actual
+         base, freshest at this point in the loop.
+      2. ``pr_metadata['base_ref']`` if set -- typically the value
          returned by ``_fetch_pr_metadata`` (``main``/``master``/etc.).
-      2. ``origin/main`` then ``origin/master`` -- the conventional
+      3. ``origin/main`` then ``origin/master`` -- the conventional
          remote-tracking refs.
-      3. ``HEAD~1`` -- last-resort fallback so the scan still produces
+      4. ``HEAD~1`` -- last-resort fallback so the scan still produces
          a non-empty answer on the most recent commit if no base ref
          is resolvable.
 
@@ -1547,17 +1809,28 @@ def _pr_changed_python_files(
     contract is preserved.
     """
     base_candidates: List[str] = []
-    if pr_metadata and pr_metadata.get("base_ref"):
-        base_ref = str(pr_metadata["base_ref"])
-        base_candidates.append(f"origin/{base_ref}")
-        base_candidates.append(base_ref)
+    # Issue #1092: prefer the dedicated tracking ref over
+    # ``origin/<base>``/``main``/``master`` fallbacks. The list-drift
+    # scanner runs after ``_refresh_pr_base_ref`` populated this when
+    # gates are enabled; without it the scanner can compute the diff
+    # against ``origin/main`` on a non-``main``-base PR and silently
+    # miss the changed-file inventory that drives drift detection.
+    if pr_metadata:
+        local_ref = pr_metadata.get("base_local_ref")
+        if isinstance(local_ref, str) and local_ref.strip():
+            base_candidates.append(local_ref.strip())
+        base_ref_raw = pr_metadata.get("base_ref")
+        if base_ref_raw:
+            base_ref = str(base_ref_raw)
+            base_candidates.append(f"origin/{base_ref}")
+            base_candidates.append(base_ref)
     base_candidates.extend(["origin/main", "origin/master", "main", "master"])
 
     for base in base_candidates:
         try:
-            verify = subprocess.run(
-                ["git", "rev-parse", "--verify", base],
-                cwd=worktree,
+            verify = _run_trusted_gate_git(
+                worktree,
+                ["rev-parse", "--verify", base],
                 capture_output=True,
                 text=True,
             )
@@ -1567,9 +1840,9 @@ def _pr_changed_python_files(
         if verify.returncode != 0:
             continue
         try:
-            diff = subprocess.run(
-                ["git", "diff", "--name-only", f"{base}...HEAD"],
-                cwd=worktree,
+            diff = _run_trusted_gate_git(
+                worktree,
+                ["diff", "--name-only", f"{base}...HEAD"],
                 capture_output=True,
                 text=True,
             )
@@ -1589,7 +1862,15 @@ def _pr_changed_python_files(
             for line in diff.stdout.splitlines()
             if line.strip() and line.strip().endswith(".py")
         ]
-        if names or base.endswith(("/main", "/master", "main", "master")):
+        # The dedicated refresh ref is by construction the PR's exact
+        # base, so an empty diff is a real answer (not a stale-base
+        # signal) and the loop accepts it directly without falling
+        # back to HEAD~1.
+        if (
+            names
+            or base.startswith("refs/remotes/pdd-checkup/")
+            or base.endswith(("/main", "/master", "main", "master"))
+        ):
             # Either we got results or we resolved a canonical base ref:
             # take this answer (even if empty) rather than falling back
             # to HEAD~1 which would mis-report the PR scope.
@@ -1598,9 +1879,9 @@ def _pr_changed_python_files(
     # Fallback: most-recent-commit diff.  Better than ``[]`` on a single-
     # commit smoke test, and safe because the AST detector is fail-open.
     try:
-        diff = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
-            cwd=worktree,
+        diff = _run_trusted_gate_git(
+            worktree,
+            ["diff", "--name-only", "HEAD~1...HEAD"],
             capture_output=True,
             text=True,
         )
@@ -1733,13 +2014,25 @@ def _collect_static_analysis_candidate_findings(
     try:
         from .list_drift_detection import detect_static_list_drift
     except Exception as exc:  # noqa: BLE001 - optional, never fail the review
-        logger.debug("list-drift module import failed: %s", exc, exc_info=True)
+        # iter-40 Finding 3: drop ``exc_info=True``. The raw traceback
+        # bypasses ``_scrub_secrets`` and can carry a path/token from
+        # the import chain. Scrub the message and log without the
+        # exception render. Operators who need the full traceback can
+        # reproduce locally.
+        logger.debug(
+            "list-drift module import failed: %s",
+            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+        )
         return []
 
     try:
         changed = _pr_changed_python_files(worktree, pr_metadata)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("list-drift changed-file resolution failed: %s", exc, exc_info=True)
+        # iter-40 Finding 3: scrub-before-log, no ``exc_info=True``.
+        logger.debug(
+            "list-drift changed-file resolution failed: %s",
+            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+        )
         changed = []
 
     if not changed:
@@ -1755,7 +2048,11 @@ def _collect_static_analysis_candidate_findings(
     try:
         findings = detect_static_list_drift(paths)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("list-drift scan failed: %s", exc, exc_info=True)
+        # iter-40 Finding 3: scrub-before-log, no ``exc_info=True``.
+        logger.debug(
+            "list-drift scan failed: %s",
+            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+        )
         return []
 
     # Filter: only emit findings where at least one side of the drift is
@@ -3496,6 +3793,474 @@ def _strip_markdown_links(text: str) -> str:
     return re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text or "").strip()
 
 
+def _pr_changed_files_all(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Return the full PR changed-file inventory (POSIX relative paths).
+
+    Mirrors ``_pr_changed_python_files`` but does not filter by extension —
+    deterministic gate discovery scopes per-file gates such as
+    ``py_compile``/``ruff``/``black`` to ``*.py`` itself, and inspects
+    e.g. ``package.json``/``pyproject.toml`` at the worktree root for
+    repo-wide gates regardless of which files changed.
+
+    Returns an empty list on git error so the caller falls back to the
+    repo-wide gate set (``git diff --check`` is always emitted).
+    """
+    base_candidates: List[str] = []
+    # Issue #1092: prefer the dedicated tracking ref populated by
+    # ``_refresh_pr_base_ref`` (``refs/remotes/pdd-checkup/pr-<N>/base``)
+    # over ``origin/<base>``/``main``/``master`` fallbacks. Without this
+    # the changed-file inventory (which scopes ``py_compile``/``ruff``/
+    # ``black``/``mypy``) can be computed against a stale ``origin/main``
+    # — silently MISSING files the PR actually changed on a non-``main``
+    # base. The list-form refresh always runs before this helper when
+    # gates are enabled, so the dedicated ref is the freshest signal.
+    if pr_metadata:
+        local_ref = pr_metadata.get("base_local_ref")
+        if isinstance(local_ref, str) and local_ref.strip():
+            base_candidates.append(local_ref.strip())
+        base_ref = str(pr_metadata.get("base_ref") or "")
+        if base_ref:
+            base_candidates.append(f"origin/{base_ref}")
+            base_candidates.append(base_ref)
+    base_candidates.extend(["origin/main", "origin/master", "main", "master"])
+
+    for base in base_candidates:
+        try:
+            verify = _run_trusted_gate_git(
+                worktree,
+                ["rev-parse", "--verify", base],
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("gates: changed-files base verify failed for %r: %s", base, exc)
+            continue
+        if verify.returncode != 0:
+            continue
+        try:
+            diff = _run_trusted_gate_git(
+                worktree,
+                ["diff", "--name-only", f"{base}...HEAD"],
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("gates: changed-files git diff failed for %r: %s", base, exc)
+            continue
+        if diff.returncode != 0:
+            continue
+        names = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
+        # The dedicated refresh ref is by construction the PR's exact
+        # base, so an empty diff there is a real "no changed files"
+        # answer (not a stale-base signal) and we accept it directly.
+        if (
+            names
+            or base.startswith("refs/remotes/pdd-checkup/")
+            or base.endswith(("/main", "/master", "main", "master"))
+        ):
+            return names
+
+    # Iter-34 Finding 1: every authoritative base resolution
+    # failed. The previous behaviour fell back to ``HEAD~1...HEAD``
+    # which silently returned a TRUNCATED view — earlier commits on
+    # a multi-commit PR were invisible. The iter-30
+    # ``node_modules`` skip and the iter-27/iter-32 config-touched
+    # skips all depend on a complete changed-file inventory; a
+    # truncated list lets a PR-controlled shim slip through.
+    # Signal the fallback ONLY when the caller actually expected a
+    # PR-range diff (pr_metadata carried base_ref / base_local_ref).
+    # When the caller passed an empty metadata dict — e.g. unit
+    # tests exercising other fail-closed branches against a
+    # non-PR-shaped tmp_path — the fallback is the only sensible
+    # path and should NOT trigger the iter-34 blocker.
+    if (
+        pr_metadata is not None
+        and isinstance(pr_metadata, dict)
+        and (pr_metadata.get("base_ref") or pr_metadata.get("base_local_ref"))
+    ):
+        pr_metadata["changed_files_fallback"] = (
+            "PR-range diff against every base candidate failed; "
+            "fell back to HEAD~1...HEAD which truncates multi-commit "
+            "PRs and lets node_modules / config skips miss earlier "
+            "commits"
+        )
+    try:
+        diff = _run_trusted_gate_git(
+            worktree,
+            ["diff", "--name-only", "HEAD~1...HEAD"],
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("gates: changed-files HEAD~1 fallback failed: %s", exc)
+        return []
+    if diff.returncode != 0:
+        return []
+    return [line.strip() for line in diff.stdout.splitlines() if line.strip()]
+
+
+def _enforce_gates_before_clean(
+    *,
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+    worktree: Path,
+    artifacts_dir: Path,
+    round_number: int,
+    mode: str,
+    pr_metadata: Optional[Dict[str, Any]],
+    reviewer: str,
+) -> List[ReviewFinding]:
+    """Run deterministic local gates before declaring ``reviewer`` clean.
+
+    Issue #1092. The LLM reviewer can declare a PR "clean" while a fast,
+    deterministic local check still fails on the loop-owned PR worktree
+    (e.g. ``prettier --check`` on unformatted JS, ``git diff --check``
+    on whitespace errors). When ``config.enable_gates`` is True, this
+    helper invokes ``pdd.checkup_gates.discover_gates`` over the
+    worktree and ``run_gates`` to execute each one, converting failures
+    into synthetic blocker findings the caller must inject into the
+    per-round flow exactly like reviewer findings.
+
+    Returns an empty list when gates are disabled or every gate passed.
+    Returns one ``ReviewFinding`` per failed gate otherwise. The caller
+    is responsible for inserting those findings into ``state.findings_by_key``
+    (via ``_record_gate_findings``) and re-routing the loop.
+
+    Never raises: every runner-side failure is captured by ``run_gates``
+    as a ``GateResult`` with ``exit_code=None`` and translated into a
+    synthetic blocker finding.
+    """
+    if not config.enable_gates:
+        return []
+    # Imported lazily to avoid a top-of-module cycle: ``checkup_gates``
+    # itself imports ``ReviewFinding`` from this module.
+    from .checkup_gates import (
+        DEFAULT_GATE_TIMEOUT_SECONDS,
+        discover_gates,
+        gate_results_to_findings,
+        run_gates,
+    )
+
+    # Issue #1092 fail-closed contract: if ``_refresh_pr_base_ref``
+    # earlier in the loop reported a fetch error, the gate layer would
+    # silently fall back to ``origin/main`` (stale on a non-``main``
+    # base) or the worktree-only ``git diff --check`` (missing the PR
+    # range entirely). Either path lets the loop honour an LLM "clean"
+    # verdict over a check we cannot prove ran against the right base
+    # — exactly the gap the issue forbids. Surface a synthetic blocker
+    # finding instead, so the operator either re-runs once the network
+    # is healthy or passes ``--no-gates`` explicitly.
+    if pr_metadata and pr_metadata.get("base_ref_fetch_error"):
+        base_ref_label = str(pr_metadata.get("base_ref") or "<unknown>")
+        scrubbed_err = _scrub_secrets(
+            str(pr_metadata["base_ref_fetch_error"])
+        )
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": scrubbed_err,
+                "phase": "base-ref-refresh",
+            }
+        )
+        return [
+            ReviewFinding(
+                severity="blocker",
+                reviewer="gate:base-ref",
+                area="deterministic-gate",
+                evidence=f"base_ref={base_ref_label} error={scrubbed_err}",
+                finding=(
+                    "Deterministic gate layer cannot prove the PR-range "
+                    "check ran against the correct base: refreshing the "
+                    f"PR base ref {base_ref_label!r} into the local "
+                    "tracking ref failed. Refusing clean verdict until "
+                    "the base can be fetched."
+                ),
+                required_fix=(
+                    "Resolve the upstream/network access for the PR's "
+                    "base repo and re-run `pdd checkup --pr "
+                    "--review-loop`. Pass `--no-gates` only as a "
+                    "last-resort diagnostic; never as a workaround on a "
+                    "PR-side ship gate."
+                ),
+                location="pdd/agentic_checkup_orchestrator.py:_refresh_pr_base_ref",
+                status="open",
+                round_number=round_number,
+            )
+        ]
+
+    try:
+        changed_files = _pr_changed_files_all(worktree, pr_metadata)
+    except Exception as exc:  # noqa: BLE001 - defensive: never raise
+        # Iter-35 Finding 1: a raise here was previously swallowed
+        # into ``changed_files = []`` and discovery proceeded with
+        # an empty inventory — so iter-30 ``node_modules`` and
+        # iter-27/iter-32 config-touched skips couldn't engage and
+        # the loop could ship a clean verdict over a PR we never
+        # inspected for those signals. Fail closed via the same
+        # sentinel ``_pr_changed_files_all`` uses for its
+        # HEAD~1 fallback, so the iter-34 ``gate:changed-files``
+        # blocker fires below. Scrub before storing — the
+        # exception text could carry tokens that travelled
+        # through the failure.
+        scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+        logger.debug("gates: changed-files resolution crashed: %s", scrubbed_exc)
+        changed_files = []
+        if pr_metadata is not None and isinstance(pr_metadata, dict):
+            pr_metadata["changed_files_fallback"] = (
+                f"_pr_changed_files_all raised: {scrubbed_exc}"
+            )
+    # Iter-34 Finding 1: if the scanner had to fall back to
+    # ``HEAD~1...HEAD`` (set on ``pr_metadata['changed_files_fallback']``),
+    # the changed-file inventory is TRUNCATED — earlier commits on a
+    # multi-commit PR are invisible. Several safety skips
+    # (``node_modules_pr_touched``, the iter-27/iter-32 config-touched
+    # rules) depend on a complete inventory; a truncated list lets
+    # earlier-commit poisoning slip through. Fail closed with a
+    # synthetic blocker just like the base-ref-refresh failure path.
+    if pr_metadata and pr_metadata.get("changed_files_fallback"):
+        scrubbed_err = _scrub_secrets(
+            str(pr_metadata["changed_files_fallback"])
+        )
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": scrubbed_err,
+                "phase": "changed-files-resolution",
+            }
+        )
+        return [
+            ReviewFinding(
+                severity="blocker",
+                reviewer="gate:changed-files",
+                area="deterministic-gate",
+                evidence=scrubbed_err,
+                finding=(
+                    "Deterministic gate layer cannot prove the PR's "
+                    "changed-file inventory is complete: every "
+                    "merge-base diff candidate failed and the scanner "
+                    "fell back to HEAD~1...HEAD. Several safety skips "
+                    "(node_modules, tool-config) depend on the full "
+                    "inventory, so the gate set may admit code paths "
+                    "the operator did not intend to verify. Refusing "
+                    "clean verdict until the diff resolution works."
+                ),
+                required_fix=(
+                    "Verify the PR base branch was fetched into the "
+                    "loop's worktree (the orchestrator's "
+                    "_refresh_pr_base_ref helper should populate "
+                    "refs/remotes/pdd-checkup/pr-<N>/base) and that "
+                    "the head was checked out with full history. "
+                    "Then re-run `pdd checkup --pr --review-loop`. "
+                    "Pass `--no-gates` only as a last-resort "
+                    "diagnostic; never as a workaround on a PR-side "
+                    "ship gate."
+                ),
+                location="pdd/checkup_review_loop.py:_pr_changed_files_all",
+                status="open",
+                round_number=round_number,
+            )
+        ]
+    base_ref_value: Optional[str] = None
+    # Issue #1092: prefer the dedicated tracking ref populated by
+    # ``_refresh_pr_base_ref`` (``refs/remotes/pdd-checkup/pr-<N>/base``)
+    # because it cannot collide with the user's ``refs/remotes/origin/*``
+    # tracking refs — a real concern when the operator's ``origin`` is
+    # their fork and a PR base named ``release-1.x`` would otherwise
+    # overwrite their own tracking ref. Fall back to the raw branch
+    # name so ``_resolve_pr_base_spec`` can search the standard
+    # ``origin/<base>``/``<base>``/``main``/``master`` candidates when
+    # the refresh helper could not land the ref.
+    if pr_metadata:
+        base_local_ref = pr_metadata.get("base_local_ref")
+        if isinstance(base_local_ref, str) and base_local_ref.strip():
+            base_ref_value = base_local_ref.strip()
+        elif pr_metadata.get("base_ref"):
+            base_ref_value = str(pr_metadata["base_ref"]) or None
+    try:
+        gates = discover_gates(
+            worktree,
+            changed_files=tuple(changed_files),
+            extra_allow=tuple(config.gate_allow),
+            base_ref=base_ref_value,
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive
+        # Discovery is allowlist-only and reads repo config files; a
+        # crash here means a config file we trusted just blew up. Fail
+        # CLOSED with a synthetic blocker finding so the loop refuses
+        # the clean verdict rather than silently shipping while the
+        # gate layer was offline.
+        #
+        # Scrub the exception text BEFORE handing it to ``logger.warning``
+        # (which can otherwise persist tokens/auth URLs into CI/cloud
+        # log streams) and BEFORE storing it on ``state.gate_runs``. The
+        # downstream report/final-state writers also scrub, but the
+        # logger surface fires first.
+        scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+        logger.warning("gates: discovery crashed: %s", scrubbed_exc)
+        # iter-40 Finding 3: drop ``exc_info=True``. The DEBUG
+        # traceback render bypasses the WARNING-line scrub and can
+        # leak any token/path the discovery code surfaced into the
+        # exception message. Operators who need the full traceback
+        # can reproduce locally.
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": scrubbed_exc,
+                "phase": "discover",
+            }
+        )
+        return [_gate_runner_crash_finding(exc, round_number, phase="discover")]
+    if not gates:
+        return []
+    default_timeout = (
+        config.gate_timeout
+        if config.gate_timeout and config.gate_timeout > 0
+        else DEFAULT_GATE_TIMEOUT_SECONDS
+    )
+    try:
+        results = run_gates(
+            worktree,
+            gates,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            # Use the caller's mode token as-is so the on-disk manifest
+            # filename (``round-{R}-{mode}-gates.json``) matches the
+            # design-doc contract. Suffix ``-gates`` on the JSON name
+            # already distinguishes gate output from the reviewer's
+            # ``round-{R}-{mode}-{role}.findings.json`` artifact in the
+            # same directory.
+            mode=mode,
+            default_timeout=default_timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive: never raise
+        # Codex review iteration 1, Finding 3: a crashed gate runner
+        # is a SAFETY EVENT, not a no-op. Fail closed with a synthetic
+        # blocker finding so ``state.reviewer_status[reviewer]`` cannot
+        # land on ``clean`` while the gate layer was offline. The
+        # caller's normal ``_record_gate_findings`` + pending-findings
+        # path then surfaces this in the rendered report exactly like
+        # any other deterministic-gate failure.
+        #
+        # External review iter-15 Finding 3: scrub before logging.
+        # ``logger.warning(..., exc_info=True)`` would emit the raw
+        # exception text plus traceback to CI/cloud log capture; the
+        # ``str(exc)`` payload can include tokens, auth URLs, or
+        # Bearer headers that travelled through to the failure.
+        scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+        logger.warning("gates: run_gates crashed: %s", scrubbed_exc)
+        # iter-40 Finding 3: drop ``exc_info=True``. The DEBUG
+        # traceback render bypasses the WARNING-line scrub above; any
+        # token surfaced via the failing gate's stderr/argv/path would
+        # otherwise land in DEBUG-captured log streams.
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": scrubbed_exc,
+                "phase": "run_gates",
+            }
+        )
+        return [_gate_runner_crash_finding(exc, round_number, phase="run_gates")]
+    # Record EVERY gate run (passed + failed) so the final report's
+    # ``### Deterministic Gates`` section and ``final-state.json``'s
+    # ``gates`` field show the full audit trail, not just failures.
+    state.gate_runs.append(
+        {
+            "round": round_number,
+            "mode": mode,
+            "reviewer": reviewer,
+            "results": [result.to_dict() for result in results],
+        }
+    )
+    return gate_results_to_findings(results, round_number=round_number)
+
+
+def _gate_runner_crash_finding(
+    exc: BaseException,
+    round_number: int,
+    *,
+    phase: str,
+) -> ReviewFinding:
+    """Build the synthetic blocker finding for a crashed gate runner.
+
+    Codex review iteration 1 (Finding 3) requires the loop fail CLOSED
+    when ``discover_gates`` or ``run_gates`` raises: a swallowed-into-
+    ``[]`` path lets the LLM's clean verdict ride over a gate layer
+    that is actually broken. The finding rides through the normal
+    pending-findings path, the loop refuses clean, and the operator
+    sees both the crash class and the recommended remediation in the
+    rendered report.
+
+    Codex review iteration 3 (MEDIUM, secret leak): the raw exception
+    message may carry env-derived secrets (``OPENAI_API_KEY``,
+    ``GITHUB_TOKEN``, ``sk-…`` tokens, ``Bearer`` headers). The
+    ``ReviewFinding.evidence`` field is rendered into the public GitHub
+    comment AND persisted into ``final-state.json["findings"]``, so we
+    scrub through ``_scrub_secrets`` BEFORE building the finding. The
+    ``finding`` field stays deterministic — it never embeds the raw
+    exception message anyway, so dedup-key stability (iteration 2
+    Finding 1) is preserved.
+    """
+    exc_class = type(exc).__name__
+    exc_message = _scrub_secrets(str(exc))
+    return ReviewFinding(
+        severity="blocker",
+        reviewer="gate:runner",
+        area="deterministic-gate",
+        evidence=f"{exc_class}: {exc_message}",
+        finding=(
+            f"Deterministic gate runner crashed during {phase!r}: {exc_class}. "
+            "Refusing clean verdict until the runner can complete."
+        ),
+        required_fix=(
+            "Investigate the gate runner crash and re-run `pdd checkup "
+            "--pr --review-loop`. Pass `--no-gates` only as a last-resort "
+            "diagnostic; never as a workaround on a PR-side ship gate."
+        ),
+        location=f"pdd/checkup_gates.py:{phase}",
+        status="open",
+        round_number=round_number,
+    )
+
+
+def _record_gate_findings(
+    state: ReviewLoopState,
+    findings: Sequence[ReviewFinding],
+) -> None:
+    """Insert gate findings into ``state.findings_by_key`` for audit.
+
+    Mirrors the per-finding portion of ``_record_review`` but never
+    touches ``state.reviewer_status``: the caller decides whether the
+    reviewer slot stays at ``findings``, rotates to a fallback, or stays
+    open for the next round.
+    """
+    for finding in findings:
+        existing = state.findings_by_key.get(finding.key)
+        if existing is None:
+            state.findings_by_key[finding.key] = finding
+        else:
+            # A later round produced the same gate finding again — keep
+            # the original dedup row but refresh evidence/required_fix so
+            # the final report shows the latest output excerpt.
+            existing.status = "open"
+            existing.evidence = finding.evidence or existing.evidence
+            existing.required_fix = finding.required_fix or existing.required_fix
+
+
 def _record_review(
     state: ReviewLoopState,
     result: ReviewResult,
@@ -5190,8 +5955,60 @@ def _write_final_state(
             }
             for fix in state.fixes
         ],
+        # Issue #1092: deterministic-gate audit trail. One entry per
+        # ``_enforce_gates_before_clean`` invocation, carrying both
+        # passed and failed ``GateResult`` dicts so downstream tooling
+        # can audit gate runs regardless of whether they produced
+        # synthetic findings. Codex review iteration 3 (MEDIUM, secret
+        # leak): scrub through ``_scrub_secrets`` because crash-row
+        # ``error`` strings and ``GateResult.error`` are exception
+        # messages that may embed env-derived secrets.
+        "gates": [_scrubbed_gate_run(run) for run in state.gate_runs],
     }
     _write_artifact(artifacts_dir / "final-state.json", json.dumps(payload, indent=2))
+
+
+def _scrubbed_gate_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a shallow copy of ``run`` with secret-bearing fields scrubbed.
+
+    Codex review iteration 3 (MEDIUM, secret leak). ``state.gate_runs``
+    is built from raw exception strings, so the rendered report and the
+    persisted ``final-state.json`` must NOT publish it verbatim. The
+    in-memory ``state.gate_runs`` keeps the raw values for unit testing
+    and future operator-side debug tooling that talks to a live process;
+    every IO-facing consumer (renderer + JSON persistence) reads through
+    this helper so the scrub is applied uniformly.
+    """
+    scrubbed: Dict[str, Any] = dict(run)
+    if "error" in scrubbed and isinstance(scrubbed["error"], str):
+        scrubbed["error"] = _scrub_secrets(scrubbed["error"])
+    if "phase" in scrubbed and isinstance(scrubbed["phase"], str):
+        # Defensive: ``phase`` is currently a small literal set
+        # (``discover``/``run_gates``) but a future caller may pass
+        # user-controlled content.
+        scrubbed["phase"] = _scrub_secrets(scrubbed["phase"])
+    results = scrubbed.get("results")
+    if isinstance(results, list):
+        new_results: List[Dict[str, Any]] = []
+        for result in results:
+            if not isinstance(result, dict):
+                new_results.append(result)
+                continue
+            scrubbed_result: Dict[str, Any] = dict(result)
+            # Belt-and-suspenders: ``stdout_excerpt`` / ``stderr_excerpt``
+            # are already scrubbed inside ``checkup_gates._execute_one``
+            # before they land in ``state.gate_runs``. Re-scrubbing here
+            # is a no-op on already-scrubbed text (the regex does not
+            # match ``[REDACTED]``) and guards against a future caller
+            # that bypasses ``_execute_one``. ``error`` is the new
+            # surface from iteration 3 that DEFINITELY needs scrubbing.
+            for key in ("error", "stdout_excerpt", "stderr_excerpt"):
+                value = scrubbed_result.get(key)
+                if isinstance(value, str):
+                    scrubbed_result[key] = _scrub_secrets(value)
+            new_results.append(scrubbed_result)
+        scrubbed["results"] = new_results
+    return scrubbed
 
 
 def _post_review_loop_report(
@@ -5505,6 +6322,91 @@ def _render_final_report(
             if reviewer_name in reviewers:
                 continue
             _render_diag_line(reviewer_name, detail)
+
+    # Issue #1092: render every recorded deterministic-gate run, grouped
+    # by round. Failed gates are clearly marked so a reader scanning the
+    # report can see exactly which local check vetoed (or would have
+    # vetoed) the LLM's clean verdict.
+    if state.gate_runs:
+        lines.extend(["", "### Deterministic Gates", ""])
+        by_round: Dict[int, List[Dict[str, Any]]] = {}
+        for run in state.gate_runs:
+            by_round.setdefault(int(run.get("round", 0)), []).append(run)
+        for round_number in sorted(by_round):
+            lines.append(f"#### Round {round_number}")
+            for run in by_round[round_number]:
+                mode = str(run.get("mode") or "?")
+                reviewer_label = str(run.get("reviewer") or "")
+                header = f"- mode `{mode}`"
+                if reviewer_label:
+                    header += f", reviewer `{reviewer_label}`"
+                lines.append(header)
+                results = run.get("results", []) or []
+                # Codex review iteration 3 (MEDIUM, secret leak): the
+                # crash-row and per-result-error renderers print
+                # ``run["error"]`` / ``result["error"]`` directly. Both
+                # come from ``f"{type(exc).__name__}: {exc}"`` and a
+                # subprocess exception can embed env-derived secrets
+                # (``OPENAI_API_KEY``, ``GITHUB_TOKEN``, ``sk-…`` tokens)
+                # in its message. The final report is posted as a public
+                # GitHub comment, so we MUST scrub through
+                # ``_scrub_secrets`` BEFORE rendering. ``phase`` is
+                # written by ``_enforce_gates_before_clean`` from a
+                # small literal set (``"discover"`` / ``"run_gates"``)
+                # but we defensively scrub it too in case a future
+                # caller passes user-controlled content.
+                run_error = _scrub_secrets(str(run.get("error") or "")).strip()
+                run_phase = _scrub_secrets(str(run.get("phase") or "")).strip()
+                # Issue #1092 codex review iteration 2 Finding 2: when
+                # ``_enforce_gates_before_clean`` records a discover/run
+                # crash, ``results`` is ``[]`` and the audit detail
+                # lives in ``error``/``phase``. Surface it as a crash
+                # row so the operator sees what blew up instead of an
+                # empty section. The matching synthetic blocker
+                # finding still appears in ``### Findings``.
+                if not results and (run_error or run_phase):
+                    phase_label = run_phase or "gate-runner"
+                    error_label = run_error or "unknown error"
+                    lines.append(
+                        f"  - runner crash during `{phase_label}`: {error_label}"
+                    )
+                for result in results:
+                    gate = result.get("gate") or {}
+                    name = gate.get("name", "<unnamed>")
+                    source = gate.get("source", "")
+                    exit_code = result.get("exit_code")
+                    duration = result.get("duration_seconds", 0.0) or 0.0
+                    # Same scrub rationale as the crash row above: the
+                    # per-gate ``error`` is built from a raw exception
+                    # string in ``checkup_gates._execute_one`` and can
+                    # carry env-derived secrets when a binary or path
+                    # name is secret-bearing.
+                    error = _scrub_secrets(str(result.get("error") or "")).strip()
+                    if exit_code is None:
+                        status = f"runner-error ({error})" if error else "runner-error"
+                    elif exit_code == 0:
+                        status = "passed"
+                    else:
+                        status = f"failed (exit {exit_code})"
+                    lines.append(
+                        f"  - `{name}` — {status}, "
+                        f"source={source or '?'}, "
+                        f"duration={float(duration):.2f}s"
+                    )
+                    if exit_code not in (0, None):
+                        tail_source = (
+                            result.get("stderr_excerpt")
+                            or result.get("stdout_excerpt")
+                            or ""
+                        )
+                        tail = tail_source.strip()
+                        if tail:
+                            if len(tail) > 1000:
+                                tail = tail[:1000] + "\n[...]"
+                            lines.append("    ```")
+                            for output_line in tail.splitlines():
+                                lines.append(f"    {output_line}")
+                            lines.append("    ```")
 
     lines.extend([
         "",

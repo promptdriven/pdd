@@ -411,17 +411,24 @@ def test_run_with_provider_opencode_cli_missing(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_cli_detector_has_opencode_entries():
-    assert cli_detector._CLI_COMMANDS.get("opencode") == "opencode"
-    assert cli_detector._CLI_DISPLAY_NAMES.get("opencode") == "OpenCode CLI"
-    assert "opencode-ai" in cli_detector._INSTALL_COMMANDS.get("opencode", "")
-    assert cli_detector.PROVIDER_DISPLAY.get("opencode") == "OpenCode"
+    # PR #1153 renamed the private cli_detector dicts to public names with
+    # the orientation flipped (CLI -> provider) so both `agy` and `gemini`
+    # can resolve to the same `google` provider during the Antigravity
+    # migration. Source the lookups from the new public surface.
+    assert cli_detector.CLI_PROVIDER.get("opencode") == "opencode"
+    assert cli_detector.CLI_LABEL.get("opencode") == "OpenCode CLI"
+    assert "opencode-ai" in (cli_detector.CLI_INSTALL_HINT.get("opencode") or "")
+    assert cli_detector.PROVIDER_DISPLAY.get("opencode") == "OpenCode CLI"
 
 
 def test_cli_detector_table_order_includes_opencode():
-    providers = [row[0] for row in cli_detector._TABLE_ORDER]
-    assert "opencode" in providers
-    cli_names = [row[1] for row in cli_detector._TABLE_ORDER]
+    # The PR replaced `_TABLE_ORDER` (a list of (provider, cli) tuples) with
+    # the ordered `CLI_PREFERENCE` list plus the `CLI_PROVIDER` mapping; the
+    # table order is reconstructed from those two.
+    cli_names = list(cli_detector.CLI_PREFERENCE)
     assert "opencode" in cli_names
+    providers = [cli_detector.CLI_PROVIDER[cli] for cli in cli_names]
+    assert "opencode" in providers
 
 
 def test_cli_detector_has_provider_oauth_opencode_with_creds(monkeypatch, tmp_path):

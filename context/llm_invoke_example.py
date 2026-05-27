@@ -1,87 +1,86 @@
-"""
-Example usage of the pdd.llm_invoke module.
-
-This script demonstrates how to invoke Large Language Models using the PDD standard interface,
-including basic generation, structured Pydantic outputs, and batch processing.
-"""
 import os
 import sys
 from pydantic import BaseModel
 
-# Import the main invocation function and logging utility
-from pdd.llm_invoke import llm_invoke, set_verbose_logging
+# Import the llm_invoke function and logging utility from the pdd package
+from pdd.llm_invoke import llm_invoke, set_quiet_logging
+
 
 def main():
-    # Prevent interactive API key prompts in this headless example
-    os.environ["PDD_FORCE"] = "1"
-    
-    # Require an API key to proceed with the example
-    if not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")):
-        print("No standard LLM API key found in the environment.")
-        print("Please set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY to run this example.")
+    """
+    Demonstrate the usage of llm_invoke for basic generation, 
+    structured output, and batch processing.
+    """
+    # Check for required API key before attempting LLM calls.
+    # The specific key required depends on your PDD_MODEL_DEFAULT or local llm_model.csv
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("OPENAI_API_KEY not set. Set it to run this example.")
         sys.exit(0)
 
-    # Optional: Enable detailed internal logging for the module
-    # set_verbose_logging(True)
+    # Optionally suppress noisy logs from LiteLLM
+    set_quiet_logging()
 
-    print("=== Example 1: Basic LLM Invocation ===")
-    # Invoke an LLM using a prompt template and JSON input variables
-    # 'strength' controls the model selection (0.0 = cheapest, 0.5 = base, 1.0 = most capable)
+    print("--- Example 1: Basic Text Generation ---")
+    # Uses string formatting based on input_json dictionary
     response = llm_invoke(
-        prompt="Tell me a very short joke about {topic}.",
-        input_json={"topic": "programmers"},
-        strength=0.5, 
-        temperature=0.7,
+        prompt="Write a one-sentence fun fact about {topic}.",
+        input_json={"topic": "space"},
+        strength=0.5,       # 0.0 = cheapest, 0.5 = base model, 1.0 = highest ELO
+        temperature=0.7,    # Creativity parameter
         verbose=False
     )
-    print(f"Result: {response['result']}")
-    print(f"Model used: {response['model_name']}")
-    print(f"Estimated Cost: ${response['cost']:.6f}\n")
+    
+    print(f"Result: {response.get('result')}")
+    print(f"Model Used: {response.get('model_name')}")
+    print(f"Cost: ${response.get('cost', 0):.6f}")
 
-    print("=== Example 2: Structured Output with Pydantic ===")
-    # Define the desired output schema
-    class JokeStructure(BaseModel):
-        setup: str
-        punchline: str
-        rating: int
 
-    # By passing output_pydantic, the module forces the LLM to return valid JSON matching the schema
+    print("\n--- Example 2: Structured Output (Pydantic) ---")
+    # Define a Pydantic model for the expected output structure
+    class AnimalFact(BaseModel):
+        animal_name: str
+        lifespan_years: int
+        is_mammal: bool
+
+    # The LLM will be instructed to return a JSON matching this schema
     response_structured = llm_invoke(
-        prompt="Create a joke about {topic}.",
-        input_json={"topic": "data science"},
+        prompt="Give me a fact about a {animal}.",
+        input_json={"animal": "kangaroo"},
         strength=0.5,
-        temperature=0.7,
-        output_pydantic=JokeStructure
+        temperature=0.1,    # Lower temperature for structured data is recommended
+        output_pydantic=AnimalFact
     )
-    
-    # The result is automatically parsed into the requested Pydantic model
-    result_obj = response_structured['result']
-    if isinstance(result_obj, JokeStructure):
-        print(f"Setup: {result_obj.setup}")
-        print(f"Punchline: {result_obj.punchline}")
-        print(f"Rating: {result_obj.rating}/10\n")
-    else:
-        # Fallback string representation if parsing completely fails
-        print(f"Result: {result_obj}\n")
 
-    print("=== Example 3: Batch Mode ===")
-    # Pass a list of dictionaries to process multiple inputs efficiently
-    batch_input = [
-        {"topic": "cats"},
-        {"topic": "dogs"},
+    result_obj = response_structured.get('result')
+    if isinstance(result_obj, AnimalFact):
+        print(f"Name: {result_obj.animal_name}")
+        print(f"Lifespan: {result_obj.lifespan_years} years")
+        print(f"Mammal: {result_obj.is_mammal}")
+    else:
+        print("Failed to parse into Pydantic model:", result_obj)
+
+
+    print("\n--- Example 3: Batch Processing ---")
+    # Pass a list of dictionaries to process multiple prompts concurrently
+    batch_inputs = [
+        {"word": "happy"},
+        {"word": "sad"},
+        {"word": "angry"}
     ]
+    
     response_batch = llm_invoke(
-        prompt="Write a one-sentence fact about {topic}.",
-        input_json=batch_input,
-        strength=0.0, # Use cheapest model for batching
-        temperature=0.1,
-        use_batch_mode=True
+        prompt="What is a common synonym for {word}? Reply with just one word.",
+        input_json=batch_inputs,
+        use_batch_mode=True,
+        strength=0.1,       # Opt for a cheaper/faster model for bulk tasks
+        temperature=0.3
     )
     
-    # Result is a list of strings corresponding to the inputs
-    results_list = response_batch['result']
-    for i, res in enumerate(results_list):
-        print(f"Input {i+1}: {res}")
+    print("Batch Results (list of strings):")
+    for idx, res in enumerate(response_batch.get('result', [])):
+        print(f"  Input '{batch_inputs[idx]['word']}': {res.strip()}")
+
 
 if __name__ == "__main__":
     main()
