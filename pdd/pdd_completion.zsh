@@ -57,7 +57,7 @@ _pdd_global_opts=(
   '--output-cost[Enable cost tracking and output a CSV file with usage details.]:filename:_files'
   '--review-examples[Review and optionally exclude few-shot examples before command execution.]'
   '--local[Run commands locally instead of in the cloud.]'
-  '--provider[Pin local model selection to a provider (e.g. anthropic, openai, gemini).]:provider:'
+  '--provider[Pin local model selection to a provider (e.g. anthropic, openai, gemini).]:provider:(anthropic openai azure_openai azure_ai vertex_ai gemini github_copilot openrouter perplexity)'
   '--context[Override automatic .pddrc context]:context-name:_guard'
   '--list-contexts[List available .pddrc contexts and exit]'
   '--help[Show help message and exit.]'

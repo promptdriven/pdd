@@ -59,15 +59,21 @@ _pdd() {
         return
     fi
 
-    # Treat --provider <value> as transparent for subcommand-context
-    # detection: pdd --provider openai generate ... should still complete
-    # "generate" options, not fall through to the default-case fallback
-    # because words[1] is "--provider".
+    # Treat value-taking global options as transparent for subcommand-
+    # context detection. E.g. ``pdd --strength 0.7 generate <TAB>`` must
+    # still complete generate options; without skipping the value, the
+    # naive scan stops at ``0.7`` and treats it as the subcommand, falling
+    # back to global options.
+    local global_value_opts=" --strength --time --temperature --output-cost --provider --context "
     local cmd_index=1
     while [[ $cmd_index -lt $cword ]]; do
         local tok=${words[$cmd_index]}
-        if [[ $tok == "--provider" ]]; then
+        if [[ "$global_value_opts" == *" $tok "* ]]; then
             cmd_index=$((cmd_index + 2))
+            continue
+        fi
+        if [[ $tok == --*=* ]]; then
+            cmd_index=$((cmd_index + 1))
             continue
         fi
         if [[ $tok == --* ]]; then

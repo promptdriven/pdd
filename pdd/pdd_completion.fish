@@ -10,7 +10,7 @@ complete -c pdd -n "__fish_use_subcommand" -l quiet -d "Decrease output verbosit
 complete -c pdd -n "__fish_use_subcommand" -l output-cost -r -d "Enable cost tracking and output CSV file"
 complete -c pdd -n "__fish_use_subcommand" -l review-examples -d "Review few-shot examples before execution"
 complete -c pdd -n "__fish_use_subcommand" -l local -d "Run commands locally"
-complete -c pdd -n "__fish_use_subcommand" -l provider -x -d "Pin local model selection to a provider (e.g. anthropic, openai, gemini)"
+complete -c pdd -n "__fish_use_subcommand" -l provider -x -a "anthropic openai azure_openai azure_ai vertex_ai gemini github_copilot openrouter perplexity" -d "Pin local model selection to a provider (e.g. anthropic, openai, gemini)"
 complete -c pdd -n "__fish_use_subcommand" -l context -r -d "Override .pddrc context"
 complete -c pdd -n "__fish_use_subcommand" -l list-contexts -d ".pddrc contexts and exit"
 complete -c pdd -n "__fish_use_subcommand" -l help -d "Show help message"

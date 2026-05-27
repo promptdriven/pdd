@@ -12,8 +12,8 @@
 
 % IMPORTANT ADDITION: Beyond the options detailed in the README.md, the PDD CLI also includes the following global options:
 %   - `--time`: Controls LLM reasoning effort (0.0-1.0).
-%   - `--provider <name>`: Pin local-mode model selection to a single provider (also reads PDD_PROVIDER). Accepts canonical aliases (``openai``, ``azure_openai``, ``vertex_ai``, ``azure_ai``, ``anthropic``, ``gemini``, ``github_copilot``, ...), the exact CSV provider name (case-insensitive), or an unambiguous substring.
-% Both new global options must be supported in the completion script (use `-x` so an argument value is expected).
+%   - `--provider <name>`: Pin local-mode model selection to a single provider (also reads PDD_PROVIDER). Accepts canonical aliases (``openai``, ``azure_openai``, ``vertex_ai``, ``azure_ai``, ``anthropic``, ``gemini``, ``github_copilot``, ``openrouter``, ``perplexity``), the exact CSV provider name (case-insensitive), or an unambiguous substring.
+% Both new global options must be supported in the completion script (use `-x` so an argument value is expected). The `--provider` completion MUST additionally pass an explicit value list via `-a "..."` listing the canonical aliases above, so `pdd --provider <TAB>` suggests provider names rather than offering nothing.
 
 % The generated pdd_completion.fish script must provide comprehensive auto-completion support for:
 %   - All commands of the PDD CLI (as per the README).
