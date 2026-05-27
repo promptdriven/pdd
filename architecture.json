@@ -144,6 +144,11 @@
             "name": "clear_workflow_state",
             "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None",
             "returns": "None"
+          },
+          {
+            "name": "sanitize_agent_input",
+            "signature": "(content: str, source: str) -> Tuple[str, List[str]]",
+            "returns": "Tuple[str, List[str]]"
           }
         ]
       }
