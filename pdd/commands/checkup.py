@@ -384,9 +384,22 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         contract_args = list(ctx.args)
         if strict:
             contract_args.insert(0, "--strict")
+        if show_help:
+            # Because `checkup` owns `--help` (add_help_option=False) Click will eagerly
+            # consume a trailing `--help` and not forward it to `contracts`. For the
+            # documented canonical path `pdd checkup contract check --help`, render the
+            # `contracts check` help directly and exit 0.
+            if not contract_args or contract_args[:1] == ["check"]:
+                contracts_check_cmd = contracts_cli.get_command(ctx, "check")
+                click.echo(
+                    contracts_check_cmd.get_help(
+                        click.Context(contracts_check_cmd, info_name=f"pdd checkup {target} check")
+                    )
+                )
+                return None
         exit_code = contracts_cli.main(
             args=contract_args,
-            prog_name=f"pdd checkup {target} check",
+            prog_name=f"pdd checkup {target}",
             standalone_mode=False,
             obj=ctx.obj,
         )

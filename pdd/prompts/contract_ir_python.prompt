@@ -1,0 +1,17 @@
+<pdd-reason>Parses contract-related sections from prompt files into a structured intermediate representation.</pdd-reason>
+
+% Write `pdd/contract_ir.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Extract `<contract_rules>`, `<coverage>`, `<waivers>`, `<vocabulary>`, `<capabilities>`, and `<non_responsibilities>` sections when present.
+- Provide helpers used by the contract engine, including:
+  - `parse_prompt_contracts(path, *, strict=False, stories_dir=None, tests_dir=None) -> PromptContractIR`
+  - `extract_sections(text)`, `extract_rules(text)`, `extract_waivers(text)`
+  - `iter_covers_refs(story_text)` for story `## Covers` references.
+- Define `COVERAGE_REF_RE` that matches only leading coverage entries (not incidental mentions in prose).
+- Keep parsing deterministic and side-effect free.
+
+% Deliverables
+- Code: `pdd/contract_ir.py`

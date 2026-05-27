@@ -1,6 +1,8 @@
 <pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
 
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
+<pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
+<pdd-dependency>commands/contracts_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
 
