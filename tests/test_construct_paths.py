@@ -3805,3 +3805,59 @@ def test_builtin_ext_map_yml_maps_to_dot_yml():
     assert result == '.yml', (
         f"BUILTIN_EXT_MAP['yml'] should be '.yml' but got {result!r}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1198 - Step 9, test 13: loader propagation via list_available_contexts.
+# ---------------------------------------------------------------------------
+
+
+def test_list_available_contexts_propagates_unknown_key_warning(tmp_path, monkeypatch, caplog):
+    """Bug #1198: `_load_pddrc_config()` is the single chokepoint that every
+    high-level caller flows through. Verify that when a public entry point
+    like `list_available_contexts()` triggers the loader against a .pddrc
+    containing an unknown key, the warning propagates out to the caller.
+
+    This is the integration-level analogue of the unit reproduction tests:
+    if `_load_pddrc_config()` is fixed to call `_validate_pddrc_keys()`, all
+    callers benefit automatically. This test fails today and proves that
+    fixing the single chokepoint is sufficient.
+    """
+    import logging
+    import warnings
+
+    from pdd.construct_paths import list_available_contexts
+
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        """
+contexts:
+  default:
+    defaults:
+      generate_output_path: pdd/
+typo_at_root_chokepoint_test: x
+""",
+        encoding="utf-8",
+    )
+
+    # Force the search-from-CWD behavior of `_find_pddrc_file()` to discover
+    # our fixture .pddrc by chdir'ing into tmp_path.
+    monkeypatch.chdir(tmp_path)
+
+    caplog.set_level(logging.WARNING)
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        names = list_available_contexts()
+
+    # Sanity: still returns the contexts (warn-not-fail).
+    assert "default" in names
+
+    log_msgs = [r.getMessage() for r in caplog.records]
+    warn_msgs = [str(w.message) for w in recorded]
+    combined = "\n".join(log_msgs + warn_msgs)
+    assert "typo_at_root_chokepoint_test" in combined, (
+        "list_available_contexts() -> _load_pddrc_config() must propagate the "
+        "unknown-key warning so all high-level callers benefit from the single "
+        "chokepoint fix (issue #1198). Got log messages: "
+        f"{log_msgs}; warnings: {warn_msgs}"
+    )
