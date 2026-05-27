@@ -2604,7 +2604,7 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 5. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-6. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
+6. **Root cause analysis** - Run experiments to identify the root cause. Classifies the fix scope as `LOCALIZED` (one isolated site), `SIBLING_PATTERN` (other instances share the same root cause and must be checked), or `CROSS_CUTTING` (fix belongs in a shared helper/component rather than many local patches). When the root cause involves a shared symbol, helper, component, state field, marker, schema, event path, or repeated pattern, performs a mandatory sibling search and classifies each candidate with machine-readable evidence (`NEEDS_FIX: <path> | <reason>` for confirmed siblings, `SAFE_EVIDENCE: <path> | <line> | <reason>` for look-alikes that are safe). Broad analogous audits remain opt-in rather than default. Also performs a variable reference audit and state symmetry check. Posts comment explaining the root cause.
 
 7. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
