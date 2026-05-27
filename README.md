@@ -330,22 +330,33 @@ pdd --local --provider gemini sync my_module
 PDD_PROVIDER=gemini pdd --local sync my_module
 ```
 
-The value is first resolved via canonical aliases (litellm routing prefixes
-like `vertex_ai`, `azure_ai`, `gemini`, `anthropic`, plus a normalized view of
-distinct CSV provider names such as `azure_openai` and `github_copilot`), then
-falls back to a case-insensitive substring match on the CSV `provider` column,
-and only if both produce no rows does PDD fall back to substring matching on
-the `model` column. So `gemini` selects only `Google Gemini` rows (not
+The value is first resolved via canonical aliases. Two alias sources feed the
+canonical map: a normalized view of distinct CSV provider names (so `OpenAI`
+→ `openai`, `Azure OpenAI` → `azure_openai`, `Github Copilot` →
+`github_copilot`), and a built-in table mapping litellm routing prefixes —
+`vertex_ai` → `Google Vertex AI`, `azure_ai` → `Azure AI`, `gemini` → `Google
+Gemini`, `anthropic` → `Anthropic` — used for any alias the CSV map does not
+already define (CSV-derived aliases always win on conflict, so a CSV with an
+exact short provider name like `Gemini` keeps mapping `gemini` to its own
+`Gemini` row instead of being rerouted to `Google Gemini`). When a canonical
+alias resolves to a provider that has zero matching rows in the CSV, PDD
+aborts with a clear error — it does NOT fall through to substring matching,
+because a recognized alias with no rows means the user pinned a provider
+this CSV doesn't have. Only when no canonical alias matches at all does PDD
+try a case-insensitive substring match on the CSV `provider` column, and
+only when that produces no rows does it try substring matching on the
+`model` column. So `gemini` selects only `Google Gemini` rows (not
 `github_copilot/gemini-...` cross-routed rows), `anthropic` selects only
-`Anthropic` rows (not AWS Bedrock / OpenRouter rows whose model names include
-`anthropic`), and `vertex_ai` — which is not a provider name but does appear
-as a model-column prefix — still resolves via the fallback. Both substring
-fallbacks refuse to pick across providers: a token that matches more than one
-distinct provider (e.g. `open` → OpenAI + Azure OpenAI on the provider column,
-`claude` or `gpt` → many providers via the model column) aborts with a list of
-the matched providers so you can pick an unambiguous one. If the pin matches
-no rows in your CSV at all, PDD aborts with a clear error listing the
-available providers — it never silently routes to a different provider.
+`Anthropic` rows (not AWS Bedrock / OpenRouter rows whose model names
+include `anthropic`), and `vertex_ai` — which is not a CSV provider name on
+its own — still resolves cleanly because the prefix table maps it to
+`Google Vertex AI`. Both substring fallbacks refuse to pick across
+providers: a token that matches more than one distinct provider (e.g. `open`
+→ OpenAI + Azure OpenAI on the provider column, `claude` or `gpt` → many
+providers via the model column) aborts with a list of the matched providers
+so you can pick an unambiguous one. If the pin matches no rows in your CSV
+at all, PDD aborts with a clear error listing the available providers — it
+never silently routes to a different provider.
 
 PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
 
