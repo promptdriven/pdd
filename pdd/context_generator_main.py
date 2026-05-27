@@ -133,7 +133,13 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                         lang_key = language.lower() if language else ''
                         lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
                         resolved_output = str(output_path.with_suffix(lang_ext))
-                        wrapper_rewrote_path = True
+                        # Some languages map to an empty extension (e.g. Makefile → ""), in
+                        # which case with_suffix is a no-op and the path is unchanged. Only
+                        # flag as a wrapper rewrite when the resulting path actually differs
+                        # — otherwise the re-confirmation step below would prompt twice for
+                        # the same target that construct_paths already confirmed.
+                        if resolved_output != output:
+                            wrapper_rewrote_path = True
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
                     resolved_output = output

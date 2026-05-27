@@ -716,6 +716,46 @@ def test_format_md_rewrite_to_existing_md_prompts_for_overwrite(mock_ctx, mock_c
     )
 
 
+def test_makefile_bare_name_does_not_double_prompt(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
+    """Bug #1205 follow-up: bare --output with an empty language extension (Makefile → '') must not re-prompt.
+
+    BUILTIN_EXT_MAP['makefile'] is '', so `with_suffix('')` is a no-op. The wrapper must not
+    flag this as a "rewrite" — construct_paths already confirmed the path, and a second prompt
+    saying "rewritten from build_example to build_example" is a regression.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    prompt_file = tmp_path / "build_makefile.prompt"
+    code_file = tmp_path / "Makefile"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("all:\n\techo ok\n")
+    pre_existing = tmp_path / "build_example"
+    pre_existing.write_text("ORIGINAL")
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "all:\n\techo ok\n"},
+        {"output": str(pre_existing)},
+        "makefile",
+    )
+    mock_context_generator.return_value = ("all:\n\techo example\n", 0.0, "local-model")
+
+    confirm_calls = []
+
+    def tracking_confirm(*args, **kwargs):
+        confirm_calls.append(args)
+        return True
+
+    monkeypatch.setattr("pdd.context_generator_main.click.confirm", tracking_confirm)
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(pre_existing), format="code")
+
+    assert confirm_calls == [], (
+        f"Wrapper must not re-prompt when the language extension is empty (e.g. Makefile). "
+        f"Got {len(confirm_calls)} spurious click.confirm call(s)."
+    )
+    assert pre_existing.read_text() == "all:\n\techo example\n"
+
+
 def test_directory_output_does_not_double_prompt(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path, monkeypatch):
     """Bug #1205 follow-up: --output examples/ must not trigger the wrapper's re-confirmation.
 
