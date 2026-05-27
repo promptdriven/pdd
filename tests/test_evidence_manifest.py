@@ -82,6 +82,32 @@ def test_output_hash_changes_with_output_content(tmp_path: Path) -> None:
     assert first["outputs"][0]["sha256"] != second["outputs"][0]["sha256"]
 
 
+def test_nested_include_records_and_expanded_hash(tmp_path: Path) -> None:
+    """Nested includes resolve beside the parent file and appear in context.includes."""
+    nested = tmp_path / "context" / "nested.prompt"
+    middle = tmp_path / "context" / "a.prompt"
+    prompt = tmp_path / "prompts" / "main_python.prompt"
+    nested.parent.mkdir(parents=True)
+    prompt.parent.mkdir()
+    nested.write_text("nested line\n", encoding="utf-8")
+    middle.write_text("middle ```<nested.prompt>```\n", encoding="utf-8")
+    prompt.write_text("top ```<context/a.prompt>```\n", encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    include_paths = {record["path"] for record in manifest["context"]["includes"]}
+    assert "context/a.prompt" in include_paths
+    assert "context/nested.prompt" in include_paths
+    assert manifest["prompt"]["expanded_sha256"] is not None
+    # Wrong root-relative resolution would omit nested.prompt from includes.
+    assert len(manifest["context"]["includes"]) == 2
+
+
 def test_dynamic_prompt_records_expansion_as_unavailable(tmp_path: Path) -> None:
     """Check that dynamic prompts with non-deterministic tags are flagged correctly."""
     prompt = tmp_path / "prompts" / "dynamic_python.prompt"

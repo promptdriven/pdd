@@ -491,7 +491,7 @@ def test(
                     output_files=[story_path],
                     model=model,
                     cost_usd=cost,
-                    validation={"unit_tests": "passed"},
+                    validation={"detect_stories": "passed"},
                     basename=story_path.stem,
                 )
             return result_dict, cost, model
@@ -530,7 +530,7 @@ def test(
                     output_files=[generated_story_file],
                     model=model,
                     cost_usd=cost,
-                    validation={"unit_tests": "passed"},
+                    validation={"detect_stories": "passed"},
                 )
             return result_dict, cost, model
 
@@ -571,7 +571,7 @@ def test(
                     output_files=changed_files,
                     model=model,
                     cost_usd=cost,
-                    validation={"unit_tests": "passed"},
+                    validation={"unit_tests": "not_available"},
                     basename="agentic-test",
                 )
             return result_dict, cost, model
@@ -609,7 +609,7 @@ def test(
                     output_files=[output] if output else (),
                     model=test_result.model,
                     cost_usd=test_result.cost,
-                    validation={"unit_tests": "passed"},
+                    validation={"unit_tests": "not_available"},
                 )
             return test_result.content, test_result.cost, test_result.model
 

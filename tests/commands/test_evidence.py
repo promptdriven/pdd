@@ -43,7 +43,7 @@ def test_test_evidence_records_manual_generation(tmp_path) -> None:
             obj={"temperature": 0.0, "quiet": True},
         )
     assert result.exit_code == 0, result.output
-    assert record.call_args.kwargs["validation"]["unit_tests"] == "passed"
+    assert record.call_args.kwargs["validation"]["unit_tests"] == "not_available"
 
 
 def test_sync_evidence_records_module_run() -> None:

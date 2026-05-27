@@ -39,6 +39,20 @@ def _display_path(path: Path, project_root: Path) -> str:
         return str(path.resolve())
 
 
+def _resolve_include_path(raw_include: str, parent_file: Path, project_root: Path) -> Path:
+    """Resolve a local include relative to the file that referenced it."""
+    candidate = Path(raw_include.strip())
+    if candidate.is_absolute():
+        return candidate.resolve()
+    beside_parent = (parent_file.parent / candidate).resolve()
+    if beside_parent.is_file():
+        return beside_parent
+    from_root = (project_root / candidate).resolve()
+    if from_root.is_file():
+        return from_root
+    return beside_parent
+
+
 def _existing_file_records(
     paths: Iterable[str | Path],
     project_root: Path,
@@ -63,24 +77,38 @@ def _existing_file_records(
 
 
 def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, str]]:
-    """Hash simple local include inputs without executing expansion tags."""
+    """Collect hashes for all reachable local includes (nested), without executing tags."""
     try:
         content = prompt_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
 
-    include_paths: list[Path] = []
-    for match in _INCLUDE_RE.finditer(content):
-        raw_include = (match.group(1) or match.group(2) or "").strip()
-        if not raw_include or "${" in raw_include:
-            continue
-        candidate = Path(raw_include)
-        if not candidate.is_absolute():
-            cwd_candidate = project_root / candidate
-            prompt_candidate = prompt_path.parent / candidate
-            candidate = cwd_candidate if cwd_candidate.is_file() else prompt_candidate
-        include_paths.append(candidate)
-    return _existing_file_records(include_paths, project_root)
+    records: list[dict[str, str]] = []
+    seen: set[Path] = set()
+
+    def walk(file_path: Path, file_content: str) -> None:
+        for match in _INCLUDE_RE.finditer(file_content):
+            raw_include = (match.group(1) or match.group(2) or "").strip()
+            if not raw_include or "${" in raw_include:
+                continue
+            include_path = _resolve_include_path(raw_include, file_path, project_root)
+            if include_path in seen or not include_path.is_file():
+                continue
+            seen.add(include_path)
+            records.append(
+                {
+                    "path": _display_path(include_path, project_root),
+                    "sha256": _sha256_file(include_path),
+                }
+            )
+            try:
+                nested_content = include_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            walk(include_path, nested_content)
+
+    walk(prompt_path, content)
+    return records
 
 
 def _deterministic_expanded_hash(
@@ -88,33 +116,42 @@ def _deterministic_expanded_hash(
     prompt_path: Path,
     project_root: Path,
 ) -> Optional[str]:
-    """Expand plain local includes only; do not repeat effectful preprocessing."""
-    if _UNSUPPORTED_EXPANSION_RE.search(content):
+    """Expand plain local includes only; resolve each include from its parent file."""
+
+    def expand_file(file_content: str, file_path: Path) -> Optional[str]:
+        if _UNSUPPORTED_EXPANSION_RE.search(file_content):
+            return None
+        expanded = file_content
+        for _ in range(25):
+            changed = False
+
+            def replace(match: re.Match[str]) -> str:
+                nonlocal changed
+                raw_include = (match.group(1) or match.group(2) or "").strip()
+                if not raw_include or "${" in raw_include:
+                    return match.group(0)
+                include_path = _resolve_include_path(raw_include, file_path, project_root)
+                if not include_path.is_file():
+                    return match.group(0)
+                try:
+                    nested_content = include_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    return match.group(0)
+                nested_expanded = expand_file(nested_content, include_path)
+                if nested_expanded is None:
+                    return match.group(0)
+                changed = True
+                return nested_expanded
+
+            expanded = _INCLUDE_RE.sub(replace, expanded)
+            if not changed:
+                return expanded
         return None
-    expanded = content
-    for _ in range(25):
-        changed = False
 
-        def replace(match: re.Match[str]) -> str:
-            nonlocal changed
-            raw_include = (match.group(1) or match.group(2) or "").strip()
-            if not raw_include:
-                return match.group(0)
-            include_path = Path(raw_include)
-            if not include_path.is_absolute():
-                cwd_candidate = project_root / include_path
-                prompt_candidate = prompt_path.parent / include_path
-                include_path = cwd_candidate if cwd_candidate.is_file() else prompt_candidate
-            if not include_path.is_file():
-                return match.group(0)
-            changed = True
-            return include_path.read_text(encoding="utf-8")
-
-        next_expanded = _INCLUDE_RE.sub(replace, expanded)
-        expanded = next_expanded
-        if not changed:
-            return _sha256_bytes(expanded.encode("utf-8"))
-    return None
+    expanded_text = expand_file(content, prompt_path)
+    if expanded_text is None:
+        return None
+    return _sha256_bytes(expanded_text.encode("utf-8"))
 
 
 def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dict[str, Any]:
@@ -242,9 +279,9 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),
         "validation": {
-            "detect_stories": "not_applicable",
-            "unit_tests": "not_applicable",
-            "verify": "not_applicable",
+            "detect_stories": "not_available",
+            "unit_tests": "not_available",
+            "verify": "not_available",
             **dict(validation or {}),
         },
         "logs": log_values,
