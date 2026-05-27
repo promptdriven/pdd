@@ -213,6 +213,55 @@ def _safe_slug(value: str) -> str:
     return slug or "run"
 
 
+def validation_from_sync(
+    sync_result: Mapping[str, Any],
+    *,
+    skip_tests: bool,
+    skip_verify: bool,
+    dry_run: bool = False,
+) -> dict[str, str]:
+    """Map ``sync_main`` results to manifest validation fields without inventing outcomes."""
+    validation: dict[str, str] = {
+        "detect_stories": "not_applicable",
+        "unit_tests": "not_applicable" if skip_tests else "not_available",
+        "verify": "not_applicable" if skip_verify else "not_available",
+    }
+    if dry_run:
+        return validation
+
+    by_language = sync_result.get("results_by_language")
+    if not isinstance(by_language, dict):
+        by_language = {"_": sync_result}
+
+    operations: set[str] = set()
+    for lang_result in by_language.values():
+        if not isinstance(lang_result, dict):
+            continue
+        for operation in lang_result.get("operations_completed") or []:
+            operations.add(str(operation))
+
+    overall_success = sync_result.get("overall_success")
+    if overall_success is None:
+        successes = [
+            bool(lang_result.get("success"))
+            for lang_result in by_language.values()
+            if isinstance(lang_result, dict)
+        ]
+        overall_success = bool(successes) and all(successes)
+
+    test_operations = {"test", "crash", "fix", "test_extend"}
+    if not skip_tests and operations & test_operations:
+        validation["unit_tests"] = "passed" if overall_success else "failed"
+
+    if not skip_verify:
+        if "verify" in operations:
+            validation["verify"] = "passed" if overall_success else "failed"
+        elif any(operation.startswith("skip:verify") for operation in operations):
+            validation["verify"] = "not_applicable"
+
+    return validation
+
+
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     command: str,

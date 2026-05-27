@@ -7,7 +7,7 @@ from pathlib import Path
 
 import jsonschema
 
-from pdd.evidence_manifest import write_evidence_manifest
+from pdd.evidence_manifest import validation_from_sync, write_evidence_manifest
 
 
 def _hash(path: Path) -> str:
@@ -106,6 +106,42 @@ def test_nested_include_records_and_expanded_hash(tmp_path: Path) -> None:
     assert manifest["prompt"]["expanded_sha256"] is not None
     # Wrong root-relative resolution would omit nested.prompt from includes.
     assert len(manifest["context"]["includes"]) == 2
+
+
+def test_validation_from_sync_maps_completed_operations() -> None:
+    """Sync evidence must reflect operations that actually ran."""
+    validation = validation_from_sync(
+        {
+            "overall_success": True,
+            "results_by_language": {
+                "python": {
+                    "success": True,
+                    "operations_completed": ["test", "crash", "verify"],
+                }
+            },
+        },
+        skip_tests=False,
+        skip_verify=False,
+    )
+    assert validation["unit_tests"] == "passed"
+    assert validation["verify"] == "passed"
+    assert validation["detect_stories"] == "not_applicable"
+
+
+def test_validation_from_sync_dry_run_stays_not_available() -> None:
+    validation = validation_from_sync(
+        {
+            "overall_success": True,
+            "results_by_language": {
+                "python": {"success": True, "operations_completed": ["verify"]},
+            },
+        },
+        skip_tests=False,
+        skip_verify=False,
+        dry_run=True,
+    )
+    assert validation["unit_tests"] == "not_available"
+    assert validation["verify"] == "not_available"
 
 
 def test_dynamic_prompt_records_expansion_as_unavailable(tmp_path: Path) -> None:

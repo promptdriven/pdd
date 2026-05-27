@@ -48,3 +48,16 @@ original context snapshot.
 Missing stories or contracts are reported as `not_applicable`; they do not make
 an otherwise successful command fail. The schema is packaged at
 `pdd/schemas/evidence_manifest.schema.json`.
+
+## Verification
+
+For this feature, use the focused pytest gate (not full `pytest -q` collection
+on every environment):
+
+```bash
+pytest -q tests/commands/test_evidence.py tests/test_evidence_manifest.py
+```
+
+`pdd sync --evidence` records `unit_tests` / `verify` as `passed` or `failed`
+only when those operations appear in `sync_main` results; otherwise the receipt
+uses `not_available` or `not_applicable`.

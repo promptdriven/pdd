@@ -13,7 +13,7 @@ from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility, echo_model_line
-from ..evidence_manifest import write_evidence_manifest
+from ..evidence_manifest import validation_from_sync, write_evidence_manifest
 
 DEFAULT_SYNC_BUDGET = 20.0
 
@@ -268,6 +268,12 @@ def sync(
                 model=model_name,
                 cost_usd=total_cost,
                 temperature=ctx.obj.get("temperature", 0.0),
+                validation=validation_from_sync(
+                    result,
+                    skip_tests=skip_tests,
+                    skip_verify=skip_verify,
+                    dry_run=dry_run,
+                ),
             )
         return str(result), total_cost, model_name
     except click.Abort:
