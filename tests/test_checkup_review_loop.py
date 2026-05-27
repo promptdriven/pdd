@@ -12255,3 +12255,237 @@ class TestFilesChangedSinceHelper:
         files = _files_changed_since(worktree, base_sha)
         assert "pdd/foo.py" in files, files
         assert "tests/moved.py" in files, files
+
+
+class TestGuardBaselineHeadRef:
+    """Codex review finding F1: when the fixer subprocess committed
+    inside the worktree, ``HEAD:architecture.json`` IS the post-fix
+    registry — comparing against itself masks committed drift. The
+    guards now accept ``head_ref`` so the loop caller can pin the
+    baseline to ``pre_fix_sha``.
+    """
+
+    def test_load_prompt_source_map_honours_head_ref(
+        self, tmp_path: Path
+    ) -> None:
+        """When ``head_ref`` is set to a SHA before the fixer made a
+        committed registry repoint, the mapping reflects the pre-fix
+        registry (not the current HEAD). This is what lets the
+        downstream guards see the repoint as drift.
+        """
+        import subprocess
+
+        from pdd.checkup_review_loop import (
+            _git_rev_parse_head,
+            _load_prompt_source_map,
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "pdd").mkdir()
+        (worktree / "pdd" / "prompts").mkdir()
+        (worktree / "pdd" / "foo.py").write_text("x=1\n", encoding="utf-8")
+        (worktree / "pdd" / "prompts" / "foo_python.prompt").write_text(
+            "p", encoding="utf-8"
+        )
+        arch_pre = [
+            {
+                "filename": "foo_python.prompt",
+                "filepath": "pdd/foo.py",
+                "reason": "pre",
+                "dependencies": [],
+                "priority": 1,
+            }
+        ]
+        (worktree / "architecture.json").write_text(
+            json.dumps(arch_pre, indent=2), encoding="utf-8"
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        pre_fix_sha = _git_rev_parse_head(worktree)
+
+        # Fixer "commits" a registry repoint: same code path now points
+        # at a DIFFERENT prompt file.
+        arch_post = [
+            {
+                "filename": "bar_python.prompt",
+                "filepath": "pdd/foo.py",
+                "reason": "post",
+                "dependencies": [],
+                "priority": 1,
+            }
+        ]
+        (worktree / "architecture.json").write_text(
+            json.dumps(arch_post, indent=2), encoding="utf-8"
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "fixer repoint")
+
+        # Default head_ref="HEAD" reflects POST-fix registry (the bug).
+        head_mapping = _load_prompt_source_map(worktree)
+        assert head_mapping == {
+            "pdd/foo.py": "pdd/prompts/bar_python.prompt"
+        }, head_mapping
+
+        # head_ref=pre_fix_sha reflects PRE-fix registry (the fix).
+        pre_mapping = _load_prompt_source_map(
+            worktree, head_ref=pre_fix_sha
+        )
+        assert pre_mapping == {
+            "pdd/foo.py": "pdd/prompts/foo_python.prompt"
+        }, pre_mapping
+
+    def test_prompt_source_guard_catches_committed_drift_with_pre_fix_baseline(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end regression for F1: a committed code-only edit
+        (the fixer subprocess landed the commit, no prompt update)
+        slips past the guard with default ``head_ref="HEAD"`` because
+        ``_load_prompt_source_map`` reads the POST-fix registry. With
+        ``head_ref=pre_fix_sha`` the baseline is the pre-fix registry
+        and the same input triggers the guard's offender path.
+        """
+        import subprocess
+
+        from pdd.checkup_review_loop import (
+            _check_prompt_source_guard,
+            _files_changed_since,
+            _git_rev_parse_head,
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "pdd").mkdir()
+        (worktree / "pdd" / "prompts").mkdir()
+        (worktree / "pdd" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+        (worktree / "pdd" / "prompts" / "foo_python.prompt").write_text(
+            "prompt v1\n", encoding="utf-8"
+        )
+        arch = [
+            {
+                "filename": "foo_python.prompt",
+                "filepath": "pdd/foo.py",
+                "reason": "test fixture",
+                "dependencies": [],
+                "priority": 1,
+            }
+        ]
+        (worktree / "architecture.json").write_text(
+            json.dumps(arch, indent=2), encoding="utf-8"
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        pre_fix_sha = _git_rev_parse_head(worktree)
+
+        # Fixer commits a code-only edit (NO prompt update). The
+        # registry is identical pre/post — the diff is purely in
+        # ``pdd/foo.py``, exactly the #1063 drift shape that triggered
+        # the guard's original existence.
+        (worktree / "pdd" / "foo.py").write_text("x = 2\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "fixer code edit (drift)")
+
+        changed = _files_changed_since(worktree, pre_fix_sha)
+        assert "pdd/foo.py" in changed
+
+        # With pre-fix baseline: guard MUST fire (the committed code-
+        # only edit is real drift the loop must not push).
+        with_pre = _check_prompt_source_guard(
+            worktree, changed, head_ref=pre_fix_sha
+        )
+        assert with_pre is not None
+        assert "pdd/foo.py" in with_pre
+        assert "pdd/prompts/foo_python.prompt" in with_pre
+
+    def test_registry_edit_guard_uses_head_ref_for_baseline(
+        self, tmp_path: Path
+    ) -> None:
+        """When the fixer subprocess committed a registry removal,
+        comparing post-fix HEAD against post-fix worktree shows no
+        diff. With ``head_ref=pre_fix_sha`` the baseline is the
+        pre-fix registry so the removed pair surfaces correctly.
+        """
+        import subprocess
+
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+            _files_changed_since,
+            _git_rev_parse_head,
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "pdd").mkdir()
+        (worktree / "pdd" / "prompts").mkdir()
+        # Code persists; only the prompt and the registry entry will
+        # go away in the committed fixer step (a #1081 attack shape).
+        (worktree / "pdd" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+        (worktree / "pdd" / "prompts" / "foo_python.prompt").write_text(
+            "p", encoding="utf-8"
+        )
+        arch_pre = [
+            {
+                "filename": "foo_python.prompt",
+                "filepath": "pdd/foo.py",
+                "reason": "pre",
+                "dependencies": [],
+                "priority": 1,
+            }
+        ]
+        (worktree / "architecture.json").write_text(
+            json.dumps(arch_pre, indent=2), encoding="utf-8"
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        pre_fix_sha = _git_rev_parse_head(worktree)
+
+        # Fixer commits: drop the prompt AND remove the registry entry.
+        # Code stays. Default-HEAD baseline would see no registry diff
+        # (because HEAD == post-fix registry); the pre-fix baseline
+        # surfaces the removed pair.
+        (worktree / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (worktree / "architecture.json").write_text("[]\n", encoding="utf-8")
+        run("add", "-A")
+        run(
+            "commit",
+            "-q",
+            "-m",
+            "fixer: drop prompt + registry entry (drift)",
+        )
+
+        changed = _files_changed_since(worktree, pre_fix_sha)
+
+        # Pre-fix baseline catches the removed pair + bare-code
+        # retirement shape and refuses.
+        refusal = _check_architecture_registry_edit_guard(
+            worktree, changed, head_ref=pre_fix_sha
+        )
+        assert refusal is not None, "guard must block with pre-fix baseline"
+        assert "pdd/foo.py" in refusal or "foo_python.prompt" in refusal

@@ -1489,8 +1489,17 @@ def run_checkup_review_loop(
         # shape; running it first surfaces the registry-mutation
         # refusal rather than a downstream 10a refusal that fires on a
         # partial symptom.
+        # Codex review finding F1: the guards read
+        # ``HEAD:architecture.json`` as their baseline by default. When
+        # the fixer subprocess committed inside the worktree (Bug #3
+        # path), ``HEAD`` IS the post-fix registry — a committed
+        # registry repoint/removal would produce zero diff against
+        # itself. Pin the guard baseline to ``pre_fix_sha`` whenever
+        # the loop captured one; the helpers default to ``"HEAD"`` so
+        # legacy/test callers keep working.
+        guard_head_ref = pre_fix_sha or "HEAD"
         registry_guard_refusal = _check_architecture_registry_edit_guard(
-            worktree, guard_changed_files
+            worktree, guard_changed_files, head_ref=guard_head_ref
         )
         if registry_guard_refusal:
             _write_artifact(
@@ -1500,7 +1509,9 @@ def run_checkup_review_loop(
             )
             state.stop_reason = registry_guard_refusal
             break
-        guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
+        guard_refusal = _check_prompt_source_guard(
+            worktree, guard_changed_files, head_ref=guard_head_ref
+        )
         if guard_refusal:
             _write_artifact(
                 artifacts_dir
@@ -5532,14 +5543,22 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
 
 
-def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+def _load_prompt_source_map(
+    worktree: Path, head_ref: str = "HEAD"
+) -> Optional[Dict[str, str]]:
     """Build the ``code_path -> prompt_path`` mapping from ``architecture.json`` AS OF HEAD.
 
-    Reads from ``git show HEAD:architecture.json`` rather than the
-    worktree filesystem so a fixer cannot remove its own registry
+    Reads from ``git show <head_ref>:architecture.json`` rather than
+    the worktree filesystem so a fixer cannot remove its own registry
     entry in the same change set and slip past the guard (review pass
-    #3 Finding 2). The pre-fixer ``HEAD`` is the canonical registry
-    for enforcing the source-of-truth contract.
+    #3 Finding 2). ``head_ref`` defaults to ``"HEAD"`` for
+    backward-compat with non-loop callers (e.g. the reviewer-prompt
+    companion-files collector). Issue #1433 Bug #3 + codex F1: when
+    the fixer subprocess has already committed inside the worktree,
+    ``HEAD`` IS the post-fix state — the guard then compares the
+    post-fix registry against the post-fix worktree and sees no
+    diff. The loop caller passes ``head_ref=pre_fix_sha`` so the
+    baseline is the snapshot we captured BEFORE the fixer ran.
 
     Returns ``None`` when the registry is missing/unreadable/unparseable
     or lists no prompt-owned modules so the caller can degrade
@@ -5549,7 +5568,7 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
     the registry-evasion hole.
     """
     result = subprocess.run(
-        ["git", "show", "HEAD:architecture.json"],
+        ["git", "show", f"{head_ref}:architecture.json"],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -5607,7 +5626,9 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
 
 
 def _check_prompt_source_guard(
-    worktree: Path, changed_files: Sequence[str]
+    worktree: Path,
+    changed_files: Sequence[str],
+    head_ref: str = "HEAD",
 ) -> Optional[str]:
     """Refuse commits that touch generated code without their owning prompt.
 
@@ -5616,6 +5637,14 @@ def _check_prompt_source_guard(
     file without updating its prompt, and the result silently survives
     until the next ``pdd sync`` overwrites it (issue #1063). This guard
     enforces the contract deterministically before the push step.
+
+    ``head_ref`` selects the registry baseline. Defaults to ``"HEAD"``
+    for backward compat. Issue #1433 Bug #3 + codex F1: when the fixer
+    subprocess committed inside the worktree, ``HEAD`` IS the post-fix
+    registry — comparing against it would mask the very drift this
+    guard exists to catch. The loop caller passes
+    ``head_ref=pre_fix_sha`` so the baseline is the snapshot we
+    captured BEFORE the fixer ran.
 
     Returns ``None`` when the push should proceed, or a refusal string
     (suitable for ``state.stop_reason``) when at least one offending
@@ -5632,7 +5661,7 @@ def _check_prompt_source_guard(
     if not changed_files:
         return None
 
-    code_to_prompt = _load_prompt_source_map(worktree)
+    code_to_prompt = _load_prompt_source_map(worktree, head_ref=head_ref)
     if code_to_prompt is None:
         return None
 
@@ -5725,17 +5754,25 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
     return pairs
 
 
-def _path_exists_at_head(worktree: Path, path: str) -> bool:
-    """Return True if ``path`` exists in HEAD's tree.
+def _path_exists_at_head(
+    worktree: Path, path: str, head_ref: str = "HEAD"
+) -> bool:
+    """Return True if ``path`` exists in ``head_ref``'s tree.
 
     Used by ``_check_architecture_registry_edit_guard`` to distinguish
-    additions (path not in HEAD) from modifications (path in HEAD). The
+    additions (path not in baseline tree) from modifications. The
     unregistered-new-code scan must skip modifications: a legitimate
     retirement that also touches an existing unregistered helper or
     test would otherwise falsely trip the scan (round-3 finding 2).
+
+    ``head_ref`` defaults to ``"HEAD"`` for backward compat. Issue
+    #1433 Bug #3 + codex F1: when the fixer subprocess committed
+    inside the worktree, ``HEAD`` IS the post-fix tree — the caller
+    passes ``head_ref=pre_fix_sha`` so additions are measured against
+    the pre-fix baseline.
     """
     result = subprocess.run(
-        ["git", "cat-file", "-e", f"HEAD:{path}"],
+        ["git", "cat-file", "-e", f"{head_ref}:{path}"],
         cwd=worktree,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -5756,10 +5793,22 @@ def _is_real_file_no_symlink(path: Path) -> bool:
 
 
 def _check_architecture_registry_edit_guard(
-    worktree: Path, changed_files: Sequence[str]
+    worktree: Path,
+    changed_files: Sequence[str],
+    head_ref: str = "HEAD",
 ) -> Optional[str]:
     """Refuse ``architecture.json`` mutations that bypass the prompt
     source-of-truth contract (issue #1081).
+
+    ``head_ref`` selects the baseline tree for the registry comparison
+    and the unregistered-new-code scan's "did this path already exist?"
+    check. Defaults to ``"HEAD"`` for backward compat. Issue #1433
+    Bug #3 + codex F1: when the fixer subprocess committed inside the
+    worktree, ``HEAD`` IS the post-fix tree — a committed registry
+    repoint or removal would produce zero added/removed/repointed
+    pairs against itself. The loop caller passes
+    ``head_ref=pre_fix_sha`` so the baseline is the snapshot we
+    captured BEFORE the fixer ran.
 
     Sibling of ``_check_prompt_source_guard`` (10a). Where 10a iterates
     over the HEAD registry to catch code-only edits, this guard
@@ -5823,7 +5872,7 @@ def _check_architecture_registry_edit_guard(
     arch_in_changes = "architecture.json" in changed_norm
 
     head_result = subprocess.run(
-        ["git", "show", "HEAD:architecture.json"],
+        ["git", "show", f"{head_ref}:architecture.json"],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -6142,7 +6191,9 @@ def _check_architecture_registry_edit_guard(
                 continue
             # Round-3 finding 2: skip modifications of files that
             # already existed at HEAD. Only flag genuine additions.
-            if _path_exists_at_head(worktree, path):
+            # Codex F1: ``head_ref`` is the pre-fix snapshot when the
+            # fixer subprocess committed inside the worktree.
+            if _path_exists_at_head(worktree, path, head_ref=head_ref):
                 continue
             unregistered_new_code_paths.append(path)
 
@@ -6190,7 +6241,9 @@ def _check_architecture_registry_edit_guard(
             # — those are caught by the symlink branch of the 10b
             # scan above.
             if candidate.is_dir() and not candidate.is_symlink():
-                if not _path_exists_at_head(worktree, path):
+                # Codex F1: ``head_ref`` is the pre-fix snapshot when
+                # the fixer subprocess committed inside the worktree.
+                if not _path_exists_at_head(worktree, path, head_ref=head_ref):
                     submodule_offenders.append(path)
 
     repointed_by_code.sort()
