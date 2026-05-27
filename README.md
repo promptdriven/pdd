@@ -320,9 +320,9 @@ Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 #### Pinning a Provider
 
 When more than one local-mode provider is configured (e.g. both a `GEMINI_API_KEY`
-and a GitHub Copilot OAuth token), `--local` selects candidates in CSV order and
-may not pick the one you intended. Pin the provider explicitly with `--provider`
-or the `PDD_PROVIDER` environment variable:
+and a GitHub Copilot OAuth token), `--local` selects candidates by `coding_arena_elo`
+from `llm_model.csv` and may not pick the one you intended. Pin the provider
+explicitly with `--provider` or the `PDD_PROVIDER` environment variable:
 
 ```bash
 pdd --local --provider gemini sync my_module
@@ -332,8 +332,8 @@ PDD_PROVIDER=gemini pdd --local sync my_module
 
 The value is a case-insensitive substring match against the CSV `provider` and
 `model` columns, so `gemini`, `google`, `anthropic`, `copilot`, etc. all work.
-If a pinned candidate fails with a model-not-supported error, PDD now cascades
-to the next matching row rather than aborting the run.
+If the pin matches no rows in your CSV, PDD aborts with a clear error listing
+the available providers — it never silently routes to a different provider.
 
 PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
 

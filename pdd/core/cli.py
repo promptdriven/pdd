@@ -315,6 +315,18 @@ class PDDCLI(click.Group):
     help="Run commands locally instead of in the cloud.",
 )
 @click.option(
+    "--provider",
+    type=str,
+    default=None,
+    envvar="PDD_PROVIDER",
+    help=(
+        "Pin local-mode model selection to a single provider "
+        "(case-insensitive substring match against the CSV provider/model columns, "
+        "e.g. 'gemini', 'anthropic', 'copilot'). Also reads PDD_PROVIDER. "
+        "Has no effect when running in cloud mode."
+    ),
+)
+@click.option(
     "--context",
     "context_override",
     type=str,
@@ -353,6 +365,7 @@ def cli(
     output_cost: Optional[str],
     review_examples: bool,
     local: bool,
+    provider: Optional[str],
     time: Optional[float], # Type hint is Optional[float]
     context_override: Optional[str],
     list_contexts: bool,
@@ -395,6 +408,12 @@ def cli(
     # Propagate --local flag to environment for llm_invoke cloud detection
     if local:
         os.environ['PDD_FORCE_LOCAL'] = '1'
+    # Propagate --provider/PDD_PROVIDER pin so llm_invoke worker threads
+    # (which cannot read ctx.obj) honour the user's selection.
+    if provider:
+        normalized = provider.strip().lower()
+        ctx.obj["provider"] = normalized
+        os.environ["PDD_PROVIDER"] = normalized
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
     # Track whether the user explicitly supplied --time on the command line.

@@ -276,6 +276,86 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
+def test_cli_provider_flag_sets_env_and_ctx(
+    mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
+):
+    """`--provider gemini` populates ctx.obj['provider'] and PDD_PROVIDER (normalized lowercase)."""
+    monkeypatch.delenv("PDD_PROVIDER", raising=False)
+    files = create_dummy_files("test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    seen_env: dict = {}
+
+    @cli_command.command()
+    @click.argument('prompt_file')
+    @click.pass_context
+    def generate(ctx, prompt_file):
+        seen_env['PDD_PROVIDER'] = os.environ.get('PDD_PROVIDER')
+        mock_main(ctx=ctx)
+
+    result = runner.invoke(
+        cli_command,
+        ["--provider", "Gemini", "generate", str(files["test.prompt"])],
+    )
+    assert result.exit_code == 0
+    ctx = mock_main.call_args.kwargs.get('ctx')
+    assert ctx.obj['provider'] == 'gemini'
+    assert seen_env['PDD_PROVIDER'] == 'gemini'
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.cli.construct_paths')
+def test_cli_provider_env_var_only(
+    mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
+):
+    """PDD_PROVIDER env var is honoured without --provider on the command line."""
+    monkeypatch.setenv("PDD_PROVIDER", "Anthropic")
+    files = create_dummy_files("test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    @cli_command.command()
+    @click.argument('prompt_file')
+    @click.pass_context
+    def generate(ctx, prompt_file):
+        mock_main(ctx=ctx)
+
+    result = runner.invoke(
+        cli_command, ["generate", str(files["test.prompt"])], env={"PDD_PROVIDER": "Anthropic"}
+    )
+    assert result.exit_code == 0
+    ctx = mock_main.call_args.kwargs.get('ctx')
+    assert ctx.obj.get('provider') == 'anthropic'
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.cli.construct_paths')
+def test_cli_provider_unset_leaves_env_untouched(
+    mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
+):
+    """When neither flag nor env is provided, ctx.obj does not gain a 'provider' key
+    and PDD_PROVIDER is not introduced (mirrors --local/PDD_FORCE_LOCAL pattern)."""
+    monkeypatch.delenv("PDD_PROVIDER", raising=False)
+    files = create_dummy_files("test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    @cli_command.command()
+    @click.argument('prompt_file')
+    @click.pass_context
+    def generate(ctx, prompt_file):
+        mock_main(ctx=ctx)
+
+    result = runner.invoke(cli_command, ["generate", str(files["test.prompt"])])
+    assert result.exit_code == 0
+    ctx = mock_main.call_args.kwargs.get('ctx')
+    assert 'provider' not in ctx.obj
+    assert 'PDD_PROVIDER' not in os.environ
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.cli.construct_paths')
 def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test --quiet overrides --verbose."""
     files = create_dummy_files("test.prompt")

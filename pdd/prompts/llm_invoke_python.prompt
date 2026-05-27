@@ -217,15 +217,14 @@
       candidates were narrowed by the pin and not by an empty CSV.
     - **Permanent-rejection classifier (`_is_permanent_invalid_request_error`)**: Used to fast-fail
       the cascade when the request shape itself is wrong (e.g. `thinking.type` enforced by Anthropic
-      Opus 4.7). Keep the allow-list of marker phrases conservative. Copilot
-      `Github_copilotException` "model not supported" variants — both `"the requested model is not
-      supported"` (the verbatim litellm-wrapped text seen for `github_copilot/gpt-5.1` when the
-      account lacks entitlement) and `"is not supported for this model"` (a related phrasing) —
-      MUST NOT be classified as permanent. Those failures are account-specific to one provider's
-      model row and the next CSV candidate may succeed. Use a more specific marker for the
-      Anthropic shape issue (e.g. `"thinking.type"` plus `"unsupported parameter"`) so the
-      classifier still catches request-shape problems while allowing model-not-entitled errors to
-      cascade. Closes #1202.
+      Opus 4.7). Keep the allow-list of marker phrases conservative: `"is not supported for this
+      model"`, `"unsupported parameter"`, `"thinking.type"`, `"output_config.effort"`. These match
+      the Anthropic Opus 4.7 ``thinking.type.enabled is not supported for this model`` 400 that
+      motivated #1158. Do NOT broaden the allow-list to include the Copilot
+      `Github_copilotException, the requested model is not supported.` phrasing — the word order
+      differs (``model is not supported`` vs ``is not supported for this model``) so that error
+      already correctly falls through to the next candidate via the existing retry path. Removing
+      the Anthropic marker would re-introduce the 10-minute cascade-hang from #1158.
 
 % Attempted-Models History:
     - Maintain a per-call chronological `attempted_models: list[str]` initialized to `[]` at the

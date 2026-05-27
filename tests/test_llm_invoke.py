@@ -4818,6 +4818,65 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
 
+    def test_provider_pin_filters_by_provider_column(self, llm_mod, tmp_path, monkeypatch):
+        """PDD_PROVIDER='google' narrows candidates to the Google row only."""
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "google")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert len(candidates) == 1
+        assert candidates[0]["model"] == "gemini-pro"
+        assert candidates[0]["provider"].lower() == "google"
+
+    def test_provider_pin_case_insensitive(self, llm_mod, tmp_path, monkeypatch):
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "ANTHROPIC")
+        candidates = llm_mod._select_model_candidates(0.5, "claude-3", df)
+        assert len(candidates) == 1
+        assert candidates[0]["model"] == "claude-3"
+
+    def test_provider_pin_matches_model_column(self, llm_mod, tmp_path, monkeypatch):
+        """Pin substring is allowed to match the model column too — covers CSVs
+        like the bundled one where ``provider='Google Vertex AI'`` carries a
+        bare ``gemini-3.1-pro-preview`` row (no provider-prefix on model)."""
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "gemini")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert len(candidates) == 1
+        assert candidates[0]["model"] == "gemini-pro"
+
+    def test_provider_pin_unknown_raises_with_known_providers(self, llm_mod, tmp_path, monkeypatch):
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "nonexistent-provider")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        msg = str(excinfo.value)
+        assert "nonexistent-provider" in msg
+        # Should list known providers from the CSV so the user can correct
+        # a typo without re-running with verbose flags.
+        assert "anthropic" in msg.lower()
+        assert "openai" in msg.lower()
+        assert "google" in msg.lower()
+
+    def test_provider_pin_empty_or_unset_is_noop(self, llm_mod, tmp_path, monkeypatch):
+        """Empty/whitespace PDD_PROVIDER must not narrow candidates."""
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert len(candidates) == 3
+        monkeypatch.setenv("PDD_PROVIDER", "   ")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert len(candidates) == 3
+
+    def test_provider_pin_propagates_through_strength_interpolation(self, llm_mod, tmp_path, monkeypatch):
+        """Pin must apply BEFORE base-model resolution and ELO interpolation —
+        otherwise strength=1.0 (highest ELO) could still pull a non-pinned row."""
+        df = self._make_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "google")
+        # strength=1.0 normally selects the highest-ELO model (gpt-4 at 1300),
+        # but with the pin only the Google row exists.
+        candidates = llm_mod._select_model_candidates(1.0, "gpt-4", df)
+        assert {c["provider"].lower() for c in candidates} == {"google"}
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""
@@ -7189,6 +7248,27 @@ def test_is_permanent_invalid_request_error_ignores_unrelated_bad_request():
         )
     except TypeError:
         exc = litellm.BadRequestError("Some transient validation hiccup")
+    assert _is_permanent_invalid_request_error(exc) is False
+
+
+def test_is_permanent_invalid_request_error_does_not_flag_copilot_not_supported():
+    """Regression for issue #1202: GitHub Copilot's verbatim error
+    ``Github_copilotException, the requested model is not supported.``
+    must NOT be classified as permanent — it is account-entitlement
+    specific to one CSV row, and the next candidate may succeed. The
+    word order differs from the Anthropic ``thinking.type`` marker
+    (``is not supported for this model``) so the substring check
+    correctly falls through. This test guards against future broadening
+    of the allow-list that would re-introduce the abort behaviour."""
+    from pdd.llm_invoke import _is_permanent_invalid_request_error
+    import litellm
+    msg = "Github_copilotException, the requested model is not supported."
+    try:
+        exc = litellm.BadRequestError(
+            message=msg, model="github_copilot/gpt-5.1", llm_provider="github_copilot"
+        )
+    except TypeError:
+        exc = litellm.BadRequestError(msg)
     assert _is_permanent_invalid_request_error(exc) is False
 
 

@@ -2408,6 +2408,31 @@ def _select_model_candidates(
 ) -> List[Dict[str, Any]]:
     """Selects and sorts candidate models based on strength and availability."""
 
+    # 0. Provider pin (PDD_PROVIDER): narrow the candidate universe BEFORE
+    # base-model resolution and strength-based selection so the pin applies
+    # uniformly (surrogate-base fallback, ELO interpolation, retry cascade).
+    # Case-insensitive substring match against the `provider` column first,
+    # then the `model` column — accepts user values like "gemini", "google",
+    # "copilot", "anthropic", "vertex" against the bundled CSV's varied
+    # provider names. Pinning is honoured EVEN when the user did not pass
+    # --local, mirroring how PDD_FORCE_LOCAL behaves: the env var is the
+    # cross-thread carrier, and worker subprocesses inherit it. Cloud mode
+    # ignores this filter because cloud routing is decided server-side.
+    provider_pin = (os.environ.get("PDD_PROVIDER", "") or "").strip().lower()
+    if provider_pin:
+        provider_col = model_df['provider'].astype(str).str.lower()
+        model_col = model_df['model'].astype(str).str.lower()
+        provider_mask = provider_col.str.contains(provider_pin, regex=False, na=False)
+        model_mask = model_col.str.contains(provider_pin, regex=False, na=False)
+        pinned_df = model_df[provider_mask | model_mask]
+        if pinned_df.empty:
+            known_providers = sorted({p for p in model_df['provider'].astype(str).str.strip() if p})
+            raise RuntimeError(
+                f"PDD_PROVIDER='{provider_pin}' matched no rows in the LLM model CSV. "
+                f"Available providers: {', '.join(known_providers) or '(none)'}"
+            )
+        model_df = pinned_df.copy()
+
     # 1. Filter by API Key Name Presence (initial availability check)
     # Keep models with a non-empty api_key field in the CSV.
     # The actual key value check happens later.
@@ -4959,6 +4984,11 @@ def llm_invoke(
 
     # --- 8. Handle Failure of All Candidates ---
     error_message = "All candidate models failed."
+    pinned_provider = (os.environ.get("PDD_PROVIDER", "") or "").strip().lower()
+    if pinned_provider:
+        # Surface the pin so users understand candidates were narrowed by
+        # PDD_PROVIDER rather than by an empty/misconfigured CSV.
+        error_message += f" (PDD_PROVIDER='{pinned_provider}')"
     if last_exception:
         error_message += f" Last error ({type(last_exception).__name__}): {last_exception}"
     if last_exception and "context limit" in str(last_exception):
