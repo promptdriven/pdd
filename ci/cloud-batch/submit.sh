@@ -9,7 +9,7 @@ JOB_RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
 JOB_NAME="pdd-test-${JOB_RUN_ID}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-POLL_INTERVAL="${POLL_INTERVAL:-10}"
+POLL_INTERVAL="${POLL_INTERVAL:-5}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-7200}"  # Real LLM shards can exceed 30 minutes.
 
 # Portable timeout (macOS lacks GNU timeout)
