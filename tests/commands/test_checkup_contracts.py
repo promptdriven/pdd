@@ -60,6 +60,29 @@ def test_checkup_contract_check_reports_defect() -> None:
     assert "MISSING_MODAL" in codes
 
 
+def test_checkup_contract_check_help_renders_and_exits_zero() -> None:
+    """Canonical help path from issue #7 review must exit 0."""
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "false",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pdd", "checkup", "contract", "check", "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "Usage: pdd checkup contract check" in result.stdout
+    assert "Missing argument 'TARGET'" not in result.stdout
+
+
 def test_checkup_contract_check_strict_is_forwarded() -> None:
     result = CliRunner().invoke(
         checkup,

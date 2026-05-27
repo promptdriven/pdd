@@ -360,7 +360,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in {"lint", "contract", "contracts"}:
+    if show_help and target not in {"lint", "contract", "contracts", "coverage"}:
         click.echo(ctx.command.get_help(ctx))
         return None
 
@@ -387,9 +387,21 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         contract_args = list(ctx.args)
         if strict:
             contract_args.insert(0, "--strict")
+        if show_help:
+            if not contract_args or contract_args[:1] == ["check"]:
+                contracts_check_cmd = contracts_cli.get_command(ctx, "check")
+                click.echo(
+                    contracts_check_cmd.get_help(
+                        click.Context(
+                            contracts_check_cmd,
+                            info_name=f"pdd checkup {target} check",
+                        )
+                    )
+                )
+                return None
         exit_code = contracts_cli.main(
             args=contract_args,
-            prog_name=f"pdd checkup {target} check",
+            prog_name=f"pdd checkup {target}",
             standalone_mode=False,
             obj=ctx.obj,
         )
@@ -397,6 +409,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             raise click.exceptions.Exit(exit_code)
         return None
     if target == "coverage":
+        if show_help:
+            click.echo(
+                coverage_cmd.get_help(
+                    click.Context(coverage_cmd, info_name="pdd checkup coverage")
+                )
+            )
+            return None
         exit_code = coverage_cmd.main(
             args=list(ctx.args),
             prog_name="pdd checkup coverage",
