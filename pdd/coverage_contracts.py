@@ -23,6 +23,7 @@ from typing import Optional
 
 from .contract_ir import (
     COVERAGE_REF_RE,
+    CROSS_MODULE_REF_RE,
     _WAIVER_REF_RE,
     _extract_markdown_sections,
     extract_sections as _extract_sections,
@@ -149,12 +150,12 @@ def _story_links_prompt(story_text: str, prompt_name: str) -> bool:
     """
     Return True if the story's pdd-story-prompts metadata mentions prompt_name.
 
-    Stories without ``<!-- pdd-story-prompts: ... -->`` are not linked to any
-    prompt (strict scoping — avoids false positives across the story corpus).
+    Stories without ``<!-- pdd-story-prompts: ... -->`` are treated as applying
+    to the prompt set under evaluation (matching the existing user-story flow).
     """
     meta_match = _STORY_PROMPTS_META_RE.search(story_text)
     if not meta_match:
-        return False  # no metadata = not linked to any specific prompt
+        return True  # no metadata = applies to prompt set
     prompts_str = meta_match.group("prompts")
     listed = [p.strip() for p in prompts_str.split(",")]
     prompt_base = prompt_name.lower()
@@ -273,7 +274,9 @@ def scan_story_validation_failures(
 
 def scan_test_evidence(
     tests_dir: Path,
+    prompt_path: Optional[Path] = None,
     read_errors: Optional[list[str]] = None,
+    require_prompt_qualified: bool = False,
 ) -> dict[str, list[str]]:
     """
     Heuristically scan test files for rule ID references.
@@ -288,6 +291,8 @@ def scan_test_evidence(
     if not tests_dir.exists():
         return evidence
 
+    prompt_name = prompt_path.name if prompt_path is not None else ""
+
     for test_file in sorted(tests_dir.rglob("test_*.py")):
         try:
             source = test_file.read_text(encoding="utf-8")
@@ -296,7 +301,7 @@ def scan_test_evidence(
                 read_errors.append(f"{test_file.name}: {exc}")
             continue
 
-        _scan_test_file(source, evidence)
+        _scan_test_file(source, evidence, prompt_name=prompt_name, require_prompt_qualified=require_prompt_qualified)
 
     return evidence
 
@@ -352,7 +357,13 @@ def _rule_ids_from_test_source(source: str) -> set[str]:
     return ids
 
 
-def _scan_test_file(source: str, evidence: dict[str, list[str]]) -> None:  # pylint: disable=too-many-locals
+def _scan_test_file(  # pylint: disable=too-many-locals
+    source: str,
+    evidence: dict[str, list[str]],
+    *,
+    prompt_name: str,
+    require_prompt_qualified: bool,
+) -> None:
     """
     Parse a single test file's source and populate evidence in-place.
 
@@ -382,9 +393,23 @@ def _scan_test_file(source: str, evidence: dict[str, list[str]]) -> None:  # pyl
         if not fname.startswith("test"):
             continue
 
-        # Pattern 1: function name contains R<N>
-        name_matches = _TEST_FUNC_RE.findall(fname)
-        for digit in name_matches:
+        # Prompt-qualified mode: only accept references scoped to this prompt.
+        if require_prompt_qualified:
+            # Check the function docstring first line and the function signature line.
+            docstring = ast.get_docstring(node) or ""
+            first_line = docstring.splitlines()[0][:200] if docstring else ""
+            sig_line = source.splitlines()[max(node.lineno - 1, 0)] if source else ""
+            for text in (first_line, sig_line):
+                for match in CROSS_MODULE_REF_RE.finditer(text):
+                    if match.group(1).lower().endswith("/" + prompt_name.lower()) or match.group(1).lower() == prompt_name.lower():
+                        rid = match.group(2).upper()
+                        evidence.setdefault(rid, [])
+                        if fname not in evidence[rid]:
+                            evidence[rid].append(fname)
+            continue
+
+        # Pattern 1: function name contains R<N> (unqualified, single-prompt usage)
+        for digit in _TEST_FUNC_RE.findall(fname):
             rid = f"R{digit}"
             evidence.setdefault(rid, [])
             if fname not in evidence[rid]:
@@ -534,6 +559,8 @@ def build_coverage(
     path: Path,
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
+    *,
+    require_prompt_qualified_tests: bool = False,
 ) -> CoverageResult:
     """
     Build a coverage matrix for a single prompt file.
@@ -591,7 +618,12 @@ def build_coverage(
 
     read_errors: list[str] = []
     story_evidence = scan_story_evidence(stories_dir, path, read_errors=read_errors)
-    test_evidence = scan_test_evidence(tests_dir, read_errors=read_errors)
+    test_evidence = scan_test_evidence(
+        tests_dir,
+        prompt_path=path,
+        read_errors=read_errors,
+        require_prompt_qualified=require_prompt_qualified_tests,
+    )
     validation_failures: dict[str, list[str]] = {}
     for source in (
         scan_story_validation_failures(stories_dir, path, read_errors=read_errors),
@@ -629,5 +661,14 @@ def build_coverage_directory(
     for prompt_path in sorted(directory.rglob("*.prompt")):
         if prompt_path.name.lower().endswith("_llm.prompt"):
             continue
-        results.append(build_coverage(prompt_path, stories_dir, tests_dir))
+        # Directory mode must avoid cross-prompt test evidence false positives.
+        # Require prompt-qualified test references (e.g. foo_python.prompt#R1).
+        results.append(
+            build_coverage(
+                prompt_path,
+                stories_dir,
+                tests_dir,
+                require_prompt_qualified_tests=True,
+            )
+        )
     return results

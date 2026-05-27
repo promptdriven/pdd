@@ -385,7 +385,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if target in {"contract", "contracts"}:
         contract_args = list(ctx.args)
         if strict:
-            contract_args.insert(0, "--strict")
+            # Forward strict to the *subcommand* (e.g. "check"), not the group.
+            # Otherwise Click treats it as an option to the "contracts" group.
+            if contract_args and contract_args[0] == "check":
+                contract_args.insert(1, "--strict")
+            else:
+                contract_args.insert(0, "--strict")
         exit_code = contracts_cli.main(
             args=contract_args,
             prog_name=f"pdd checkup {target} check",

@@ -65,7 +65,10 @@ def test_checkup_contract_check_strict_is_forwarded() -> None:
         obj={"quiet": True},
     )
 
+    # Regression: strict must be forwarded to the subcommand, not treated as a group option.
+    assert "No such option: --strict" not in result.output
     assert result.exit_code == 2
+    assert isinstance(json.loads(result.output), list)
 
 
 @pytest.mark.parametrize(

@@ -427,6 +427,18 @@ class TestCoverageCliRegistration:
         assert result.exit_code == 0
         assert "no contract coverage data" in result.output.lower()
 
+    def test_registered_top_level_coverage_command_accepts_contracts_flag(self, tmp_path):
+        """Issue #823 contract: `pdd coverage --contracts ...` is available."""
+        prompt = _write(tmp_path, "legacy_python.prompt", LEGACY_PROMPT)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli.cli,
+            ["--quiet", "coverage", "--contracts", str(prompt)],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+        assert "no contract coverage data" in result.output.lower()
+
     @pytest.mark.parametrize(
         ("target", "expected_exit_code"),
         [
