@@ -82,7 +82,6 @@ if "pdd.cli" in sys.modules:
 del importlib
 del (
     _import_mocks,
-    _saved_core_modules,
     _saved_modules,
     _module_name,
     _side_effect_modules,

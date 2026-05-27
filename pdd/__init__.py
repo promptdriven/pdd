@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 _ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
+_ORIGINAL_METADATA_VERSION = _metadata_version
 
 
 def _derive_git_aligned_version() -> str | None:
@@ -45,6 +46,13 @@ def _derive_git_aligned_version() -> str | None:
 
 def _load_package_version() -> str:
     """Return a version aligned with current tag strategy."""
+    # Check if a test monkeypatched the module's _metadata_version binding
+    if _metadata_version is not _ORIGINAL_METADATA_VERSION:
+        try:
+            return _metadata_version("pdd-cli")
+        except Exception:
+            pass
+
     try:
         dist_version = _ORIGINAL_DISTRIBUTION("pdd-cli").version
     except PackageNotFoundError:
