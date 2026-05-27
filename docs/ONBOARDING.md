@@ -88,16 +88,17 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
 **Recommended: Use the setup wizard**
 
 Run the interactive setup wizard to configure your credentials. PDD supports
-API keys for direct prompt/LiteLLM commands and stored OAuth/subscription
-logins for agentic CLI workflows such as Claude Max/Pro, Gemini OAuth, and
-Codex ChatGPT login, plus OpenCode provider auth/config:
+API keys for direct prompt/LiteLLM commands and stored OAuth/subscription/config
+credentials for agentic CLI workflows such as Claude Max/Pro, Google
+Gemini/Antigravity auth, Vertex env auth, Codex ChatGPT login, and OpenCode
+provider auth/config:
 
 ```bash
 pdd setup
 ```
 
 The wizard will:
-- **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription logins
+- **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription/config credentials
 - **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands still need API keys.
 - **Validate API keys** with real test requests to ensure they work
 - **Show cost transparency** for different model tiers
@@ -221,7 +222,8 @@ pdd fix https://github.com/owner/repo/issues/456
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your Claude Max/Pro OAuth login from `claude auth login` if present, otherwise `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GOOGLE_API_KEY`)
+   - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (uses Antigravity OAuth or keyring-backed Google subscription sign-in if present, otherwise `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin Antigravity, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection (`auto` prefers `agy` when credentialed, but keeps legacy `gemini` for legacy-OAuth-only setups).
+   - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GEMINI_API_KEY` or `GOOGLE_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
@@ -371,7 +373,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
   ```
 - [ ] **Copilot/automated review comments addressed** - Review and resolve all automated review comments before requesting human review
 
-  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Gemini CLI, etc.) to automatically fix Copilot comments:
+  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Antigravity CLI, etc.) to automatically fix Copilot comments:
 
   ```bash
   # Example with Claude Code

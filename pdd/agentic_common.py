@@ -219,7 +219,7 @@ def classify_step_output(
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
-    *, 
+    *,
     strict_unresolved: bool = False,
 ) -> str:
     """Safely substitute known {placeholders} without raising on unknown keys.
@@ -256,8 +256,24 @@ def get_agent_provider_preference() -> List[str]:
     """
     env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
     if env_val:
-        return [p.strip() for p in env_val.split(",") if p.strip()]
-    return _DEFAULT_PROVIDER_PREFERENCE
+        prefs = [p.strip() for p in env_val.split(",") if p.strip()]
+        normalized = []
+        for p in prefs:
+            if p == "antigravity":
+                normalized.append("google")
+                # `PDD_AGENTIC_PROVIDER=antigravity` is an explicit pin to `agy`.
+                # Overwrite any prior `PDD_GOOGLE_CLI` (including a stale
+                # `gemini` rollback value) so the more-specific selector wins.
+                os.environ["PDD_GOOGLE_CLI"] = "agy"
+            else:
+                normalized.append(p)
+        # Deduplicate while preserving order
+        result = []
+        for p in normalized:
+            if p not in result:
+                result.append(p)
+        return result
+    return list(_DEFAULT_PROVIDER_PREFERENCE)
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -277,8 +293,6 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/claude"),
         Path("/opt/homebrew/bin/claude"),
         Path("/home/linuxbrew/.linuxbrew/bin/claude"),
-        # nvm base path - glob-expanded in _find_cli_binary() to search
-        # ~/.nvm/versions/node/*/bin/ for all installed node versions
         Path.home() / ".nvm" / "versions" / "node",
     ],
     "codex": [
@@ -297,6 +311,16 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
         Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
+        Path.home() / ".nvm" / "versions" / "node",
+    ],
+    "agy": [
+        Path.home() / ".npm-global" / "bin" / "agy",
+        Path.home() / ".local" / "bin" / "agy",
+        Path.home() / "bin" / "agy",
+        Path("/usr/local/bin/agy"),
+        Path("/opt/homebrew/bin/agy"),
+        Path("/home/linuxbrew/.linuxbrew/bin/agy"),
+        Path.home() / ".antigravity" / "bin" / "agy",
         Path.home() / ".nvm" / "versions" / "node",
     ],
     "opencode": [
@@ -830,7 +854,7 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
     discovery still honors the current home directory.
     """
     paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini", "opencode"}:
+    if name in {"claude", "codex", "gemini", "opencode", "agy"}:
         home = Path.home()
         paths.extend([
             home / ".npm-global" / "bin" / name,
@@ -838,6 +862,8 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
             home / "bin" / name,
             home / ".nvm" / "versions" / "node",
         ])
+        if name == "agy":
+            paths.append(home / ".antigravity" / "bin" / "agy")
 
     seen: set[str] = set()
     unique_paths: List[Path] = []
@@ -878,6 +904,158 @@ def _get_cli_diagnostic_info(name: str) -> str:
     return "\n".join(lines)
 
 
+def _get_google_cli_binary(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Resolve the Google provider CLI binary path based on PDD_GOOGLE_CLI and availability.
+
+    Shares the same selection logic as ``_get_google_cli_name``; returns the
+    filesystem path rather than the logical name.  The two functions MUST stay
+    in sync so that availability detection and subprocess construction always
+    agree on which binary is selected.
+
+    Selection rules:
+        - ``agy`` / ``gemini``: explicit pin (errors at run time if missing).
+        - ``auto`` (default): use the same logical-name resolver as
+          ``_get_google_cli_name`` so command construction and the launched
+          executable cannot disagree.
+    """
+    if env is None:
+        env = os.environ
+    pref = env.get("PDD_GOOGLE_CLI", "auto").strip().lower()
+    if pref == "agy":
+        return _find_cli_binary("agy")
+    if pref == "gemini":
+        return _find_cli_binary("gemini")
+    cli_name = _get_google_cli_name(env)
+    return _find_cli_binary(cli_name) if cli_name else None
+
+
+def _has_google_api_key_for_cli(cli: str, env: Optional[Dict[str, str]] = None) -> bool:
+    """Return whether *env* has an API key usable by the selected Google CLI."""
+    if env is None:
+        env = os.environ
+    if cli == "agy":
+        return bool(
+            env.get("ANTIGRAVITY_API_KEY")
+            or env.get("GOOGLE_API_KEY")
+            # Compatibility: PDD maps GEMINI_API_KEY to GOOGLE_API_KEY before
+            # launching agy so existing Gemini-key users keep working.
+            or env.get("GEMINI_API_KEY")
+        )
+    if cli == "gemini":
+        return bool(env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY"))
+    return False
+
+
+def _has_agy_oauth_credentials() -> bool:
+    """Return True when Antigravity (``agy``) appears signed in locally.
+
+    Antigravity CLI authenticates through the OS secure keyring for
+    subscription/Google Sign-In users, so a populated
+    ``~/.gemini/antigravity-cli/oauth_creds.json`` is not the only valid
+    auth signal. Count the JSON token file when present, and otherwise accept
+    the Antigravity onboarding + active Google account files as the local
+    keyring-backed sign-in marker. Runtime still surfaces an actionable
+    "Authentication required." error if the keyring session is stale.
+    """
+    creds_path = Path.home() / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    try:
+        data = json.loads(creds_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and bool(
+            data.get("refresh_token") or data.get("access_token")
+        ):
+            return True
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    onboarding_path = (
+        Path.home() / ".gemini" / "antigravity-cli" / "cache" / "onboarding.json"
+    )
+    accounts_path = Path.home() / ".gemini" / "google_accounts.json"
+    try:
+        onboarding = json.loads(onboarding_path.read_text(encoding="utf-8"))
+        accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(onboarding, dict) or not isinstance(accounts, dict):
+        return False
+    onboarding_complete = bool(
+        onboarding.get("onboardingComplete")
+        or onboarding.get("consumerOnboardingComplete")
+        or onboarding.get("enterpriseOnboardingComplete")
+    )
+    active_account = accounts.get("active")
+    return (
+        onboarding_complete
+        and isinstance(active_account, str)
+        and bool(active_account.strip())
+    )
+
+
+def _has_google_vertex_auth(env: Optional[Dict[str, str]] = None) -> bool:
+    """Return True when Google Vertex auth env is configured for the CLIs."""
+    if env is None:
+        env = os.environ
+    if env.get("GOOGLE_GENAI_USE_VERTEXAI") != "true":
+        return False
+    return bool(
+        env.get("GOOGLE_APPLICATION_CREDENTIALS")
+        or env.get("GOOGLE_CLOUD_PROJECT")
+        or env.get("VERTEXAI_PROJECT")
+        or env.get("VERTEX_PROJECT")
+    )
+
+
+def _has_legacy_gemini_oauth_credentials() -> bool:
+    """Return True when ONLY the legacy Gemini OAuth file is populated."""
+    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
+    try:
+        data = json.loads(creds_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("refresh_token") or data.get("access_token"))
+
+
+def _get_google_cli_name(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Return the *logical* name of the selected Google CLI binary ("agy" or "gemini").
+
+    Uses the same resolution logic as ``_get_google_cli_binary`` but returns
+    the preference-key name rather than the filesystem path.  This decouples
+    binary-identity checks from ``os.path.basename(cli_path)``, which breaks
+    when ``.pddrc`` or ``PDD_GOOGLE_CLI`` points at a wrapper, symlink, or
+    versioned binary (e.g. ``/usr/local/bin/agy-1.0.1``).
+    """
+    if env is None:
+        env = os.environ
+    pref = env.get("PDD_GOOGLE_CLI", "auto").strip().lower()
+    if pref == "agy":
+        return "agy" if _find_cli_binary("agy") else None
+    if pref == "gemini":
+        return "gemini" if _find_cli_binary("gemini") else None
+    agy_bin = _find_cli_binary("agy")
+    gemini_bin = _find_cli_binary("gemini")
+    if agy_bin and gemini_bin:
+        # Prefer agy for the migration, except when the only configured auth
+        # signal is legacy Gemini OAuth. In that case selecting agy makes
+        # runtime availability drop Google even though setup correctly reports
+        # legacy Gemini as configured.
+        if (
+            _has_google_api_key_for_cli("agy", env)
+            or _has_google_vertex_auth(env)
+            or _has_agy_oauth_credentials()
+        ):
+            return "agy"
+        if _has_legacy_gemini_oauth_credentials():
+            return "gemini"
+        return "agy"
+    if agy_bin:
+        return "agy"
+    if gemini_bin:
+        return "gemini"
+    return None
+
+
 def get_available_agents() -> List[str]:
     """
     Returns list of available provider names based on CLI existence and API key configuration.
@@ -894,22 +1072,30 @@ def get_available_agents() -> List[str]:
     if _find_cli_binary("claude"):
         available.append("anthropic")
 
-    # 2. Google (Gemini)
-    # Available if 'gemini' CLI exists AND any supported non-interactive auth
-    # path is configured. The Gemini CLI can run headless from its stored OAuth
-    # credentials even when GOOGLE_API_KEY/GEMINI_API_KEY are unset.
-    has_gemini_cli = _find_cli_binary("gemini") is not None
-    has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    has_vertex_auth = (
-        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
-        and (
-            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
-        )
-    )
-    has_gemini_oauth = _has_gemini_oauth_credentials()
+    # 2. Google (Gemini / Antigravity)
+    # Available if the resolved Google CLI binary exists AND a non-interactive
+    # auth path that *pairs with that specific binary* is configured. API keys
+    # are binary-specific, while Vertex auth works with both binaries. OAuth
+    # files are binary-specific: agy reads
+    # ~/.gemini/antigravity-cli/oauth_creds.json; legacy gemini reads
+    # ~/.gemini/oauth_creds.json. Marking google "available" because *some*
+    # Google OAuth exists, then having the binary fail at runtime with
+    # "Authentication required.", is a worse UX than just routing to a
+    # different available provider — pair the auth signal with the binary.
+    google_bin = _get_google_cli_binary()
+    google_cli_name = _get_google_cli_name()
+    # Pair the API-key signal with the active binary: ANTIGRAVITY_API_KEY is
+    # consumed by agy but not by legacy gemini. GOOGLE_API_KEY is accepted by
+    # both, and PDD bridges GEMINI_API_KEY to GOOGLE_API_KEY for agy.
+    has_google_key = _has_google_api_key_for_cli(google_cli_name or "")
+    has_vertex_auth = _has_google_vertex_auth()
+    has_matching_oauth = False
+    if google_cli_name == "agy":
+        has_matching_oauth = _has_agy_oauth_credentials()
+    elif google_cli_name == "gemini":
+        has_matching_oauth = _has_legacy_gemini_oauth_credentials()
 
-    if has_gemini_cli and (has_google_key or has_vertex_auth or has_gemini_oauth):
+    if google_bin and (has_google_key or has_vertex_auth or has_matching_oauth):
         available.append("google")
 
     # 3. OpenAI (Codex)
@@ -942,20 +1128,24 @@ def get_available_agents() -> List[str]:
 
 
 def _has_gemini_oauth_credentials() -> bool:
-    """Return True when Gemini CLI stored OAuth credentials are present.
+    """Return True when Gemini/Antigravity CLI stored OAuth credentials are present.
 
     Gemini CLI supports first-party OAuth auth stored under ~/.gemini. Treating
     API keys and Vertex env as the only available auth paths makes PDD skip a
     working local Gemini CLI and fall into broken providers.
     """
-    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
-    try:
-        data = json.loads(creds_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    return bool(data.get("refresh_token") or data.get("access_token"))
+    for creds_path in [
+        Path.home() / ".gemini" / "oauth_creds.json",
+        Path.home() / ".gemini" / "antigravity-cli" / "oauth_creds.json"
+    ]:
+        try:
+            data = json.loads(creds_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            if bool(data.get("refresh_token") or data.get("access_token")):
+                return True
+    return False
 
 
 def _has_codex_auth_file() -> bool:
@@ -1143,14 +1333,14 @@ _OPENCODE_PROVIDER_CREDENTIAL_FIELDS = frozenset(
 # Tokenizer for stripping JSONC comments while preserving string contents.
 # A naive ``re.sub(r"//[^\n]*", "", text)`` mangles valid configs that
 # contain ``"baseURL": "https://..."`` inside JSON strings — the ``//``
-# inside the URL gets eaten along with the rest of the line. This pattern
-# matches a complete double-quoted JSON string (with backslash escapes)
-# OR a block comment OR a line comment, in that priority order; strings
-# pass through untouched while comments are dropped.
+# inside the URL gets eaten along with the rest of the line.
+# This pattern matches a complete double-quoted JSON string (with backslash
+# escapes) OR a block comment OR a line comment, in that priority order;
+# strings pass through untouched while comments are dropped.
 _JSONC_TOKEN_RE = re.compile(
-    r'"(?:\\.|[^"\\])*"'   # double-quoted JSON string with escape support
-    r'|/\*[\s\S]*?\*/'      # /* block comment */
-    r'|//[^\n]*'            # // line comment
+    r'"(?:\\.|[^"\\])*"'
+    r'|/\*[\s\S]*?\*/'
+    r'|//[^\n]*'
 )
 
 
@@ -1908,7 +2098,7 @@ def run_agentic_task(
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
         deadline: Optional Unix timestamp for job-level time budgeting
         use_playwright: Enable constrained tool access mode for browser-based testing
-        time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
+        reasoning_time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
             top-level ``pdd --time`` flag. When provided, overrides the
             ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
             means "fall back to env" so unplumbed call sites keep working.
@@ -1916,10 +2106,14 @@ def run_agentic_task(
     Returns:
         (success, output_text, cost_usd, provider_used)
     """
+    # get_agent_provider_preference() must be called first: for
+    # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
+    # effect, which get_available_agents() then reads to evaluate auth correctly.
+    provider_pref = get_agent_provider_preference()
     agents = get_available_agents()
 
     # Filter agents based on preference order
-    candidates = [p for p in get_agent_provider_preference() if p in agents]
+    candidates = [p for p in provider_pref if p in agents]
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
@@ -1950,7 +2144,6 @@ def run_agentic_task(
 
     full_instruction = (
         f"{instruction}{feedback_section}\n\n"
-        f"Read the file {prompt_filename} for instructions. "
         "You have full file access to explore and modify files as needed."
     )
 
@@ -2037,9 +2230,23 @@ def run_agentic_task(
                 if success:
                     stripped_output = output.strip()
                     output_length = len(stripped_output)
+                    # Antigravity (`agy --print`) does not expose usage stats, so
+                    # successful responses always return cost=0.0. Short but
+                    # legitimate answers like "4", "Done", or "OK" would otherwise
+                    # be demoted to false positives by the zero-cost gate. Empty
+                    # stdout and the explicit "Error:" / "Authentication required."
+                    # exit-0 failure modes are already converted to success=False
+                    # in _run_with_provider's agy branch, so they never reach here.
+                    provider_lacks_cost_reporting = (
+                        provider == "google" and _get_google_cli_name() == "agy"
+                    )
                     is_false_positive = (
                         output_length == 0 or  # Empty output is always a false positive
-                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH) or  # Zero cost with short output
+                        (
+                            not provider_lacks_cost_reporting
+                            and cost == 0.0
+                            and output_length < MIN_VALID_OUTPUT_LENGTH
+                        ) or  # Zero cost with short output (skipped for agy: no usage reporting)
                         (
                             cost > 0.0
                             and stripped_output.startswith("Error:")
@@ -2591,7 +2798,7 @@ def _run_with_provider(
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
         label: Task label for heartbeat messages
         use_playwright: Enable constrained tool access for browser testing
-        time: Reasoning-allocation float in [0.0, 1.0]. When provided,
+        reasoning_time: Reasoning-allocation float in [0.0, 1.0]. When provided,
             takes precedence over the ``PDD_REASONING_EFFORT`` env var.
             ``None`` means "fall back to env" so unplumbed call sites
             keep receiving the signal via the global variable set by
@@ -2622,7 +2829,12 @@ def _run_with_provider(
 
     # Find CLI binary path (use explicit path if provided)
     if cli_path is None:
-        cli_path = _find_cli_binary(cli_name)
+        if provider == "google":
+            cli_path = _get_google_cli_binary(env)
+            if not cli_path:
+                return False, f"CLI for google provider not found. PDD_GOOGLE_CLI={env.get('PDD_GOOGLE_CLI', 'auto')}", 0.0, None
+        else:
+            cli_path = _find_cli_binary(cli_name)
     if not cli_path:
         return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0, None
 
@@ -2690,24 +2902,60 @@ def _run_with_provider(
                 "not this subprocess.[/dim]"
             )
     elif provider == "google":
-        # Do NOT use -p flag for Gemini. The -p flag passes text literally,
-        # so passing a file path gives Gemini the path string instead of content.
-        # Instead, pass a short instruction as positional argument telling Gemini
-        # to read the prompt file (matches old _run_google_variants pattern).
-        cmd = [
-            cli_path,
-            f"Read the file {prompt_path.name} for your full instructions and execute them.",
-            "--yolo",
-            "--output-format", "json"
-        ]
-        # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
-        gemini_model = env.get("GEMINI_MODEL")
-        if gemini_model:
-            cmd.extend(["--model", gemini_model])
+        resolved_bin = _get_google_cli_name(env)
+        if resolved_bin == "agy":
+            # Antigravity CLI args.
+            # Verified empirically against agy 1.0.1: `--output-format` is NOT
+            # a supported flag (`agy --help` lists only --print/--print-timeout
+            # /--continue/--conversation/--dangerously-skip-permissions/-i/
+            # --log-file/--sandbox/--add-dir; an earlier round-1 review fix
+            # that added `--output-format json` made every google run exit 1
+            # with `flags provided but not defined: -output-format` instead of
+            # the pre-fix "Invalid JSON output"). agy emits PLAIN TEXT on
+            # stdout; the agy parse branch further down treats stdout as the
+            # response body and surfaces `cost=0, model=null` to the audit
+            # log because the CLI does not currently expose usage stats.
+            # Unlike the legacy gemini CLI, agy can read the print prompt from
+            # stdin. Pipe the prompt body instead of putting it on argv so large
+            # issue prompts cannot hit OS argument limits or leak through
+            # process listings while the subprocess is running.
+            cmd = [
+                cli_path,
+                "--dangerously-skip-permissions",
+                "--print",
+            ]
+            if env.get("GEMINI_API_KEY") and not (
+                env.get("GOOGLE_API_KEY") or env.get("ANTIGRAVITY_API_KEY")
+            ):
+                env["GOOGLE_API_KEY"] = env["GEMINI_API_KEY"]
+            if timeout:
+                cmd.extend(["--print-timeout", f"{int(timeout)}s"])
+
+            if env.get("GEMINI_MODEL") and not quiet:
+                console.print(
+                    "[dim]GEMINI_MODEL requested, but Antigravity CLI has no equivalent "
+                    "flag; ignored.[/dim]"
+                )
+        else:
+            # Legacy Gemini CLI
+            # Do NOT use -p flag for Gemini. The -p flag passes text literally,
+            # so passing a file path gives Gemini the path string instead of content.
+            # Instead, pass a short instruction as positional argument telling Gemini
+            # to read the prompt file (matches old _run_google_variants pattern).
+            cmd = [
+                cli_path,
+                f"Read the file {prompt_path.name} for your full instructions and execute them.",
+                "--yolo",
+                "--output-format", "json"
+            ]
+            # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
+            gemini_model = env.get("GEMINI_MODEL")
+            if gemini_model:
+                cmd.extend(["--model", gemini_model])
         if reasoning_effort and not quiet:
             # See Claude Code branch above for rationale — same constraint applies.
             console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Google provider CLI "
                 "has no reasoning-effort flag; applies to llm_invoke steps only, "
                 "not this subprocess.[/dim]"
             )
@@ -2798,7 +3046,10 @@ def _run_with_provider(
     # positional argument makes the path string the prompt, not the file body.
     # OpenCode reads the prompt from the file referenced in the trailing
     # message argv, so it does NOT receive the body via stdin.
-    stdin_content = prompt_content if provider in {"anthropic", "openai"} else None
+    stdin_content = prompt_content if (
+        provider in {"anthropic", "openai"}
+        or (provider == "google" and _get_google_cli_name(env) == "agy")
+    ) else None
 
     try:
         result = _subprocess_run(
@@ -2880,6 +3131,25 @@ def _run_with_provider(
             f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
             f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
         )
+
+    # Antigravity (`agy`): the CLI emits plain text on stdout (no
+    # --output-format flag is supported as of agy 1.0.1, see cmd-build
+    # comment above). agy ALSO exits 0 in two failure modes that we must
+    # surface as failures instead of treating as a successful response:
+    #   - timeout: stdout is exactly `Error: timed out waiting for response`
+    #   - missing/expired OAuth in headless mode: stdout starts with
+    #     `Authentication required.` followed by the device-code URL.
+    # Anything else with exit 0 is treated as the response body. Cost and
+    # model are unknown — the audit log will show `cost=0, model=null`
+    # until Google ships a structured-output mode.
+    if provider == "google" and _get_google_cli_name(env) == "agy":
+        text = result.stdout.strip()
+        if (
+            text.startswith("Error:")
+            or text.startswith("Authentication required.")
+        ):
+            return False, text[:MAX_ERROR_SNIPPET_LENGTH], 0.0, None
+        return True, text, 0.0, None
 
     # Parse JSON Output
     try:
@@ -3145,11 +3415,46 @@ def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) 
     except (json.JSONDecodeError, ValueError):
         return None
 
+
+def _flatten_comment_pages(payload: Any) -> List[Dict]:
+    """Flatten GitHub comment payloads from one page or slurped pages."""
+    comments: List[Dict] = []
+    if isinstance(payload, dict):
+        comments.append(payload)
+    elif isinstance(payload, list):
+        for item in payload:
+            comments.extend(_flatten_comment_pages(item))
+    return comments
+
+
+def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
+    """Parse comments emitted by ``gh api --paginate`` with or without slurp."""
+    text = stdout.strip()
+    if not text:
+        return []
+
+    try:
+        return _flatten_comment_pages(json.loads(text))
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    index = 0
+    comments: List[Dict] = []
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        payload, index = decoder.raw_decode(text, index)
+        comments.extend(_flatten_comment_pages(payload))
+    return comments
+
 def _find_state_comment(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
     cwd: Path
 ) -> Optional[Tuple[int, Dict]]:
     """
@@ -3164,43 +3469,121 @@ def _find_state_comment(
             "gh", "api",
             f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
             "--method", "GET",
-            "--paginate"
+            "--paginate",
+            "--slurp",
         ]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if result.returncode != 0:
             return None
-            
-        comments = json.loads(result.stdout)
+
+        comments = _load_gh_paginated_comments(result.stdout)
         marker = _build_state_marker(workflow_type, issue_number)
-        
+
+        best: Optional[Tuple[int, Dict]] = None
         for comment in comments:
             body = comment.get("body", "")
             if marker in body:
                 state = _parse_state_from_comment(body, workflow_type, issue_number)
                 if state:
-                    return comment["id"], state
-                    
-        return None
+                    cid = comment["id"]
+                    if best is None or cid > best[0]:
+                        best = (cid, state)
+        return best
     except Exception:
         return None
 
+
+def _find_all_state_comments(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    cwd: Path,
+) -> List[int]:
+    """Return EVERY GitHub comment id whose body contains this workflow's
+    state marker, in the order GitHub returned them.
+
+    The legacy ``_find_state_comment`` returns only the first match, which
+    is fine for the happy path where there is exactly one state comment.
+    Issue #1149 surfaced a duplicate-marker hazard: if two workers race
+    on first-save and both POST a fresh state comment, or a prior run's
+    state was never fully cleared, two valid-looking comments coexist.
+    A future normal resume's ``_find_state_comment`` will load whichever
+    one GitHub ranks first — usually the OLDER one — silently resuming
+    against stale step outputs. Callers that need to deduplicate (clean
+    restart pre-clear, or save's first-write dedupe path) must use this
+    helper, not the singleton variant.
+    """
+    if not _find_cli_binary("gh"):
+        return []
+
+    try:
+        cmd = [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+            "--method", "GET",
+            "--paginate",
+            "--slurp",
+        ]
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return []
+        comments = _load_gh_paginated_comments(result.stdout)
+        marker = _build_state_marker(workflow_type, issue_number)
+        ids: List[int] = []
+        for comment in comments:
+            body = comment.get("body", "")
+            if marker in body and comment.get("id") is not None:
+                ids.append(int(comment["id"]))
+        return ids
+    except Exception:
+        return []
+
+
+def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd: Path) -> bool:
+    """Delete one issue comment by id via ``gh api``. Best-effort, never raises."""
+    if not _find_cli_binary("gh"):
+        return False
+    try:
+        cmd = [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
+            "-X", "DELETE",
+        ]
+        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def github_save_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    cwd: Path, 
-    comment_id: Optional[int] = None
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    state: Dict,
+    cwd: Path,
+    comment_id: Optional[int] = None,
+    *,
+    dedupe: bool = False,
 ) -> Optional[int]:
     """
     Creates or updates a GitHub comment with the state. Returns new/existing comment_id.
+
+    When ``dedupe=True`` and ``comment_id is None`` (i.e. this is the
+    session's first save and we have no prior id to PATCH), the helper
+    first lists ALL comments carrying this workflow's state marker. If
+    one or more already exist, it PATCHes the most-recent (highest id)
+    in place and DELETEs the rest, returning the PATCHed id. This closes
+    the duplicate-marker hazard described on ``_find_all_state_comments``
+    in cases where a concurrent worker re-created a state comment in the
+    gap between a clean-restart pre-clear and this save.
     """
     if not _find_cli_binary("gh"):
         return None
 
     body = _serialize_state_comment(workflow_type, issue_number, state)
-    
+
     try:
         if comment_id:
             # PATCH existing
@@ -3214,6 +3597,39 @@ def github_save_state(
             if res.returncode == 0:
                 return comment_id
         else:
+            existing_ids: List[int] = []
+            if dedupe:
+                existing_ids = _find_all_state_comments(
+                    repo_owner, repo_name, issue_number, workflow_type, cwd
+                )
+
+            if existing_ids:
+                # Adopt the most recent comment (GitHub assigns monotonically
+                # increasing ids), PATCH it in place, and delete the rest.
+                keep_id = max(existing_ids)
+                cmd = [
+                    "gh", "api",
+                    f"repos/{repo_owner}/{repo_name}/issues/comments/{keep_id}",
+                    "-X", "PATCH",
+                    "-f", f"body={body}",
+                ]
+                res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    return None
+                failed_ids = [
+                    stale_id for stale_id in existing_ids
+                    if stale_id != keep_id
+                    and not _github_delete_comment(repo_owner, repo_name, stale_id, cwd)
+                ]
+                if failed_ids:
+                    print(
+                        f"[pdd] github_save_state: {len(failed_ids)} stale state "
+                        f"comment(s) for issue #{issue_number} could not be deleted: "
+                        f"{failed_ids}",
+                        file=sys.stderr,
+                    )
+                return keep_id
+
             # POST new
             cmd = [
                 "gh", "api",
@@ -3225,16 +3641,16 @@ def github_save_state(
             if res.returncode == 0:
                 data = json.loads(res.stdout)
                 return data.get("id")
-                
+
         return None
     except Exception:
         return None
 
 def github_load_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
     cwd: Path
 ) -> Tuple[Optional[Dict], Optional[int]]:
     """
@@ -3246,30 +3662,32 @@ def github_load_state(
     return None, None
 
 def github_clear_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    cwd: Path
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_type: str,
+    cwd: Path,
 ) -> bool:
     """
-    Deletes the state comment if it exists.
+    Deletes EVERY GitHub comment carrying this workflow's state marker.
+
+    Previously this helper deleted only the first matching comment
+    (whichever ``_find_state_comment`` returned). That left any older /
+    duplicate state markers behind, so a subsequent normal resume could
+    load a stale state and silently start from the wrong step. Sweeping
+    all matches is safe because there should never legitimately be more
+    than one state comment per (issue, workflow); when there are, both
+    are equally untrustworthy and the next save will repost a fresh one.
     """
-    result = _find_state_comment(repo_owner, repo_name, issue_number, workflow_type, cwd)
-    if not result:
-        return True # Already clear
-        
-    comment_id = result[0]
-    try:
-        cmd = [
-            "gh", "api",
-            f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
-            "-X", "DELETE"
-        ]
-        subprocess.run(cmd, cwd=cwd, capture_output=True)
-        return True
-    except Exception:
-        return False
+    ids = _find_all_state_comments(repo_owner, repo_name, issue_number, workflow_type, cwd)
+    if not ids:
+        return True  # Already clear
+
+    all_deleted = True
+    for cid in ids:
+        if not _github_delete_comment(repo_owner, repo_name, cid, cwd):
+            all_deleted = False
+    return all_deleted
 
 def _should_use_github_state(use_github_state: bool) -> bool:
     if not use_github_state:
@@ -3389,22 +3807,33 @@ def load_workflow_state(
     return None, None
 
 def save_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
-    use_github_state: bool = True, 
-    github_comment_id: Optional[int] = None
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state: Dict,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
+    github_comment_id: Optional[int] = None,
+    *,
+    dedupe: bool = False,
 ) -> Optional[int]:
     """
     Saves state to local file and GitHub.
     Returns updated github_comment_id.
+
+    Pass ``dedupe=True`` when the caller has reason to suspect duplicate
+    state markers may have appeared (e.g. clean restart, where a
+    concurrent worker could have re-created a state comment between the
+    pre-clear sweep and this save). When set AND ``github_comment_id``
+    is None, the save path finds ALL existing state comments for this
+    (issue, workflow), PATCHes the most-recent in place, and DELETEs the
+    rest — converging to exactly one state comment regardless of prior
+    races.
     """
     local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-    
+
     # 1. Save Local (atomic: write to tmp then rename)
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -3418,7 +3847,8 @@ def save_workflow_state(
     # 2. Save GitHub
     if _should_use_github_state(use_github_state):
         new_id = github_save_state(
-            repo_owner, repo_name, issue_number, workflow_type, state, cwd, github_comment_id
+            repo_owner, repo_name, issue_number, workflow_type, state, cwd,
+            github_comment_id, dedupe=dedupe,
         )
         if new_id:
             return new_id
@@ -3429,12 +3859,12 @@ def save_workflow_state(
     return github_comment_id
 
 def clear_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
     use_github_state: bool = True
 ) -> None:
     """

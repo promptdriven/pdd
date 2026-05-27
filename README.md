@@ -179,7 +179,8 @@ For CLI enthusiasts, implement GitHub issues directly:
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
+   - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (uses Antigravity OAuth or keyring-backed Google subscription sign-in if present, otherwise `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin the Antigravity binary, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection (`auto` prefers `agy` when credentialed, but keeps legacy `gemini` for legacy-OAuth-only setups).
+   - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
@@ -241,8 +242,8 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription credentials such as Claude Max/Pro, Gemini OAuth, or Codex ChatGPT login, or OpenCode provider auth/config.
-  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription credential or config, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
+  1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config.
+  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
   4. Optionally creates a `.pddrc` project config
   5. Tests the first available model with a real LLM call 
@@ -841,7 +842,7 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Antigravity/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
 
 ```bash
 # Project-wide architecture sync (no argument)
@@ -1790,13 +1791,14 @@ pdd [GLOBAL OPTIONS] test <github-issue-url>
 **Agentic Options:**
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--clean-restart`: Discard saved agentic test state and start the 18-step workflow fresh
 - `--manual`: Use legacy prompt-based mode instead of agentic mode
 
 **Environment Variables:**
 - `PDD_CLOUD_RUN=true`: Enable parallel execution mode for manual testing (Steps 6-11)
 - `PDD_NO_GITHUB_STATE=1`: Disable GitHub state persistence
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature.
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning.
 
 **Example (Agentic Mode):**
 ```bash
@@ -1805,6 +1807,9 @@ pdd test https://github.com/myorg/myrepo/issues/789
 
 # Resume after answering clarifying questions
 pdd test https://github.com/myorg/myrepo/issues/789
+
+# Start fresh and ignore saved workflow state
+pdd test --clean-restart https://github.com/myorg/myrepo/issues/789
 ```
 
 **Next Step - Fixing Test Issues:**
@@ -2037,6 +2042,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
+- `--clean-restart`: Discard saved agentic E2E fix state and ignore sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
 - `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
@@ -2105,9 +2111,9 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Requires the `claude` CLI to be installed and in your `PATH`.
     *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
     *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Authenticates with `~/.gemini` OAuth credentials (run `gemini` interactively once to populate), `GOOGLE_API_KEY`/`GEMINI_API_KEY`, or Vertex AI service-account credentials.
+2.  **Google (Antigravity `agy` / legacy `gemini`):**
+    *   Requires either the `agy` CLI (preferred, install via `curl -fsSL https://antigravity.google/cli/install.sh | bash`) **or** the legacy `gemini` CLI (`npm install -g @google/gemini-cli`) to be on your `PATH`. When both are installed, `auto` mode picks `agy` when an Antigravity-compatible key/OAuth/Vertex credential is configured; if the only Google auth signal is legacy `~/.gemini/oauth_creds.json`, it uses `gemini` so rollback OAuth keeps working. `PDD_GOOGLE_CLI=gemini` is the explicit rollback to the old binary. `PDD_AGENTIC_PROVIDER=antigravity` pins `agy` and overrides any prior `PDD_GOOGLE_CLI`.
+    *   Authenticates with Antigravity OAuth or keyring-backed Google subscription sign-in (`~/.gemini/antigravity-cli/` state), API keys (`ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, plus PDD maps `GEMINI_API_KEY` to `GOOGLE_API_KEY` for the `agy` subprocess), or Vertex AI env auth. Legacy `gemini` uses its own OAuth file (`~/.gemini/oauth_creds.json`) plus `GEMINI_API_KEY`/`GOOGLE_API_KEY`. Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**.
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
@@ -2142,7 +2148,7 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 
 **Resumable Operations:**
 
-State is automatically persisted, allowing you to resume interrupted workflows. Use `--no-resume` to start fresh.
+State is automatically persisted, allowing you to resume interrupted workflows. Use `--clean-restart` to discard saved workflow state and sibling `pdd bug` analysis before starting fresh. Use `--no-resume` only when you want to ignore the E2E fix checkpoint while still allowing reusable bug-analysis context.
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd fix` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
@@ -2160,8 +2166,8 @@ pdd fix --ci-retries 5 https://github.com/myorg/myrepo/issues/42
 # Skip post-push CI validation entirely
 pdd fix --skip-ci https://github.com/myorg/myrepo/issues/42
 
-# Start fresh (ignore saved state)
-pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
+# Start fresh (ignore saved state and sibling bug analysis)
+pdd fix --clean-restart https://github.com/myorg/myrepo/issues/42
 
 # Disable GitHub state persistence (local-only)
 pdd fix --no-github-state https://github.com/myorg/myrepo/issues/42
@@ -2172,7 +2178,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription credential or config (recommended) or an API key in the environment
+- At least one supported agent CLI (Claude, Gemini/Antigravity, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription/config credential (recommended) or an API key in the environment
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2306,6 +2312,8 @@ The 13-step workflow:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
+**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. Cannot be combined with `--manual`.
+
 **Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
 **Worktree Branching Behavior**: When running `pdd change`, `pdd bug`, or `pdd split`, a new git worktree is created based on your current HEAD:
@@ -2352,7 +2360,7 @@ Update prompts based on code changes. This command operates in two primary modes
 
 **Agentic Prompt Optimization (Default)**
 
-The `update` command uses an agentic AI (Claude Code, Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+The `update` command uses an agentic AI (Claude Code, Gemini/Antigravity, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
 
 1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
 2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
@@ -2363,7 +2371,7 @@ This produces prompts that are more concise while remaining clear to developers 
 
 **Prerequisites**: Requires one of these CLI tools installed and configured:
 - `claude` (Anthropic Claude Code)
-- `gemini` (Google Gemini CLI)
+- `agy` (Google Antigravity CLI, preferred for Google provider) **or** `gemini` (legacy Google Gemini CLI, rollback)
 - `codex` (OpenAI Codex CLI)
 - `opencode` (OpenCode CLI)
 
@@ -2455,7 +2463,7 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 
 Example (agentic vs simple mode):
 ```bash
-# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+# Default: Agentic mode (uses claude/agy/gemini/codex/opencode for intelligent optimization)
 pdd update --git my_module_python.prompt src/my_module.py
 
 # Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)
@@ -2538,7 +2546,7 @@ Options:
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription credential or config, or an API key in your environment (see [Prerequisites](#prerequisites) for details).
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini/Antigravity, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription/config credential or an API key in your environment (see [Prerequisites](#prerequisites) for details).
 
 Example:
 ```
@@ -2594,7 +2602,7 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 5. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-6. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
+6. **Root cause analysis** - Run experiments to identify the root cause. Classifies the fix scope as `LOCALIZED` (one isolated site), `SIBLING_PATTERN` (other instances share the same root cause and must be checked), or `CROSS_CUTTING` (fix belongs in a shared helper/component rather than many local patches). When the root cause involves a shared symbol, helper, component, state field, marker, schema, event path, or repeated pattern, performs a mandatory sibling search and classifies each candidate with machine-readable evidence (`NEEDS_FIX: <path> | <reason>` for confirmed siblings, `SAFE_EVIDENCE: <path> | <line> | <reason>` for look-alikes that are safe). Broad analogous audits remain opt-in rather than default. Also performs a variable reference audit and state symmetry check. Posts comment explaining the root cause.
 
 7. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
@@ -2617,13 +2625,17 @@ Options:
 - `--language LANG`: Specify the programming language for the unit test (default is "Python").
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--clean-restart`: Discard saved agentic bug state and start the investigation workflow fresh
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
 Example:
 ```bash
 # Agentic mode (recommended)
 pdd bug https://github.com/myorg/myrepo/issues/42
+
+# Start fresh and ignore saved workflow state
+pdd bug --clean-restart https://github.com/myorg/myrepo/issues/42
 
 # Manual mode (legacy)
 pdd bug --manual prompt.prompt code.py main.py current.txt desired.txt
@@ -3205,12 +3217,13 @@ PDD uses several environment variables to customize its behavior:
 #### Agentic Workflow Variables
 
 - **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set. Surfaced in the `.pdd/agentic-logs/` audit trail's `model` field when the response JSON does not carry an explicit model name (Issue #1376).
-- **`GEMINI_MODEL`**: Override the model used by Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` to the Gemini CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
+- **`GEMINI_MODEL`**: Override the model used by the legacy Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` only to the legacy `gemini` command. Antigravity `agy` does not expose an equivalent model flag; model routing is handled by the Antigravity CLI. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
 - **`CODEX_MODEL`**: Override the model used by Codex (OpenAI) CLI in agentic workflows (e.g., `gpt-5`). When set, passes `--model` to the Codex CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
-- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens include `anthropic`, `google`, `openai`, and `opencode` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`).
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
+- **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 

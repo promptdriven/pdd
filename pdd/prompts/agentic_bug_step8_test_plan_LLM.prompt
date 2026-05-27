@@ -122,15 +122,33 @@ Return your findings between `<step_report>` and `</step_report>` tags. The PDD 
 *Proceeding to Step 9: Generate Test*
 </step_report>
 
+% Scope Classification (from Step 6)
+
+Step 6 classified the fix scope as:
+
+```
+{scope_classification}
+```
+
+Use this to drive your test planning:
+- **LOCALIZED**: Plan tests for the single fix site. Do NOT invent sibling tests.
+- **SIBLING_PATTERN**: Plan at least one dedicated test for each confirmed sibling listed in `{step6_expansion_items}` below. Each sibling item can be a file path, command, route, UI control, enum/config value, file extension, content type, language row, provider/model, state marker, or other domain case. Each sibling must have its own behavioral test through its own entry point — sharing one parametrized test across siblings is acceptable only when the test genuinely exercises each sibling's code path or value case independently.
+- **CROSS_CUTTING**: Plan a test against the centralized mechanism (the new helper / context / decorator / middleware) rather than N near-duplicate tests at each call site. Add one or two integration tests showing the mechanism applies through different entry points.
+
+Missing or unrecognized values should be treated as `LOCALIZED` (backward compatible).
+
 % Scope Expansion Items
 
-Step 6's independent analysis identified these items beyond what the issue proposes:
+Step 6's independent analysis identified these items beyond what the issue proposes (this includes any `NEEDS_FIX` siblings folded in by the orchestrator):
 
 ```
 {step6_expansion_items}
 ```
 
-If this value is not `none`, your test plan MUST include at least one test for each listed item. These were found by Step 6's root cause analysis independently of the issue body — the issue author identified only a subset of the problem.
+Use this list according to the final scope classification:
+- **LOCALIZED**: Include tests for listed items only when they are part of the single localized fix site or proposed-fix gap. Do NOT broaden into sibling coverage from this list alone.
+- **SIBLING_PATTERN**: Your test plan MUST include at least one test for each listed item, whether the item is a source path or a value-level case such as an extension alias, command alias, state marker, status value, or UI action. These were found by Step 6's root cause analysis independently of the issue body — the issue author identified only a subset of the problem.
+- **CROSS_CUTTING**: Treat listed items as affected call-site evidence, not a per-item test checklist. Plan the centralized mechanism test plus one or two representative integration tests through distinct listed entry points.
 
 % Cross-Step Consistency Check
 
@@ -160,7 +178,7 @@ Your test plan must verify **observable behavior**, not code structure.
 
 - Tests should be specific enough to catch this exact bug
 - Tests should not be so brittle they break with valid changes
-- **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones. Additionally, if `{step6_expansion_items}` is not `none`, your plan MUST also cover every listed expansion item — these were identified by Step 6's independent analysis beyond what the issue describes.
+- **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones. Additionally, if `{step6_expansion_items}` is not `none` **and the scope is LOCALIZED or SIBLING_PATTERN**, your plan MUST also cover every listed expansion item — these were identified by Step 6's independent analysis beyond what the issue describes. For CROSS_CUTTING scope, follow the rule above: plan the centralized mechanism test plus representative integration tests through distinct listed entry points — do NOT generate a per-item test for each expansion item.
 - **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
 - **Code path check**: For each root cause, ask "through which code paths can this be reached?" (first-run execution, resume from checkpoint, retry after failure, error recovery, different entry points). If the same data is processed in multiple paths, test each one. A fix that corrects the first-run path but leaves the resume path broken is incomplete — the tests should catch that. Cross-reference Step 6's sibling bugs to ensure every independently-discovered bug has test coverage.
 - **Call-boundary coverage check**: The fix locations are: `{fix_locations}`. If there are multiple files, the test plan MUST include tests for BOTH sides of the call boundary — mock the callee and verify the caller passes the right arguments, AND test the callee directly.
