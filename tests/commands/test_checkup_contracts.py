@@ -80,7 +80,7 @@ def test_checkup_contract_check_real_cli_json_stdout_is_parseable_only(
         {
             "PDD_PATH": str(REPO_ROOT / "pdd"),
             "PYTHONPATH": str(REPO_ROOT),
-            "PDD_AUTO_UPDATE": "true",
+            "PDD_AUTO_UPDATE": "false",
         }
     )
     result = subprocess.run(

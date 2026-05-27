@@ -735,9 +735,7 @@ def test_add_with_none():
 # end-to-end. Run with: pytest -m integration
 
 @pytest.mark.integration
-@pytest.mark.real
 @pytest.mark.slow
-@pytest.mark.timeout(300)
 def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
     """
     INTEGRATION TEST: Verify live LLM respects prompt as authoritative.
@@ -745,17 +743,8 @@ def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
     This test makes real LLM API calls to verify the fix prompt guidance
     causes the LLM to fix tests (not code) when tests expect unspecified behavior.
 
-    Run with: PDD_RUN_REAL_LLM_TESTS=1 pytest tests/test_fix_errors_from_unit_tests.py -k integration
+    Run with: pytest -m integration tests/test_fix_errors_from_unit_tests.py
     """
-    if not (
-        os.getenv("PDD_RUN_REAL_LLM_TESTS") == "1"
-        or os.getenv("PDD_RUN_ALL_TESTS") == "1"
-    ):
-        pytest.skip(
-            "Live LLM integration test requires PDD_RUN_REAL_LLM_TESTS=1 "
-            "or pytest --run-all"
-        )
-
     # Prompt clearly specifies ONLY tracking specific file types
     prompt = """
 Write a Python function `track_file_changes` that:
@@ -854,24 +843,15 @@ E   AssertionError: assert '/tmp/random_data.json' in []
     if update_code:
         print(f"\nFixed code:\n{fixed_code[:500]}...")
 
-    # Mock tests above verify prompt-authoritative behavior; this live check is
-    # observational and may vary by model/provider.
-    if str(model).startswith("Error:"):
-        pytest.skip(f"LLM pipeline error: {model}")
-
-    if not (update_unit_test or update_code):
-        pytest.skip(
-            "LLM returned no proposed fix (update_unit_test=False, update_code=False). "
-            "Live integration outcome is non-deterministic across models; unit tests "
-            "with mocks verify prompt-authoritative guidance."
-        )
-
-    if update_unit_test and not update_code:
-        print("\nOK: LLM fixed the unit test without changing production code.")
-    else:
+    # Soft assertions - log but don't fail if LLM misbehaves
+    # The mock tests above verify the expected behavior
+    if not update_unit_test or update_code:
         print("\nWARNING: LLM did not follow prompt-authoritative guidance!")
         print("Expected: update_unit_test=True, update_code=False")
         print(f"Got: update_unit_test={update_unit_test}, update_code={update_code}")
+
+    # Hard assertion: at least one fix should be proposed
+    assert update_unit_test or update_code, "LLM should propose at least one fix"
 
 from pydantic import ValidationError
 from z3 import *

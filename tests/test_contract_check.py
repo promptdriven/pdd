@@ -446,6 +446,23 @@ class TestCheckMustNotCoverage:
         issues = _check_must_not_coverage(rules, "- R1: test_secrets_not_exposed\n")
         assert issues == []
 
+    def test_must_not_not_covered_by_mention_in_other_entry(self):
+        rules = [
+            _rule("R1", 1, "MUST", "R1: The system MUST accept uploads."),
+            _rule(
+                "R2",
+                2,
+                "MUST NOT",
+                "R2: The system MUST NOT expose secrets.",
+                is_must_not=True,
+            ),
+        ]
+        coverage = "R1: regression mentions R2 in its description but does not cover it\n"
+        issues = _check_must_not_coverage(rules, coverage)
+        assert len(issues) == 1
+        assert issues[0].code == "UNCOVERED_MUST_NOT"
+        assert issues[0].rule_id == "R2"
+
     def test_unnumbered_must_not_skipped(self):
         rules = [
             _rule("(unnumbered)", None, "MUST NOT",

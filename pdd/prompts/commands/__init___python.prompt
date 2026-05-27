@@ -27,7 +27,6 @@
     - `split`, `change`, `update` (from `.modify`)
     - `sync`, `sync_architecture` (from `.maintenance`)
     - `checkup` (from `.checkup`)
-    - `prompt_group` (from `.prompt`; exposes `pdd prompt lint`)
     - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
     - `preprocess` (from `.misc`)

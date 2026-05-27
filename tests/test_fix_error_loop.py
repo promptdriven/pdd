@@ -790,20 +790,10 @@ def test_agentic_fallback_cwd_is_project_root_not_prompt_parent(tmp_path, monkey
 
     with patch("pdd.fix_error_loop.run_agentic_fix", side_effect=capture_cwd_mock) as mock_agent, \
          patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
-         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
          patch("subprocess.run") as mock_subprocess:
         # Make tests have failures to trigger agentic fallback
         # since success = (fails == 0 and errors == 0) will be False
         mock_pytest.return_value = (1, 0, 0, "1 failed")
-        mock_fix.return_value = (
-            False,
-            False,
-            test_file.read_text(),
-            code_file.read_text(),
-            "No fix",
-            0.0,
-            "mock-model",
-        )
         # Mock subprocess for verification program
         mock_subprocess.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 

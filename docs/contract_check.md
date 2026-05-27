@@ -114,7 +114,6 @@ JSON mode suppresses unrelated CLI noise on stdout (auto-update banners, etc.).
 
 ## Related commands
 
-- **Prompt prose quality:** [`pdd checkup lint`](prompt_lint.md) — vague terms in requirements/acceptance criteria, optional `--llm`.
 - **Architecture alignment:** `pdd checkup --validate-arch-includes`.
 
 ## Stretch goal (not in default CLI)

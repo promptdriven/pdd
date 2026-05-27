@@ -2,8 +2,7 @@
 """
 Shared contract authoring intermediate representation (IR).
 
-Single parse entry point for ``pdd contracts check``, ``pdd coverage --contracts``,
-``pdd contracts compile``, and ``pdd contracts review``.
+Single parse entry point for ``pdd contracts check`` and related contract tooling.
 """
 from __future__ import annotations
 
@@ -39,6 +38,30 @@ _COVERAGE_REF_RE = COVERAGE_REF_RE  # backward-compat alias for internal callers
 _CROSS_MODULE_REF_RE = CROSS_MODULE_REF_RE
 _WAIVER_ID_RE = re.compile(r"^(W-?\d+):", re.IGNORECASE)
 _WAIVER_REF_RE = re.compile(r"\bWAIVED\s+(W-?\d+)\b", re.IGNORECASE)
+
+VAGUE_TERMS: frozenset[str] = frozenset({
+    "valid", "invalid", "safe", "unsafe", "active", "inactive", "recent",
+    "duplicate", "graceful", "gracefully", "reasonable", "authorized",
+    "unauthorized", "trusted", "untrusted", "complete", "successful",
+})
+
+
+def extract_vocabulary_terms(vocab_text: str) -> set[str]:
+    """Extract defined term names from a vocabulary/glossary/definitions block."""
+    terms: set[str] = set()
+    for line in vocab_text.splitlines():
+        stripped = line.strip()
+        term_match = re.match(
+            r"^[-*]?\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*(?::\s|\s+-\s)",
+            stripped,
+        )
+        if term_match:
+            phrase = term_match.group(1).strip().lower()
+            terms.add(phrase)
+            for word in re.split(r"[\s_-]+", phrase):
+                if word:
+                    terms.add(word)
+    return terms
 
 
 @dataclass(frozen=True)
@@ -126,7 +149,7 @@ _MD_HEADING_RE = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
 
 
 @dataclass
-class Rule:
+class Rule:  # pylint: disable=too-many-instance-attributes
     """One parsed rule from <contract_rules>."""
 
     raw_id: str
@@ -145,7 +168,7 @@ class Rule:
 
 
 @dataclass
-class Waiver:
+class Waiver:  # pylint: disable=too-many-instance-attributes
     """One parsed waiver block from <waivers>."""
 
     raw_id: str
@@ -159,7 +182,7 @@ class Waiver:
 
 
 @dataclass
-class CoverageEntry:
+class CoverageEntry:  # pylint: disable=too-many-instance-attributes
     """Evidence text for one rule from <coverage>."""
 
     rule_id: str
@@ -168,7 +191,7 @@ class CoverageEntry:
 
 
 @dataclass
-class ReviewRecord:
+class ReviewRecord:  # pylint: disable=too-many-instance-attributes
     """One human/LLM review decision from <contract_review>."""
 
     finding_id: str
@@ -182,7 +205,7 @@ class ReviewRecord:
 
 
 @dataclass
-class FormalizationRecord:
+class FormalizationRecord:  # pylint: disable=too-many-instance-attributes
     """One rule formalization stub from <formalization> (parse-only in v1)."""
 
     rule_id: str
@@ -195,7 +218,7 @@ class FormalizationRecord:
 
 
 @dataclass
-class PromptContractIR:
+class PromptContractIR:  # pylint: disable=too-many-instance-attributes
     """Authoring IR for one prompt file."""
 
     path: Path
@@ -442,8 +465,6 @@ def extract_rules(rules_text: str) -> list[Rule]:  # pylint: disable=too-many-lo
 
 def _extract_rule_terms(block: str) -> list[str]:
     """Extract vocabulary-like terms referenced in a rule block."""
-    from .prompt_lint import VAGUE_TERMS  # pylint: disable=import-outside-toplevel
-
     found: list[str] = []
     lower_block = block.lower()
     for term in sorted(VAGUE_TERMS):
@@ -647,12 +668,10 @@ def _parse_formalization_section(formal_text: str) -> list[FormalizationRecord]:
 
 def _build_vocabulary_terms(sections: dict[str, str]) -> set[str]:
     """Collect defined vocabulary terms from prompt sections."""
-    from .prompt_lint import _extract_vocabulary_terms  # pylint: disable=import-outside-toplevel
-
     vocab_terms: set[str] = set()
     for key in ("vocabulary", "glossary", "definitions", "covers"):
         if key in sections:
-            vocab_terms |= _extract_vocabulary_terms(sections[key])
+            vocab_terms |= extract_vocabulary_terms(sections[key])
     return vocab_terms
 
 
@@ -661,71 +680,45 @@ def _build_vocabulary_terms(sections: dict[str, str]) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def parse_prompt_contracts(
-    path: Path,
-    *,
-    stories_dir: Optional[Path] = None,
-    tests_dir: Optional[Path] = None,
-) -> PromptContractIR:
-    """
-    Parse one prompt file into the shared authoring IR.
-
-    When ``stories_dir`` / ``tests_dir`` are provided, optional evidence maps
-    are populated (same scanners as coverage).
-    """
-    ir = PromptContractIR(path=path)
+def parse_prompt_contracts(path: Path) -> PromptContractIR:
+    """Parse one prompt file into the shared authoring IR."""
+    parsed = PromptContractIR(path=path)
 
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        ir.parse_error = f'File not found: "{path}"'
-        return ir
+        parsed.parse_error = f'File not found: "{path}"'
+        return parsed
     except OSError as exc:
-        ir.parse_error = str(exc)
-        return ir
+        parsed.parse_error = str(exc)
+        return parsed
 
-    ir.sections = extract_sections(text)
-    ir.vocabulary_terms = _build_vocabulary_terms(ir.sections)
+    parsed.sections = extract_sections(text)
+    parsed.vocabulary_terms = _build_vocabulary_terms(parsed.sections)
 
-    rules_text = ir.sections.get("contract_rules", "")
+    rules_text = parsed.sections.get("contract_rules", "")
     if rules_text.strip():
-        ir.rules = extract_rules(rules_text)
+        parsed.rules = extract_rules(rules_text)
 
-    waivers_text = ir.sections.get("waivers", "")
+    waivers_text = parsed.sections.get("waivers", "")
     if waivers_text.strip():
-        ir.waivers = extract_waivers(waivers_text)
+        parsed.waivers = extract_waivers(waivers_text)
 
-    coverage_text = ir.sections.get("coverage", "")
+    coverage_text = parsed.sections.get("coverage", "")
     if coverage_text.strip():
-        ir.coverage_entries = parse_coverage_block(coverage_text)
+        parsed.coverage_entries = parse_coverage_block(coverage_text)
 
-    review_text = ir.sections.get("contract_review", "")
+    review_text = parsed.sections.get("contract_review", "")
     if review_text.strip():
-        ir.reviews = _parse_review_section(review_text)
+        parsed.reviews = _parse_review_section(review_text)
 
-    formal_text = ir.sections.get("formalization", "")
+    formal_text = parsed.sections.get("formalization", "")
     if formal_text.strip():
-        ir.formalizations = _parse_formalization_section(formal_text)
+        parsed.formalizations = _parse_formalization_section(formal_text)
 
-    if stories_dir is not None:
-        from .coverage_contracts import scan_story_evidence  # pylint: disable=import-outside-toplevel
-        ir.story_covers = scan_story_evidence(stories_dir, path)
-
-    if tests_dir is not None:
-        from .coverage_contracts import scan_test_evidence  # pylint: disable=import-outside-toplevel
-        ir.test_refs = scan_test_evidence(tests_dir)
-
-    return ir
+    return parsed
 
 
-def parse_directory(
-    directory: Path,
-    *,
-    stories_dir: Optional[Path] = None,
-    tests_dir: Optional[Path] = None,
-) -> list[PromptContractIR]:
+def parse_directory(directory: Path) -> list[PromptContractIR]:
     """Parse every ``*.prompt`` file under a directory."""
-    return [
-        parse_prompt_contracts(p, stories_dir=stories_dir, tests_dir=tests_dir)
-        for p in sorted(directory.rglob("*.prompt"))
-    ]
+    return [parse_prompt_contracts(p) for p in sorted(directory.rglob("*.prompt"))]

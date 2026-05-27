@@ -93,17 +93,6 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
-def _is_structured_json_invocation(arguments: List[str]) -> bool:
-    """Return whether this invocation needs machine-readable JSON output."""
-    pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("checkup", "lint") in pairs
-        or ("checkup", "contract") in pairs
-        or ("checkup", "contracts") in pairs
-        or ("contracts", "check") in pairs
-    )
-
-
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -346,7 +335,7 @@ class PDDCLI(click.Group):
     default=10,
     help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
-@click.version_option(package_name="pdd-cli", prog_name="cli")
+@click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -367,11 +356,6 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
-    # Structured checkup output is intended for downstream machine consumers.
-    json_mode = _is_structured_json_invocation(sys.argv)
-    quiet = quiet or json_mode
-    core_dump = core_dump and not json_mode
-
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
 
@@ -478,8 +462,7 @@ def cli(
             )
 
     # Perform auto-update check unless disabled
-
-    if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
+    if os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:
                 console.print("[info]Checking for updates...[/info]")
