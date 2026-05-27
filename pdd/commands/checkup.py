@@ -14,6 +14,7 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from .contracts import contracts_cli
+from .prompt import prompt_lint
 
 
 @click.command(
@@ -349,13 +350,34 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Prompt lint:
+      pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
     Contract checks:
       pdd checkup contract check [OPTIONS] TARGET  (alias: ``pdd contracts check``)
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in {"contract", "contracts"}:
+    if show_help and target not in {"lint", "contract", "contracts"}:
         click.echo(ctx.command.get_help(ctx))
+        return None
+
+    if target == "lint":
+        lint_args = list(ctx.args)
+        if strict:
+            lint_args.insert(0, "--strict")
+        if not lint_args or show_help:
+            click.echo(
+                prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
+            )
+            return None
+        exit_code = prompt_lint.main(
+            args=lint_args,
+            prog_name="pdd checkup lint",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
         return None
 
     if target in {"contract", "contracts"}:
