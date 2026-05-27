@@ -197,6 +197,13 @@ def isolate_cloud_only_overrides(monkeypatch):
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
     monkeypatch.delenv("PDD_QUIET", raising=False)
+    # PDD_PROVIDER (#1202) narrows model selection at the very top of
+    # _select_model_candidates. If a developer exports it locally for
+    # interactive use, selection-related tests that don't explicitly set
+    # it would see a foreign pin leak in and skip rows they expect to be
+    # candidates. Clear it by default; tests that need it set monkeypatch
+    # it explicitly.
+    monkeypatch.delenv("PDD_PROVIDER", raising=False)
 
 
 @pytest.fixture(autouse=True)

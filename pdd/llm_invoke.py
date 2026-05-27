@@ -2411,20 +2411,35 @@ def _select_model_candidates(
     # 0. Provider pin (PDD_PROVIDER): narrow the candidate universe BEFORE
     # base-model resolution and strength-based selection so the pin applies
     # uniformly (surrogate-base fallback, ELO interpolation, retry cascade).
-    # Case-insensitive substring match against the `provider` column first,
-    # then the `model` column — accepts user values like "gemini", "google",
-    # "copilot", "anthropic", "vertex" against the bundled CSV's varied
-    # provider names. Pinning is honoured EVEN when the user did not pass
-    # --local, mirroring how PDD_FORCE_LOCAL behaves: the env var is the
-    # cross-thread carrier, and worker subprocesses inherit it. Cloud mode
-    # ignores this filter because cloud routing is decided server-side.
+    #
+    # Matching is provider-column first; model-column is only consulted as a
+    # fallback when the provider column matches nothing. This precedence
+    # exists because the bundled CSV cross-routes models across providers
+    # (e.g. ``bedrock/anthropic.claude-...``, ``openrouter/anthropic/claude-...``,
+    # ``github_copilot/gemini-3-pro-preview``, ``perplexity/google/gemini-...``).
+    # A naive provider-OR-model match would mean ``--provider anthropic``
+    # silently includes AWS Bedrock and OpenRouter rows, and ``--provider
+    # gemini`` includes GitHub Copilot's Gemini routing — defeating the
+    # purpose of "pinning a provider". The model-column fallback is kept
+    # for the case where a user types a provider-prefix only present in
+    # model names (e.g. ``--provider vertex_ai``); if the user's intent
+    # matches a real provider, that real provider wins.
+    #
+    # Pinning is honoured EVEN when the user did not pass --local — the env
+    # var is the cross-thread carrier and worker subprocesses inherit it.
+    # Cloud mode ignores this filter because cloud routing is decided
+    # server-side; ``_select_model_candidates`` is only called on the local
+    # path.
     provider_pin = (os.environ.get("PDD_PROVIDER", "") or "").strip().lower()
     if provider_pin:
         provider_col = model_df['provider'].astype(str).str.lower()
-        model_col = model_df['model'].astype(str).str.lower()
         provider_mask = provider_col.str.contains(provider_pin, regex=False, na=False)
-        model_mask = model_col.str.contains(provider_pin, regex=False, na=False)
-        pinned_df = model_df[provider_mask | model_mask]
+        pinned_df = model_df[provider_mask]
+        if pinned_df.empty:
+            # Fall back to model-column match only when no provider matches.
+            model_col = model_df['model'].astype(str).str.lower()
+            model_mask = model_col.str.contains(provider_pin, regex=False, na=False)
+            pinned_df = model_df[model_mask]
         if pinned_df.empty:
             known_providers = sorted({p for p in model_df['provider'].astype(str).str.strip() if p})
             raise RuntimeError(

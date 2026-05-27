@@ -4867,6 +4867,70 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
 
+    def _make_cross_routed_df(self, llm_mod, tmp_path):
+        """Mirror the bundled CSV's cross-provider routing: GitHub Copilot,
+        OpenRouter, Bedrock, and Perplexity all carry model names that
+        substring-match well-known provider tokens (``anthropic``,
+        ``gemini``). Used to verify the pin honours provider-column intent
+        and does not silently include cross-routed rows."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Google Gemini,gemini/gemini-3.1-pro-preview,2.0,12.0,1456,GEMINI_API_KEY,True,effort,1000000,8192,0\n"
+            "Github Copilot,github_copilot/gemini-3-pro-preview,0.0,0.0,1438,,True,none,128000,8192,0\n"
+            "Anthropic,claude-opus-4-7,15.0,75.0,1561,ANTHROPIC_API_KEY,True,adaptive,200000,8192,128000\n"
+            "AWS Bedrock,bedrock/anthropic.claude-opus-4,15.0,75.0,1500,AWS_ACCESS_KEY_ID,True,none,200000,8192,0\n"
+            "OpenRouter,openrouter/anthropic/claude-opus-4,15.0,75.0,1450,OPENROUTER_API_KEY,True,none,200000,8192,0\n"
+        )
+        csv_path = tmp_path / "cross_routed.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_provider_pin_anthropic_does_not_include_bedrock_or_openrouter(self, llm_mod, tmp_path, monkeypatch):
+        """``PDD_PROVIDER=anthropic`` must NOT include AWS Bedrock or OpenRouter
+        rows whose model names contain ``anthropic``. Regression for codex
+        review of #1202: provider-column match takes precedence over
+        model-column match so cross-routed rows do not silently leak in."""
+        df = self._make_cross_routed_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "anthropic")
+        candidates = llm_mod._select_model_candidates(0.5, "claude-opus-4-7", df)
+        providers = {c["provider"].lower() for c in candidates}
+        assert providers == {"anthropic"}, providers
+        models = {c["model"] for c in candidates}
+        assert "bedrock/anthropic.claude-opus-4" not in models
+        assert "openrouter/anthropic/claude-opus-4" not in models
+
+    def test_provider_pin_gemini_excludes_copilot_when_google_gemini_exists(self, llm_mod, tmp_path, monkeypatch):
+        """``PDD_PROVIDER=gemini`` must prefer the real ``Google Gemini``
+        provider over a ``github_copilot/gemini-...`` cross-routed model
+        whose model column substring-matches. Regression for codex review
+        of #1202: provider-column match wins over model-column match."""
+        df = self._make_cross_routed_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "gemini")
+        candidates = llm_mod._select_model_candidates(0.5, "gemini/gemini-3.1-pro-preview", df)
+        providers = {c["provider"].lower() for c in candidates}
+        assert providers == {"google gemini"}, providers
+        models = {c["model"] for c in candidates}
+        assert "github_copilot/gemini-3-pro-preview" not in models
+
+    def test_provider_pin_falls_back_to_model_column_when_provider_unmatched(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """When no provider column matches, fall back to model-column matching.
+        This preserves use cases like ``--provider vertex_ai`` where the
+        token only appears in model-routing prefixes. With the cross-routed
+        fixture, ``copilot`` does not match any provider column directly
+        (provider is the literal ``Github Copilot`` with a space) — verify
+        the substring lowercase match still finds it via the provider column
+        first, NOT via the model column fallback."""
+        df = self._make_cross_routed_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "copilot")
+        candidates = llm_mod._select_model_candidates(0.5, "gemini/gemini-3.1-pro-preview", df)
+        # "github copilot" lowercase contains "copilot" → provider-column match.
+        providers = {c["provider"].lower() for c in candidates}
+        assert providers == {"github copilot"}
+
     def test_provider_pin_propagates_through_strength_interpolation(self, llm_mod, tmp_path, monkeypatch):
         """Pin must apply BEFORE base-model resolution and ELO interpolation —
         otherwise strength=1.0 (highest ELO) could still pull a non-pinned row."""

@@ -330,10 +330,15 @@ pdd --local --provider gemini sync my_module
 PDD_PROVIDER=gemini pdd --local sync my_module
 ```
 
-The value is a case-insensitive substring match against the CSV `provider` and
-`model` columns, so `gemini`, `google`, `anthropic`, `copilot`, etc. all work.
-If the pin matches no rows in your CSV, PDD aborts with a clear error listing
-the available providers — it never silently routes to a different provider.
+The value is a case-insensitive substring match against the CSV `provider`
+column first; only if no provider matches does PDD fall back to matching the
+`model` column. So `gemini` selects only `Google Gemini` rows (not
+`github_copilot/gemini-...` cross-routed rows), `anthropic` selects only
+`Anthropic` rows (not AWS Bedrock / OpenRouter rows whose model names include
+`anthropic`), and `vertex_ai` — which is not a provider name but does appear
+as a model-column prefix — still resolves via the fallback. If the pin
+matches no rows in your CSV, PDD aborts with a clear error listing the
+available providers — it never silently routes to a different provider.
 
 PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
 
