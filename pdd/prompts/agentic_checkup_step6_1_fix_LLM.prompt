@@ -1,3 +1,14 @@
+<pdd-reason>Checkup Step 6a fixer: applies in-scope fixes constrained by the PR-Scope Convergence Guard (#1228).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to fix all discovered issues.
 
 % Context
@@ -50,6 +61,16 @@ Focus on remaining/new problems that the previous iteration did not fix.
 {step5_output}
 </step5_output>
 
+% PR-Scope Convergence Guard (issue #1228)
+
+<step5_signal>
+{step5_signal}
+</step5_signal>
+
+<in_scope_paths>
+{in_scope_paths}
+</in_scope_paths>
+
 % Your Task
 
 Fix all issues discovered in Steps 2-5, in order of severity (critical first):
@@ -84,6 +105,19 @@ Fix all issues discovered in Steps 2-5, in order of severity (critical first):
 8. **Clean up PDD artifacts** if any:
    - Remove .agentic_prompt_*.txt, tmp*.py, crash logs
 
+9. **Stay inside the PR-scope (issue #1228 — PR-Scope Convergence Guard)**:
+   - The orchestrator has computed an in-scope path set in `<in_scope_paths>` from `(PR's changed files) ∪ (failing-test files from <step5_signal>) ∪ (test files for changed sources)`. Every file you modify MUST be in that set.
+   - If your fix genuinely requires editing a file outside `<in_scope_paths>`, you MUST emit an explicit `EXPANSION_ITEMS:` block BEFORE your edits, listing each out-of-scope path with a one-line justification that references either a specific failing-test `nodeid` from `<step5_signal>.failures[]` or a PR-changed file. Format:
+     ```
+     EXPANSION_ITEMS:
+     - <out-of-scope-path>: <justification referencing a failing nodeid or PR file>
+     ```
+     Without a matching `EXPANSION_ITEMS:` entry, the orchestrator's `enforce_scope()` gate WILL reject your diff before commit and reset the worktree.
+   - For every file you create or modify, add a `# traces_to: <nodeid-or-pr-file>` comment line near the top (or after a `// traces_to:` line for JS/TS) — this is what Step 7's causality check correlates against. Use one entry per file. Multiple traces may be comma-separated. Acceptable values are failing-test `nodeid`s from `<step5_signal>` or paths from the PR's changed-file set.
+   - **NO_CHANGES_REQUIRED short-circuit**: if `<step5_signal>` reports `exit_code: 0` AND `failures: []` AND no critical findings flow from Steps 2-4, you MUST emit the literal token `NO_CHANGES_REQUIRED` on its own line, produce zero edits, and post a comment that explicitly says no fixes were required. The orchestrator short-circuits to a zero-commit exit. Do NOT invent fixes when there is no signal.
+   - **MUST NOT** add unrelated subsystems, plugins, or large refactors. The pre-push diff sanity gate rejects diffs whose added LOC exceed `max(10 × failing-test-surface-LOC, 200)`. Stay within that budget.
+   - In your Files Changed table below, add a `Traces to` column naming the failing nodeid or PR file each change addresses.
+
 % Output
 
 After completing your work, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -98,9 +132,9 @@ Your comment should follow this format:
 ## Step 6a/8: Fix Issues (Iteration {fix_verify_iteration})
 
 ### Fixes Applied
-| Issue | File | Fix Description |
-|-------|------|----------------|
-| [from which step] | path/to/file | what was fixed |
+| Issue | File | Fix Description | Traces to |
+|-------|------|-----------------|-----------|
+| [from which step] | path/to/file | what was fixed | nodeid or PR file |
 
 ### Files Changed
 - `path/to/file1`
@@ -120,3 +154,4 @@ FILES_MODIFIED: path/to/file3, path/to/file4
 - If a test assertion correctly detects a real bug, fix the CODE, not the test
 - Always post your findings as a GitHub comment before completing
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
+- PR-Scope Convergence Guard (issue #1228): every modified file MUST live in `<in_scope_paths>` OR be justified via an `EXPANSION_ITEMS:` block. The orchestrator's `enforce_scope()` gate WILL reset the worktree on violations. On a clean `<step5_signal>` (no failures), emit `NO_CHANGES_REQUIRED` and make zero edits.

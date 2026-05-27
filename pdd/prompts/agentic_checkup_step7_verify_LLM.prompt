@@ -1,3 +1,14 @@
+<pdd-reason>Checkup Step 7 verifier: enforces R1228 causality_check that fixer diffs must causally address Step 5 signal failures.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to verify fixes and generate a final report.
 
 % Context
@@ -68,6 +79,16 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 {pr_push_output}
 </pr_push_output>
 
+% PR-Scope Convergence Guard (issue #1228)
+
+<step5_signal>
+{step5_signal}
+</step5_signal>
+
+<fixer_diff_summary>
+{fixer_diff_summary}
+</fixer_diff_summary>
+
 % Your Task
 
 1. **Re-run the build** to confirm no build errors remain
@@ -104,12 +125,19 @@ The JSON report MUST be the LAST thing you output, on its own, wrapped in a mark
   "message": "summary of findings and actions taken",
   "tech_stack": ["language1", "framework1", ...],
   "issue_aligned": true/false,
+  "causality_check": {{
+    "related_files": ["files in the fixer diff that intersect step5_signal failing files, PR changed files, or test files for changed sources"],
+    "unrelated_files": ["files in the fixer diff that do NOT intersect any of the above and lack a matching EXPANSION_ITEMS justification"],
+    "unresolved_failures": ["nodeids from step5_signal.failures[] that were neither addressed by a fix `traces_to:` nor justified via EXPANSION_ITEMS"],
+    "status": "pass|fail",
+    "reason": "one-sentence explanation"
+  }},
   "issues": [
     {{
       "module": "module_name",
       "file": "path/to/file",
       "severity": "critical|medium|low",
-      "category": "missing_dep|import_error|build_error|test_failure|interface_mismatch|artifact",
+      "category": "missing_dep|import_error|build_error|test_failure|interface_mismatch|artifact|causality_failure",
       "description": "what was wrong",
       "fixed": true/false,
       "fix_description": "what was done to fix it (or empty if not fixed)"
@@ -118,6 +146,13 @@ The JSON report MUST be the LAST thing you output, on its own, wrapped in a mark
   "changed_files": ["list", "of", "modified", "files"]
 }}
 ```
+
+**Contract rule R1228 (PR-Scope Convergence Guard, issue #1228)**:
+- `causality_check` is REQUIRED on every Step 7 verdict. A file is `related` iff it appears in `<step5_signal>.failures[].file`, in the PR's changed-file set, OR is a test file for one of those (e.g. `tests/test_<stem>.py` for `pdd/<stem>.py`).
+- `success: true` REQUIRES `causality_check.status == "pass"` AND `causality_check.unresolved_failures` is empty AND `causality_check.unrelated_files` is empty (or each unrelated path has a matching `EXPANSION_ITEMS:` justification from Step 6).
+- If `causality_check.unrelated_files` is non-empty without matching `EXPANSION_ITEMS`, set `success: false` and add a `causality_failure` entry (`severity: critical`) to `issues`.
+- "All Issues Fixed" REQUIRES `causality_check.status == "pass"`, no unresolved failures, AND build/tests green. Without all three, do NOT emit "All Issues Fixed".
+- The orchestrator independently re-validates causality in `pdd/checkup_gates.causality_check()` after Step 7 returns. If the orchestrator's check disagrees with this LLM verdict, the orchestrator's check is AUTHORITATIVE and overrides this verdict — your `causality_check` field is advisory. The orchestrator-side check is the one that gates the push.
 
 In **issue mode**, omit `issue_aligned` (or set it to `null`) — it only applies when verifying an existing PR.
 In **PR mode**, `issue_aligned` is REQUIRED.

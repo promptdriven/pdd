@@ -1,3 +1,14 @@
+<pdd-reason>Runs the project test suite in checkup Step 5 and emits the structured Step5Signal for the PR-Scope Convergence Guard (#1228).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to run the test suite and collect failures.
 
 % Context
@@ -74,6 +85,17 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
    - Passed / Failed / Skipped / Error counts
    - List each failure with its category and brief description
 
+5. **Emit a structured Step5Signal (PR-Scope Convergence Guard, issue #1228)**:
+   - When the discovered runner is pytest, append `--junitxml=.pdd/checkup-context/step5-junit.xml` to the invocation so failures are captured in machine-parseable form. Create the parent directory if it does not exist. For non-pytest runners, parse the runner's native machine-readable output (jest JSON, cargo test JSON, go test -json) and synthesize the same shape.
+   - At the END of your step output, AFTER the markdown summary and BEFORE the `Proceeding to Step 6` line, emit a `<step5_signal>...</step5_signal>` block whose body is a JSON object with these fields:
+     - `exit_code` (int): runner exit code (0 on green).
+     - `total` / `passed` / `failed` / `skipped` / `errors` (ints).
+     - `failures` (array of objects, capped at 50 entries): each object has `nodeid` (str), `file` (str — POSIX path relative to the worktree root or absolute), `lineno` (int or null), `message` (str, capped at ~500 chars), `traceback_top` (str, capped at ~500 chars — the topmost user-frame of the traceback), and `category` (one of `import_error|assertion|fixture|timeout|config|other`).
+     - `pr_changed_files_used` (bool): true when PR mode used `<pr_changed_files>` to scope tests.
+     - `targeted_scope_used` (bool): true when PR mode ran a targeted (non-full) suite.
+   - The block MUST be present on green runs (`exit_code: 0`, `failures: []`) so the orchestrator can distinguish "clean" from "step parsing failed".
+   - Do NOT include the raw `<step5_signal>` block in the `gh issue comment` body — it is machine context for the orchestrator only. The existing markdown summary remains the human-facing comment.
+
 % Output
 
 After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -114,3 +136,4 @@ Your comment should follow this format:
 - In PR mode, `targeted` test scope is opt-in. `full` (the default) means the user expects comprehensive verification — do NOT silently downgrade to targeted because the suite is large; instead report the skipped command honestly
 - Always post your findings as a GitHub comment before completing
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
+- The `<step5_signal>` block (Task 5) is REQUIRED on every run — emit it even on green runs so the orchestrator can short-circuit. Do NOT include it in the `gh issue comment` body.
