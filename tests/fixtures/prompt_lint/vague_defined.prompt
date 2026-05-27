@@ -1,0 +1,23 @@
+% Fixture: vague terms present but every term is defined in the vocabulary block.
+% This fixture produces 0 lint issues — all terms are covered.
+
+<vocabulary>
+- valid response: an HTTP 200 response whose JSON body contains a non-empty "data" field
+- reasonable time: completes within 500 ms at p99 under standard load
+- duplicate request: a request whose idempotency key matches a previously accepted request within the last 24 hours
+- graceful rejection: returns HTTP 409 with a JSON error body {"code": "DUPLICATE", "message": "..."}
+- authorized user: a user whose JWT token is present, unexpired, and has the "write" scope
+- active user: a user whose account status field equals "active" in the accounts table
+- complete: all required fields (name, email, role) are non-empty strings
+</vocabulary>
+
+<contract_rules>
+1. The function must return a valid response within a reasonable time.
+2. Duplicate requests must be rejected gracefully.
+3. Only authorized users may call this endpoint.
+</contract_rules>
+
+<requirements>
+- Accept file uploads from active users only.
+- Mark complete when all required fields are present.
+</requirements>

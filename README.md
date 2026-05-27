@@ -53,6 +53,8 @@ For a case study on specification drift in AI-assisted coding workflows, read [W
 
 Also see the Prompt‑Driven Development Doctrine for core principles and practices: [docs/prompt-driven-development-doctrine.md](docs/prompt-driven-development-doctrine.md)
 
+For pre-merge prompt and user-story quality (vague terms, vocabulary, optional LLM review), see [docs/prompt_lint.md](docs/prompt_lint.md).
+
 ## Installation
 
 ### Prerequisites for macOS

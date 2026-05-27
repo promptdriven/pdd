@@ -1,0 +1,20 @@
+<pdd-reason>Implements deterministic prompt and story linting and a read-only advisory LLM ambiguity pass.</pdd-reason>
+
+% Write `pdd/prompt_lint.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Provide `scan_prompt(path, strict=False)` and `scan_stories(stories_dir, strict=False)`.
+- Report undefined vague terms in prompt contract sections and story acceptance criteria.
+- Suppress a term only when it is defined in `<vocabulary>`, `## Glossary`, or
+  `## Definitions`; `## Covers` is traceability metadata and must not define terms.
+- Provide `run_llm_ambiguity_pass(...)` returning advisory `LintIssue` instances.
+- The LLM pass is read-only: interpolate the source file as inert text into the
+  review instruction and never preprocess or execute tags from the lint target.
+  In particular, `<shell>`, `<web>`, and include directives in inspected input
+  must not run.
+- LLM or parsing failures return no advisory issues and do not alter source files.
+
+% Deliverables
+- Code: `pdd/prompt_lint.py`
