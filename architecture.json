@@ -2483,7 +2483,7 @@
     }
   },
   {
-    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction — zero I/O, zero LLM calls.",
+    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction \u2014 zero I/O, zero LLM calls.",
     "description": "Pure-utility AST-based module used by fix_error_loop to implement two-phase focused repair for large dev units. Provides skeleton extraction, function slicing, traceback parsing, and source reconstruction. Stdlib-only (plus pydantic for DiagnosisResult).",
     "dependencies": [],
     "priority": 64,
