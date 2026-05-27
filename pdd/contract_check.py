@@ -29,12 +29,25 @@ from .contract_ir import (
     Rule,
     VAGUE_TERMS,
     Waiver,
-    extract_rules as _extract_rules,  # pylint: disable=unused-import  (re-exported for tests)
+    extract_rules as _extract_rules,
     extract_sections as _extract_sections,
     extract_waivers as _extract_waivers,
     iter_covers_refs,
     parse_prompt_contracts,
 )
+
+__all__ = [
+    "ContractIssue",
+    "ContractResult",
+    "Rule",
+    "Waiver",
+    "_extract_rules",
+    "_extract_waivers",
+    "check_directory",
+    "check_prompt",
+    "check_stories",
+    "run_llm_ambiguity_pass",
+]
 
 logger = logging.getLogger(__name__)
 
