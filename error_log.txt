@@ -1,0 +1,8 @@
+<pytest_output iteration=1>
+Fail
+</pytest_output>
+
+=== Attempt iteration 1 ===
+
+=== Final Pytest Run ===
+Fail

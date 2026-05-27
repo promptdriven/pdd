@@ -745,6 +745,30 @@ def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
         _load_pddrc_config(pddrc)
 
 
+def test_load_pddrc_warns_on_prompt_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: prompt_path was documented in
+    construct_paths_python.prompt as an alias for prompts_dir, but
+    _resolve_config_hierarchy never implemented the resolution chain. Per Greg's
+    second review, removed from the schema and from the prompt's spec. Validator
+    should surface it as unknown until aliasing is actually wired through. If
+    this test starts failing, either the wiring landed (CLI prompt_path, .pddrc
+    prompt_path, PDD_PROMPT_PATH env var, all resolving to prompts_dir with the
+    documented precedence) and the key should move into _PDDRC_DEFAULTS_KEYS
+    with regression coverage proving .pddrc affects prompts_dir resolution, or
+    the prompt re-introduced the alias documentation and needs cleanup."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      prompt_path: "configured_prompts"\n'
+    )
+    with pytest.warns(UserWarning, match="prompt_path"):
+        _load_pddrc_config(pddrc)
+
+
 def test_construct_paths_missing_command_options(tmpdir):
 
     """
