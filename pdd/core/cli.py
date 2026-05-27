@@ -9,12 +9,11 @@ import click
 from typing import Any, List, Optional, Tuple, TextIO
 
 try:
-    from .. import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
+    from .. import DEFAULT_STRENGTH, DEFAULT_TIME
 except ImportError:
     # Fallback for environments where `pdd` resolves as a namespace package.
     DEFAULT_STRENGTH = 1.0
     DEFAULT_TIME = 0.25
-    __version__ = "unknown"
 from ..auto_update import auto_update
 from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
@@ -335,7 +334,7 @@ class PDDCLI(click.Group):
     default=10,
     help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
-@click.version_option(version=__version__, package_name="pdd-cli")
+@click.version_option(package_name="pdd-cli", prog_name="cli")
 @click.pass_context
 def cli(
     ctx: click.Context,
