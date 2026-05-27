@@ -12,7 +12,6 @@ Usage examples::
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -69,6 +68,11 @@ def _render_result_table(result: CoverageResult) -> None:
     if result.error:
         stdout_console.print(f"  [red]Error:[/red] {result.error}")
         return
+
+    if result.read_errors:
+        stdout_console.print("  [yellow]Scanner read errors:[/yellow]")
+        for message in result.read_errors:
+            stdout_console.print(f"    {message}")
 
     if not result.has_contract_rules:
         stdout_console.print("  [dim]No <contract_rules> section — no contract coverage data.[/dim]")
@@ -139,10 +143,14 @@ def _render_result_table(result: CoverageResult) -> None:
 )
 @click.option(
     "--stories-dir",
+    "--stories",
     "stories_dir",
     default=None,
     type=click.Path(file_okay=False),
-    help="Directory containing story__*.md files (default: user_stories/).",
+    help=(
+        "Directory containing story__*.md files (default: user_stories/). "
+        "Alias: --stories (same flag as pdd contracts check)."
+    ),
 )
 @click.option(
     "--tests-dir",
@@ -171,9 +179,13 @@ def coverage_cmd(
     Contract coverage is implied by the command name.
 
     Exit codes:
-      0  all rules checked or waived
-      1  at least one unchecked, story-only, or test-only rule
-      2  error (file not found, parse failure)
+      0  all rules checked or waived, no scanner read errors
+      1  coverage gaps and/or unreadable story/test files under scan dirs
+      2  fatal error (missing TARGET, unreadable prompt file)
+
+    JSON output uses an envelope ``{results, total_prompts, ...}``; see
+    docs/coverage_contracts.md. ``pdd contracts check --json`` emits a
+    top-level array of contract-check results instead.
     """
     stories_path = Path(stories_dir) if stories_dir else None
     tests_path = Path(tests_dir) if tests_dir else None
@@ -187,15 +199,16 @@ def coverage_cmd(
             print(json.dumps({"error": error_msg, "results": []}))
         else:
             console.print(f"[red]Error:[/red] {error_msg}")
-        sys.exit(2)
+        raise click.exceptions.Exit(2)
 
     if target_path.is_file():
         results.append(build_coverage(target_path, stories_path, tests_path))
     else:
         results = build_coverage_directory(target_path, stories_path, tests_path)
 
-    # Determine exit code
-    has_error = any(r.error for r in results)
+    # Determine exit code: fatal prompt errors (2) vs gaps/read issues (1)
+    has_fatal = any(r.error for r in results)
+    has_read_errors = any(r.read_errors for r in results)
     has_gap = any(
         rc.status in (STATUS_UNCHECKED, STATUS_STORY_ONLY, STATUS_TEST_ONLY)
         or rc.status == STATUS_FAILED
@@ -217,8 +230,7 @@ def coverage_cmd(
             for result in results:
                 _render_result_table(result)
 
-    if has_error:
-        sys.exit(2)
-    elif has_gap:
-        sys.exit(1)
-    sys.exit(0)
+    if has_fatal:
+        raise click.exceptions.Exit(2)
+    if has_gap or has_read_errors:
+        raise click.exceptions.Exit(1)
