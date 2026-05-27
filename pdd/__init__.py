@@ -2,52 +2,14 @@
 
 from importlib.metadata import PackageNotFoundError, version as _metadata_version
 import os
-import subprocess
-from pathlib import Path
-
-
-def _derive_git_aligned_version() -> str | None:
-    """Return tag-aligned development version for the current git checkout."""
-    repo_root = Path(__file__).resolve().parents[1]
-    if not (repo_root / ".git").exists():
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "tag", "--list", "--merged", "HEAD", "--sort=-v:refname", "v*"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        semver_tags = [t for t in result.stdout.split() if t.count(".") == 2]
-        if not semver_tags:
-            return None
-        latest = semver_tags[0].lstrip("v")
-
-        head_tags = subprocess.check_output(
-            ["git", "tag", "--points-at", "HEAD"], cwd=repo_root, text=True
-        ).split()
-        if f"v{latest}" in head_tags:
-            return latest
-
-        parts = [int(x) for x in latest.split(".")]
-        parts[-1] += 1
-        return ".".join(str(p) for p in parts) + ".dev0"
-    except Exception:
-        return None
 
 
 def _load_package_version() -> str:
     """Return the installed pdd-cli distribution version."""
     try:
-        dist_version = _metadata_version("pdd-cli")
+        return _metadata_version("pdd-cli")
     except PackageNotFoundError:
-        dist_version = "0.0.0+unknown"
-
-    git_version = _derive_git_aligned_version()
-    return git_version or dist_version
+        return "0.0.0+unknown"
 
 
 __version__ = _load_package_version()
