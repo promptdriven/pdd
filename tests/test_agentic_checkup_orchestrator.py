@@ -1043,6 +1043,7 @@ class TestProviderFailureAbort:
         """Should abort after 3 consecutive 'All agent providers failed' errors."""
         mock_run, _, _, _ = mock_dependencies
 
+        mock_run.side_effect = None
         mock_run.return_value = (False, "All agent providers failed", 0.0, "")
 
         success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
@@ -1324,6 +1325,7 @@ class TestResume:
         mock_run, _, _, _ = mock_dependencies
         default_args["cwd"] = tmp_path
 
+        mock_run.side_effect = None
         mock_run.return_value = (False, "All agent providers failed", 0.0, "")
 
         saved_states = []

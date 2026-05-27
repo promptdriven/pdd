@@ -1697,11 +1697,15 @@ def _run_agentic_checkup_orchestrator_inner(
             changed_files[:] = list(dict.fromkeys(changed_files))
             context["files_to_stage"] = ", ".join(changed_files)
 
-        if not success and not quiet:
-            console.print(
-                f"[yellow]Warning: Step {step_num} reported failure, "
-                f"but proceeding as no hard stop condition met.[/yellow]"
-            )
+        if not success:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: Step {step_num} reported failure, "
+                    f"but proceeding as no hard stop condition met.[/yellow]"
+                )
+            # Always surface Step 5 failure detail — visible even in quiet mode.
+            if step_num == 5 and output:
+                console.print(f"[yellow]Step 5 failure detail:\n{output}[/yellow]")
         elif not quiet:
             console.print(f"  -> Step {step_num} complete.")
 
@@ -2238,11 +2242,17 @@ def _run_agentic_checkup_orchestrator_inner(
                 )
 
             step7_output = ""
+            step5_clean = False  # Track whether Step 5 passed with no failures
 
             for step_num, name, description in loop_steps:
                 # On first pass through the loop, honour resume (skip
                 # already-done steps). Subsequent iterations run all steps.
                 if is_first_loop_pass and step_num < start_step:
+                    continue
+
+                # Bug 5a: Skip fixer steps when Step 5 is clean (PR mode only).
+                # In regular mode, the fixer always runs regardless of Step 5.
+                if pr_mode and step5_clean and step_num in (6.1, 6.2, 6.3):
                     continue
 
                 # Label uses underscores: step6_1_iter1
@@ -2280,6 +2290,9 @@ def _run_agentic_checkup_orchestrator_inner(
                 )
                 if abort is not None:
                     return abort
+
+                if step_num == 5:
+                    step5_clean = success
 
                 if step_num == 7:
                     step7_output = output
@@ -2517,6 +2530,63 @@ def _run_agentic_checkup_orchestrator_inner(
                         total_cost,
                         last_model_used,
                     )
+
+                # Bug 5b: Skip push when there are no changed files.
+                if not guard_changed_files:
+                    step_outputs["pr_push"] = "No changes to commit"
+                    context["pr_push_output"] = "No changes to commit"
+                    _save_state()
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (True, f"Clean run — no changes to push.{post_suffix}", total_cost, last_model_used)
+
+                # Bug 2: Scope guard — reject fixer files outside the PR's changed-file set.
+                import re as _re
+                api_files_text = pr_metadata.get("api_changed_files", "")
+                pr_file_set = set(_re.findall(r"[-+M ]+:\s*(.+)", api_files_text))
+                out_of_scope = [f for f in guard_changed_files if f not in pr_file_set]
+                # Check if fixer provided EXPANSION_ITEMS justification in step 6 output.
+                step6_out = step_outputs.get("6_1", "")
+                has_expansion_items = "EXPANSION_ITEMS:" in step6_out
+                if out_of_scope and not has_expansion_items:
+                    scope_refusal = (
+                        f"Scope guard: fixer touched files outside PR's changed-file set "
+                        f"without EXPANSION_ITEMS justification: {out_of_scope}"
+                    )
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (pr_artifacts_dir / "scope-guard-refusal.txt").write_text(scope_refusal + "\n")
+                    step_outputs["pr_push"] = scope_refusal
+                    context["pr_push_output"] = scope_refusal
+                    _save_state()
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (False, f"{scope_refusal}{post_suffix}", total_cost, last_model_used)
+
+                # Bug 3: Causal-connection check — fixer diff must overlap with Step 5 failure paths.
+                step5_out = step_outputs.get("5", "")
+                if step5_out.startswith("FAILED:"):
+                    # Extract file paths mentioned in the Step 5 failure output.
+                    failure_paths = set(_re.findall(r"(?:tests?/|pdd/|src/)[\w/._-]+\.py", step5_out))
+                    if failure_paths:
+                        fixer_files_set = set(guard_changed_files)
+                        overlap = fixer_files_set & failure_paths
+                        if not overlap:
+                            causal_refusal = (
+                                f"Causal-connection check: fixer changed files {sorted(fixer_files_set)} "
+                                f"have zero overlap with Step 5 failure paths {sorted(failure_paths)}. "
+                                f"Refusing push to prevent unrelated changes reaching the PR."
+                            )
+                            pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                            (pr_artifacts_dir / "causal-connection-refusal.txt").write_text(causal_refusal + "\n")
+                            step_outputs["pr_push"] = causal_refusal
+                            context["pr_push_output"] = causal_refusal
+                            _save_state()
+                            post_suffix = _post_pr_mode_final_report(
+                                step_outputs.get("7", step7_output)
+                            )
+                            return (False, f"{causal_refusal}{post_suffix}", total_cost, last_model_used)
 
                 push_ok, push_message = _commit_and_push_if_changed(
                     worktree_path,
