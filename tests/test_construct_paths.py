@@ -724,7 +724,29 @@ def test_load_pddrc_warning_message_format(tmp_path):
     assert "ignored" in msg.lower()
     assert "pdd setup" in msg.lower()
 
+def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: auto_deps_csv_path is prescribed
+    by pdd/templates/generic/generate_pddrc_YAML.prompt but never consumed by
+    _resolve_config_hierarchy. Validator should surface it as unknown until the
+    wiring is added (separate issue). If this test starts failing, either the
+    wiring landed and the key should move into _PDDRC_DEFAULTS_KEYS with
+    regression coverage proving .pddrc affects the auto-deps CSV path, or the
+    template re-introduced the prescription and needs to be cleaned up."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      auto_deps_csv_path: "project_dependencies.csv"\n'
+    )
+    with pytest.warns(UserWarning, match="auto_deps_csv_path"):
+        _load_pddrc_config(pddrc)
+
+
 def test_construct_paths_missing_command_options(tmpdir):
+
     """
     Test that construct_paths handles missing command options (None) gracefully.
     """
