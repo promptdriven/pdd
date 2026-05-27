@@ -57,6 +57,21 @@ Focus on remaining/new problems that the previous iteration did not fix.
 {step5_output}
 </step5_output>
 
+% Step 5 normalized failure signal (orchestrator-synthesised)
+%
+% The orchestrator parses the ```failure_signal``` block that Step 5 is
+% required to emit and, when it is missing or malformed, synthesises a
+% normalised structured block from the scrubbed raw failure output.
+% Always prefer this block over reparsing ``<step5_output>`` for the
+% concrete command, exit code, failing IDs, artifact path, and output —
+% it is the contract Step 6 relies on. When ``step5_failure_signal_missing``
+% is non-empty, treat the listed fields as untrusted and reason directly
+% from the embedded ``output:`` payload.
+<step5_failure_signal>
+{step5_failure_signal}
+</step5_failure_signal>
+<step5_failure_signal_missing>{step5_failure_signal_missing}</step5_failure_signal_missing>
+
 % PR Scope Guard (PR mode only)
 
 When `PR-verification mode` is `true`, you MUST constrain all file changes to the PR's scope:

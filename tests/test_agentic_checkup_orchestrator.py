@@ -2822,6 +2822,11 @@ class TestIssue1212Bug2FixerScopeGuard:
         in_scope_files = ["pdd/main.py", "tests/test_main.py"]
 
         def step_side_effect(step_num, name, context, **kwargs):
+            # Round-3 Finding 2: the side-effect guard now refuses to push
+            # when the fixer never ran. Make Step 5 fail so Step 6.x runs
+            # and the worktree changes are attributable to the fixer.
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3090,6 +3095,8 @@ class TestIssue1215ScopeGuardRealApiFormat:
     def test_modified_row_is_in_scope(self, tmp_path):
         """A fixer touching a `- MODIFIED:` path is in scope and pushes."""
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3110,6 +3117,8 @@ class TestIssue1215ScopeGuardRealApiFormat:
     def test_added_row_is_in_scope(self, tmp_path):
         """A fixer touching a `- ADDED:` path is in scope and pushes."""
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3130,6 +3139,8 @@ class TestIssue1215ScopeGuardRealApiFormat:
     def test_renamed_row_both_sides_in_scope(self, tmp_path):
         """A fixer touching either side of a `- RENAMED: old -> new` row is in scope."""
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3327,6 +3338,8 @@ class TestIssue1215Round2ScopeGuardArtifactFiltering:
         )
 
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3381,6 +3394,11 @@ class TestIssue1215Round2ExpansionItemsStructured:
     def test_blank_expansion_items_does_not_bypass_scope_guard(self, tmp_path):
         """A bare ``EXPANSION_ITEMS:`` marker no longer disables the scope refusal."""
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                # Step 5 must fail so the fixer runs — otherwise the
+                # round-3 clean-run side-effect guard fires first and the
+                # scope guard never gets a chance.
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 6.1:
                 return (
                     True,
@@ -3412,6 +3430,8 @@ class TestIssue1215Round2ExpansionItemsStructured:
     def test_mismatched_expansion_items_still_refuses_uncovered_files(self, tmp_path):
         """An EXPANSION_ITEMS listing path A does NOT authorise touching path B."""
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 6.1:
                 return (
                     True,
@@ -3622,3 +3642,318 @@ class TestIssue1215Round2FailureSignalValidation:
         ctx = captured[0]
         assert "```failure_signal" in ctx.get("step5_failure_signal", "")
         assert "__block__" in ctx.get("step5_failure_signal_missing", "")
+
+
+class TestIssue1215Round3ScopeGuardJustification:
+    """Round-3 Finding 1: only justified EXPANSION_ITEMS can subtract paths."""
+
+    def test_unjustified_expansion_path_still_in_out_of_scope(self, tmp_path):
+        """Listing an out-of-scope file under EXPANSION_ITEMS with no reason is refused."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                # EXPANSION_ITEMS lists the unrelated file but provides
+                # NO justification — must be treated as out-of-scope.
+                return (
+                    True,
+                    "FILES_MODIFIED: plugins/unrelated/x.py\n"
+                    "EXPANSION_ITEMS: plugins/unrelated/x.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/unrelated/x.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "scope guard" in (msg or "").lower()
+        assert "plugins/unrelated/x.py" in (msg or "")
+
+
+class TestIssue1215Round3CleanRunSideEffect:
+    """Round-3 Finding 2: clean Steps 3/4/5 must not push side-effect edits."""
+
+    def test_clean_run_with_side_effect_dirty_file_refuses_push(self, tmp_path):
+        """Steps 3/4/5 clean → fixer skipped → any in-scope dirty file must NOT push."""
+        steps_invoked: List[float] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            steps_invoked.append(step_num)
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        # The dirty file is even *in scope* (matches PR's changed-file
+        # set) — Round-3 Finding 2's contract is that side effects must
+        # not push regardless of scope when no fixer ran.
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        # Confirm fixer steps were indeed skipped on the clean path.
+        assert 6.1 not in steps_invoked, (
+            f"Fixer 6.1 must be skipped on clean Steps 3-5: invoked={steps_invoked}"
+        )
+        push_mock.assert_not_called()
+        assert success is False
+        assert "side-effect" in (msg or "").lower()
+
+
+class TestIssue1215Round3FailureSignalContentValidation:
+    """Round-3 Finding 4: failure_signal must have non-empty fields on fail status."""
+
+    def test_empty_output_block_flagged_missing(self):
+        text = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        assert "output" in missing
+
+    def test_empty_exit_code_flagged_missing_on_fail(self):
+        text = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: \n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  AssertionError\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        assert "exit_code" in missing
+
+    def test_empty_failing_ids_flagged_missing_on_fail(self):
+        text = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: error\n"
+            "failing_ids: \n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  AssertionError\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        assert "failing_ids" in missing
+
+    def test_empty_artifact_path_flagged_missing_on_fail(self):
+        text = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: \n"
+            "output: |\n"
+            "  AssertionError\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        assert "artifact_path" in missing
+
+    def test_pass_status_allows_empty_failure_fields(self):
+        """When status indicates success, the failure-only required fields
+        may legitimately be empty."""
+        text = (
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 0\n"
+            "status: pass\n"
+            "failing_ids: \n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "```\n"
+        )
+        fields, missing = _parse_failure_signal_block(text)
+        # ``pass`` status should not require failure-context fields.
+        assert "failing_ids" not in missing
+        assert "output" not in missing
+
+
+class TestIssue1215Round3Step6PromptFailureSignalSlot:
+    """Round-3 Finding 3: Step 6 prompt must contain ``step5_failure_signal``."""
+
+    def test_step6_prompt_template_references_failure_signal(self):
+        # Read the worktree's prompt file directly — the resolver picks up
+        # whichever ``pdd`` package is on sys.path, which during ``pip
+        # install -e`` may point at the installed copy rather than the
+        # source-tree change we are verifying.
+        from pathlib import Path
+
+        prompt_path = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step6_1_fix_LLM.prompt"
+        )
+        assert prompt_path.exists(), f"step 6.1 prompt must exist at {prompt_path}"
+        tmpl = prompt_path.read_text(encoding="utf-8")
+        assert "{step5_failure_signal}" in tmpl, (
+            "Step 6.1 prompt must render the normalised failure_signal block"
+        )
+
+    def test_step6_formatted_prompt_contains_synthesised_signal(self, tmp_path):
+        """When Step 5 omits failure_signal, Step 6's *formatted* prompt
+        carries the orchestrator-synthesised block, not just raw output."""
+        from pathlib import Path as _Path
+        from pdd.preprocess import preprocess
+
+        prompt_path = (
+            _Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step6_1_fix_LLM.prompt"
+        )
+        worktree_prompt = prompt_path.read_text(encoding="utf-8")
+
+        captured_prompts: List[str] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED tests/test_x.py - AssertionError", 0.1, "model")
+            if step_num == 6.1:
+                # Re-substitute the worktree's prompt source against the
+                # orchestrator's live context. This exercises the same
+                # ``preprocess`` + format-map path the orchestrator uses,
+                # without depending on which pdd package the resolver picks.
+                pre = preprocess(
+                    worktree_prompt,
+                    recursive=True,
+                    double_curly_brackets=True,
+                    exclude_keys=list(context.keys()),
+                )
+                captured_prompts.append(pre.format_map(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured_prompts, "Step 6.1 must have run"
+        rendered = captured_prompts[0]
+        assert "```failure_signal" in rendered, (
+            "Formatted Step 6 prompt must contain the synthesised failure_signal block"
+        )
+        assert "orchestrator-note" in rendered, (
+            "Synthesised block must announce itself in the formatted prompt"
+        )
+
+
+class TestIssue1215Round3DiffSizeGate:
+    """Round-3 Finding 5: pre-push diff sanity gate refuses oversized fixes."""
+
+    def test_oversized_diff_without_expansion_is_refused(self, tmp_path, monkeypatch):
+        """A push that would add > limit lines without EXPANSION_ITEMS justification is refused."""
+        # Force a tiny limit so we don't have to fabricate thousands of lines.
+        monkeypatch.setenv("PDD_CHECKUP_DIFF_LOC_LIMIT", "5")
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        # Pretend the worktree shows 100 added lines.
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines",
+                 return_value=100,
+             ):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "diff size guard" in (msg or "").lower()
+        assert "100" in (msg or "")
+
+    def test_oversized_diff_with_valid_expansion_allowed(self, tmp_path, monkeypatch):
+        """A justified EXPANSION_ITEMS bypasses the size gate (operator opt-in)."""
+        monkeypatch.setenv("PDD_CHECKUP_DIFF_LOC_LIMIT", "5")
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: pdd/main.py\n"
+                    "EXPANSION_ITEMS: pdd/main.py — rewrite required because the "
+                    "module's public interface changed and every caller needs "
+                    "the new signature.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines",
+                 return_value=100,
+             ):
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        push_mock.assert_called_once()

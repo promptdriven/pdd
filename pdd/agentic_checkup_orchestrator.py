@@ -15,6 +15,7 @@ branch; the worktree is created before the first loop iteration.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -580,6 +581,87 @@ def _git_rev_parse_head(worktree: Path) -> str:
     )
 
     return fn(worktree)
+
+
+# Codex round-3 Finding 5: diff size sanity gate. A fixer push that adds
+# more than ``DIFF_SIZE_ADDED_LOC_LIMIT`` lines without an explicit
+# EXPANSION_ITEMS justification is treated as an oversized change and
+# refused. Threshold chosen as a deliberate conservative ceiling tied to a
+# typical bug-fix surface — larger fixes should declare themselves via
+# EXPANSION_ITEMS so the operator can see the scope expansion. Override via
+# the ``PDD_CHECKUP_DIFF_LOC_LIMIT`` env var (positive int; falls back to
+# the default on parse error). Set to ``0`` to disable the gate entirely.
+DIFF_SIZE_ADDED_LOC_LIMIT = 800
+
+
+def _diff_size_added_lines(worktree: Path) -> Optional[int]:
+    """Return total added lines across uncommitted + untracked files.
+
+    Uses ``git diff --numstat`` to count added lines in tracked changes,
+    then adds the line counts of untracked files (numstat ignores them).
+    Binary files report ``-`` in numstat output and contribute zero.
+
+    Returns ``None`` when the git probe fails, so callers fail-degrade
+    rather than blocking pushes on a flaky git invocation.
+    """
+    try:
+        from .checkup_gates import (  # pylint: disable=import-outside-toplevel
+            _build_subprocess_env,
+            _resolve_trusted_git,
+        )
+
+        git_bin = _resolve_trusted_git(worktree)
+        if not git_bin:
+            return None
+        env = _build_subprocess_env(worktree)
+        result = subprocess.run(
+            [git_bin, "diff", "--numstat", "HEAD"],
+            cwd=str(worktree),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        added = 0
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added_field = parts[0].strip()
+            if added_field in ("", "-"):
+                continue
+            try:
+                added += int(added_field)
+            except ValueError:
+                continue
+
+        untracked = subprocess.run(
+            [git_bin, "ls-files", "--others", "--exclude-standard"],
+            cwd=str(worktree),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if untracked.returncode == 0:
+            for path in untracked.stdout.splitlines():
+                rel = path.strip()
+                if not rel:
+                    continue
+                full = worktree / rel
+                try:
+                    if full.is_file():
+                        with full.open("rb") as fh:
+                            added += sum(1 for _ in fh)
+                except OSError:
+                    continue
+        return added
+    except (subprocess.TimeoutExpired, OSError):
+        return None
 
 
 def _check_prompt_source_guard(
@@ -1150,11 +1232,32 @@ def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List
     _commit_block_value()
 
     missing: List[str] = []
+    status_value = str(fields.get("status", "")).strip().lower()
+    # Codex round-3 Finding 4: when the status indicates a real failure
+    # (``fail``/``error``) Step 6 needs concrete debugging context — exit
+    # code, failing IDs, an artifact pointer, and at least some output to
+    # reason from. A block that lists those keys with empty values is just
+    # as useless as one that omits them, so promote them to ``missing``.
+    failure_statuses = {"fail", "error", "failed", "failure"}
+    failure_required_non_empty = {
+        "exit_code",
+        "failing_ids",
+        "artifact_path",
+        "output",
+    }
     for key in _FAILURE_SIGNAL_REQUIRED_KEYS:
         if key not in fields:
             missing.append(key)
             continue
-        if key in ("command", "status") and not str(fields[key]).strip():
+        value = str(fields[key]).strip()
+        if key in ("command", "status") and not value:
+            missing.append(key)
+            continue
+        if status_value in failure_statuses and key in failure_required_non_empty and not value:
+            # ``failing_ids`` may legitimately be empty when the runner
+            # cannot enumerate the IDs; the prompt instructs Step 5 to
+            # write ``none`` or a synthetic identifier in that case, so an
+            # empty value here is still treated as missing context.
             missing.append(key)
     return fields, missing
 
@@ -1510,6 +1613,12 @@ def _run_agentic_checkup_orchestrator_inner(
         "fix_verify_iteration": "1",
         "max_fix_verify_iterations": str(MAX_FIX_VERIFY_ITERATIONS),
         "previous_fixes": "",
+        # Codex round-3 Finding 3: initialise the normalised Step 5
+        # failure_signal slots so the Step 6 prompt (which now references
+        # ``{step5_failure_signal}``) always renders, even when Step 5
+        # succeeded or has not run yet.
+        "step5_failure_signal": "",
+        "step5_failure_signal_missing": "",
     }
     for step in STEP_ORDER:
         step_key = str(step).replace(".", "_")
@@ -2464,6 +2573,13 @@ def _run_agentic_checkup_orchestrator_inner(
 
         step7_output = ""
 
+        # Codex round-3 Finding 2: track whether the fixer (Steps 6.1/6.2/6.3)
+        # ever actually ran. Defaults to False so that a clean-run PR (Steps
+        # 3/4/5 all clean) cannot push side-effect edits left in the worktree
+        # by other steps or tooling. Non-PR mode skips the side-effect refusal
+        # path entirely (regular checkup commits its fixes the usual way).
+        fixer_invoked = False
+
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
             if resuming_mid_iteration:
                 resuming_mid_iteration = False
@@ -2532,6 +2648,14 @@ def _run_agentic_checkup_orchestrator_inner(
                     and step_num in (6.1, 6.2, 6.3)
                 ):
                     continue
+
+                # Codex round-3 Finding 2: a fixer step is about to execute,
+                # so any subsequent worktree changes can plausibly be
+                # attributed to the fixer. Without this flag, edits left by
+                # other tools/steps in an otherwise-clean PR run would be
+                # committed and pushed as "checkup fixes".
+                if step_num in (6.1, 6.2, 6.3):
+                    fixer_invoked = True
 
                 # Label uses underscores: step6_1_iter1
                 step_str = str(step_num).replace(".", "_")
@@ -2861,6 +2985,44 @@ def _run_agentic_checkup_orchestrator_inner(
                 # outer finalization (clear_workflow_state) gets called.
                 no_changes_clean_run = not guard_changed_files
 
+                # Codex round-3 Finding 2: when Steps 3/4/5 were all clean
+                # the fixer (6.1/6.2/6.3) was skipped, so any dirty files in
+                # the worktree are side effects from non-fixer steps (Step 7
+                # tooling, ad-hoc agent edits, etc.). Pushing them would
+                # recreate the non-convergent clean-run failure where each
+                # rerun publishes a new "checkup fix" commit that nobody
+                # asked for. Refuse the push, record the artifact, and post
+                # the canonical Step 7 verdict instead.
+                if (
+                    not fixer_invoked
+                    and not no_changes_clean_run
+                ):
+                    side_effect_refusal = (
+                        "Clean-run side-effect guard: fixer steps "
+                        "(6.1/6.2/6.3) were skipped because Steps 3/4/5 all "
+                        "reported clean, but the worktree contains "
+                        f"non-fixer edits: {sorted(guard_changed_files)}. "
+                        "Refusing to commit or push these — they were not "
+                        "produced by the fixer and have no causal link to a "
+                        "PR failure."
+                    )
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir / "clean-run-side-effect-refusal.txt"
+                    ).write_text(side_effect_refusal + "\n")
+                    step_outputs["pr_push"] = side_effect_refusal
+                    context["pr_push_output"] = side_effect_refusal
+                    _save_state()
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{side_effect_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
                 # Bug 2: Scope guard — reject fixer files outside the PR's
                 # changed-file set. Parse the actual GitHub API status rows
                 # emitted by ``_format_pr_api_changed_files`` ("- MODIFIED:
@@ -2916,10 +3078,19 @@ def _run_agentic_checkup_orchestrator_inner(
                     has_valid_expansion = bool(expansion_paths_set) and (
                         expansion_has_justification
                     )
+                    # Codex round-3 Finding 1: only subtract expansion paths
+                    # from the out-of-scope list when the EXPANSION_ITEMS
+                    # marker is BOTH non-empty AND carries a causal
+                    # justification. Listing an unrelated file under
+                    # ``EXPANSION_ITEMS:`` with no reason was bypassing the
+                    # scope refusal entirely.
+                    allowed_expansion = (
+                        expansion_paths_set if has_valid_expansion else set()
+                    )
                     out_of_scope = [
                         f for f in guard_changed_files
                         if f not in pr_file_set
-                        and f not in expansion_paths_set
+                        and f not in allowed_expansion
                     ]
                     if out_of_scope:
                         if has_valid_expansion:
@@ -3002,6 +3173,53 @@ def _run_agentic_checkup_orchestrator_inner(
                                     step_outputs.get("7", step7_output)
                                 )
                                 return (False, f"{causal_refusal}{post_suffix}", total_cost, last_model_used)
+
+                # Codex round-3 Finding 5: diff size sanity gate. A push
+                # that adds more than ``DIFF_SIZE_ADDED_LOC_LIMIT`` lines
+                # without an explicit, justified EXPANSION_ITEMS marker
+                # signals a runaway fixer (whole-module rewrites, large
+                # generated files, etc.). Refuse it so the operator can
+                # inspect — a fix genuinely needing that much code should
+                # declare itself via EXPANSION_ITEMS.
+                if not no_changes_clean_run:
+                    try:
+                        size_limit = int(
+                            os.environ.get(
+                                "PDD_CHECKUP_DIFF_LOC_LIMIT",
+                                str(DIFF_SIZE_ADDED_LOC_LIMIT),
+                            )
+                        )
+                    except ValueError:
+                        size_limit = DIFF_SIZE_ADDED_LOC_LIMIT
+                    if size_limit > 0:
+                        added_lines = _diff_size_added_lines(worktree_path)
+                        if added_lines is not None and added_lines > size_limit:
+                            if not has_valid_expansion:
+                                size_refusal = (
+                                    "Diff size guard: fixer push would add "
+                                    f"{added_lines} lines (limit {size_limit}) "
+                                    "without a justified EXPANSION_ITEMS marker. "
+                                    "Refusing push — a legitimate large change "
+                                    "must declare itself via EXPANSION_ITEMS with "
+                                    "a causal justification, or the limit must "
+                                    "be raised via PDD_CHECKUP_DIFF_LOC_LIMIT."
+                                )
+                                pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                                (
+                                    pr_artifacts_dir / "diff-size-guard-refusal.txt"
+                                ).write_text(size_refusal + "\n")
+                                step_outputs["pr_push"] = size_refusal
+                                context["pr_push_output"] = size_refusal
+                                _save_state()
+                                post_suffix = _post_pr_mode_final_report(
+                                    step_outputs.get("7", step7_output)
+                                )
+                                return (
+                                    False,
+                                    f"{size_refusal}{post_suffix}",
+                                    total_cost,
+                                    last_model_used,
+                                )
 
                 if no_changes_clean_run:
                     push_ok, push_message = True, "No changes to push."
