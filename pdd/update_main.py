@@ -996,8 +996,19 @@ def _print_repository_drift_report(
 
 def _find_prd_file(project_root: Path) -> Optional[Path]:
     """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
-    for pattern in ["PRD.md", "prd.md", "*_prd.md", "*_PRD.md"]:
-        matches = list(project_root.glob(pattern))
+    if not project_root.is_dir():
+        return None
+
+    # Resolve exact names by literal spelling so case-insensitive volumes
+    # (e.g. macOS default) do not treat glob("PRD.md") as a match for prd.md.
+    by_name = {entry.name: entry for entry in project_root.iterdir() if entry.is_file()}
+    for exact_name in ("PRD.md", "prd.md"):
+        match = by_name.get(exact_name)
+        if match is not None:
+            return match
+
+    for pattern in ("*_prd.md", "*_PRD.md"):
+        matches = sorted(project_root.glob(pattern))
         if matches:
             return matches[0]
     return None

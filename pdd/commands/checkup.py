@@ -1,9 +1,11 @@
 """
 Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
-import click
+# pylint: disable=unknown-option-value
 from pathlib import Path
 from typing import Optional, Tuple
+
+import click
 
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
@@ -11,9 +13,14 @@ from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
+from .prompt import prompt_lint
 
 
-@click.command("checkup")
+@click.command(
+    "checkup",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    add_help_option=False,
+)
 @click.argument("target", required=False, default=None)
 @click.option(
     "--validate-arch-includes",
@@ -285,9 +292,18 @@ from ..core.utils import echo_model_line
         "can co-evolve without breaking signature stability."
     ),
 )
+@click.option(
+    "--help",
+    "-h",
+    "show_help",
+    is_flag=True,
+    is_eager=True,
+    default=False,
+    help="Show this message and exit.",
+)
 @click.pass_context
 @track_cost
-def checkup(
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,
@@ -319,6 +335,7 @@ def checkup(
     no_gates: bool,
     gate_timeout: float,
     gate_allow: Tuple[str, ...],
+    show_help: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -332,8 +349,36 @@ def checkup(
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Prompt lint:
+      pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
     """
     ctx.ensure_object(dict)
+
+    if show_help and target != "lint":
+        click.echo(ctx.command.get_help(ctx))
+        return None
+
+    if target == "lint":
+        lint_args = list(ctx.args)
+        if strict:
+            lint_args.insert(0, "--strict")
+        if not lint_args or show_help:
+            click.echo(
+                prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
+            )
+            return None
+        exit_code = prompt_lint.main(
+            args=lint_args,
+            prog_name="pdd checkup lint",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if ctx.args:
+        raise click.UsageError(f"Got unexpected extra arguments ({' '.join(ctx.args)})")
 
     if validate_arch_includes:
         if target is not None or pr_url is not None or issue_url_opt is not None:
@@ -342,7 +387,7 @@ def checkup(
                 param_hint="'TARGET'",
             )
         root = project_root if project_root is not None else Path.cwd()
-        from ..architecture_include_validation import run_validate_arch_includes_cli
+        from ..architecture_include_validation import run_validate_arch_includes_cli  # pylint: disable=import-outside-toplevel
 
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
@@ -486,6 +531,6 @@ def checkup(
 
     except (click.Abort, click.exceptions.Exit):
         raise
-    except Exception as exception:
+    except Exception as exception:  # pylint: disable=broad-exception-caught
         handle_error(exception, "checkup", ctx.obj.get("quiet", False))
         return None
