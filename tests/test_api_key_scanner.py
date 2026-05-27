@@ -96,6 +96,14 @@ BEDROCK_CSV_ROWS = [
      "reasoning_type": "", "location": ""},
 ]
 
+GEMINI_CSV_ROWS = [
+    {"provider": "Google Gemini", "model": "gemini/gemini-3-flash-preview",
+     "input": "0.5", "output": "3.0", "coding_arena_elo": "1437",
+     "base_url": "", "api_key": "GEMINI_API_KEY",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "effort", "location": ""},
+]
+
 MIXED_CSV_ROWS = SIMPLE_CSV_ROWS + BEDROCK_CSV_ROWS
 
 
@@ -212,6 +220,12 @@ def test_key_names_splits_pipe_delimited(tmp_path, monkeypatch):
     assert get_provider_key_names() == [
         "AWS_ACCESS_KEY_ID", "AWS_REGION_NAME", "AWS_SECRET_ACCESS_KEY",
     ]
+
+
+def test_key_names_expands_google_api_key_alias(tmp_path, monkeypatch):
+    """Gemini rows advertise both legacy and universal Google key names."""
+    _setup_home(tmp_path, monkeypatch, csv_rows=GEMINI_CSV_ROWS)
+    assert get_provider_key_names() == ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
 
 
 def test_key_names_pipe_dedup_across_rows(tmp_path, monkeypatch):
