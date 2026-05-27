@@ -322,6 +322,53 @@ def test_e2e_fix_basename_flows_into_subproject_fingerprint_path(
     )
 
 
+def test_e2e_decorator_basename_aligns_with_sync_when_pddrc_sets_prompts_dir(
+    tmp_path, monkeypatch
+):
+    """Reviewer round-4: when .pddrc sets `prompts_dir: "prompts/backend"`,
+    `infer_module_identity` (used by the @log_operation decorator) MUST
+    anchor on that configured root, not on the literal "prompts" segment.
+
+    Otherwise decorator-emitted fingerprints land at
+    `backend_services_foo_python.json` while sync looks at
+    `services_foo_python.json` — invisible to the other half of the
+    workflow."""
+    from pdd.operation_log import infer_module_identity
+
+    repo_root = tmp_path / "repo_root"
+    repo_root.mkdir()
+    subproject = repo_root / "extensions" / "github_pdd_app"
+    subproject.mkdir(parents=True)
+    pddrc_body = '''version: "1.0"
+contexts:
+  backend:
+    paths:
+      - "backend/**"
+      - "prompts/backend/**"
+    defaults:
+      generate_output_path: "backend/src/"
+      test_output_path: "backend/tests/"
+      example_output_path: "context/"
+      prompts_dir: "prompts/backend"
+      default_language: "python"
+'''
+    (subproject / ".pddrc").write_text(pddrc_body, encoding="utf-8")
+    prompt = subproject / "prompts" / "backend" / "services" / "foo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("p", encoding="utf-8")
+
+    basename, language = infer_module_identity(str(prompt))
+    # Must align with what construct_paths / sync emit for the same prompt
+    # under the same .pddrc: subdir anchored on the configured prompts_dir.
+    assert basename == "services/foo", (
+        f"infer_module_identity emitted basename={basename!r}; expected "
+        f"'services/foo' (anchored on prompts_dir 'prompts/backend'). "
+        f"'backend/services/foo' would split fingerprint files across two "
+        f"names and silently break sync visibility."
+    )
+    assert language == "python"
+
+
 def test_e2e_decorator_metadata_writes_anchor_at_subproject(tmp_path, monkeypatch):
     """Reviewer round-3: the @log_operation decorator infers prompt_file
     but then calls append_log_entry / save_fingerprint / save_run_report

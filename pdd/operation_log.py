@@ -191,20 +191,86 @@ def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[
     # Reconstruct directory context from prompt path.
     # Prompt paths look like: .../prompts/frontend/src/app/settings/page_typescriptreact.prompt
     # We need to extract "frontend/src/app/settings/page" (not just "page").
+    # Issue #1211: when a .pddrc near the prompt defines a non-default
+    # `prompts_dir` (e.g. "prompts/backend"), anchor the subdir extraction
+    # on that configured root. Without this, `infer_module_identity` would
+    # emit a basename like "backend/services/foo" while construct_paths
+    # / sync would emit "services/foo", silently splitting the fingerprint
+    # filename into two ("backend_services_foo_*.json" vs "services_foo_*.json").
     parts = path_obj.parts
-    try:
-        prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
-        # Get the subdirectory path between "prompts/" and the filename
-        subdir_parts = parts[prompts_idx + 1 : -1]
-        if subdir_parts:
-            basename = str(Path(*subdir_parts) / file_basename)
-        else:
-            basename = file_basename
-    except ValueError:
-        # No "prompts" directory in path — fall back to filename-only
+    configured_prompts_dir = _prompts_dir_for_prompt(path_obj)
+    anchor_parts: Tuple[str, ...] = ()
+    if configured_prompts_dir:
+        normalized = str(configured_prompts_dir).replace("\\", "/").rstrip("/")
+        anchor_parts = tuple(p for p in normalized.split("/") if p and p != ".")
+
+    subdir_parts: Tuple[str, ...] = ()
+    matched = False
+    if anchor_parts:
+        for start in range(len(parts) - len(anchor_parts), -1, -1):
+            if start < 0:
+                break
+            if tuple(parts[start : start + len(anchor_parts)]) == anchor_parts:
+                subdir_parts = parts[start + len(anchor_parts) : -1]
+                matched = True
+                break
+
+    if not matched:
+        try:
+            prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
+            subdir_parts = parts[prompts_idx + 1 : -1]
+        except ValueError:
+            # No "prompts" directory in path — fall back to filename-only
+            subdir_parts = ()
+
+    if subdir_parts:
+        basename = str(Path(*subdir_parts) / file_basename)
+    else:
         basename = file_basename
 
     return basename, language
+
+
+def _prompts_dir_for_prompt(prompt_path: Path) -> Optional[str]:
+    """Return the configured `prompts_dir` from the .pddrc nearest the
+    prompt file, or None if no .pddrc is reachable / no `prompts_dir`
+    is set. Used by `infer_module_identity` (Issue #1211) to keep
+    decorator-emitted basenames aligned with construct_paths/sync.
+    """
+    try:
+        from .construct_paths import (
+            _find_nearest_pddrc_for_file,
+            _load_pddrc_config,
+            _detect_context,
+            _get_context_config,
+            detect_context_for_file,
+        )
+    except ImportError:
+        return None
+
+    pddrc_path, _ = _find_nearest_pddrc_for_file(prompt_path)
+    if pddrc_path is None:
+        return None
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:
+        return None
+
+    context_name = None
+    try:
+        if prompt_path.exists():
+            detected, _ = detect_context_for_file(str(prompt_path))
+            context_name = detected
+    except Exception:
+        context_name = None
+    if context_name is None:
+        try:
+            context_name = _detect_context(prompt_path.parent, config, None)
+        except Exception:
+            context_name = None
+
+    context_config = _get_context_config(config, context_name)
+    return context_config.get("prompts_dir") or None
 
 
 def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:

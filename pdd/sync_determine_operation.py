@@ -2793,7 +2793,12 @@ def _perform_sync_analysis(
         if 'prompt' in changes:
             # Prompt and derived files both changed — stale fingerprint.
             # Delete metadata and re-run analysis fresh (will hit the "no fingerprint" path).
-            meta_dir = get_meta_dir()
+            # Issue #1211: resolve meta dir via paths so we delete from the
+            # subproject's .pdd/meta — not from a parent CWD orphan. Reading
+            # from one location and deleting from another (round-3 bug) would
+            # leave the stale fingerprint in place and recurse into
+            # _perform_sync_analysis with the same state, looping forever.
+            meta_dir = get_meta_dir(paths=paths)
             safe_bn = _safe_basename(basename)
             fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
             rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"

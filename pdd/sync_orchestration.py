@@ -2347,7 +2347,7 @@ def sync_orchestration(
                         if language.lower() != 'python':
                             # Bug #573: Check coverage before accepting — don't declare success
                             # if coverage is below target (e.g. 0.0 from sys.modules stubs)
-                            current_rr = read_run_report(basename, language)
+                            current_rr = read_run_report(basename, language, paths=pdd_files)
                             coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_skipped", {
                                 "reason": f"test_extend not supported for {language} (or agentic_mode), {'accepting' if coverage_ok else 'rejecting'} current state",
@@ -2365,7 +2365,7 @@ def sync_orchestration(
                         if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
                             # Bug #573: Check coverage before accepting — don't declare success
                             # if coverage is below target after exhausting retries
-                            current_rr = read_run_report(basename, language)
+                            current_rr = read_run_report(basename, language, paths=pdd_files)
                             coverage_ok = current_rr is not None and current_rr.coverage >= target_coverage
                             log_event(basename, language, "test_extend_limit", {
                                 "attempts": extend_attempts,
@@ -2540,7 +2540,7 @@ def sync_orchestration(
                                         # content just changed. Mirrors the
                                         # clear after generate (line 2272).
                                         try:
-                                            clear_run_report(basename, language)
+                                            clear_run_report(basename, language, paths=pdd_files)
                                         except Exception:
                                             # Never mask a successful auto-deps
                                             # result on metadata cleanup errors.
@@ -2689,7 +2689,7 @@ def sync_orchestration(
                                     else:
                                         os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
                                 # Clear stale run_report so crash/verify is required for newly generated code
-                                clear_run_report(basename, language)
+                                clear_run_report(basename, language, paths=pdd_files)
                                 # Issue #572: Validate Python imports after generation in agentic mode
                                 if agentic_mode and language.lower() == 'python' and pdd_files['code'].exists():
                                     unresolved = _validate_python_imports(
@@ -2734,7 +2734,7 @@ def sync_orchestration(
                                     continue
                             
                                 # Crash handling logic (simplified copy from original)
-                                current_run_report = read_run_report(basename, language)
+                                current_run_report = read_run_report(basename, language, paths=pdd_files)
                                 crash_log_content = ""
                             
                                 # Check for crash condition (either run report says so, or we check manually)
