@@ -1069,6 +1069,25 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+_EXPANSION_CAUSAL_KEYWORDS = (
+    "because",
+    "broken by",
+    "caused by",
+    "depends on",
+    "required by",
+    "needed for",
+    "needed because",
+    "blocked by",
+    "fails because",
+    "breaks because",
+    "due to",
+    "triggered by",
+    "imports",
+    "uses",
+    "regression in",
+)
+
+
 def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
     """Parse the ``EXPANSION_ITEMS:`` allowlist from Step 6 output.
 
@@ -1127,7 +1146,21 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
                 marker_paths.add(cleaned)
         # Pull a few trailing non-empty lines as potential justification
         # text so a multi-line block of reasoning still satisfies the
-        # justification requirement.
+        # justification requirement. Codex round-6 Finding 1: arbitrary
+        # trailing prose (e.g. a closing "All done." sentence) used to
+        # qualify as justification on length alone, letting the fixer
+        # bypass scope by emitting any marker plus any padding text.
+        # Restrict trailing capture to lines that look like they belong
+        # to THIS marker: indented continuations, bullets, an explicit
+        # JUSTIFICATION:/REASON:/BECAUSE: prefix, lines that mention one
+        # of the marker's own paths, or lines containing a causal
+        # keyword. Plain unrelated prose no longer counts.
+        marker_path_tokens: set = set()
+        for path in marker_paths:
+            marker_path_tokens.add(path)
+            tail = path.rsplit("/", 1)[-1]
+            if tail:
+                marker_path_tokens.add(tail)
         for follow in lines[idx + 1: idx + 6]:
             follow_stripped = follow.strip()
             if not follow_stripped:
@@ -1136,6 +1169,21 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
                 break
             if follow_stripped.startswith(("FILES_", "PATTERN_", "FIX_")):
                 break
+            is_continuation = (
+                follow.startswith((" ", "\t"))
+                or follow_stripped.startswith(("- ", "* ", "+ ", "> "))
+            )
+            lowered = follow_stripped.lower()
+            has_prefix = lowered.startswith(
+                ("justification:", "reason:", "because:", "rationale:", "why:")
+            )
+            mentions_path = any(tok in follow_stripped for tok in marker_path_tokens)
+            has_causal_keyword = any(
+                kw in lowered for kw in _EXPANSION_CAUSAL_KEYWORDS
+            )
+            if not (is_continuation or has_prefix or mentions_path or has_causal_keyword):
+                # Unrelated trailing prose — not a per-marker justification.
+                continue
             marker_segments.append(follow_stripped)
 
         paths.update(marker_paths)
@@ -1271,6 +1319,11 @@ def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List
 
 _ARTIFACT_OUTPUT_MAX_LINES = 400
 _ARTIFACT_OUTPUT_MAX_BYTES = 256 * 1024
+# Codex round-6 performance: cap raw bytes pulled off disk before scrubbing.
+# Tokens are short (~40 chars) so 16x headroom is more than enough to keep any
+# secret intact across the read boundary, while preventing a pathological pytest
+# log (hundreds of MB) from spiking orchestrator memory.
+_ARTIFACT_READ_MAX_BYTES = _ARTIFACT_OUTPUT_MAX_BYTES * 16
 
 
 def _read_failure_signal_artifact(
@@ -1312,9 +1365,15 @@ def _read_failure_signal_artifact(
     if not candidate_resolved.is_file():
         return None
     try:
-        raw_bytes = candidate_resolved.read_bytes()
+        # Read at most _ARTIFACT_READ_MAX_BYTES + 1 so callers can detect
+        # raw-side truncation without materialising arbitrarily large logs.
+        with candidate_resolved.open("rb") as fh:
+            raw_bytes = fh.read(_ARTIFACT_READ_MAX_BYTES + 1)
     except OSError:
         return None
+    raw_truncated = len(raw_bytes) > _ARTIFACT_READ_MAX_BYTES
+    if raw_truncated:
+        raw_bytes = raw_bytes[:_ARTIFACT_READ_MAX_BYTES]
     # Codex round-5 Finding 4: decode AND scrub the full artifact body
     # before any truncation. Slicing raw bytes first leaves a
     # recognisable ``ghp_AB...`` fragment when a token straddles the
@@ -1338,7 +1397,8 @@ def _read_failure_signal_artifact(
         body_bytes = body.encode("utf-8", errors="replace")[:_ARTIFACT_OUTPUT_MAX_BYTES]
         body = body_bytes.decode("utf-8", errors="replace")
     needs_truncation_note = (
-        len(raw_bytes) > _ARTIFACT_OUTPUT_MAX_BYTES
+        raw_truncated
+        or len(raw_bytes) > _ARTIFACT_OUTPUT_MAX_BYTES
         or len(scrubbed_lines) > _ARTIFACT_OUTPUT_MAX_LINES
     )
     truncation_note = ""
@@ -2692,7 +2752,17 @@ def _run_agentic_checkup_orchestrator_inner(
         # 3/4/5 all clean) cannot push side-effect edits left in the worktree
         # by other steps or tooling. Non-PR mode skips the side-effect refusal
         # path entirely (regular checkup commits its fixes the usual way).
-        fixer_invoked = False
+        #
+        # Codex round-6 Finding 3: a resume that skips ahead (start_step > 6)
+        # bypasses the assignment at line ~2772 that would otherwise flip the
+        # flag — without honouring persisted fixer state the side-effect
+        # guard would then refuse the dirty changes the previous run's fixer
+        # produced. Seed from step_outputs so a resumed iteration recognises
+        # that the fixer already executed.
+        fixer_invoked = (
+            any(k in step_outputs for k in ("6_1", "6_2", "6_3"))
+            or start_step > 6
+        )
 
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
             if resuming_mid_iteration:
@@ -2831,6 +2901,34 @@ def _run_agentic_checkup_orchestrator_inner(
                     )
                     logical_failure = status_value in failure_statuses
                     step5_clean = success and not logical_failure
+
+                    # Codex round-6 Finding 2: a provider-success result whose
+                    # embedded failure_signal block declares status: fail used
+                    # to skip the failure-detail console.print (which only
+                    # fires in the not-success branch) AND left step_outputs
+                    # ["5"] without the "FAILED:" prefix. That blanked out
+                    # the user-visible failure detail and silently disabled
+                    # the downstream causal-connection check (which keys off
+                    # step_outputs["5"].startswith("FAILED:")). Surface the
+                    # detail and normalise the persisted step output so both
+                    # paths behave the same.
+                    if success and logical_failure:
+                        persisted_for_surface = step5_persisted
+                        if not quiet:
+                            console.print(
+                                "[yellow]Step 5 reported provider success but the "
+                                "failure_signal block declares status="
+                                f"{status_value!r}; treating as a test failure."
+                                "[/yellow]"
+                            )
+                            if persisted_for_surface:
+                                console.print(
+                                    "[yellow]Step 5 failure detail:\n"
+                                    f"{persisted_for_surface}[/yellow]"
+                                )
+                        if not step_outputs.get("5", "").startswith("FAILED:"):
+                            step_outputs["5"] = f"FAILED: {persisted_for_surface}"
+                            _save_state()
 
                     if not step5_clean:
                         # Codex round-4 Finding 3: when Step 5 leaves
@@ -3213,7 +3311,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     # unrelated path on one marker line and let a sibling
                     # marker's justification cover for it.
                     step6_out = step_outputs.get("6_1", "")
-                    expansion_paths_set, justified_paths_set = (
+                    _, justified_paths_set = (
                         _parse_expansion_items(step6_out)
                     )
                     out_of_scope = [
@@ -3244,7 +3342,9 @@ def _run_agentic_checkup_orchestrator_inner(
                                 f"justification: {out_of_scope}"
                             )
                         pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
-                        (pr_artifacts_dir / "scope-guard-refusal.txt").write_text(scope_refusal + "\n")
+                        (pr_artifacts_dir / "scope-guard-refusal.txt").write_text(
+                            scope_refusal + "\n"
+                        )
                         step_outputs["pr_push"] = scope_refusal
                         context["pr_push_output"] = scope_refusal
                         _save_state()
@@ -3292,14 +3392,21 @@ def _run_agentic_checkup_orchestrator_inner(
                                     f"Refusing push to prevent unrelated changes reaching the PR."
                                 )
                                 pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
-                                (pr_artifacts_dir / "causal-connection-refusal.txt").write_text(causal_refusal + "\n")
+                                (
+                                    pr_artifacts_dir / "causal-connection-refusal.txt"
+                                ).write_text(causal_refusal + "\n")
                                 step_outputs["pr_push"] = causal_refusal
                                 context["pr_push_output"] = causal_refusal
                                 _save_state()
                                 post_suffix = _post_pr_mode_final_report(
                                     step_outputs.get("7", step7_output)
                                 )
-                                return (False, f"{causal_refusal}{post_suffix}", total_cost, last_model_used)
+                                return (
+                                    False,
+                                    f"{causal_refusal}{post_suffix}",
+                                    total_cost,
+                                    last_model_used,
+                                )
 
                 # Codex round-3 Finding 5: diff size sanity gate. A push
                 # that adds more than ``DIFF_SIZE_ADDED_LOC_LIMIT`` lines

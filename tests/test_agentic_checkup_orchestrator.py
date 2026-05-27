@@ -4436,3 +4436,275 @@ class TestIssue1215Round5ArtifactSecretBoundary:
         assert "ghp_" + "D" * 36 not in result, (
             "Raw token in artifact_path leaked into the truncation note."
         )
+
+
+class TestIssue1215Round6ExpansionItemsTrailingProse:
+    """Round-6 Finding 1: trailing prose (e.g. a closing "All done." line)
+    must NOT count as a per-marker justification. Only inline reasons,
+    bullets/indented continuations, explicit justification prefixes, lines
+    mentioning the marker's paths, or lines with causal keywords qualify."""
+
+    def test_unrelated_trailing_prose_does_not_justify(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/x.py\n"
+            "All done.\n"
+        )
+        paths, justified_paths = _parse_expansion_items(text)
+        assert paths == {"plugins/x.py"}
+        assert justified_paths == set(), (
+            "Trailing 'All done.' must not satisfy the per-marker "
+            "justification requirement."
+        )
+
+    def test_bullet_continuation_does_justify(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/x.py\n"
+            "- needed to fix the cascading import error\n"
+        )
+        _, justified_paths = _parse_expansion_items(text)
+        assert justified_paths == {"plugins/x.py"}
+
+    def test_indented_continuation_does_justify(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/x.py\n"
+            "  test imports plugins/x.py which the PR change broke\n"
+        )
+        _, justified_paths = _parse_expansion_items(text)
+        assert justified_paths == {"plugins/x.py"}
+
+    def test_prefix_marker_does_justify(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/x.py\n"
+            "Justification: shared util needs the same signature change\n"
+        )
+        _, justified_paths = _parse_expansion_items(text)
+        assert justified_paths == {"plugins/x.py"}
+
+    def test_line_mentioning_path_does_justify(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/x.py\n"
+            "Updating plugins/x.py was required by the new interface\n"
+        )
+        _, justified_paths = _parse_expansion_items(text)
+        assert justified_paths == {"plugins/x.py"}
+
+    def test_causal_keyword_does_justify(self):
+        text = (
+            "EXPANSION_ITEMS: plugins/x.py\n"
+            "Refactor needed because the upstream signature changed\n"
+        )
+        _, justified_paths = _parse_expansion_items(text)
+        assert justified_paths == {"plugins/x.py"}
+
+    def test_scope_guard_refuses_when_only_prose_padding(self, tmp_path):
+        """End-to-end: a bare marker followed by closing prose is refused
+        by the pre-push scope guard (no per-path justification means no
+        bypass)."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: plugins/unrelated/x.py\n"
+                    "EXPANSION_ITEMS: plugins/unrelated/x.py\n"
+                    "All done.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["plugins/unrelated/x.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "scope guard" in (msg or "").lower()
+
+
+class TestIssue1215Round6Step5LogicalFailureVisibility:
+    """Round-6 Finding 2: a provider-success Step 5 whose embedded
+    failure_signal declares status: fail must (a) print failure detail to
+    the user, (b) flip step_outputs['5'] to a FAILED: prefix so the
+    downstream causal-connection check actually runs."""
+
+    def test_causal_guard_runs_on_logical_failure(self, tmp_path):
+        """Provider success + failure_signal status:fail must engage the
+        causal-connection check — a fixer touching a file with zero
+        causal overlap is refused."""
+        step5_logical_fail_output = (
+            "Ran pytest, captured failure_signal below.\n"
+            "```failure_signal\n"
+            "command: pytest -k test_main\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_x\n"
+            "artifact_path: inline\n"
+            "output: assertion failed\n"
+            "```\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                # Provider succeeded but the signal block declares
+                # status: fail.
+                return (True, step5_logical_fail_output, 0.1, "model")
+            if step_num == 6.1:
+                # Fixer modifies a file that has zero overlap with the PR's
+                # changed-file set (pdd/main.py) and zero overlap with the
+                # failure paths (tests/test_main.py). No EXPANSION_ITEMS.
+                return (
+                    True,
+                    "FILES_MODIFIED: pdd/unrelated_module.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/unrelated_module.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        # Causal-connection check fires only when step_outputs["5"]
+        # starts with "FAILED:" — its message names the unrelated file.
+        assert "causal" in (msg or "").lower() or "scope" in (msg or "").lower()
+        assert "pdd/unrelated_module.py" in (msg or "")
+
+
+class TestIssue1215Round6FixerInvokedResume:
+    """Round-6 Finding 3: a resume that skips past Step 6 must still
+    recognise the fixer ran in a prior iteration — otherwise the
+    clean-run side-effect guard wrongly refuses the fixer's dirty files."""
+
+    def test_resume_with_persisted_step6_output_does_not_refuse_dirty_files(
+        self, tmp_path
+    ):
+        """When workflow state carries persisted 6_1 output AND the
+        resume start_step is past Step 6, ``fixer_invoked`` must already
+        be True so dirty fixer files reach the scope/causal checks rather
+        than the side-effect refusal."""
+        wt = tmp_path / "wt"
+        wt.mkdir(exist_ok=True)
+
+        # Simulate a workflow state where Steps 3..6 already completed in
+        # a previous run; only Step 7 still has to run. The orchestrator's
+        # state-identity guard requires mode/pr_number/pr_owner/pr_repo/
+        # pr_head_sha to match the current invocation before cached step
+        # outputs are honoured — without those, the resume path discards
+        # the cache and runs from scratch (which would still defeat the
+        # check we're trying to make here).
+        persisted_step_outputs = {
+            "3": "clean",
+            "4": "clean",
+            "5": "clean",
+            "6_1": "FILES_MODIFIED: pdd/main.py\n",
+            "6_2": "verify-ok",
+            "6_3": "review-ok",
+        }
+        persisted_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "abc123deadbeef",
+            "last_completed_step": 6.3,
+            "current_step": 7,
+            "step_outputs": persisted_step_outputs,
+            "context": {
+                "files_to_stage": "pdd/main.py",
+                "step5_output": "clean",
+                "step6_1_output": "FILES_MODIFIED: pdd/main.py\n",
+            },
+            "total_cost": 0.0,
+            "last_model_used": "model",
+            "fix_verify_iteration": 1,
+            "previous_fixes": "",
+            "posted_step_comments": [],
+            "changed_files": ["pdd/main.py"],
+        }
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        meta = dict(_PR_META_REAL_API)
+        patches = (
+            patch(
+                "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+                return_value=(wt, None),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value=meta,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._run_single_step",
+                side_effect=step_side_effect,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_changed_files",
+                return_value=["pdd/main.py"],
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+                return_value=(True, "Pushed 1 file"),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.load_workflow_state",
+                return_value=(persisted_state, "state.json"),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.save_workflow_state",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.console"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path, "use_github_state": True}
+            )
+
+        # The side-effect refusal would have fired on a False fixer_invoked
+        # flag — assert it did NOT by checking the message and that push
+        # was attempted (scope/causal/diff checks may still allow it).
+        assert "clean-run side-effect guard" not in (msg or ""), (
+            f"fixer_invoked was wrongly False on resume — refusal message: {msg!r}"
+        )
+        # If everything else is in order, the commit/push path should be
+        # taken (pdd/main.py is in pr_file_set so scope check passes).
+        push_mock.assert_called_once()
+        assert success is True
