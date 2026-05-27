@@ -2233,9 +2233,14 @@ def _collect_companion_source_of_truth_files(
     try:
         changed = _pr_changed_files_all(worktree, pr_metadata)
     except Exception as exc:  # noqa: BLE001 - defensive
+        # CodeQL does not recognise ``_scrub_secrets`` as a sanitizer
+        # for ``py/clear-text-logging-sensitive-data``. Log only the
+        # exception CLASS NAME (no message body) so the alert cannot
+        # fire on a tainted-string log argument. Operators who need
+        # the full exception text can reproduce locally.
         logger.debug(
-            "companion-files: changed-file resolution failed: %s",
-            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+            "companion-files: changed-file resolution failed (%s)",
+            type(exc).__name__,
         )
         return []
     if not changed:
@@ -4984,9 +4989,10 @@ def _detect_pr_base_merge_conflict(
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
         logger.debug(
-            "pr-base merge-conflict probe verify failed: %s",
-            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+            "pr-base merge-conflict probe verify failed (%s)",
+            type(exc).__name__,
         )
         return None
     if verify.returncode != 0 or not verify.stdout.strip():
@@ -5015,9 +5021,10 @@ def _detect_pr_base_merge_conflict(
             timeout=120,
         )
     except (OSError, subprocess.SubprocessError) as exc:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
         logger.debug(
-            "pr-base merge-conflict probe failed: %s",
-            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+            "pr-base merge-conflict probe failed (%s)",
+            type(exc).__name__,
         )
         return None
     if result.returncode == 0:
@@ -5025,11 +5032,12 @@ def _detect_pr_base_merge_conflict(
     if result.returncode != 1:
         # The merge-tree subcommand exists in older gits but
         # ``--write-tree`` was added in 2.38. On older git the call
-        # exits >1; degrade open rather than block.
+        # exits >1; degrade open rather than block. CodeQL sanitizer
+        # note: see _collect_companion_source_of_truth_files — log
+        # the exit code only, not the stderr body.
         logger.debug(
-            "pr-base merge-conflict probe got unexpected exit %s (stderr=%s)",
+            "pr-base merge-conflict probe got unexpected exit %s",
             result.returncode,
-            _scrub_secrets((result.stderr or "").strip()),
         )
         return None
     stdout = (result.stdout or "").strip()
@@ -5085,17 +5093,12 @@ def _files_changed_since(worktree: Path, base_sha: str) -> List[str]:
         logger.debug("files-changed-since failed: %s", exc)
         return []
     if result.returncode != 0:
-        # Scrub git stderr before logging: it can include base/head
-        # SHAs, refspecs, or tokenized auth URLs from prior git
-        # operations harvested into the same stream.
-        scrubbed_stderr = _scrub_secrets(
-            (result.stderr or b"").decode("utf-8", errors="replace").strip()
-        )
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exit code, never the stderr body.
         logger.debug(
-            "files-changed-since git diff returned %s for %s..HEAD: %s",
+            "files-changed-since git diff returned %s for %s..HEAD",
             result.returncode,
             base,
-            scrubbed_stderr,
         )
         return []
     raw = result.stdout or b""
@@ -5584,18 +5587,16 @@ def _load_prompt_source_map(
         # ``git show HEAD:architecture.json`` returns non-zero when
         # the worktree is not a git repo, HEAD does not exist (no
         # commits), or architecture.json is not in the HEAD tree.
-        # Degrade gracefully rather than block, but emit enough
-        # diagnostic for the operator to recognize a misconfigured
-        # worktree. Scrub stderr — git can echo back tokenized auth
-        # URLs from prior fetch retries in the same logger stream.
-        scrubbed_stderr = _scrub_secrets((result.stderr or "").strip())
+        # Degrade gracefully rather than block. CodeQL sanitizer note:
+        # see _collect_companion_source_of_truth_files — log only the
+        # exit code, never the stderr body. The operator can re-run
+        # `git show HEAD:architecture.json` locally to see the cause.
         logger.warning(
             "prompt-source guard: architecture.json missing at HEAD "
-            "in %s (git show exit=%s, stderr=%s); skipping prompt-"
-            "drift enforcement for this round.",
+            "in %s (git show exit=%s); skipping prompt-drift "
+            "enforcement for this round.",
             worktree,
             result.returncode,
-            scrubbed_stderr,
         )
         return None
     try:
@@ -5887,17 +5888,14 @@ def _check_architecture_registry_edit_guard(
         check=False,
     )
     if head_result.returncode != 0:
-        # Scrub stderr before logging — see _load_prompt_source_map
-        # for the same rationale (tokenized auth URLs from prior git
-        # operations can ride the same logger stream into CI capture).
-        scrubbed_stderr = _scrub_secrets((head_result.stderr or "").strip())
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exit code, never the stderr body.
         logger.warning(
             "architecture-registry guard: architecture.json missing at "
-            "HEAD in %s (git show exit=%s, stderr=%s); skipping "
-            "registry-edit enforcement for this round.",
+            "HEAD in %s (git show exit=%s); skipping registry-edit "
+            "enforcement for this round.",
             worktree,
             head_result.returncode,
-            scrubbed_stderr,
         )
         return None
     try:
