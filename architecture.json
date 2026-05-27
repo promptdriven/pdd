@@ -7734,7 +7734,7 @@
     }
   },
   {
-    "reason": "Issue #1092: deterministic local gates the review loop runs before honoring any LLM 'clean' verdict.",
+    "reason": "Issue #1092 deterministic gates + #1228 PR-Scope Convergence Guard for `pdd checkup --pr`.",
     "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (PR-range git diff --check, prettier --check via package.json, a non-mutating Python syntax check via the builtin compile() builtin per changed .py file, optional ruff/black/mypy when configured in pyproject.toml, optional `npx --no-install tsc --noEmit` when typescript is declared AND node_modules/typescript/bin/tsc is on disk). Per-file gates pass POSIX `--` end-of-options separator so paths cannot be parsed as flags. Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, sanitized PATH, and secret redaction; gate discovery and changed-file git probes resolve a trusted absolute git binary outside the PR worktree so PATH=.:$PATH cannot run a PR-shipped ./git. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
     "dependencies": [
       "checkup_review_loop_python.prompt"
@@ -7792,11 +7792,67 @@
             "sideEffects": [
               "None"
             ]
+          },
+          {
+            "name": "parse_step5_signal",
+            "signature": "(text: str, *, worktree: Path, junit_xml_path: Optional[Path] = None) -> Optional[Step5Signal]",
+            "returns": "Optional[Step5Signal]",
+            "sideEffects": [
+              "Parses junit XML via junitparser when junit_xml_path is supplied; otherwise scans text for a <step5_signal> JSON block",
+              "Never raises - returns None when neither junit XML nor JSON block is parseable",
+              "Per-field truncation, POSIX path normalisation, and failures[] cap-at-50 happen here so downstream consumers see a consistent shape"
+            ]
+          },
+          {
+            "name": "compute_in_scope_paths",
+            "signature": "(pr_changed_files: Sequence[str], step5_signal: Optional[Step5Signal], *, worktree: Path, test_file_resolver: Optional[Callable[[str], Iterable[str]]] = None) -> Set[Path]",
+            "returns": "Set[Path]",
+            "sideEffects": [
+              "Union of (a) PR changed files, (b) Step5Signal failing-test files, (c) test files for PR-changed sources via test_file_resolver",
+              "Default resolver maps pdd/<stem>.py -> tests/test_<stem>.py when present in worktree",
+              "All paths are POSIX-form Path objects relative to worktree; files outside worktree are dropped",
+              "Never raises; empty inputs return an empty set"
+            ]
+          },
+          {
+            "name": "enforce_scope",
+            "signature": "(diff_paths: Sequence[Path], in_scope: Set[Path], expansion_items: Sequence[str] = (), *, worktree: Path) -> List[ReviewFinding]",
+            "returns": "List[ReviewFinding]",
+            "sideEffects": [
+              "Returns one synthetic blocker ReviewFinding per out-of-scope, unjustified path with reviewer='gate:pr-scope-enforce', area='pr-scope-guard'",
+              "EXPANSION_ITEMS entries explicitly listing the path are honoured as justifications",
+              "Never raises; returns [] when every path is in scope"
+            ]
+          },
+          {
+            "name": "diff_sanity_gate",
+            "signature": "(prior_pr_diff_paths: Sequence[Path], new_diff_paths: Sequence[Path], loc_delta: int, *, worktree: Path, in_scope: Set[Path], expansion_items: Sequence[str], step5_signal: Optional[Step5Signal], failing_test_count: int, max_loc_multiplier: float = 10.0, floor_lines: int = 200) -> List[ReviewFinding]",
+            "returns": "List[ReviewFinding]",
+            "sideEffects": [
+              "Pre-push budget gate. Budget = max(max_loc_multiplier * failing-test-surface LOC, floor_lines)",
+              "Emits one blocker finding when loc_delta exceeds budget AND no BUDGET_OVERRIDE line in expansion_items",
+              "Also emits a blocker finding when new_diff_paths contains any path not in prior_pr_diff_paths AND not in in_scope AND lacking expansion_items match (last-line-of-defence duplication of enforce_scope)",
+              "Never raises; returns [] when the diff is within budget and entirely scoped"
+            ]
+          },
+          {
+            "name": "causality_check",
+            "signature": "(step5_signal: Optional[Step5Signal], pr_changed_files: Sequence[str], fixer_diff_paths: Sequence[Path], *, worktree: Path, traces_to_by_path: Mapping[str, Sequence[str]], expansion_items: Sequence[str]) -> List[ReviewFinding]",
+            "returns": "List[ReviewFinding]",
+            "sideEffects": [
+              "Orchestrator-authoritative causality check that fixer diff causally addresses Step 5 signal failures",
+              "Reads traces_to_by_path (the parsed `# traces_to:` map extracted from fixer-modified files)",
+              "Emits one critical ReviewFinding per unrelated_files entry plus one for the overall unresolved_failures set when non-empty",
+              "Does NOT trust the Step 7 LLM self-reported causality_check field (Step 7 prompt explicitly labels the orchestrator-side check as authoritative)",
+              "Never raises; returns [] when diff is causally aligned with the signal"
+            ]
           }
         ],
         "dataclasses": [
           "Gate",
-          "GateResult"
+          "GateResult",
+          "Step5Failure",
+          "Step5Signal"
         ],
         "config_knobs": [
           "DEFAULT_GATE_TIMEOUT_SECONDS"
@@ -7816,7 +7872,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
+    "reason": "Multi-step orchestrator for pdd checkup; PR mode enforces the #1228 PR-Scope Convergence Guard (Step5Signal, in-scope set, causality check, pre-push diff sanity gate, clean-run zero-commit short-circuit).",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -8030,6 +8086,81 @@
     "position": {
       "x": 13800,
       "y": 1200
+    }
+  },
+  {
+    "reason": "Checkup Step 5 test runner; emits the structured <step5_signal> block + junit XML for the PR-Scope Convergence Guard (#1228).",
+    "description": "LLM prompt template invoked by the agentic_checkup_orchestrator. Checkup Step 5 test runner; emits the structured <step5_signal> block + junit XML for the PR-Scope Convergence Guard (#1228).",
+    "dependencies": [],
+    "priority": 215.1,
+    "filename": "agentic_checkup_step5_test_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step5_test_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 15800,
+      "y": 3200
+    }
+  },
+  {
+    "reason": "Checkup Step 6a fixer; receives <step5_signal>/<in_scope_paths> and enforces EXPANSION_ITEMS / # traces_to: scope discipline (#1228).",
+    "description": "LLM prompt template invoked by the agentic_checkup_orchestrator. Checkup Step 6a fixer; receives <step5_signal>/<in_scope_paths> and enforces EXPANSION_ITEMS / # traces_to: scope discipline (#1228).",
+    "dependencies": [],
+    "priority": 215.2,
+    "filename": "agentic_checkup_step6_1_fix_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_1_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 15800,
+      "y": 3300
+    }
+  },
+  {
+    "reason": "Checkup Step 7 verifier; carries the required causality_check verdict field (R1228) that the orchestrator independently re-validates.",
+    "description": "LLM prompt template invoked by the agentic_checkup_orchestrator. Checkup Step 7 verifier; carries the required causality_check verdict field (R1228) that the orchestrator independently re-validates.",
+    "dependencies": [],
+    "priority": 215.3,
+    "filename": "agentic_checkup_step7_verify_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step7_verify_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 15800,
+      "y": 3400
     }
   },
   {
