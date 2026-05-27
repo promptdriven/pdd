@@ -88,6 +88,7 @@ BUILTIN_EXT_MAP = {
     'svelte': '.svelte', 'vue': '.vue',
     # Common data/config formats
     'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
+    'markdown': '.md',
 }
 
 # Configuration loading functions

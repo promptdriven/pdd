@@ -192,7 +192,14 @@ def example_example_command():
     
     Options:
         --output PATH: Where to save the generated example code
-        --format FORMAT: Output format (default: code). Valid values: code (uses language extension), md (markdown)
+        --format FORMAT: Output format (default: code). Valid values:
+            - code: Honors any non-empty suffix on --output verbatim; synthesizes the language
+                    extension from BUILTIN_EXT_MAP only when --output has no suffix or is omitted.
+            - md:   Forces a lowercase .md suffix on the resolved output path, replacing any
+                    other suffix (including .MD) on --output.
+            When the wrapper rewrites an explicit --output (bare name under 'code', or non-.md
+            under 'md') and the rewritten file already exists, the user is prompted to confirm
+            the overwrite unless --force is set.
     
     Returns:
         Tuple[str, float, str]: (example_code, total_cost_in_dollars, model_name)
