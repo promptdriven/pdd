@@ -37,6 +37,21 @@ STEP7_VERDICT_JSON = (
 )
 ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
 
+# Round-8 Finding 1: Step 5 must emit a structured failure_signal block
+# with a recognised status word; missing/unknown statuses now fail closed.
+STEP5_CLEAN_OUTPUT = (
+    "All tests passed.\n"
+    "```failure_signal\n"
+    "command: pytest -q\n"
+    "exit_code: 0\n"
+    "status: pass\n"
+    "failing_ids: none\n"
+    "artifact_path: inline\n"
+    "output: |\n"
+    "  42 passed in 0.42s\n"
+    "```"
+)
+
 STABLE_PR_METADATA = {
     "clone_url": "https://github.com/o/r.git",
     "head_ref": "change/fix",
@@ -469,8 +484,9 @@ class TestBug5CleanRunConvergence:
         def step_side_effect(step_num, name, context, **kwargs):
             invoked_steps.append(step_num)
             if step_num == 5:
-                # Step 5 is clean — no test failures
-                return (True, "All tests passed. 42 passed, 0 failed.", 0.1, "model")
+                # Step 5 is clean — emit the required structured
+                # failure_signal block with status: pass (round-8 #1).
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")

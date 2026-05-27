@@ -2907,10 +2907,27 @@ def _run_agentic_checkup_orchestrator_inner(
                         _parse_failure_signal_block(step5_persisted)
                     )
                     failure_statuses = {"fail", "error", "failed", "failure"}
+                    pass_statuses = {"pass", "ok", "success", "passed", "clean"}
                     status_value = (
                         str(signal_fields.get("status", "")).strip().lower()
                     )
-                    logical_failure = status_value in failure_statuses
+                    # Codex round-8 Finding 1: when the agent omits or
+                    # mangles the required ``failure_signal`` block, the
+                    # logical outcome is unknown — treating an unknown
+                    # outcome as "pass" let a provider-success Step 5
+                    # that reported failing tests only in prose flow
+                    # through as ``step5_clean=True`` and skipped the
+                    # fixer. Fail closed: a missing block (signal_missing
+                    # contains "__block__"), an empty status, or any
+                    # status word that is not in the known pass set
+                    # counts as a logical failure.
+                    block_missing = "__block__" in signal_missing
+                    status_recognised_pass = status_value in pass_statuses
+                    logical_failure = (
+                        status_value in failure_statuses
+                        or block_missing
+                        or not status_recognised_pass
+                    )
                     step5_clean = success and not logical_failure
 
                     # Codex round-6 Finding 2: a provider-success result whose
@@ -3298,16 +3315,33 @@ def _run_agentic_checkup_orchestrator_inner(
                         or pr_metadata.get("api_changed_files")
                         or ""
                     )
-                    for match in _re.finditer(
-                        r"^-\s+([A-Z]+):\s*(.+?)\s*$",
-                        api_files_text,
-                        flags=_re.MULTILINE,
-                    ):
-                        status_label = match.group(1)
+                    # Codex round-8 Finding 2: when the GitHub PR files
+                    # API is down/rate-limited, ``api_files_text`` is
+                    # empty even though the local merge-base diff
+                    # (formatted by ``_format_pr_changed_files_for_prompt``
+                    # into ``context['pr_scope_changed_files']``) still
+                    # lists the PR's changed files. Parsing only the API
+                    # rows left ``pr_file_set`` empty and refused valid
+                    # edits to PR-touched files. Union both sources so
+                    # the scope guard tolerates an API outage when the
+                    # local base ref is healthy. The same regex matches
+                    # both formats — uppercase word statuses (MODIFIED/
+                    # ADDED/RENAMED/DELETED) from the API formatter, and
+                    # short git statuses (M, A, D, R100) from the local
+                    # merge-base formatter — because ``[A-Z][A-Z0-9]*``
+                    # spans both.
+                    local_scope_text = str(
+                        context.get("pr_scope_changed_files") or ""
+                    )
+                    pr_scope_sources = "\n".join(
+                        text for text in (api_files_text, local_scope_text)
+                        if text
+                    )
+
+                    def _ingest_row(status_label: str, value: str) -> None:
                         if status_label == "NOTE":
-                            continue
-                        value = match.group(2)
-                        if status_label == "RENAMED" and " -> " in value:
+                            return
+                        if " -> " in value and status_label.startswith("R"):
                             old_path, _, new_path = value.partition(" -> ")
                             if old_path:
                                 pr_file_set.add(old_path)
@@ -3315,6 +3349,13 @@ def _run_agentic_checkup_orchestrator_inner(
                                 pr_file_set.add(new_path)
                         else:
                             pr_file_set.add(value)
+
+                    for match in _re.finditer(
+                        r"^-\s+([A-Z][A-Z0-9]*):\s*(.+?)\s*$",
+                        pr_scope_sources,
+                        flags=_re.MULTILINE,
+                    ):
+                        _ingest_row(match.group(1), match.group(2))
                     # Codex round-5 Finding 3: parse EXPANSION_ITEMS into
                     # (paths, justified_paths). Only paths whose OWN marker
                     # entry carried a causal justification bypass the
@@ -3325,10 +3366,30 @@ def _run_agentic_checkup_orchestrator_inner(
                     _, justified_paths_set = (
                         _parse_expansion_items(step6_out)
                     )
+                    # Codex round-8 Finding 3: the Step 6 prompt
+                    # explicitly permits the fixer to edit failing test
+                    # files and files whose failures are causally related
+                    # to PR-changed files, without requiring an explicit
+                    # EXPANSION_ITEMS marker. The old scope guard refused
+                    # those before the causal guard could allow them.
+                    # Extract Step 5 failure paths and treat them as a
+                    # third scope-allowed source. The causal guard below
+                    # still applies (it requires at least one overlap
+                    # between fixer files and the OK-set), so genuinely
+                    # unrelated edits remain blocked.
+                    step5_for_scope = step_outputs.get("5", "")
+                    scope_failure_paths: set = set()
+                    if step5_for_scope.startswith("FAILED:"):
+                        scope_failure_paths = set(_re.findall(
+                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
+                            step5_for_scope,
+                        ))
+                    scope_allowed: set = (
+                        pr_file_set | scope_failure_paths | justified_paths_set
+                    )
                     out_of_scope = [
                         f for f in guard_changed_files
-                        if f not in pr_file_set
-                        and f not in justified_paths_set
+                        if f not in scope_allowed
                     ]
                     if out_of_scope:
                         if justified_paths_set:

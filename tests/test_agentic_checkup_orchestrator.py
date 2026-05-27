@@ -43,6 +43,27 @@ STEP7_VERDICT_JSON = (
 )
 ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
 
+# Round-8 Finding 1: the Step 5 prompt REQUIRES a structured
+# ``failure_signal`` block, and the orchestrator now fails closed when
+# it's missing or carries an unknown ``status`` word. Tests that intend
+# Step 5 to be logically clean (provider success AND no test failures)
+# must include this block so the orchestrator can verify the
+# contract — otherwise the run is treated as a logical failure and the
+# fixer is invoked, which is the safety behaviour the round-8 fix
+# introduced.
+STEP5_CLEAN_OUTPUT = (
+    "All tests passed.\n"
+    "```failure_signal\n"
+    "command: pytest -q\n"
+    "exit_code: 0\n"
+    "status: pass\n"
+    "failing_ids: none\n"
+    "artifact_path: inline\n"
+    "output: |\n"
+    "  42 passed in 0.42s\n"
+    "```"
+)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -2980,7 +3001,7 @@ class TestIssue1212Bug5CleanRunConvergence:
         def step_side_effect(step_num, name, context, **kwargs):
             invoked_steps.append(step_num)
             if step_num == 5:
-                return (True, "All tests passed. 42 passed, 0 failed.", 0.1, "model")
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3520,7 +3541,10 @@ class TestIssue1215Round2ResumeCleanFlags:
                 "2": "out-2",
                 "3": "out-3",
                 "4": "out-4",
-                "5": "out-5",
+                # Round-8 Finding 1: cached Step 5 must include a
+                # ``failure_signal`` block with ``status: pass`` for the
+                # resume to honour it as logically clean.
+                "5": STEP5_CLEAN_OUTPUT,
             },
             "total_cost": 0.0,
             "model": "gpt-4",
@@ -3537,6 +3561,12 @@ class TestIssue1215Round2ResumeCleanFlags:
 
         def step_side_effect(step_num, name, context, **kwargs):
             steps_invoked.append(step_num)
+            if step_num == 5:
+                # Round-8 Finding 1: Step 5 must emit the structured
+                # ``failure_signal`` block with ``status: pass`` to be
+                # treated as logically clean — the orchestrator now
+                # fails closed when the block is missing or unparseable.
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -3820,6 +3850,11 @@ class TestIssue1215Round3CleanRunSideEffect:
 
         def step_side_effect(step_num, name, context, **kwargs):
             steps_invoked.append(step_num)
+            if step_num == 5:
+                # Round-8 Finding 1: Step 5 must emit ``status: pass`` to
+                # be treated as logically clean — missing/unparseable
+                # blocks now fail closed.
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -4745,7 +4780,13 @@ class TestIssue1215Round6FixerInvokedResume:
         """Round-7 Finding 2: a manual --start-step 7 with NO persisted
         Step 6 output must still trip the clean-run side-effect guard for
         a dirty in-scope file — the operator did not run the fixer, so
-        the dirty file cannot be attributed to it."""
+        the dirty file cannot be attributed to it.
+
+        Round-8 Finding 1 follow-through: the live Step 5 mock emits a
+        well-formed ``status: pass`` failure_signal so the fail-closed
+        rule keeps the run on the clean path (otherwise Step 5 would be
+        treated as logically failed and the fixer would run, masking the
+        scenario we're testing)."""
         wt = tmp_path / "wt"
         wt.mkdir(exist_ok=True)
 
@@ -4762,11 +4803,14 @@ class TestIssue1215Round6FixerInvokedResume:
             "step_outputs": {
                 "3": "clean",
                 "4": "clean",
-                "5": "clean",
+                # Round-8 Finding 1: cached Step 5 must carry the
+                # structured failure_signal block for fail-closed parsing
+                # to recognise it as logically clean on resume.
+                "5": STEP5_CLEAN_OUTPUT,
             },
             "context": {
                 "files_to_stage": "",
-                "step5_output": "clean",
+                "step5_output": STEP5_CLEAN_OUTPUT,
             },
             "total_cost": 0.0,
             "last_model_used": "model",
@@ -4777,6 +4821,8 @@ class TestIssue1215Round6FixerInvokedResume:
         }
 
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -4833,3 +4879,191 @@ class TestIssue1215Round6FixerInvokedResume:
         push_mock.assert_not_called()
         assert success is False
         assert "side-effect" in (msg or "").lower() or "clean-run" in (msg or "").lower()
+
+
+class TestIssue1215Round8Step5MissingFailureSignal:
+    """Round-8 Finding 1: a provider-success Step 5 with no/mangled
+    `failure_signal` block must fail closed — the fixer must run rather
+    than the run being declared clean on broken tests."""
+
+    def test_provider_success_no_failure_signal_block_invokes_fixer(self, tmp_path):
+        invoked = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                # Provider succeeds but emits NO failure_signal block,
+                # while reporting failing tests in prose.
+                return (
+                    True,
+                    "Ran pytest. FAILED tests/test_main.py::test_x",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        # Fail-closed: missing block ⇒ logical failure ⇒ fixer runs.
+        assert 6.1 in invoked, (
+            "Missing failure_signal must NOT be treated as clean — "
+            f"steps invoked: {invoked}"
+        )
+
+    def test_provider_success_unknown_status_invokes_fixer(self, tmp_path):
+        invoked = []
+        weird_status_output = (
+            "Tests ran.\n"
+            "```failure_signal\n"
+            "command: pytest\n"
+            "exit_code: 0\n"
+            "status: maybe\n"
+            "failing_ids: none\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  42 passed\n"
+            "```"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, weird_status_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert 6.1 in invoked, (
+            "Unrecognised status word must be treated as a logical failure "
+            f"and trigger the fixer — steps invoked: {invoked}"
+        )
+
+
+class TestIssue1215Round8ScopeGuardLocalDiffFallback:
+    """Round-8 Finding 2: when the GitHub PR files API is empty/error
+    but the local merge-base diff names the PR's changed files, the
+    scope guard must accept edits to those files."""
+
+    def test_scope_guard_accepts_local_merge_base_diff(self, tmp_path):
+        # API rows empty (simulating gh failure / rate limit); local
+        # merge-base diff IS populated via pr_scope_changed_files in
+        # context. The scope guard should union both.
+        api_empty_meta: Dict = {
+            **_PR_META_1212,
+            "api_changed_files": "",
+            "api_changed_files_full": "",
+            "api_changed_files_error": "rate limited",
+            "base_ref": "main",
+            "base_local_ref": "refs/heads/pdd-pr-base/200",
+        }
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 4:
+                # Seed pr_scope_changed_files in context, mimicking what
+                # _format_pr_changed_files_for_prompt would write before
+                # Step 6 — the orchestrator already seeds this at the
+                # PR-worktree setup stage, but for this isolated mock
+                # we set it on the first step that has a context.
+                context["pr_scope_changed_files"] = (
+                    "Base: refs/heads/pdd-pr-base/200\n"
+                    "- M: pdd/main.py\n"
+                    "- A: pdd/new_helper.py"
+                )
+                return (True, "out-4", 0.0, "model")
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                # Fixer touches a file listed in the LOCAL diff but not
+                # in any API row — must be accepted.
+                return (True, "FILES_MODIFIED: pdd/new_helper.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/new_helper.py"],
+            pr_metadata=api_empty_meta,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert "scope guard" not in (msg or "").lower(), (
+            f"Local merge-base diff path should be in scope; msg={msg!r}"
+        )
+        push_mock.assert_called_once()
+        assert success is True
+
+
+class TestIssue1215Round8ScopeGuardAcceptsStep5FailurePaths:
+    """Round-8 Finding 3: the Step 6 prompt allows edits to failing test
+    files and causally connected files. The scope guard must accept
+    those without requiring an EXPANSION_ITEMS marker — the causal
+    guard remains the backstop."""
+
+    def test_scope_guard_accepts_test_file_named_in_step5_failure(self, tmp_path):
+        # API metadata lists pdd/main.py as the PR change. The fixer
+        # edits tests/test_main.py (NOT in pr_file_set) because Step 5
+        # named it as the failing file. The old scope guard refused
+        # this; round-8 must allow it on the failure-path source.
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (
+                    False,
+                    "FAILED: tests/test_main.py::test_x - AssertionError",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.1:
+                # Fixer edits the failing test file directly — NO
+                # EXPANSION_ITEMS marker.
+                return (True, "FILES_MODIFIED: tests/test_main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["tests/test_main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert "scope guard" not in (msg or "").lower(), (
+            f"Step 5 failure-named test file must be in scope; msg={msg!r}"
+        )
+        push_mock.assert_called_once()
+        assert success is True
