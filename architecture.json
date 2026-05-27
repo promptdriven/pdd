@@ -2446,10 +2446,11 @@
     }
   },
   {
-    "reason": "Iteratively fixes errors until tests pass.",
-    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
+    "reason": "Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.",
+    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations. Supports two-phase focused repair for large dev units via fix_focus, and failure-aware early exit for syntax/import and timeout/flaky failures.",
     "dependencies": [
-      "failure_classification_python.prompt"
+      "failure_classification_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2464,44 +2465,14 @@
       "module": {
         "functions": [
           {
-            "name": "escape_brackets",
-            "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py') -> Tuple[bool, bool, str, str, str, float, str]",
-            "returns": "Tuple[bool, bool, str, str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "run_pytest_on_file",
-            "signature": "(test_file: str) -> tuple[int, int, int, str]",
-            "returns": "tuple[int, int, int, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "format_log_for_output",
-            "signature": "(log_structure)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -2509,6 +2480,50 @@
     "position": {
       "x": 9280,
       "y": 1600
+    }
+  },
+  {
+    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction — zero I/O, zero LLM calls.",
+    "description": "Pure-utility AST-based module used by fix_error_loop to implement two-phase focused repair for large dev units. Provides skeleton extraction, function slicing, traceback parsing, and source reconstruction. Stdlib-only (plus pydantic for DiagnosisResult).",
+    "dependencies": [],
+    "priority": 64,
+    "filename": "fix_focus_python.prompt",
+    "filepath": "pdd/fix_focus.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_skeleton",
+            "signature": "(source: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "extract_function_slices",
+            "signature": "(source: str, function_names: list[str]) -> dict[str, str]",
+            "returns": "dict[str, str]"
+          },
+          {
+            "name": "extract_failing_functions",
+            "signature": "(traceback: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "reconstruct_source",
+            "signature": "(original: str, updated_slices: dict[str, str]) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1760
     }
   },
   {
