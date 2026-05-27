@@ -35,6 +35,7 @@ def mock_open(*args, **kwargs):
 def test_get_comment_env_var_not_set(monkeypatch):
     # Ensure the environment variable is not set
     monkeypatch.delenv('PDD_PATH', raising=False)
+    monkeypatch.setenv("PDD_STRICT_PDD_PATH", "1")
     assert get_comment('Python') == 'del'
 
 def test_get_comment_file_not_found(monkeypatch):

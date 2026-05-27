@@ -24,11 +24,9 @@ except ImportError:
         return (False, "Agentic crash handler not available", 0.0, "N/A", [])
 
 try:
-    from .get_language import get_language, get_language_from_package_data
+    from .get_language import get_language
 except ImportError:
     def get_language(ext):
-        return "unknown"
-    def get_language_from_package_data(ext):
         return "unknown"
 
 try:
@@ -36,14 +34,6 @@ try:
 except ImportError:
     def default_verify_cmd_for(lang, verification_program):
         return None
-
-
-def _resolve_language(extension: str) -> str:
-    """Resolve workflow language without requiring project initialization."""
-    try:
-        return get_language(extension)
-    except ValueError:
-        return get_language_from_package_data(extension)
 
 def _normalize_agentic_result(result):
     """
@@ -274,12 +264,6 @@ def run_process_with_output(cmd_args, timeout=300):
     # This handles cases where child processes keep pipes open
     if t_out.is_alive() or t_err.is_alive():
         try:
-            # The parent may have exited successfully while a detached child in
-            # its session still owns the capture pipes. Terminate that group.
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
-        try:
             proc.stdout.close()
         except Exception:
             pass
@@ -365,7 +349,7 @@ def fix_code_loop(
     if not is_python:
         # For non-Python files, run the verification program to get an initial error state
         rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
-        lang = _resolve_language(os.path.splitext(code_file)[1])
+        lang = get_language(os.path.splitext(code_file)[1])
         verify_cmd = default_verify_cmd_for(lang, verification_program)
         if not verify_cmd:
             # No verify command available (e.g., Java without maven/gradle).
@@ -611,7 +595,7 @@ def fix_code_loop(
                         verbose=verbose,
                         program_path=verification_program,
                         code_path=code_file,
-                        language="python" if is_python else _resolve_language(os.path.splitext(code_file)[1]),
+                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
                     )
                     if model_name_iter:
                         model_name = model_name_iter

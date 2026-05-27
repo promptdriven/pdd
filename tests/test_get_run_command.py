@@ -72,6 +72,7 @@ class TestGetRunCommand:
     def test_get_run_command_missing_environment_variable(self, monkeypatch):
         """Tests get_run_command when PDD_PATH is not set."""
         monkeypatch.delenv("PDD_PATH", raising=False)
+        monkeypatch.setenv("PDD_STRICT_PDD_PATH", "1")
         with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
             get_run_command('.py')
 
@@ -115,5 +116,6 @@ class TestGetRunCommandForFile:
     def test_get_run_command_for_file_missing_environment(self, monkeypatch):
         """Tests get_run_command_for_file when PDD_PATH is not set."""
         monkeypatch.delenv("PDD_PATH", raising=False)
+        monkeypatch.setenv("PDD_STRICT_PDD_PATH", "1")
         with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
             get_run_command_for_file('/path/to/script.py')

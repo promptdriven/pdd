@@ -296,3 +296,36 @@ class TestPathResolverProjectRootMarkerPriority:
 
         resolver = self._make_resolver(cwd=deep)
         assert resolver.resolve_project_root() == deep.resolve()
+
+
+class TestPathResolverDataFileStrictMode:
+    """``resolve_data_file`` falls back to package/repo roots unless strict mode is on."""
+
+    def test_strict_mode_requires_pdd_path(self, monkeypatch, tmp_path):
+        from pdd.path_resolution import PathResolver
+
+        monkeypatch.delenv("PDD_PATH", raising=False)
+        monkeypatch.setenv("PDD_STRICT_PDD_PATH", "1")
+        resolver = PathResolver(
+            cwd=tmp_path,
+            pdd_path_env=None,
+            package_root=Path(__file__).resolve().parents[1] / "pdd",
+            repo_root=Path(__file__).resolve().parents[1],
+        )
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            resolver.resolve_data_file("data/language_format.csv")
+
+    def test_fallback_uses_package_data_without_pdd_path(self, monkeypatch, tmp_path):
+        from pdd.path_resolution import PathResolver
+
+        monkeypatch.delenv("PDD_PATH", raising=False)
+        monkeypatch.delenv("PDD_STRICT_PDD_PATH", raising=False)
+        repo_root = Path(__file__).resolve().parents[1]
+        resolver = PathResolver(
+            cwd=tmp_path,
+            pdd_path_env=None,
+            package_root=repo_root / "pdd",
+            repo_root=repo_root,
+        )
+        csv_path = resolver.resolve_data_file("data/language_format.csv")
+        assert csv_path.exists()

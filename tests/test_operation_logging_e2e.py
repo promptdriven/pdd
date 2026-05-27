@@ -28,30 +28,24 @@ import pytest
 # Mark all tests in this module as e2e (slow, uses real LLM)
 pytestmark = pytest.mark.e2e
 
+RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+
+
+def _skip_unless_real_llm() -> None:
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "E2E operation logging tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
+        )
+
+
+@pytest.fixture(autouse=True)
+def _require_real_llm_for_e2e() -> None:
+    _skip_unless_real_llm()
+
 
 class TestOperationLoggingE2E:
     """E2E tests verifying CLI commands log with invocation_mode='manual'."""
-
-    @pytest.fixture(autouse=True)
-    def skip_without_live_credentials(self) -> None:
-        """Avoid running costly subprocess LLM tests without usable auth signals."""
-        run_live = (
-            os.getenv("PDD_RUN_REAL_LLM_TESTS") == "1"
-            or os.getenv("PDD_RUN_ALL_TESTS") == "1"
-        )
-        if not run_live:
-            pytest.skip("Set PDD_RUN_REAL_LLM_TESTS=1 to run real LLM tests.")
-
-        has_cloud_auth = bool(os.getenv("PDD_JWT_TOKEN"))
-        provider_keys = (
-            "OPENAI_API_KEY",
-            "AZURE_API_KEY",
-            "AZURE_OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "GOOGLE_API_KEY",
-        )
-        if not has_cloud_auth and not any(os.getenv(key) for key in provider_keys):
-            pytest.skip("No PDD Cloud token or supported provider key is configured.")
 
     @pytest.fixture
     def project_dir(self, tmp_path: Path) -> Path:
@@ -101,9 +95,8 @@ class TestOperationLoggingE2E:
         timeout: int = 120
     ) -> subprocess.CompletedProcess:
         """Run a pdd command and return the result."""
-        import sys
         result = subprocess.run(
-            [sys.executable, "-m", "pdd"] + args,
+            ["pdd"] + args,
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -478,9 +471,8 @@ class TestSyncLogsWithSyncMode:
         )
 
         # Run sync (this will trigger generate internally)
-        import sys
         subprocess.run(
-            [sys.executable, "-m", "pdd", "sync", "counter", "--skip-tests", "--skip-verify", "--budget", "2.0"],
+            ["pdd", "sync", "counter", "--skip-tests", "--skip-verify", "--budget", "2.0"],
             cwd=project_dir,
             capture_output=True,
             text=True,

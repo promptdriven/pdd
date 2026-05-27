@@ -27,7 +27,7 @@ from .construct_paths import (
     resolve_effective_config as resolve_target_context,
 )
 from .config_resolution import resolve_effective_config as resolve_command_config
-from .get_language import get_language, get_language_from_package_data
+from .get_language import get_language
 from .update_prompt import update_prompt
 from .git_update import git_update
 from .agentic_common import get_available_agents
@@ -59,14 +59,6 @@ _SKIP_FILENAMES = {
     'setupTests.ts', 'setupTests.js',
     'mockServiceWorker.js',
 }
-
-
-def _resolve_language(extension: str) -> str:
-    """Resolve workflow language without requiring project initialization."""
-    try:
-        return get_language(extension)
-    except ValueError:
-        return get_language_from_package_data(extension)
 
 _SKIP_BASENAME_SUFFIXES = {
     '.config', '.setup',
@@ -333,7 +325,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
         quiet: Whether to suppress output messages
         output_dir: Custom output directory (overrides default 'prompts' directory)
     """
-    language = _resolve_language(os.path.splitext(code_file_path)[1])
+    language = get_language(os.path.splitext(code_file_path)[1])
     if not language:
         language = "unknown"
 
@@ -494,7 +486,7 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     code_files = [
         f for f in all_files
         if (
-            _resolve_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
+            get_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
             not f.endswith('.prompt') and
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
             not os.path.splitext(os.path.basename(f))[0].endswith('_example') and
@@ -598,7 +590,7 @@ def derive_basename_and_language(
         (basename, language) or (None, None) for unknown extensions.
     """
     ext = os.path.splitext(code_file_path)[1]
-    language = _resolve_language(ext)
+    language = get_language(ext)
     if not language:
         return None, None
 
@@ -1006,25 +998,19 @@ def _find_prd_file(project_root: Path) -> Optional[Path]:
     """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
     if not project_root.is_dir():
         return None
-    try:
-        files = [path for path in project_root.iterdir() if path.is_file()]
-    except OSError:
-        return None
 
-    exact_names = {path.name: path for path in files}
-    for name in ("PRD.md", "prd.md"):
-        if name in exact_names:
-            return exact_names[name]
+    # Resolve exact names by literal spelling so case-insensitive volumes
+    # (e.g. macOS default) do not treat glob("PRD.md") as a match for prd.md.
+    by_name = {entry.name: entry for entry in project_root.iterdir() if entry.is_file()}
+    for exact_name in ("PRD.md", "prd.md"):
+        match = by_name.get(exact_name)
+        if match is not None:
+            return match
 
-    for path in files:
-        if path.name.lower() == "prd.md":
-            return path
-    for path in files:
-        if path.name.endswith(("_prd.md", "_PRD.md")):
-            return path
-    for path in files:
-        if path.name.lower().endswith("_prd.md"):
-            return path
+    for pattern in ("*_prd.md", "*_PRD.md"):
+        matches = sorted(project_root.glob(pattern))
+        if matches:
+            return matches[0]
     return None
 
 
@@ -1614,7 +1600,7 @@ def update_main(
         table.add_column("Cost", justify="right")
         table.add_column("Model")
         table.add_column("Error", style="error")
-        table.add_column("Metadata")
+        table.add_column("Metadata", min_width=24, no_wrap=True)
 
         models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):

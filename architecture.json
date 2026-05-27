@@ -8318,6 +8318,77 @@
     }
   },
   {
+    "reason": "Deterministic prompt and user-story lint for vague terms and observable contract outcomes.",
+    "description": "Scans .prompt contract sections and story__*.md acceptance criteria for undefined vague terms and missing observable-outcome verbs. Optional read-only LLM ambiguity pass uses prompt_lint_LLM.prompt without preprocessing or executing directives from the lint target.",
+    "dependencies": [
+      "prompt_lint_LLM.prompt"
+    ],
+    "priority": 237,
+    "filename": "prompt_lint_python.prompt",
+    "filepath": "pdd/prompt_lint.py",
+    "tags": [
+      "module",
+      "python",
+      "lint"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "scan_prompt",
+            "signature": "(path: Path, *, strict: bool = False, llm_template: Optional[bool] = None)",
+            "returns": "LintResult"
+          },
+          {
+            "name": "scan_stories",
+            "signature": "(stories_dir: Path, *, strict: bool = False)",
+            "returns": "list[LintResult]"
+          },
+          {
+            "name": "run_llm_ambiguity_pass",
+            "signature": "(path: Path, *, strength: float = 0.5, temperature: float = 0.0, time: Optional[float] = None, verbose: bool = False, use_cloud: Optional[bool] = None)",
+            "returns": "list[LintIssue]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13600,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Shared Click implementation for pdd checkup lint (not a top-level pdd prompt command).",
+    "description": "Defines the prompt_lint Click command invoked via pdd checkup lint dispatch. Supports deterministic scan, --stories, --json, --strict, and opt-in --llm advisory review. Read-only: never writes prompt or story files.",
+    "dependencies": [
+      "prompt_lint_python.prompt"
+    ],
+    "priority": 238,
+    "filename": "commands/prompt_python.prompt",
+    "filepath": "pdd/commands/prompt.py",
+    "tags": [
+      "command",
+      "python",
+      "lint"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "prompt_lint",
+            "description": "Lint prompts and user stories; exposed as pdd checkup lint"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13800,
+      "y": 2000
+    }
+  },
+  {
     "reason": "Defines frontend command configs, global options, and constants for the PDD UI.",
     "description": "Frontend constants module containing command configurations, global options, and helper functions.",
     "dependencies": [],

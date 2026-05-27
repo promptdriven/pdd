@@ -682,8 +682,8 @@ def _is_known_language(language_name: str) -> bool:
         'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
         # Additional languages from language_format.csv
         'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
-        'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
         'lisp', 'scheme', 'ada',
+        'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
         'prisma', 'lean', 'agda',
         # Frontend / templating
         'svelte', 'vue', 'scss', 'sass', 'less',

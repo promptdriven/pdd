@@ -11,9 +11,22 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.commands.checkup import checkup
+from pdd.commands.contracts import contracts_cli
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "contract_check"
 REPO_ROOT = Path(__file__).parents[2]
+
+
+def test_contracts_check_top_level_alias_json() -> None:
+    """``pdd contracts check`` mirrors ``pdd checkup contract check``."""
+    result = CliRunner().invoke(
+        contracts_cli,
+        ["check", "--json", str(FIXTURES / "valid_contract_python.prompt")],
+        obj={"quiet": True},
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)[0]["issues"] == []
 
 
 def test_checkup_contract_check_valid_prompt_json() -> None:
@@ -75,8 +88,7 @@ def test_checkup_contract_check_real_cli_json_stdout_is_parseable_only(
             sys.executable,
             "-m",
             "pdd",
-            "checkup",
-            "contract",
+            "contracts",
             "check",
             "--json",
             str(FIXTURES / fixture_name),

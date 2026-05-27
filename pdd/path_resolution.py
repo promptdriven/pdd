@@ -10,6 +10,13 @@ PromptProfile = Literal["pdd_path_then_repo_then_cwd"]
 DataProfile = Literal["pdd_path_only"]
 ProjectRootProfile = Literal["pdd_path_then_marker_then_cwd"]
 
+_STRICT_PDD_PATH_ENV = "PDD_STRICT_PDD_PATH"
+
+
+def _strict_pdd_path_required() -> bool:
+    """Return True when callers must have ``PDD_PATH`` set (no repo fallback)."""
+    return os.getenv(_STRICT_PDD_PATH_ENV, "").lower() in ("1", "true", "yes", "on")
+
 
 @dataclass(frozen=True)
 class PathResolver:
@@ -67,14 +74,9 @@ class PathResolver:
         if profile != "pdd_path_only":
             raise ValueError(f"Unsupported data profile: {profile}")
         
-        if self.pdd_path_env is None:
-            # Check if we are running within strict unit tests that assert ValueError on missing PDD_PATH
-            import inspect
-            for frame_info in inspect.stack():
-                filename = frame_info.filename
-                if any(x in filename for x in ("test_get_comment", "test_get_extension", "test_get_language", "test_get_run_command")):
-                    raise ValueError("PDD_PATH environment variable is not set.")
-        
+        if self.pdd_path_env is None and _strict_pdd_path_required():
+            raise ValueError("PDD_PATH environment variable is not set.")
+
         if self.pdd_path_env is not None:
             return self.pdd_path_env / rel
         
