@@ -12,7 +12,15 @@ from __future__ import annotations
 # logger.info() calls are suppressed when the user passes --quiet.
 import os as _os
 import sys
-if '--quiet' in sys.argv:
+
+
+def _is_prompt_lint_json_invocation(arguments: list[str]) -> bool:
+    """Return whether this process is running prompt lint JSON output."""
+    pairs = set(zip(arguments, arguments[1:]))
+    return "--json" in arguments and ("checkup", "lint") in pairs
+
+
+if '--quiet' in sys.argv or _is_prompt_lint_json_invocation(sys.argv):
     _os.environ.setdefault('PDD_QUIET', '1')
 
 _DEFAULTS = {

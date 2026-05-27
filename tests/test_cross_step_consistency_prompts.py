@@ -212,6 +212,49 @@ class TestExpansionItemsPlaceholderInPrompts:
             "this is what the orchestrator parses to populate {step6_expansion_items}."
         )
 
+    def test_step6_requires_value_level_sibling_search(self, step6_content: str):
+        """Step 6 must find sibling bugs that are values/cases, not only files."""
+        assert "Siblings are not limited to source files." in step6_content
+        assert "file extension, content type, language row" in step6_content
+        assert "If the root cause rewrites, normalizes, canonicalizes" in step6_content
+        assert "extension:.htm" in step6_content
+        assert "Extension/format canonicalization rule" in step6_content
+        for alias in (".mjs", ".cjs", ".pyi", ".bash", ".zsh", ".tsx", ".cpp"):
+            assert alias in step6_content
+        assert "C++" in step6_content
+        assert "language.lower()" in step6_content
+        assert "unsafe path wins for expansion coverage" in step6_content
+        assert "NEEDS_FIX: extension:.zsh" in step6_content
+
+    def test_orchestrator_prompt_accepts_value_level_needs_fix_items(self):
+        """Generated orchestrator spec must preserve non-path NEEDS_FIX support."""
+        source = (PROMPTS_DIR / "agentic_bug_orchestrator_python.prompt").read_text()
+        assert "NEEDS_FIX: <item> | <reason>" in source
+        assert "stable value-level sibling ID" in source
+        assert "extension:.htm" in source
+
+    def test_step8_expansion_items_are_scope_conditional(self, step8_content: str):
+        """Step 8 must not force per-item tests for CROSS_CUTTING scope."""
+        assert "Use this list according to the final scope classification:" in step8_content
+        assert "not a per-item test checklist" in step8_content
+        assert "one or two representative integration tests" in step8_content
+        assert "If this value is not `none`, your test plan MUST include" not in step8_content
+
+    def test_step9_expansion_items_are_scope_conditional(self, step9_content: str):
+        """Step 9 must not force per-item tests for CROSS_CUTTING scope."""
+        assert "Use this list according to the final scope classification:" in step9_content
+        assert "not a per-item test checklist" in step9_content
+        assert "one or two representative integration tests" in step9_content
+        assert "If this value is not `none`, you MUST generate" not in step9_content
+
+    def test_steps8_and_9_plan_value_level_sibling_items(
+        self, step8_content: str, step9_content: str
+    ):
+        """Steps 8/9 must test non-path siblings such as extension aliases."""
+        for content in (step8_content, step9_content):
+            assert "value-level case such as an extension alias" in content
+            assert "file extension, content type, language row" in content
+
 
 # ---------------------------------------------------------------------------
 # Unit tests: Step 10 uses WARNING not FAIL for scope gaps

@@ -1,0 +1,45 @@
+% Fixture: payment_api_clean_python.prompt
+% Same contract rules as payment_api_python.prompt but with full vocabulary block.
+% Target: 0 issues.
+
+<vocabulary>
+- valid amount: a positive integer in the smallest currency unit (e.g. cents),
+  greater than 0 and at most 99_999_999
+- authorized principal: a caller whose Bearer JWT contains scope "charge:write"
+  and whose sub claim matches a registered merchant ID
+- unauthorized principal: any caller that does not meet the authorized principal definition
+- duplicate transaction: a charge whose idempotency_key and merchant_id match
+  a row in charges with status IN ("pending", "succeeded")
+- successful charge receipt: HTTP 200 with JSON {"id": "<uuid>", "status": "succeeded",
+  "amount": <int>, "currency": "<iso4217>"}
+- graceful provider failure: HTTP 502 with JSON {"code": "PROVIDER_ERROR",
+  "retry_after": <seconds>}
+</vocabulary>
+
+<contract_rules>
+R1 - Amount validation
+The system MUST reject any charge where the amount is not valid.
+
+R2 - Authorized callers only
+
+For every POST /charge request,
+the system MUST return HTTP 403
+when called by an unauthorized principal.
+
+R3 - Duplicate idempotency
+
+For every charge request with the same idempotency_key,
+the system MUST NOT create a duplicate transaction.
+
+R4 - Success response
+The system MUST return HTTP 200 with a successful charge receipt.
+
+R5 - Graceful error handling
+The system MUST handle provider failures gracefully.
+</contract_rules>
+
+<requirements>
+- Accept payments in USD and EUR.
+- Log all charge attempts for audit purposes.
+- Validate idempotency_key presence on every request.
+</requirements>

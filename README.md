@@ -53,6 +53,8 @@ For a case study on specification drift in AI-assisted coding workflows, read [W
 
 Also see the Prompt‑Driven Development Doctrine for core principles and practices: [docs/prompt-driven-development-doctrine.md](docs/prompt-driven-development-doctrine.md)
 
+For pre-merge prompt and user-story quality (vague terms, vocabulary, optional LLM review), see [docs/prompt_lint.md](docs/prompt_lint.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -1710,9 +1712,9 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
-  - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
-  - `md`: Generates markdown format with `.md` extension
-  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly.
+  - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript) when no suffix is supplied on `--output`. If `--output` includes a suffix (`.yml`, `.m`, `.txt`, …), that suffix is honored verbatim — pass `--format md` to force a `.md` extension.
+  - `md`: Generates markdown content; the resolved output path will always end in lowercase `.md`, replacing any other suffix (including upper-case variants like `.MD`) on `--output`.
+  When the wrapper rewrites an explicit `--output` path (`--format md` with a non-`.md` suffix, or a bare name under `--format code`) and the rewritten file already exists, you will be prompted to confirm the overwrite unless `--force` is set.
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
@@ -2602,7 +2604,7 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 5. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-6. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
+6. **Root cause analysis** - Run experiments to identify the root cause. Classifies the fix scope as `LOCALIZED` (one isolated site), `SIBLING_PATTERN` (other instances share the same root cause and must be checked), or `CROSS_CUTTING` (fix belongs in a shared helper/component rather than many local patches). When the root cause involves a shared symbol, helper, component, state field, marker, schema, event path, or repeated pattern, performs a mandatory sibling search and classifies each candidate with machine-readable evidence (`NEEDS_FIX: <path> | <reason>` for confirmed siblings, `SAFE_EVIDENCE: <path> | <line> | <reason>` for look-alikes that are safe). Broad analogous audits remain opt-in rather than default. Also performs a variable reference audit and state symmetry check. Posts comment explaining the root cause.
 
 7. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 

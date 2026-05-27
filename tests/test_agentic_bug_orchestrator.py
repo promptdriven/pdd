@@ -4059,6 +4059,66 @@ def test_no_retry_when_test_counts_match(mock_dependencies, default_args, tmp_pa
     )
 
 
+def test_resume_after_step8_rehydrates_planned_test_count(
+    mock_dependencies, default_args, tmp_path
+):
+    """Resuming directly into Step 9 must not render {planned_test_count} literally."""
+    mock_run, mock_load, _ = mock_dependencies
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    state = {
+        "step_outputs": {
+            str(i): f"Output for step {i}" for i in range(1, 8)
+        },
+        "last_completed_step": 8,
+        "worktree_path": str(worktree_path),
+        "step_comments": {},
+    }
+    state["step_outputs"]["8"] = (
+        "## Test Plan\n"
+        "#### Test 1: Alpha\n"
+        "#### Test 2: Beta\n"
+        "PLANNED_TEST_COUNT: 2"
+    )
+    captured = {}
+
+    mock_load.return_value = "Step {issue_number}: planned={planned_test_count}"
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            captured["step9_instruction"] = kwargs.get("instruction", "")
+            test_file = worktree_path / "tests" / "test_resume.py"
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text(
+                "def test_alpha():\n    assert True\n\n"
+                "def test_beta():\n    assert True\n"
+            )
+            return (
+                True,
+                "Generated tests\nFILES_CREATED: tests/test_resume.py",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step10":
+            return (True, "FAIL: Test does not work as expected", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(state, None),
+    ), patch(
+        "pdd.agentic_bug_orchestrator._verify_e2e_tests",
+        return_value=(True, "verification ok"),
+    ):
+        run_agentic_bug_orchestrator(**default_args)
+
+    assert captured["step9_instruction"] == "Step 1: planned=2"
+
+
 def test_marker_absent_falls_back_to_headers(mock_dependencies, default_args, tmp_path):
     """
     Test that cross-validation still works when PLANNED_TEST_COUNT marker
@@ -6388,6 +6448,68 @@ class TestVerifyFixLocationCoverage:
         )
         assert result == ["pdd/cmd_test_main.py"]
 
+    def test_cli_runner_command_invocation_covers_command_module(self, tmp_path):
+        """A pdd.cli CliRunner test covers the command module that owns the command."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+
+        command_file = tmp_path / "pdd" / "commands" / "generate.py"
+        command_file.parent.mkdir(parents=True)
+        command_file.write_text(
+            "import click\n\n"
+            "@click.command('example')\n"
+            "def example():\n"
+            "    pass\n"
+        )
+        test_file = tmp_path / "tests" / "test_cli.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from click.testing import CliRunner\n"
+            "from pdd import cli as _cli\n"
+            "import pdd.context_generator_main\n\n"
+            "def test_example_cli():\n"
+            "    result = CliRunner().invoke(_cli.cli, ['example'])\n"
+            "    assert result.exit_code == 0\n"
+        )
+
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/context_generator_main.py"],
+            ["tests/test_cli.py"],
+            tmp_path,
+        )
+
+        assert result == []
+
+    def test_cli_runner_without_command_name_does_not_cover_command_module(self, tmp_path):
+        """Importing pdd.cli alone is not enough to cover a command module."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+
+        command_file = tmp_path / "pdd" / "commands" / "generate.py"
+        command_file.parent.mkdir(parents=True)
+        command_file.write_text(
+            "import click\n\n"
+            "@click.command('example')\n"
+            "def example():\n"
+            "    pass\n"
+        )
+        test_file = tmp_path / "tests" / "test_cli.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from click.testing import CliRunner\n"
+            "from pdd import cli as _cli\n"
+            "import pdd.context_generator_main\n\n"
+            "def test_other_cli():\n"
+            "    result = CliRunner().invoke(_cli.cli, ['other'])\n"
+            "    assert result.exit_code == 0\n"
+        )
+
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/context_generator_main.py"],
+            ["tests/test_cli.py"],
+            tmp_path,
+        )
+
+        assert result == ["pdd/commands/generate.py"]
+
     def test_matches_via_patch_target(self, tmp_path):
         """Coverage detected via patch('module.path') string."""
         from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
@@ -7314,3 +7436,644 @@ def test_step9_rewrite_same_length_with_new_pattern_triggers_retry(
         f"Same-length rewrite with new pattern must trigger at least one retry. "
         f"Got {step9_calls} step9 calls. This is gltanaka's second review case."
     )
+
+
+class TestStep6ScopeClassification:
+    """Issue #1208: parse SCOPE_CLASSIFICATION + NEEDS_FIX / SAFE_EVIDENCE markers."""
+
+    def test_localized_default_when_marker_missing(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("no markers here") == "LOCALIZED"
+
+    def test_parses_three_classifications(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: LOCALIZED") == "LOCALIZED"
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: SIBLING_PATTERN") == "SIBLING_PATTERN"
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: CROSS_CUTTING") == "CROSS_CUTTING"
+
+    def test_unrecognized_classification_defaults_to_localized(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: BOGUS") == "LOCALIZED"
+
+    def test_classification_is_case_insensitive(self):
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        assert _parse_scope_classification("SCOPE_CLASSIFICATION: sibling_pattern") == "SIBLING_PATTERN"
+
+    def test_parse_needs_fix_lines(self):
+        from pdd.agentic_bug_orchestrator import _parse_needs_fix
+
+        output = (
+            "NEEDS_FIX: pdd/foo.py | shares the same helper\n"
+            "NEEDS_FIX: pdd/bar.py | state symmetry mismatch\n"
+        )
+        assert _parse_needs_fix(output) == [
+            ("pdd/foo.py", "shares the same helper"),
+            ("pdd/bar.py", "state symmetry mismatch"),
+        ]
+
+    def test_parse_needs_fix_without_reason(self):
+        from pdd.agentic_bug_orchestrator import _parse_needs_fix
+
+        assert _parse_needs_fix("NEEDS_FIX: pdd/foo.py") == [("pdd/foo.py", "")]
+
+    def test_parse_needs_fix_accepts_value_level_items(self):
+        from pdd.agentic_bug_orchestrator import _parse_needs_fix
+
+        output = "NEEDS_FIX: extension:.htm | HTML alias still rewrites to .html\n"
+        assert _parse_needs_fix(output) == [
+            ("extension:.htm", "HTML alias still rewrites to .html"),
+        ]
+
+    def test_parse_safe_evidence_lines(self):
+        from pdd.agentic_bug_orchestrator import _parse_safe_evidence
+
+        output = "SAFE_EVIDENCE: pdd/baz.py | 42 | guarded by feature flag\n"
+        assert _parse_safe_evidence(output) == [
+            ("pdd/baz.py", "42", "guarded by feature flag"),
+        ]
+
+    def test_parse_safe_evidence_accepts_value_level_items(self):
+        from pdd.agentic_bug_orchestrator import _parse_safe_evidence
+
+        output = "SAFE_EVIDENCE: extension:.yaml | pdd/data/language_format.csv:17 | canonical YAML suffix already works\n"
+        assert _parse_safe_evidence(output) == [
+            (
+                "extension:.yaml",
+                "pdd/data/language_format.csv:17",
+                "canonical YAML suffix already works",
+            ),
+        ]
+
+
+class TestStep6ApplyScopeMarkers:
+    """Issue #1208: orchestrator threading + auto-downgrade logic."""
+
+    def test_localized_no_siblings_no_expansion(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers("SCOPE_CLASSIFICATION: LOCALIZED", ctx)
+        assert result == "LOCALIZED"
+        assert ctx["scope_classification"] == "LOCALIZED"
+        assert ctx["step6_expansion_items"] == "none"
+
+    def test_sibling_pattern_folds_needs_fix_into_expansion(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        output = (
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "NEEDS_FIX: pdd/foo.py | same helper\n"
+            "NEEDS_FIX: pdd/bar.py | same helper\n"
+        )
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers(output, ctx)
+        assert result == "SIBLING_PATTERN"
+        assert ctx["scope_classification"] == "SIBLING_PATTERN"
+        items = ctx["step6_expansion_items"]
+        assert "pdd/foo.py" in items
+        assert "pdd/bar.py" in items
+        assert "same helper" in items
+
+    def test_sibling_pattern_with_zero_needs_fix_auto_downgrades(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers("SCOPE_CLASSIFICATION: SIBLING_PATTERN", ctx)
+        assert result == "LOCALIZED"
+        assert ctx["scope_classification"] == "LOCALIZED"
+
+    def test_cross_cutting_preserved(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        ctx = {"step6_expansion_items": "none"}
+        result = _apply_step6_scope_markers("SCOPE_CLASSIFICATION: CROSS_CUTTING", ctx)
+        assert result == "CROSS_CUTTING"
+        assert ctx["scope_classification"] == "CROSS_CUTTING"
+
+    def test_needs_fix_dedupes_against_existing_expansion_items(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        output = (
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "NEEDS_FIX: pdd/foo.py | additional context\n"
+            "NEEDS_FIX: pdd/bar.py | new sibling\n"
+        )
+        ctx = {"step6_expansion_items": "pdd/foo.py: original reason"}
+        _apply_step6_scope_markers(output, ctx)
+        items = ctx["step6_expansion_items"]
+        # pdd/foo.py appears exactly once (existing entry preserved)
+        assert items.count("pdd/foo.py") == 1
+        assert "original reason" in items
+        assert "pdd/bar.py" in items
+
+    def test_safe_evidence_not_added_to_expansion(self):
+        from pdd.agentic_bug_orchestrator import _apply_step6_scope_markers
+
+        output = (
+            "SCOPE_CLASSIFICATION: LOCALIZED\n"
+            "SAFE_EVIDENCE: pdd/baz.py | 7 | guarded\n"
+        )
+        ctx = {"step6_expansion_items": "none"}
+        _apply_step6_scope_markers(output, ctx)
+        assert ctx["step6_expansion_items"] == "none"
+
+
+class TestStep6ScopeOrchestratorWiring:
+    """Issue #1208 (checkup-1210): regression tests guarding that the Step 6
+    scope-marker helpers are actually wired into the orchestrator entry points.
+
+    The helper-level tests above cover the parsing/folding logic in isolation,
+    but they would still pass if the live Step 6 path or the resume path
+    stopped calling them. These tests catch that class of regression by
+    inspecting the orchestrator source for the three wiring sites introduced
+    in commit 778b1e3fb.
+    """
+
+    def _read_orchestrator_source(self) -> str:
+        import inspect
+        from pdd import agentic_bug_orchestrator
+
+        return inspect.getsource(agentic_bug_orchestrator)
+
+    def test_initial_context_seeds_scope_classification_localized(self):
+        """run_agentic_bug_orchestrator must seed scope_classification=LOCALIZED
+        in the initial context so Step 8/9 templates can always render
+        {scope_classification} even before Step 6 produces output.
+        """
+        source = self._read_orchestrator_source()
+        # Find the initial-context literal block and assert the key is present.
+        assert '"scope_classification": "LOCALIZED"' in source, (
+            "Initial context in run_agentic_bug_orchestrator must seed "
+            "scope_classification=\"LOCALIZED\" (issue #1208). Removing this "
+            "default would cause Step 8/9 templates to KeyError or render the "
+            "literal placeholder {scope_classification}."
+        )
+
+    def test_resume_path_invokes_apply_step6_scope_markers(self):
+        """When a saved run is resumed with step6_output already in context,
+        the orchestrator must re-apply scope markers so scope_classification
+        and folded NEEDS_FIX siblings reach Steps 8/9.
+        """
+        source = self._read_orchestrator_source()
+        # The resume block sits under `if "step6_output" in context:` and must
+        # call _apply_step6_scope_markers(context["step6_output"], context).
+        resume_marker = '_apply_step6_scope_markers(context["step6_output"], context)'
+        assert resume_marker in source, (
+            "Resume path (when step6_output is already in context) must call "
+            "_apply_step6_scope_markers so resumed runs propagate "
+            "scope_classification and NEEDS_FIX siblings (issue #1208)."
+        )
+
+    def test_live_step6_path_invokes_apply_step6_scope_markers(self):
+        """The live Step 6 execution path must call _apply_step6_scope_markers
+        on the raw step_output (not on context["step6_output"]) so the parsed
+        classification + sibling folding happen for fresh runs too.
+        """
+        source = self._read_orchestrator_source()
+        live_marker = "_apply_step6_scope_markers(step_output, context)"
+        assert live_marker in source, (
+            "Live Step 6 execution path must call "
+            "_apply_step6_scope_markers(step_output, context) so SCOPE_CLASSIFICATION + "
+            "NEEDS_FIX siblings are parsed for non-resumed runs (issue #1208)."
+        )
+
+    def test_expansion_items_resume_reads_last_marker(self):
+        """Regression for PR #1210 round 2: when the PATTERN_SEARCH retry
+        appends an updated EXPANSION_ITEMS line, the resume-side parser must
+        return the LAST marker so retry-discovered siblings reach Step 8/9.
+        Reading the first marker (often `EXPANSION_ITEMS: none`) silently
+        drops them.
+        """
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+
+        step6_output = (
+            "<step_report>...</step_report>\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "FIX_LOCATIONS: pdd/a.py\n"
+            "EXPANSION_ITEMS: none\n"
+            "\n"
+            "% Updated after grep verification\n"
+            "FIX_LOCATIONS: pdd/a.py, pdd/b.py\n"
+            "EXPANSION_ITEMS: pdd/b.py: shares helper\n"
+        )
+        assert _parse_expansion_items(step6_output) == "pdd/b.py: shares helper"
+
+    def test_scope_classification_resume_reads_last_marker(self):
+        """Regression for PR #1210 round 2: when the PATTERN_SEARCH retry
+        promotes scope back to SIBLING_PATTERN, the appended
+        SCOPE_CLASSIFICATION marker must win on resume — reading the original
+        (pre-promotion) marker leaves Step 8 with the wrong instructions.
+        """
+        from pdd.agentic_bug_orchestrator import _parse_scope_classification
+
+        step6_output = (
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "% (auto-downgraded internally to LOCALIZED in initial parse)\n"
+            "% Updated after grep verification\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+        )
+        assert _parse_scope_classification(step6_output) == "SIBLING_PATTERN"
+
+    def test_pattern_retry_promotes_scope_when_siblings_found(self):
+        """Regression for PR #1210 rounds 2 & 3: when the PATTERN_SEARCH retry
+        produces sibling evidence and scope is still LOCALIZED, the
+        orchestrator must promote scope to SIBLING_PATTERN regardless of what
+        the original Step 6 marker said. This covers (a) explicit
+        SIBLING_PATTERN auto-downgraded to LOCALIZED, (b) explicit LOCALIZED
+        paired with PATTERN_SEARCH, and (c) missing/invalid scope (default
+        LOCALIZED) paired with PATTERN_SEARCH. A stale LOCALIZED + non-empty
+        expansion_items pair is contradictory for Step 8.
+        """
+        source = self._read_orchestrator_source()
+        # Promotion is gated on the current (downgraded) scope being LOCALIZED.
+        assert 'if current_scope == "LOCALIZED":' in source, (
+            "Retry block must promote scope whenever sibling_evidence is "
+            "non-empty and current scope is LOCALIZED — not only when the "
+            "original Step 6 marker was SIBLING_PATTERN."
+        )
+        # Promotion must write to context.
+        assert 'context["scope_classification"] = "SIBLING_PATTERN"' in source, (
+            "Retry block must promote context['scope_classification'] to "
+            "SIBLING_PATTERN when retry produces sibling evidence."
+        )
+        # Promotion must append a SCOPE_CLASSIFICATION marker to step6_output.
+        assert 'SCOPE_CLASSIFICATION: {promoted_scope}' in source, (
+            "Promoted scope must be appended to step6_output so resume re-derives "
+            "the promoted value via the last-marker parser."
+        )
+
+    def test_pattern_retry_appends_needs_fix_lines_for_resume(self):
+        """Regression for PR #1210 round 2: retry must append NEEDS_FIX lines
+        for every confirmed sibling so the resume-side
+        _apply_step6_scope_markers sees them and does not re-downgrade
+        SIBLING_PATTERN back to LOCALIZED on resume.
+        """
+        source = self._read_orchestrator_source()
+        assert 'NEEDS_FIX: {sib_path} | {reason_text}' in source, (
+            "Retry must append a NEEDS_FIX line for each sibling so resume's "
+            "_apply_step6_scope_markers does not auto-downgrade scope."
+        )
+
+    def test_pattern_retry_overflow_emits_marker_not_silent_drop(self):
+        """Regression for PR #1210 round 6: when PATTERN_SEARCH finds more
+        than _MAX_GREP_RESULTS unclassified files, the overflow files MUST NOT
+        auto-default into FIX_LOCATIONS or step6_expansion_items (no LLM
+        evidence → violates spec "every expanded item has evidence" and
+        "broad audits opt-in"). Instead the orchestrator must emit a loud
+        PATTERN_SEARCH_OVERFLOW marker so users can opt into manual review.
+        """
+        source = self._read_orchestrator_source()
+        # Overflow must NOT be folded into FIX_LOCATIONS or sibling_evidence.
+        assert "all_grep_unclassified" not in source, (
+            "Retry path must NOT merge against a combined cap+overflow set. "
+            "Overflow files have no LLM evidence and must stay out of "
+            "FIX_LOCATIONS / step6_expansion_items."
+        )
+        assert "_OVERFLOW_REASON" not in source, (
+            "Overflow files must not be appended to sibling_evidence with an "
+            "overflow reason — they must NOT flow into expansion items."
+        )
+        # Overflow must instead emit a visible PATTERN_SEARCH_OVERFLOW marker.
+        assert "PATTERN_SEARCH_OVERFLOW" in source, (
+            "Orchestrator must emit a PATTERN_SEARCH_OVERFLOW marker when "
+            "overflow_unclassified is non-empty so the gap is loud, not silent."
+        )
+        assert "overflow_unclassified" in source, (
+            "Orchestrator must still track overflow_unclassified to emit the "
+            "PATTERN_SEARCH_OVERFLOW marker with the candidate list."
+        )
+
+    def test_pattern_retry_path_folds_siblings_into_expansion_items(self):
+        """Regression for PR #1210: when Step 6's PATTERN_SEARCH retry classifies
+        a grep-discovered file as NEEDS_FIX, the orchestrator must update
+        context["step6_expansion_items"] (not just FIX_LOCATIONS) so Step 8/9
+        plan tests for it. The wiring is verified by source inspection because
+        the retry block lives deep inside the orchestrator main loop.
+        """
+        source = self._read_orchestrator_source()
+        # The retry success branch must call _parse_needs_fix on retry_output
+        # to recover (path, reason) tuples for the expansion-items merge.
+        assert "_parse_needs_fix(retry_output)" in source, (
+            "Step 6 PATTERN_SEARCH retry path must call _parse_needs_fix on the "
+            "retry output so confirmed siblings (with reasons) can be folded "
+            "into step6_expansion_items for Step 8/9 (PR #1210 regression)."
+        )
+        # The retry path must merge those into step6_expansion_items via the
+        # same helper that the main Step 6 path uses.
+        assert "_merge_needs_fix_into_expansion(" in source, (
+            "Step 6 PATTERN_SEARCH retry path must call "
+            "_merge_needs_fix_into_expansion to fold retry-discovered siblings "
+            "into context['step6_expansion_items']."
+        )
+        # And the merged expansion items must persist on step6_output so a
+        # resumed run does not lose them.
+        assert 'EXPANSION_ITEMS: {expansion_after_retry}' in source, (
+            "Updated EXPANSION_ITEMS line must be appended to step_output after "
+            "a retry-driven sibling merge so resumed runs re-derive the same "
+            "expanded set (PR #1210 regression)."
+        )
+
+    def test_apply_step6_scope_markers_is_exported(self):
+        """All five helpers added in the fix must remain importable from
+        pdd.agentic_bug_orchestrator. A naming/removal regression here would
+        silently revert the fix."""
+        from pdd.agentic_bug_orchestrator import (
+            _apply_step6_scope_markers,
+            _merge_needs_fix_into_expansion,
+            _parse_needs_fix,
+            _parse_safe_evidence,
+            _parse_scope_classification,
+        )
+
+        # Smoke-call each one with the simplest possible input to confirm the
+        # interface (callability + return shape) is intact.
+        assert _parse_scope_classification("") == "LOCALIZED"
+        assert _parse_needs_fix("") == []
+        assert _parse_safe_evidence("") == []
+        assert _merge_needs_fix_into_expansion("none", []) == "none"
+        ctx: dict = {"step6_expansion_items": "none"}
+        assert _apply_step6_scope_markers("", ctx) == "LOCALIZED"
+        assert ctx["scope_classification"] == "LOCALIZED"
+        assert ctx["scope_classification"] == "LOCALIZED"
+
+
+    def test_value_level_sibling_dedup_survives_colon_in_item_name(self):
+        """Regression for PR #1210 round-7: _merge_needs_fix_into_expansion must
+        not create duplicate entries when a value-level sibling like
+        'extension:.htm' already exists in EXPANSION_ITEMS and appears again as
+        a NEEDS_FIX path. Splitting on the first ':' alone keys the existing
+        entry as 'extension' instead of 'extension:.htm', causing dedup to miss
+        the match.
+        """
+        from pdd.agentic_bug_orchestrator import _merge_needs_fix_into_expansion
+
+        # Existing item with a reason (the format stored after a first merge)
+        existing = "extension:.htm: same root cause as .html"
+        # Re-encountering the same sibling — must not duplicate
+        result = _merge_needs_fix_into_expansion(
+            existing, [("extension:.htm", "confirmed by retry")]
+        )
+        items = [x.strip() for x in result.split(",")]
+        htm_items = [i for i in items if "extension:.htm" in i]
+        assert len(htm_items) == 1, (
+            f"Expected exactly 1 'extension:.htm' entry, got {len(htm_items)}: "
+            f"{htm_items}. Dedup is splitting on ':' instead of ': ', "
+            f"causing value-level sibling keys like 'extension:.htm' to be "
+            f"miskeyed as 'extension'."
+        )
+
+    def test_value_level_sibling_dedup_no_reason(self):
+        """Dedup also works when the existing item has no reason attached."""
+        from pdd.agentic_bug_orchestrator import _merge_needs_fix_into_expansion
+
+        existing = "extension:.htm"
+        result = _merge_needs_fix_into_expansion(
+            existing, [("extension:.htm", "")]
+        )
+        items = [x.strip() for x in result.split(",")]
+        htm_items = [i for i in items if "extension:.htm" in i]
+        assert len(htm_items) == 1, (
+            f"Expected 1 entry, got {len(htm_items)}: {htm_items}"
+        )
+
+
+class TestStep6ScopeEndToEndPropagation:
+    """Issue #1208 (checkup-1210) E2E/integration: verify the full pipeline
+    where a Step 6 LLM response containing SCOPE_CLASSIFICATION + NEEDS_FIX +
+    SAFE_EVIDENCE markers actually reaches Step 8 and Step 9 prompts via the
+    orchestrator's template rendering pipeline.
+
+    Unit tests above cover the parsers in isolation; wiring tests above check
+    the call sites exist. These tests drive the *whole* orchestrator with
+    realistic Step 6 output and templates that reference
+    ``{scope_classification}`` / ``{step6_expansion_items}``, then assert the
+    final instruction strings handed to the Step 8/9 LLM calls contain the
+    correct substituted values. This catches regressions where any link in
+    the chain (parser → context → preprocess → format-replace → instruction)
+    silently breaks.
+    """
+
+    @staticmethod
+    def _setup_realistic_templates(mock_load):
+        """Return a side_effect that mimics the real Step 6/8/9 prompts'
+        use of the new template variables. Other steps get a generic stub."""
+
+        def side_effect_load(template_name):
+            if "step6" in template_name:
+                # Step 6 prompt — doesn't matter, mock_run drives its output.
+                return "Step 6 prompt: investigate {issue_number}"
+            if "step8" in template_name:
+                return (
+                    "Plan tests.\n"
+                    "Scope: {scope_classification}\n"
+                    "Expansion items: {step6_expansion_items}"
+                )
+            if "step9" in template_name:
+                return (
+                    "Generate tests.\n"
+                    "Scope: {scope_classification}\n"
+                    "Expansion items: {step6_expansion_items}"
+                )
+            return f"Prompt for {{issue_number}} ({template_name})"
+
+        mock_load.side_effect = side_effect_load
+
+    @staticmethod
+    def _capture_step_instructions(mock_run, step6_output: str):
+        """Configure mock_run so Step 6 returns ``step6_output`` and Step 9
+        emits a FILES_CREATED line (avoiding the no-files hard stop). Other
+        steps return a benign success. Returns a dict that will be populated
+        with {label: instruction} as steps execute."""
+
+        captured: dict = {}
+
+        def side_effect_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            captured[label] = kwargs.get("instruction", "")
+            if label == "step6":
+                return (True, step6_output, 0.1, "model")
+            if label == "step9":
+                return (True, "Generated test\nFILES_CREATED: test_sibling.py", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        mock_run.side_effect = side_effect_run
+        return captured
+
+    def test_sibling_pattern_with_needs_fix_propagates_to_step8_and_step9_instructions(
+        self, mock_dependencies, default_args
+    ):
+        """The most important E2E case: Step 6 emits SCOPE_CLASSIFICATION:
+        SIBLING_PATTERN + two NEEDS_FIX siblings. The orchestrator must
+        parse them, fold the sibling paths into step6_expansion_items, and
+        substitute both ``{scope_classification}`` and
+        ``{step6_expansion_items}`` placeholders in the Step 8 and Step 9
+        instructions actually handed to the LLM call."""
+        mock_run, mock_load, _ = mock_dependencies
+        self._setup_realistic_templates(mock_load)
+
+        step6_output = (
+            "<step_report>\n"
+            "### Root cause analysis\n"
+            "Shared helper is wrong.\n"
+            "</step_report>\n"
+            "FIX_LOCATIONS: pdd/helper.py\n"
+            "EXPANSION_ITEMS: none\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "NEEDS_FIX: pdd/caller_a.py | uses the same buggy helper\n"
+            "NEEDS_FIX: pdd/caller_b.py | uses the same buggy helper\n"
+            "SAFE_EVIDENCE: pdd/caller_c.py | 12 | guarded by feature flag\n"
+        )
+        captured = self._capture_step_instructions(mock_run, step6_output)
+
+        run_agentic_bug_orchestrator(**default_args)
+
+        # Step 8 must have received the substituted classification + siblings.
+        step8_instr = captured.get("step8", "")
+        assert "Scope: SIBLING_PATTERN" in step8_instr, (
+            "Step 8 instruction must contain substituted scope_classification; "
+            f"got: {step8_instr!r}"
+        )
+        assert "{scope_classification}" not in step8_instr, (
+            "Literal {scope_classification} placeholder must not leak through "
+            f"to the Step 8 LLM call; got: {step8_instr!r}"
+        )
+        assert "pdd/caller_a.py" in step8_instr, (
+            "Step 8 must see NEEDS_FIX sibling pdd/caller_a.py folded into "
+            f"step6_expansion_items; got: {step8_instr!r}"
+        )
+        assert "pdd/caller_b.py" in step8_instr, (
+            "Step 8 must see NEEDS_FIX sibling pdd/caller_b.py folded into "
+            f"step6_expansion_items; got: {step8_instr!r}"
+        )
+        # SAFE_EVIDENCE entries must NOT pollute the expansion items channel.
+        assert "pdd/caller_c.py" not in step8_instr, (
+            "SAFE_EVIDENCE paths are telemetry-only and must not appear in "
+            f"step6_expansion_items handed to Step 8; got: {step8_instr!r}"
+        )
+
+        # Same expectations for Step 9.
+        step9_instr = captured.get("step9", "")
+        assert "Scope: SIBLING_PATTERN" in step9_instr
+        assert "{scope_classification}" not in step9_instr
+        assert "pdd/caller_a.py" in step9_instr
+        assert "pdd/caller_b.py" in step9_instr
+        assert "pdd/caller_c.py" not in step9_instr
+
+    def test_sibling_pattern_with_zero_needs_fix_auto_downgrades_in_step8_instruction(
+        self, mock_dependencies, default_args
+    ):
+        """If the LLM emits SCOPE_CLASSIFICATION: SIBLING_PATTERN but no
+        NEEDS_FIX lines, the deterministic auto-downgrade in
+        ``_apply_step6_scope_markers`` must surface as LOCALIZED in the
+        instruction handed to Step 8 — not the (invalid) SIBLING_PATTERN
+        value the LLM emitted."""
+        mock_run, mock_load, _ = mock_dependencies
+        self._setup_realistic_templates(mock_load)
+
+        step6_output = (
+            "<step_report>\n"
+            "FIX_LOCATIONS: pdd/foo.py\n"
+            "EXPANSION_ITEMS: none\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "</step_report>\n"
+        )
+        captured = self._capture_step_instructions(mock_run, step6_output)
+
+        run_agentic_bug_orchestrator(**default_args)
+
+        step8_instr = captured.get("step8", "")
+        assert "Scope: LOCALIZED" in step8_instr, (
+            "Step 8 must observe the deterministic SIBLING_PATTERN→LOCALIZED "
+            f"auto-downgrade when no NEEDS_FIX lines are present; got: {step8_instr!r}"
+        )
+        assert "SIBLING_PATTERN" not in step8_instr, (
+            "Auto-downgrade must overwrite the SIBLING_PATTERN value before "
+            f"Step 8 sees it; got: {step8_instr!r}"
+        )
+
+    def test_cross_cutting_propagates_to_step8_instruction(
+        self, mock_dependencies, default_args
+    ):
+        """CROSS_CUTTING classification flows through unchanged to Step 8."""
+        mock_run, mock_load, _ = mock_dependencies
+        self._setup_realistic_templates(mock_load)
+
+        step6_output = (
+            "<step_report>\nFIX_LOCATIONS: pdd/shared_middleware.py\n"
+            "EXPANSION_ITEMS: none\n"
+            "SCOPE_CLASSIFICATION: CROSS_CUTTING\n</step_report>\n"
+        )
+        captured = self._capture_step_instructions(mock_run, step6_output)
+
+        run_agentic_bug_orchestrator(**default_args)
+
+        step8_instr = captured.get("step8", "")
+        assert "Scope: CROSS_CUTTING" in step8_instr, (
+            f"CROSS_CUTTING classification must reach Step 8; got: {step8_instr!r}"
+        )
+
+    def test_missing_scope_marker_defaults_to_localized_in_step8_instruction(
+        self, mock_dependencies, default_args
+    ):
+        """Backward compatibility: a Step 6 output without
+        SCOPE_CLASSIFICATION must produce a substituted LOCALIZED value in
+        Step 8/9 instructions — not a literal ``{scope_classification}``
+        placeholder. This guards against the original bug (issue #1208,
+        Step 4 of the checkup) where the placeholder leaked through."""
+        mock_run, mock_load, _ = mock_dependencies
+        self._setup_realistic_templates(mock_load)
+
+        # Legacy-style Step 6 output: no SCOPE_CLASSIFICATION marker at all.
+        step6_output = (
+            "<step_report>\nFIX_LOCATIONS: pdd/legacy.py\n"
+            "EXPANSION_ITEMS: none\n</step_report>\n"
+        )
+        captured = self._capture_step_instructions(mock_run, step6_output)
+
+        run_agentic_bug_orchestrator(**default_args)
+
+        step8_instr = captured.get("step8", "")
+        assert "Scope: LOCALIZED" in step8_instr, (
+            "Missing SCOPE_CLASSIFICATION must default to LOCALIZED in "
+            f"Step 8 instruction (backward compatibility); got: {step8_instr!r}"
+        )
+        assert "{scope_classification}" not in step8_instr, (
+            "Literal {scope_classification} placeholder must never reach the "
+            f"LLM — the initial-context seed should catch this. Got: {step8_instr!r}"
+        )
+
+    def test_needs_fix_folded_into_expansion_alongside_existing_items(
+        self, mock_dependencies, default_args
+    ):
+        """When Step 6 emits BOTH legacy EXPANSION_ITEMS and new NEEDS_FIX
+        lines, both sets must appear in the Step 8 instruction (the merge
+        happens inside ``_apply_step6_scope_markers``). This proves the new
+        sibling channel doesn't clobber the legacy expansion channel."""
+        mock_run, mock_load, _ = mock_dependencies
+        self._setup_realistic_templates(mock_load)
+
+        step6_output = (
+            "<step_report>\nFIX_LOCATIONS: pdd/foo.py\n"
+            "EXPANSION_ITEMS: pdd/legacy_item.py: original expansion\n"
+            "SCOPE_CLASSIFICATION: SIBLING_PATTERN\n"
+            "NEEDS_FIX: pdd/new_sibling.py | shares the same helper\n"
+            "</step_report>\n"
+        )
+        captured = self._capture_step_instructions(mock_run, step6_output)
+
+        run_agentic_bug_orchestrator(**default_args)
+
+        step8_instr = captured.get("step8", "")
+        assert "pdd/legacy_item.py" in step8_instr, (
+            "Legacy EXPANSION_ITEMS entry must survive the merge with "
+            f"NEEDS_FIX siblings; got: {step8_instr!r}"
+        )
+        assert "pdd/new_sibling.py" in step8_instr, (
+            "NEEDS_FIX sibling must be folded into step6_expansion_items "
+            f"alongside legacy entries; got: {step8_instr!r}"
+        )
+        assert "Scope: SIBLING_PATTERN" in step8_instr
