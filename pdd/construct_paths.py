@@ -135,7 +135,6 @@ _PDDRC_DEFAULTS_KEYS = {
     "test_output_path",
     "example_output_path",
     "prompts_dir",
-    "prompt_path",
     "default_language",
     "target_coverage",
     "strength",
