@@ -43,9 +43,16 @@ STABLE_PR_METADATA = {
     "head_owner": "o",
     "head_repo": "r",
     "head_sha": "abc123deadbeef",
-    # PR's original changed files — this is what Step 5 / Step 7 use for scope
-    "api_changed_files": "- M: pdd/main.py\n- M: tests/test_main.py",
-    "api_changed_files_full": "- M: pdd/main.py\n- M: tests/test_main.py",
+    # PR's original changed files — this is what Step 5 / Step 7 use for scope.
+    # Uses the real ``- MODIFIED:`` row format emitted by
+    # ``_format_pr_api_changed_files`` so the scope-guard parser exercises the
+    # production row shape.
+    "api_changed_files": (
+        "- MODIFIED: pdd/main.py\n- MODIFIED: tests/test_main.py"
+    ),
+    "api_changed_files_full": (
+        "- MODIFIED: pdd/main.py\n- MODIFIED: tests/test_main.py"
+    ),
 }
 
 PR_ARGS = {
@@ -272,15 +279,37 @@ class TestBug2FixerScopeGuard:
     def test_fixer_scope_guard_allows_in_scope_files(self, tmp_path):
         """Fixer changes that stay within the PR's changed-file set are allowed.
 
-        PASSES_ON_CURRENT_CODE (positive case): When the fixer only modifies files
-        already in the PR's api_changed_files, the push should proceed normally.
-        This is the positive counterpart to test_fixer_out_of_scope_files_rejected.
+        Simulates the real fixer path: Step 5 fails with a concrete test
+        failure, Step 6.1 runs and reports in-scope ``FILES_MODIFIED`` rows,
+        and the worktree shows in-scope dirty files. The push must proceed
+        because every dirty file is in the PR's changed-file set.
+
+        This is the positive counterpart to
+        ``test_fixer_out_of_scope_files_rejected_before_push`` and exists
+        alongside the clean-run side-effect regression in
+        ``TestBug5CleanRunConvergence`` (which asserts that a Steps 3/4/5
+        clean run with dirty files does NOT push).
         """
         # PR originally changed pdd/main.py and tests/test_main.py
         # Fixer only modified those same files — fully in scope
         in_scope_files = ["pdd/main.py", "tests/test_main.py"]
+        step5_failure_text = (
+            "FAILED: tests/test_main.py::test_critical_path - AssertionError"
+        )
 
         def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                # Real failure → fixer (6.1/6.2/6.3) runs.
+                return (False, step5_failure_text, 0.1, "model")
+            if step_num == 6.1:
+                # Fixer reports in-scope edits via the FILES_MODIFIED rows
+                # that the orchestrator parses into ``files_to_stage``.
+                return (
+                    True,
+                    "FILES_MODIFIED: pdd/main.py\nFILES_MODIFIED: tests/test_main.py",
+                    0.1,
+                    "model",
+                )
             if step_num == 7:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
@@ -299,10 +328,8 @@ class TestBug2FixerScopeGuard:
                 **{**PR_ARGS, "cwd": tmp_path}
             )
 
-        # In-scope changes should be pushed (positive case)
-        push_mock.assert_called_once(), (
-            "In-scope fixer changes (files already in PR) should be committed and pushed"
-        )
+        # In-scope fixer changes after a real Step 5 failure must be pushed.
+        push_mock.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

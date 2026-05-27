@@ -1262,6 +1262,74 @@ def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List
     return fields, missing
 
 
+_ARTIFACT_OUTPUT_MAX_LINES = 400
+_ARTIFACT_OUTPUT_MAX_BYTES = 256 * 1024
+
+
+def _read_failure_signal_artifact(
+    artifact_path_value: str,
+    worktree_path: Optional[Path],
+) -> Optional[str]:
+    """Read the Step 5 failure log when it lives in ``artifact_path``.
+
+    Codex round-4 Finding 3: Step 5 is allowed to leave ``output:`` empty
+    when ``artifact_path:`` points at a file on disk that holds the full
+    pytest log. The previous orchestrator never read that file, so Step 6
+    received an empty ``output:`` payload and the entire failure detail
+    was lost. Resolves the path under the PR worktree, refuses to escape
+    it, caps the content to keep the prompt bounded, and scrubs secrets.
+
+    Returns ``None`` when the value is empty, sentinel ("inline"/"none"),
+    not a regular file under the worktree, or unreadable.
+    """
+    value = (artifact_path_value or "").strip()
+    if not value or value.lower() in {"inline", "none", "n/a", "-", "missing"}:
+        return None
+    if worktree_path is None:
+        return None
+    try:
+        worktree_resolved = worktree_path.resolve()
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = worktree_resolved / candidate
+        candidate_resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None
+    # Refuse paths that escape the worktree — Step 5 controls this value
+    # and a hostile or buggy run could otherwise hand Step 6 secrets from
+    # outside the PR scope (e.g. ``/etc/passwd``, ``~/.netrc``).
+    try:
+        candidate_resolved.relative_to(worktree_resolved)
+    except ValueError:
+        return None
+    if not candidate_resolved.is_file():
+        return None
+    try:
+        raw_bytes = candidate_resolved.read_bytes()
+    except OSError:
+        return None
+    truncated_bytes = raw_bytes[:_ARTIFACT_OUTPUT_MAX_BYTES]
+    text = truncated_bytes.decode("utf-8", errors="replace")
+    truncated_lines = text.splitlines()[:_ARTIFACT_OUTPUT_MAX_LINES]
+    body = "\n".join(truncated_lines)
+    truncation_note = ""
+    if (
+        len(raw_bytes) > _ARTIFACT_OUTPUT_MAX_BYTES
+        or len(text.splitlines()) > _ARTIFACT_OUTPUT_MAX_LINES
+    ):
+        truncation_note = (
+            "\n# orchestrator-note: artifact truncated for prompt "
+            f"budget (cap: {_ARTIFACT_OUTPUT_MAX_LINES} lines / "
+            f"{_ARTIFACT_OUTPUT_MAX_BYTES} bytes; full log at "
+            f"{value})."
+        )
+    scrubbed = _scrub_secrets(body)
+    token = _github_token_from_env()
+    if token:
+        scrubbed = _redact_secret(scrubbed, token)
+    return scrubbed + truncation_note
+
+
 def _normalised_failure_signal_text(
     raw_output: str,
     fields: Dict[str, str],
@@ -1606,6 +1674,14 @@ def _run_agentic_checkup_orchestrator_inner(
         "pr_number": str(pr_number) if pr_number is not None else "",
         "pr_push_output": "",
         "pr_changed_files": "",
+        # Codex round-4 Finding 2: ``pr_changed_files`` is a test-selection
+        # signal (only populated when ``pr_test_scope == 'targeted'`` so
+        # Step 5 runs a focused subset). ``pr_scope_changed_files`` is the
+        # FIXER scope signal — Step 6 uses it to constrain edits to the
+        # PR's existing changed-file set regardless of test scope. We
+        # populate it unconditionally in PR mode so the prompt scope guard
+        # holds even when the operator runs the default ``--scope full``.
+        "pr_scope_changed_files": "",
         "pr_test_scope": pr_test_scope,
         "manual_start_step": str(start_step_override or ""),
         "worktree_path": "",
@@ -1870,11 +1946,17 @@ def _run_agentic_checkup_orchestrator_inner(
                     metadata_for_guard,
                     quiet,
                 )
+                # Codex round-4 Finding 2: always populate the fixer scope
+                # placeholder so Step 6's scope guard holds in full mode
+                # too. ``pr_changed_files`` stays gated on ``targeted`` so
+                # Step 5's test-selection contract is unchanged.
+                pr_scope_files_text = _format_pr_changed_files_for_prompt(
+                    worktree_path,
+                    metadata_for_guard,
+                )
+                context["pr_scope_changed_files"] = pr_scope_files_text
                 if pr_test_scope == "targeted":
-                    context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
-                        worktree_path,
-                        metadata_for_guard,
-                    )
+                    context["pr_changed_files"] = pr_scope_files_text
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
@@ -2271,11 +2353,17 @@ def _run_agentic_checkup_orchestrator_inner(
             metadata_for_guard,
             quiet,
         )
+        # Codex round-4 Finding 2: always populate the fixer scope
+        # placeholder so Step 6's scope guard holds in the default full
+        # mode. The targeted test-selection placeholder
+        # (``pr_changed_files``) remains opt-in.
+        pr_scope_files_text = _format_pr_changed_files_for_prompt(
+            worktree_path,
+            metadata_for_guard,
+        )
+        context["pr_scope_changed_files"] = pr_scope_files_text
         if pr_test_scope == "targeted":
-            context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
-                worktree_path,
-                metadata_for_guard,
-            )
+            context["pr_changed_files"] = pr_scope_files_text
 
         if not quiet:
             console.print(
@@ -2711,6 +2799,26 @@ def _run_agentic_checkup_orchestrator_inner(
                         signal_fields, signal_missing = (
                             _parse_failure_signal_block(step5_persisted)
                         )
+                        # Codex round-4 Finding 3: when Step 5 leaves
+                        # ``output:`` empty and points to a file via
+                        # ``artifact_path:``, the orchestrator must read
+                        # the file so Step 6 still sees the failure
+                        # detail. Without this, long pytest logs were
+                        # silently dropped before Step 6, recreating the
+                        # original no-signal fixer problem.
+                        if (
+                            "output" in signal_missing
+                            and signal_fields.get("artifact_path")
+                        ):
+                            artifact_content = _read_failure_signal_artifact(
+                                signal_fields.get("artifact_path", ""),
+                                worktree_path,
+                            )
+                            if artifact_content:
+                                signal_fields["output"] = artifact_content
+                                signal_missing = [
+                                    k for k in signal_missing if k != "output"
+                                ]
                         if signal_missing and not quiet:
                             console.print(
                                 "[yellow]Step 5 failure_signal block "
@@ -3194,15 +3302,54 @@ def _run_agentic_checkup_orchestrator_inner(
                     if size_limit > 0:
                         added_lines = _diff_size_added_lines(worktree_path)
                         if added_lines is not None and added_lines > size_limit:
-                            if not has_valid_expansion:
+                            # Codex round-4 Finding 4: the bypass must
+                            # actually JUSTIFY the oversized diff, not just
+                            # contain any unrelated justified entry. A
+                            # ``has_valid_expansion`` flag is true the
+                            # moment EXPANSION_ITEMS lists any path with a
+                            # reason, even one that does not touch the
+                            # files contributing to the oversized diff.
+                            # Require every worktree-dirty file to appear
+                            # in the justified expansion list so the
+                            # operator (or fixer) cannot wave the size
+                            # gate through by citing a tangential path.
+                            #
+                            # NOTE: this is intentionally stricter than
+                            # the scope guard above — the scope guard
+                            # accepts ``pr_file_set`` membership alone
+                            # because PR-listed files are presumed
+                            # in-scope by the PR itself. The size guard
+                            # cares about the SIZE of the change, so
+                            # in-scope membership does not implicitly
+                            # justify a large diff; only an explicit
+                            # path-level EXPANSION_ITEMS entry does.
+                            uncovered_paths = sorted(
+                                set(guard_changed_files) - expansion_paths_set
+                            )
+                            covers_oversized_paths = (
+                                has_valid_expansion and not uncovered_paths
+                            )
+                            if not covers_oversized_paths:
+                                if not has_valid_expansion:
+                                    bypass_reason = (
+                                        "no justified EXPANSION_ITEMS marker"
+                                    )
+                                else:
+                                    bypass_reason = (
+                                        "EXPANSION_ITEMS marker did not cover "
+                                        "every changed path; uncovered files: "
+                                        f"{uncovered_paths}. Listed expansion "
+                                        f"paths: {sorted(expansion_paths_set)}"
+                                    )
                                 size_refusal = (
                                     "Diff size guard: fixer push would add "
                                     f"{added_lines} lines (limit {size_limit}) "
-                                    "without a justified EXPANSION_ITEMS marker. "
+                                    f"and the bypass is invalid: {bypass_reason}. "
                                     "Refusing push — a legitimate large change "
-                                    "must declare itself via EXPANSION_ITEMS with "
-                                    "a causal justification, or the limit must "
-                                    "be raised via PDD_CHECKUP_DIFF_LOC_LIMIT."
+                                    "must declare every changed path under "
+                                    "EXPANSION_ITEMS with a causal justification, "
+                                    "or the limit must be raised via "
+                                    "PDD_CHECKUP_DIFF_LOC_LIMIT."
                                 )
                                 pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
                                 (

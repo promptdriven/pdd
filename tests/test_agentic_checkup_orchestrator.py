@@ -808,16 +808,56 @@ class TestChangedFilesTracking:
         )
 
     def test_pr_mode_full_scope_skips_changed_files(self, tmp_path):
-        """Default 'full' scope keeps pr_changed_files empty so the agent runs the full suite."""
+        """Default 'full' scope keeps the test-selection placeholder empty.
+
+        ``pr_changed_files`` is a Step-5 test-selection signal that must
+        remain empty in full mode so the agent runs the entire suite. The
+        formatter still runs to populate ``pr_scope_changed_files``
+        (Step 6 fixer scope, codex round-4 Finding 2) but the targeted
+        placeholder stays empty.
+        """
         format_calls: list = []
         captured = self._run_orchestrator_capturing_context(
             tmp_path,
             test_scope="full",
             format_call_count=format_calls,
         )
-        assert not format_calls, "formatter must not run under full scope"
         assert captured[0]["pr_test_scope"] == "full"
         assert captured[0]["pr_changed_files"] == ""
+        # Codex round-4 Finding 2: fixer-scope placeholder is populated
+        # regardless of test_scope.
+        assert captured[0]["pr_scope_changed_files"] == (
+            "Base: main\n- M: pdd/example.py"
+        )
+        # Formatter is invoked exactly once (to populate the scope
+        # placeholder); the targeted branch must not call it a second
+        # time on the same setup.
+        assert format_calls == [1], (
+            "formatter should run once to populate pr_scope_changed_files "
+            "and never again on a single PR-mode setup"
+        )
+
+    def test_pr_mode_full_scope_step6_prompt_renders_scope_list(self, tmp_path):
+        """Codex round-4 Finding 2: under default full scope, the Step 6
+        prompt context still carries the authoritative PR scope list.
+
+        Regression: ``pr_scope_changed_files`` must be non-empty in PR
+        mode regardless of ``test_scope`` so the prompt's scope guard has
+        an authoritative list to constrain the fixer against.
+        """
+        format_calls: list = []
+        captured = self._run_orchestrator_capturing_context(
+            tmp_path,
+            test_scope="full",
+            format_call_count=format_calls,
+        )
+        # Every step context must carry the populated scope list — the
+        # Step 6 prompt depends on it being non-empty in PR mode.
+        for ctx in captured:
+            assert ctx.get("pr_scope_changed_files", "").startswith("Base:"), (
+                "pr_scope_changed_files must be populated for every step "
+                "context in PR mode, including the default full scope"
+            )
 
     def test_orchestrator_rejects_invalid_test_scope(self, tmp_path):
         """Invalid test_scope must fail loudly, not silently fall back."""
@@ -3613,6 +3653,93 @@ class TestIssue1215Round2FailureSignalValidation:
         assert "orchestrator-note" in text
         assert "AssertionError" in text
 
+    def test_step6_receives_artifact_log_when_step5_uses_artifact_path(self, tmp_path):
+        """Codex round-4 Finding 3: when Step 5 emits an empty ``output:``
+        but points to a real log file via ``artifact_path:``, the
+        orchestrator must read the file and inject its (scrubbed)
+        contents into ``context['step5_failure_signal']`` so Step 6 has
+        the failure detail.
+        """
+        # The orchestrator's PR worktree is tmp_path / "wt"; place the
+        # artifact under that worktree so the helper accepts it.
+        wt = tmp_path / "wt"
+        wt.mkdir(exist_ok=True)
+        artifact_rel = ".pdd/checkup-context/pytest-iter1.log"
+        artifact_full = wt / artifact_rel
+        artifact_full.parent.mkdir(parents=True, exist_ok=True)
+        artifact_full.write_text(
+            "=== test session starts ===\n"
+            "tests/test_main.py::test_critical_path FAILED\n"
+            "E   AssertionError: expected 1, got 2 (from artifact)\n"
+            "=== short test summary info ===\n"
+            "FAILED tests/test_main.py::test_critical_path\n",
+            encoding="utf-8",
+        )
+
+        step5_output = (
+            "Tests failed (log saved to artifact).\n"
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_critical_path\n"
+            f"artifact_path: {artifact_rel}\n"
+            "output: |\n"
+            "```\n"
+        )
+        captured: List[Dict] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, step5_output, 0.1, "model")
+            if step_num == 6.1:
+                captured.append(dict(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured, "Step 6.1 must run after Step 5 failure"
+        ctx = captured[0]
+        signal = ctx.get("step5_failure_signal", "")
+        # The full artifact body must reach Step 6 — not just the empty
+        # inline output that Step 5 emitted.
+        assert "expected 1, got 2 (from artifact)" in signal, (
+            "Step 6 must see the artifact log content, not the empty inline "
+            "output emitted by Step 5"
+        )
+        assert "test_critical_path" in signal
+        # ``output`` is no longer missing once the artifact was read.
+        assert "output" not in ctx.get("step5_failure_signal_missing", "")
+
+    def test_artifact_path_outside_worktree_is_refused(self, tmp_path):
+        """Path-traversal via ``artifact_path:`` must not leak files
+        from outside the PR worktree into Step 6 context.
+        """
+        from pdd.agentic_checkup_orchestrator import (
+            _read_failure_signal_artifact,
+        )
+
+        wt = tmp_path / "wt"
+        wt.mkdir(exist_ok=True)
+        # File outside the worktree — must not be read.
+        outside = tmp_path / "secret.log"
+        outside.write_text("super-secret token: ghp_abc\n", encoding="utf-8")
+
+        result = _read_failure_signal_artifact("../secret.log", wt)
+        assert result is None, "artifact_path must refuse paths outside worktree"
+
     def test_step6_receives_failure_signal_when_step5_omits_block(self, tmp_path):
         """Step 6 always receives ``context['step5_failure_signal']`` after Step 5 failure."""
         captured: List[Dict] = []
@@ -3957,3 +4084,65 @@ class TestIssue1215Round3DiffSizeGate:
             run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
 
         push_mock.assert_called_once()
+
+    def test_oversized_diff_with_unrelated_expansion_path_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """Codex round-4 Finding 4: an EXPANSION_ITEMS marker that names a
+        valid-but-unrelated path must NOT bypass the size gate.
+
+        Negative regression for the hole where ``has_valid_expansion``
+        flipped to True the moment EXPANSION_ITEMS listed any justified
+        path, even one that did not cover the file actually contributing
+        to the oversized diff.
+        """
+        monkeypatch.setenv("PDD_CHECKUP_DIFF_LOC_LIMIT", "5")
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                # The worktree shows pdd/main.py is dirty, but the fixer
+                # lists pdd/helpers.py under EXPANSION_ITEMS — a valid,
+                # justified, but UNRELATED path. The size gate must still
+                # refuse because the oversized changed path (pdd/main.py)
+                # is not covered by the marker.
+                return (
+                    True,
+                    "FILES_MODIFIED: pdd/main.py\n"
+                    "EXPANSION_ITEMS: pdd/helpers.py — needs a small "
+                    "tweak because the helpers module exports a constant "
+                    "that the new main.py implementation relies on.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            # In-scope file per PR metadata (so the scope guard passes)
+            # but the diff is oversized and the expansion list does NOT
+            # cover this path.
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._diff_size_added_lines",
+                 return_value=100,
+             ):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        # Refusal must specifically mention that the marker did not cover
+        # every changed path.
+        assert "diff size guard" in (msg or "").lower()
+        assert "did not cover" in (msg or "").lower(), msg
+        assert "pdd/main.py" in (msg or ""), msg

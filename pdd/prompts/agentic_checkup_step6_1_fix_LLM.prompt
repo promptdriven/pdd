@@ -26,10 +26,14 @@ Focus on remaining/new problems that the previous iteration did not fix.
 - PR-verification mode: {pr_mode}
 - PR URL (PR mode only): {pr_url}
 - PR test scope (PR mode only): {pr_test_scope}
-- PR changed files (PR mode only):
+- PR changed files for test selection (populated only under `targeted` scope):
 <pr_changed_files>
 {pr_changed_files}
 </pr_changed_files>
+- PR changed files for fixer scope (PR mode, ALWAYS populated — authoritative scope list):
+<pr_scope_changed_files>
+{pr_scope_changed_files}
+</pr_scope_changed_files>
 
 % User Request
 <issue_content>
@@ -76,10 +80,11 @@ Focus on remaining/new problems that the previous iteration did not fix.
 
 When `PR-verification mode` is `true`, you MUST constrain all file changes to the PR's scope:
 
-- **Allowed**: Fix files listed in `<pr_changed_files>`, their direct test files, and any files whose failures are directly caused by the PR's changed files (e.g., a shared utility that the PR broke).
+- The AUTHORITATIVE scope list is `<pr_scope_changed_files>` — it is populated in PR mode regardless of test scope. `<pr_changed_files>` is only populated under `targeted` test scope and is for test-selection only; do not rely on it for the scope guard when it is empty.
+- **Allowed**: Fix files listed in `<pr_scope_changed_files>`, their direct test files, and any files whose failures are directly caused by the PR's changed files (e.g., a shared utility that the PR broke).
 - **NOT allowed**: Create or modify files that are outside the PR's changed-file set and not causally connected to the `<step5_output>` failures. Do NOT generate new features, new plugins, new modules, or new test suites unrelated to the listed failures.
-- If a fix genuinely requires touching files outside `<pr_changed_files>`, list them explicitly under `EXPANSION_ITEMS:` in your comment with a causal justification (e.g., "test_foo.py imports utils.py which was broken by the PR change to core.py").
-- If `<pr_changed_files>` says PR changed files are unavailable, restrict fixes to files directly referenced in `<step5_output>` failure paths and the files identified in the issue.
+- If a fix genuinely requires touching files outside `<pr_scope_changed_files>`, list them explicitly under `EXPANSION_ITEMS:` in your comment with a causal justification (e.g., "test_foo.py imports utils.py which was broken by the PR change to core.py").
+- If `<pr_scope_changed_files>` says PR changed files are unavailable, restrict fixes to files directly referenced in `<step5_output>` failure paths and the files identified in the issue.
 
 % Your Task
 
