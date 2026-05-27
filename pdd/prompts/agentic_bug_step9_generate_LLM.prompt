@@ -215,7 +215,7 @@ When incorporating reproduction tests:
 
 % Test Count Verification
 
-Step 8 planned {planned_test_count} tests. You MUST generate exactly that many `def test_` (or `async def test_`) functions with real assertions. Before finishing, count your test functions and verify the count matches. Do NOT generate stub functions that contain only `pass`, `...`, or a docstring with no assertions.
+Step 8 planned {planned_test_count} tests. You MUST generate AT LEAST that many `def test_` (or `async def test_`) functions with real assertions — you may add more when SIBLING_PATTERN scope expansion items identified by Step 6 were absent from Step 8's plan (mark each addition with `# Scope addition:` as described above). Do NOT generate stub functions that contain only `pass`, `...`, or a docstring with no assertions.
 
 % Your Task
 

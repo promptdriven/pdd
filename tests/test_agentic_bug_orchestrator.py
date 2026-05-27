@@ -7718,35 +7718,33 @@ class TestStep6ScopeOrchestratorWiring:
             "_apply_step6_scope_markers does not auto-downgrade scope."
         )
 
-    def test_pattern_retry_overflow_files_flow_into_expansion(self):
-        """Regression for PR #1210 round 5: when PATTERN_SEARCH finds more
-        than _MAX_GREP_RESULTS unclassified files, the overflow MUST still
-        flow into both FIX_LOCATIONS and step6_expansion_items as
-        conservative NEEDS_FIX defaults with a clear "not LLM-reviewed"
-        reason. Silently dropping overflow lets Step 8/9 miss real
-        same-root-cause siblings on broad (>50-match) bugs.
+    def test_pattern_retry_overflow_emits_marker_not_silent_drop(self):
+        """Regression for PR #1210 round 6: when PATTERN_SEARCH finds more
+        than _MAX_GREP_RESULTS unclassified files, the overflow files MUST NOT
+        auto-default into FIX_LOCATIONS or step6_expansion_items (no LLM
+        evidence → violates spec "every expanded item has evidence" and
+        "broad audits opt-in"). Instead the orchestrator must emit a loud
+        PATTERN_SEARCH_OVERFLOW marker so users can opt into manual review.
         """
         source = self._read_orchestrator_source()
-        # The merge must use the FULL grep set (cap + overflow), not just the
-        # cap-fitted slice.
-        assert "fix_locs, needs_fix, safe, all_grep_unclassified" in source, (
-            "Retry success must merge against the full grep set "
-            "(all_grep_unclassified = cap-fitted + overflow). Otherwise "
-            "overflow files never reach FIX_LOCATIONS."
+        # Overflow must NOT be folded into FIX_LOCATIONS or sibling_evidence.
+        assert "all_grep_unclassified" not in source, (
+            "Retry path must NOT merge against a combined cap+overflow set. "
+            "Overflow files have no LLM evidence and must stay out of "
+            "FIX_LOCATIONS / step6_expansion_items."
         )
-        assert "fix_locs, [], [], all_grep_unclassified" in source, (
-            "Retry failure must merge against the full grep set so overflow "
-            "files default to NEEDS_FIX alongside the cap-fitted unclassifieds."
+        assert "_OVERFLOW_REASON" not in source, (
+            "Overflow files must not be appended to sibling_evidence with an "
+            "overflow reason — they must NOT flow into expansion items."
         )
-        # Overflow must be folded into sibling_evidence with the overflow reason.
-        assert "_OVERFLOW_REASON" in source, (
-            "Retry path must label overflow defaults with an explicit "
-            "'PATTERN_SEARCH overflow' reason so Step 8/9 know they were not "
-            "LLM-reviewed."
+        # Overflow must instead emit a visible PATTERN_SEARCH_OVERFLOW marker.
+        assert "PATTERN_SEARCH_OVERFLOW" in source, (
+            "Orchestrator must emit a PATTERN_SEARCH_OVERFLOW marker when "
+            "overflow_unclassified is non-empty so the gap is loud, not silent."
         )
-        assert "for fname in overflow_unclassified:" in source, (
-            "Retry path must iterate overflow_unclassified to append each "
-            "overflow file to sibling_evidence."
+        assert "overflow_unclassified" in source, (
+            "Orchestrator must still track overflow_unclassified to emit the "
+            "PATTERN_SEARCH_OVERFLOW marker with the candidate list."
         )
 
     def test_pattern_retry_path_folds_siblings_into_expansion_items(self):
