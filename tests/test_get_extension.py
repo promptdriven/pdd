@@ -40,12 +40,11 @@ def test_get_extension_invalid_extension_empty_string(mock_env_pdd_path, mock_re
     """Test that a language with an empty extension returns an empty string."""
     assert get_extension('Makefile') == ''
 
-def test_get_extension_pdd_path_not_set(monkeypatch):
+def test_get_extension_pdd_path_not_set():
     """Test that missing PDD_PATH environment variable raises ValueError."""
-    monkeypatch.delenv("PDD_PATH", raising=False)
-    monkeypatch.setenv("PDD_STRICT_PDD_PATH", "1")
-    with pytest.raises(ValueError, match="Environment variable PDD_PATH is not set."):
-        get_extension('Python')
+    with patch('os.getenv', return_value=None):
+        with pytest.raises(ValueError, match="Environment variable PDD_PATH is not set."):
+            get_extension('Python')
 
 def test_get_extension_csv_file_not_found(mock_env_pdd_path):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that missing CSV file raises FileNotFoundError."""

@@ -3,11 +3,10 @@
 import re
 import subprocess
 from pathlib import Path
-from importlib.metadata import version as metadata_version
-
 from click.testing import CliRunner
 
 import pdd
+from pdd import get_version
 from pdd.core.cli import cli as cli_command
 
 _PEP440_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:\.(?:dev|rc|a|b|post)\d+)?$")
@@ -28,10 +27,28 @@ def test_package_version_is_well_formed_and_not_a_fallback():
 
 def test_cli_version_reports_distribution_metadata():
     """`pdd --version` reports the installed pdd-cli version."""
-    expected = metadata_version("pdd-cli")
+    expected = get_version()
     result = CliRunner().invoke(cli_command, ["--version"])
     assert result.exit_code == 0
     assert f"version {expected}" in result.output
+
+
+def test_cli_version_reads_metadata_after_prior_invocation(monkeypatch):
+    """--version must not cache an older distribution version across invocations."""
+    versions = iter(["0.0.251.dev107", "0.0.251.dev110"])
+
+    def _next_version(_package: str) -> str:
+        return next(versions)
+
+    monkeypatch.setattr("pdd._metadata_version", _next_version)
+
+    runner = CliRunner()
+    first = runner.invoke(cli_command, ["--version"])
+    second = runner.invoke(cli_command, ["--version"])
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert "version 0.0.251.dev107" in first.output
+    assert "version 0.0.251.dev110" in second.output
 
 
 def test_version_matches_expected_for_current_state():

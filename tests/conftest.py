@@ -1,15 +1,11 @@
 """Project-level pytest configuration hooks."""
 
-import sys
-from pathlib import Path
-project_root = str(Path(__file__).resolve().parent.parent)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 import atexit
 import os
 import shutil
+import sys
 import tempfile
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -116,17 +112,6 @@ _E2E_FIX_ATTRS_TO_RESTORE = (
     "_run_step11_code_cleanup",
     "run_ci_validation_loop",
 )
-
-
-@pytest.fixture(autouse=True)
-def _normalize_cli_test_env(monkeypatch, request):
-    """Keep unit tests independent of developer shell/.env overrides.
-
-    Many CLI tests assert that ``auto_update()`` runs once per invocation.
-    Developers often export ``PDD_AUTO_UPDATE=false`` locally; force it on
-    for the test process unless a test explicitly patches the flag off.
-    """
-    monkeypatch.setenv("PDD_AUTO_UPDATE", "true")
 
 
 @pytest.fixture(autouse=True)

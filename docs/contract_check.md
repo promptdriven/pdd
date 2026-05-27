@@ -46,7 +46,7 @@ When present in a prompt file:
 | Section | Purpose |
 |---------|---------|
 | `<contract_rules>` | Testable rules with IDs and modal verbs |
-| `<vocabulary>` | Definitions that suppress vague-term warnings |
+| `<vocabulary>` | Definitions that suppress vague-term warnings (not `<covers>` / story `## Covers`) |
 | `<capabilities>` | What the module may do |
 | `<non_responsibilities>` | Explicit exclusions |
 | `<coverage>` | Story/test/waiver evidence per rule ID |
@@ -114,7 +114,6 @@ JSON mode suppresses unrelated CLI noise on stdout (auto-update banners, etc.).
 
 ## Related commands
 
-- **Prompt prose quality:** [`pdd checkup lint`](prompt_lint.md) — vague terms in requirements/acceptance criteria, optional `--llm`.
 - **Architecture alignment:** `pdd checkup --validate-arch-includes`.
 
 ## Stretch goal (not in default CLI)

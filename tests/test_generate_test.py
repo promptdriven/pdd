@@ -8,9 +8,6 @@ from rich.console import Console
 from pdd import DEFAULT_STRENGTH
 from pdd.generate_test import generate_test, _validate_inputs
 
-# Mark all tests in this module as real (uses real LLM)
-pytestmark = pytest.mark.real
-
 
 def get_project_root() -> Path:
     """Get the project root directory."""

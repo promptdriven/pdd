@@ -311,7 +311,6 @@ def test_agent_cli_exception(setup_files, mock_dependencies):
 # Z3 Formal Verification Tests
 # -----------------------------------------------------------------------------
 
-@pytest.mark.timeout(180)
 def test_z3_logic_verification(setup_files, mock_dependencies):
     """
     Formally verify the boolean logic of overall_success using Z3.

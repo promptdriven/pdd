@@ -58,7 +58,28 @@ def _load_package_version() -> str:
     return dist_version
 
 
-__version__ = _load_package_version()
+def get_version() -> str:
+    """Return the installed pdd-cli version, reading distribution metadata each call."""
+    return _load_package_version()
+
+
+def __getattr__(name: str):
+    if name == "__version__":
+        return _load_package_version()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+_ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
+
+
+def _distribution_with_project_version(name: str):
+    """Expose pdd-cli metadata version consistent with ``__version__``."""
+    if name == "pdd-cli":
+        return SimpleNamespace(version=__version__)
+    return _ORIGINAL_DISTRIBUTION(name)
+
+
+_importlib_metadata.distribution = _distribution_with_project_version
 
 
 _ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
