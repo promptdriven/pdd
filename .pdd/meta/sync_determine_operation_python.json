@@ -1,0 +1,21 @@
+{
+  "pdd_version": "0.0.252",
+  "timestamp": "2026-05-27T23:26:11.290967+00:00",
+  "command": "example",
+  "prompt_hash": "7d5e22b6f85f4a69a839ba8ff465da0f340aafbf61d3fc6d10b19ff8fd96660f",
+  "code_hash": "8f03079504e9ad65d577681e7f4aa7a0f570c6b05691ba9a37fe86757ee84343",
+  "example_hash": "ce5bb04f00c1f46740be65e85200ddbb89759db37212a6fc5c6541f9abeb0811",
+  "test_hash": "b01a04f9e1ba5a0143b864607583de0173a9b7d1429734f1855e2790bc46c4a3",
+  "test_files": {
+    "test_sync_determine_operation.py": "b01a04f9e1ba5a0143b864607583de0173a9b7d1429734f1855e2790bc46c4a3"
+  },
+  "include_deps": {
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "pdd/llm_invoke.py": "91c9a1e8c384f8b8cb6c52b18e3e9b30267c2c419ccf2309d2b4228543a4e456",
+    "pdd/template_expander.py": "bcaa670f334b9fa7726aa85906e70125ad2cd4b7e7b62a8e39f8bdd06c975edb",
+    "prompts/sync_analysis_LLM.prompt": "b54ff4325be64b9393db33026a576468bfa45f6c7aa736526b7bae2872f0520d"
+  }
+}
