@@ -960,6 +960,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 pddrc_path = _find_pddrc_file()
                 example_dir = "examples/"
                 test_dir = "tests/"
+                generate_dir = ""
                 if pddrc_path:
                     try:
                         config = _load_pddrc_config(pddrc_path)
@@ -974,12 +975,25 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         defaults = context_config.get('defaults', {})
                         example_dir = defaults.get('example_output_path', 'examples/')
                         test_dir = defaults.get('test_output_path', 'tests/')
+                        generate_dir = defaults.get('generate_output_path', '')
                         if example_dir and not example_dir.endswith('/'):
                             example_dir = example_dir + '/'
                         if test_dir and not test_dir.endswith('/'):
                             test_dir = test_dir + '/'
+                        if generate_dir and not generate_dir.endswith('/'):
+                            generate_dir = generate_dir + '/'
                     except ValueError:
                         pass
+
+                # Apply generate_output_path only when arch_filepath is a bare filename
+                # at the project root (no directory component). When arch_filepath already
+                # contains a subdirectory structure, that structure takes precedence.
+                arch_filepath_path = Path(arch_filepath)
+                if generate_dir and str(arch_filepath_path.parent) in (".", ""):
+                    code_path = project_root / f"{generate_dir}{code_stem}.{extension}"
+                    logger.debug(f"Path source: generate={code_path} (from pddrc generate_output_path)")
+                else:
+                    logger.debug(f"Path source: generate={code_path} (from architecture.json)")
 
                 example_path = project_root / f"{example_dir}{code_stem}_example.{extension}"
                 test_path = project_root / f"{test_dir}test_{code_stem}.{extension}"
