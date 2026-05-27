@@ -71,6 +71,32 @@
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
         * Otherwise, write to the explicit `output` path provided by the user.
+        * Extension preservation (issue #1205): when `output` is an explicit file path the user-supplied
+          suffix MUST be honored verbatim. Only synthesize/replace the suffix when the user supplied a path
+          with no extension. Specifically:
+            - When `--format md` is in effect, ensure the resolved output ends in lowercase `.md`. Compare
+              with case sensitivity (`Path(output).suffix != ".md"`) so `.MD`, `.Md`, etc. are normalized
+              to `.md` — README/help promise a lowercase `.md` suffix.
+            - When `--format code` (the Click default), if the user-supplied output already has a non-empty
+              suffix (`Path(output).suffix`), use that path verbatim. Do NOT call `with_suffix` to rewrite
+              `.yml` → `.yaml`, `.md` → `.markdown`, `.m` → `.matlab`, etc. Only when the user-supplied
+              output has no suffix should you fall back to the language-derived extension from
+              `BUILTIN_EXT_MAP` (with the `f".{{lang_key}}"` fallback for unmapped languages).
+            - Track whether the wrapper itself rewrote the path (set a local flag, e.g. `wrapper_rewrote_path`,
+              True only in the `--format md` non-`.md` branch and the `--format code` bare-name branch).
+              CRITICAL: in the bare-name branch, only set the flag when `resolved_output != output` — some
+              languages (e.g. Makefile) map to an empty extension in `BUILTIN_EXT_MAP`, in which case
+              `with_suffix("")` is a no-op and the path is unchanged; flagging it as a rewrite would
+              produce a spurious "rewritten from X to X" re-confirmation prompt.
+        * Rewrite overwrite re-confirmation (issue #1205 follow-up): `construct_paths` only checks the
+          user-supplied `output` for an overwrite conflict, so when the wrapper rewrites the path (a bare
+          name under `--format code`, or `--format md` replacing a non-`.md` suffix), the rewritten target
+          was never confirmed. After computing `resolved_output`, if `wrapper_rewrote_path` is True AND
+          `force` is False AND `Path(resolved_output).exists()`, prompt for confirmation: use
+          `confirm_callback` if provided, otherwise `click.confirm`. On refusal (or non-interactive
+          `EOFError`) raise `click.Abort`. `--force` skips the prompt entirely. CRITICAL: do NOT re-prompt
+          when `output` is a directory or is omitted — in those cases `construct_paths` already resolved the
+          final path and ran its own overwrite confirmation, so a second prompt would be a regression.
         * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
     - Python syntax validation (for Python language only):
         * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.

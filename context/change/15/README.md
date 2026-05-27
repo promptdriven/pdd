@@ -135,6 +135,10 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
+  - `code`: When `--output` includes any suffix (e.g. `.yml`, `.m`, `.txt`), that suffix is honored verbatim. When `--output` has no suffix or is omitted, the language-specific file extension is synthesized (e.g. `.py` for Python).
+  - `md`: Forces a lowercase `.md` suffix on the resolved output path, replacing any other suffix on `--output`.
+  When the wrapper rewrites an explicit `--output` path (`--format md` with a non-`.md` suffix, or a bare name under `--format code`) and the rewritten file already exists, you will be prompted to confirm the overwrite unless `--force` is set.
 
 Example:
 ```
