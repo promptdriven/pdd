@@ -517,7 +517,15 @@ def _merge_needs_fix_into_expansion(
         for item in expansion.split(","):
             cleaned = item.strip()
             if cleaned:
-                key = cleaned.split(":", 1)[0].strip().strip("`").lower()
+                # Split on ": " (colon-space) to separate the item token from
+                # its reason. Splitting on ":" alone miskeys value-level siblings
+                # like "extension:.htm: reason" → key would be "extension" instead
+                # of "extension:.htm", so a follow-up NEEDS_FIX for "extension:.htm"
+                # would bypass dedup and produce a duplicate entry.
+                if ": " in cleaned:
+                    key = cleaned.split(": ", 1)[0].strip().strip("`").lower()
+                else:
+                    key = cleaned.strip("`").lower()
                 if key not in seen_keys:
                     seen_keys.add(key)
                     existing.append(cleaned)

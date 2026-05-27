@@ -7801,6 +7801,46 @@ class TestStep6ScopeOrchestratorWiring:
         assert ctx["scope_classification"] == "LOCALIZED"
 
 
+    def test_value_level_sibling_dedup_survives_colon_in_item_name(self):
+        """Regression for PR #1210 round-7: _merge_needs_fix_into_expansion must
+        not create duplicate entries when a value-level sibling like
+        'extension:.htm' already exists in EXPANSION_ITEMS and appears again as
+        a NEEDS_FIX path. Splitting on the first ':' alone keys the existing
+        entry as 'extension' instead of 'extension:.htm', causing dedup to miss
+        the match.
+        """
+        from pdd.agentic_bug_orchestrator import _merge_needs_fix_into_expansion
+
+        # Existing item with a reason (the format stored after a first merge)
+        existing = "extension:.htm: same root cause as .html"
+        # Re-encountering the same sibling — must not duplicate
+        result = _merge_needs_fix_into_expansion(
+            existing, [("extension:.htm", "confirmed by retry")]
+        )
+        items = [x.strip() for x in result.split(",")]
+        htm_items = [i for i in items if "extension:.htm" in i]
+        assert len(htm_items) == 1, (
+            f"Expected exactly 1 'extension:.htm' entry, got {len(htm_items)}: "
+            f"{htm_items}. Dedup is splitting on ':' instead of ': ', "
+            f"causing value-level sibling keys like 'extension:.htm' to be "
+            f"miskeyed as 'extension'."
+        )
+
+    def test_value_level_sibling_dedup_no_reason(self):
+        """Dedup also works when the existing item has no reason attached."""
+        from pdd.agentic_bug_orchestrator import _merge_needs_fix_into_expansion
+
+        existing = "extension:.htm"
+        result = _merge_needs_fix_into_expansion(
+            existing, [("extension:.htm", "")]
+        )
+        items = [x.strip() for x in result.split(",")]
+        htm_items = [i for i in items if "extension:.htm" in i]
+        assert len(htm_items) == 1, (
+            f"Expected 1 entry, got {len(htm_items)}: {htm_items}"
+        )
+
+
 class TestStep6ScopeEndToEndPropagation:
     """Issue #1208 (checkup-1210) E2E/integration: verify the full pipeline
     where a Step 6 LLM response containing SCOPE_CLASSIFICATION + NEEDS_FIX +
