@@ -24,6 +24,16 @@ from .dump import _write_core_dump
 from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
 
 
+def _show_cli_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    """Print distribution version and exit (reads metadata on every invocation)."""
+    if not value or ctx.resilient_parsing:
+        return
+    from .. import get_version
+
+    click.echo(f"cli, version {get_version()}", color=ctx.color)
+    ctx.exit()
+
+
 def _strip_ansi_codes(text: str) -> str:
     """Remove ANSI escape codes from text for clean log output."""
     # Covers common CSI sequences (\x1b[...m, \x1b[...K, cursor moves),
@@ -334,7 +344,14 @@ class PDDCLI(click.Group):
     default=10,
     help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
-@click.version_option(package_name="pdd-cli", prog_name="cli")
+@click.option(
+    "--version",
+    is_flag=True,
+    expose_value=False,
+    is_eager=True,
+    callback=_show_cli_version,
+    help="Show the version and exit.",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,

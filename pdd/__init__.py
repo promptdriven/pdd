@@ -12,7 +12,15 @@ def _load_package_version() -> str:
         return "0.0.0+unknown"
 
 
-__version__ = _load_package_version()
+def get_version() -> str:
+    """Return the installed pdd-cli version, reading distribution metadata each call."""
+    return _load_package_version()
+
+
+def __getattr__(name: str):
+    if name == "__version__":
+        return _load_package_version()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
