@@ -1420,6 +1420,25 @@ def _discover_python_gates(
                 ),
             )
         )
+        # Issue #1433 Bug #2: parity with CI's ``ruff format --check``.
+        # The lint check above does NOT cover formatting (whitespace,
+        # quote style, line length wrapping); a project whose CI runs
+        # both ``ruff check`` AND ``ruff format --check`` would have its
+        # format failures slip past the gate while the loop ships a
+        # clean verdict. Emit as a SEPARATE gate so per-tool
+        # ``--gate-allow`` filtering still works and the failure surfaces
+        # under its own ``ruff-format`` name in the report.
+        gates.append(
+            Gate(
+                name="ruff-format",
+                cmd=[ruff_abs, "format", "--check", "--", *changed_py],
+                source="pyproject.toml:[tool.ruff]",
+                required_fix_hint=(
+                    "Run `ruff format` locally and commit the formatting "
+                    "changes."
+                ),
+            )
+        )
     black_abs = _resolve_tool("black", worktree)
     if (
         changed_py

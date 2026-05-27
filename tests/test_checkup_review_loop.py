@@ -5829,6 +5829,220 @@ class TestCommitAndPushIfChanged:
         ]
         assert "rebase" in recorded[1] and "--onto" in recorded[1]
 
+    def test_push_existing_local_commits_when_worktree_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1433 Bug #3."""
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _w: [])
+        monkeypatch.setattr(
+            mod, "_git_rev_parse_head", lambda _w: "b" * 40
+        )
+
+        pushes: List[Tuple[str, str]] = []
+
+        def fake_push(_w: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((kwargs["remote"], kwargs["refspec"]))
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R", (),
+                    {"returncode": 0, "stdout": "b" * 40 + "\n", "stderr": ""},
+                )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path, metadata, "fix: address findings",
+            pre_fix_sha="a" * 40,
+        )
+        assert success is True, message
+        assert pushes == [("https://github.com/o/r.git", "HEAD:feature")], pushes
+        for cmd in runs:
+            assert cmd[:3] != ["git", "add", "-u"], cmd
+            assert "commit" not in cmd, cmd
+
+    def test_no_changes_when_clean_and_head_at_pre_fix_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _w: [])
+        head = "c" * 40
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda _w: head)
+
+        push_calls = 0
+
+        def fake_push(*_a: Any, **_k: Any) -> Tuple[bool, str]:
+            nonlocal push_calls
+            push_calls += 1
+            return True, ""
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            {"clone_url": "u", "head_ref": "h", "head_owner": "o", "head_repo": "r"},
+            "fix", pre_fix_sha=head,
+        )
+        assert success is True
+        assert "No changes to push" in message
+        assert push_calls == 0
+
+    def test_no_pre_fix_sha_keeps_legacy_no_op_path(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _w: [])
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda _w: "d" * 40)
+        monkeypatch.setattr(
+            mod, "push_with_retry", lambda *a, **k: pytest.fail("must not push")
+        )
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path, {}, "fix",
+        )
+        assert success is True
+        assert "No changes to push" in message
+
+    def test_push_existing_commits_when_only_filtered_artifacts_dirty(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review finding F2."""
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(
+            mod, "_git_changed_files",
+            lambda _w: [".pdd/checkup-context/round-1/output.txt"],
+        )
+        monkeypatch.setattr(
+            mod, "_git_untracked_files",
+            lambda _w: [".pdd/checkup-context/round-1/output.txt"],
+        )
+        monkeypatch.setattr(mod, "_git_has_staged_changes", lambda _w: False)
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda _w: "1" * 40)
+
+        pushes: List[Tuple[str, str]] = []
+
+        def fake_push(_w: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((kwargs["remote"], kwargs["refspec"]))
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "1" * 40 + "\n", "stderr": ""},
+                )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path, metadata, "fix: address findings",
+            pre_fix_sha="0" * 40,
+        )
+        assert success is True, message
+        assert pushes == [("https://github.com/o/r.git", "HEAD:feature")], pushes
+        for cmd in runs:
+            assert "commit" not in cmd, cmd
+
+    def test_rebase_uses_local_base_sha_for_full_range(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review finding F3."""
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_fetch_pr_head_for_rebase",
+            lambda *_a, **_kw: (True, ""),
+        )
+
+        recorded: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            recorded.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        fixer_sha = "1" * 40
+        pre_fix_sha = "0" * 40
+        success, _msg = mod._rebase_onto_updated_pr_head(
+            tmp_path,
+            clone_url="https://github.com/o/r.git",
+            head_ref="feature",
+            repo_owner="o", repo_name="r",
+            fixer_sha=fixer_sha,
+            local_base_sha=pre_fix_sha,
+        )
+        assert success is True
+        rebase_cmds = [c for c in recorded if "rebase" in c and "--onto" in c]
+        assert len(rebase_cmds) == 1, rebase_cmds
+        cmd = rebase_cmds[0]
+        upstream_index = cmd.index("FETCH_HEAD") + 1
+        assert cmd[upstream_index] == pre_fix_sha, cmd
+        assert cmd[upstream_index + 1] == "HEAD", cmd
+
+    def test_rebase_falls_back_to_head_minus_one_without_base(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Backwards compat for F3."""
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_fetch_pr_head_for_rebase", lambda *_a, **_kw: (True, "")
+        )
+
+        recorded: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            recorded.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        for base in (None, "1" * 40):
+            recorded.clear()
+            success, _msg = mod._rebase_onto_updated_pr_head(
+                tmp_path,
+                clone_url="https://github.com/o/r.git",
+                head_ref="feature",
+                repo_owner="o", repo_name="r",
+                fixer_sha="1" * 40,
+                local_base_sha=base,
+            )
+            assert success is True
+            rebase_cmds = [c for c in recorded if "rebase" in c and "--onto" in c]
+            assert len(rebase_cmds) == 1
+            cmd = rebase_cmds[0]
+            upstream_index = cmd.index("FETCH_HEAD") + 1
+            assert cmd[upstream_index] == "HEAD~1", (base, cmd)
+
 
 class TestStaticAnalysisCandidateFindingsIntegration:
     """The AST drift scan must actually reach the reviewer prompt that
@@ -11584,3 +11798,460 @@ class TestPrChangedFilesScannerBaseLocalRef:
 
         assert files == ["pkg/feature.py"]
         assert not marker.exists()
+
+
+def _make_pr_worktree_with_arch(
+    tmp_path: Path,
+    *,
+    code_rel: str,
+    prompt_rel: str,
+    prompt_in_pr: bool,
+    arch_in_pr: bool,
+) -> Path:
+    """Build a real git worktree with HEAD past a base commit (used by
+    Issue #1433 Bug #4 tests).
+    """
+    import subprocess
+
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+
+    def run(*args: str) -> None:
+        subprocess.run(
+            ["git", *args], cwd=worktree, check=True, capture_output=True
+        )
+
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "test@example.com")
+    run("config", "user.name", "Test")
+
+    arch = [
+        {
+            "filename": prompt_rel.rsplit("/", 1)[-1],
+            "filepath": code_rel,
+            "reason": "test fixture",
+            "dependencies": [],
+            "priority": 1,
+        }
+    ]
+    (worktree / "architecture.json").write_text(
+        json.dumps(arch, indent=2), encoding="utf-8"
+    )
+    prompt_path = worktree / prompt_rel
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("prompt v1\n", encoding="utf-8")
+    code_path = worktree / code_rel
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text("x = 1\n", encoding="utf-8")
+    run("add", ".")
+    run("commit", "-q", "-m", "base")
+
+    run("checkout", "-q", "-b", "pr-branch")
+    code_path.write_text("x = 2\n", encoding="utf-8")
+    if prompt_in_pr:
+        prompt_path.write_text("prompt v2\n", encoding="utf-8")
+    if arch_in_pr:
+        arch[0]["reason"] = "test fixture updated"
+        (worktree / "architecture.json").write_text(
+            json.dumps(arch, indent=2), encoding="utf-8"
+        )
+    run("add", ".")
+    run("commit", "-q", "-m", "pr change")
+    return worktree
+
+
+class TestCompanionSourceOfTruthFiles:
+    """Issue #1433 Bug #4."""
+
+    def test_format_returns_empty_when_no_companions(self) -> None:
+        from pdd.checkup_review_loop import _format_companion_source_of_truth
+
+        assert _format_companion_source_of_truth([]) == ""
+
+    def test_format_renders_section_for_companions(self) -> None:
+        from pdd.checkup_review_loop import _format_companion_source_of_truth
+
+        out = _format_companion_source_of_truth(
+            [
+                {
+                    "code_path": "pdd/foo.py",
+                    "prompt_path": "pdd/prompts/foo_python.prompt",
+                    "prompt_in_diff": False,
+                    "architecture_in_diff": False,
+                }
+            ]
+        )
+        assert "Companion Source-Of-Truth Files To Inspect" in out
+        assert "pdd/foo.py" in out
+        assert "pdd/prompts/foo_python.prompt" in out
+        assert '"prompt_in_diff": false' in out
+
+    def test_collector_surfaces_unchanged_prompt_for_changed_code(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
+
+        worktree = _make_pr_worktree_with_arch(
+            tmp_path,
+            code_rel="pdd/foo.py",
+            prompt_rel="pdd/prompts/foo_python.prompt",
+            prompt_in_pr=False,
+            arch_in_pr=False,
+        )
+        companions = _collect_companion_source_of_truth_files(
+            worktree, pr_metadata={"base_ref": "main"}
+        )
+        assert len(companions) == 1, companions
+        entry = companions[0]
+        assert entry["code_path"] == "pdd/foo.py"
+        assert entry["prompt_path"] == "pdd/prompts/foo_python.prompt"
+        assert entry["prompt_in_diff"] is False
+        assert entry["architecture_in_diff"] is False
+
+    def test_collector_omits_when_prompt_and_arch_in_diff(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
+
+        worktree = _make_pr_worktree_with_arch(
+            tmp_path,
+            code_rel="pdd/foo.py",
+            prompt_rel="pdd/prompts/foo_python.prompt",
+            prompt_in_pr=True,
+            arch_in_pr=True,
+        )
+        assert _collect_companion_source_of_truth_files(
+            worktree, pr_metadata={"base_ref": "main"}
+        ) == []
+
+    def test_collector_surfaces_when_only_arch_in_diff(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
+
+        worktree = _make_pr_worktree_with_arch(
+            tmp_path,
+            code_rel="pdd/foo.py",
+            prompt_rel="pdd/prompts/foo_python.prompt",
+            prompt_in_pr=False,
+            arch_in_pr=True,
+        )
+        companions = _collect_companion_source_of_truth_files(
+            worktree, pr_metadata={"base_ref": "main"}
+        )
+        assert len(companions) == 1
+        assert companions[0]["prompt_in_diff"] is False
+        assert companions[0]["architecture_in_diff"] is True
+
+    def test_collector_fail_open_when_arch_missing(
+        self, tmp_path: Path
+    ) -> None:
+        import subprocess
+
+        from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        subprocess.run(
+            ["git", "init", "-q", "-b", "main"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+        )
+        for cfg in (
+            ["config", "user.email", "t@e.com"],
+            ["config", "user.name", "T"],
+        ):
+            subprocess.run(
+                ["git", *cfg], cwd=worktree, check=True, capture_output=True
+            )
+        (worktree / "pdd").mkdir()
+        (worktree / "pdd" / "foo.py").write_text("x=1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "base"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        assert _collect_companion_source_of_truth_files(
+            worktree, pr_metadata={"base_ref": "main"}
+        ) == []
+
+    def test_review_prompt_includes_section_when_companions_passed(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import ReviewLoopState, _review_prompt
+
+        prompt = _review_prompt(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            round_number=1,
+            state=ReviewLoopState(),
+            config=_config(blocking_severities=("blocker", "critical")),
+            mode="review",
+            findings_to_verify=[],
+            companion_source_of_truth=[
+                {
+                    "code_path": "pdd/foo.py",
+                    "prompt_path": "pdd/prompts/foo_python.prompt",
+                    "prompt_in_diff": False,
+                    "architecture_in_diff": False,
+                }
+            ],
+        )
+        assert "Companion Source-Of-Truth Files To Inspect" in prompt
+        assert "pdd/prompts/foo_python.prompt" in prompt
+
+    def test_review_prompt_omits_section_when_no_companions(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import ReviewLoopState, _review_prompt
+
+        prompt = _review_prompt(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            round_number=1,
+            state=ReviewLoopState(),
+            config=_config(blocking_severities=("blocker", "critical")),
+            mode="review",
+            findings_to_verify=[],
+            companion_source_of_truth=[],
+        )
+        assert "Companion Source-Of-Truth Files To Inspect" not in prompt
+
+
+class TestPrBaseMergeConflictPreflight:
+    """Issue #1433 Bug #1."""
+
+    def test_returns_none_when_no_base(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _detect_pr_base_merge_conflict
+
+        assert _detect_pr_base_merge_conflict(tmp_path, None) is None
+        assert _detect_pr_base_merge_conflict(tmp_path, "") is None
+
+    def test_returns_none_when_clean_merge(self, tmp_path: Path) -> None:
+        import subprocess
+
+        from pdd.checkup_review_loop import _detect_pr_base_merge_conflict
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "a.txt").write_text("line 1\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        run("checkout", "-q", "-b", "pr-branch")
+        (worktree / "a.txt").write_text("line 1\nline 2\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "pr append")
+
+        assert _detect_pr_base_merge_conflict(worktree, "main") is None
+
+    def test_returns_conflict_description_when_pr_diverges_from_base(
+        self, tmp_path: Path
+    ) -> None:
+        import subprocess
+
+        from pdd.checkup_review_loop import _detect_pr_base_merge_conflict
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "shared.txt").write_text("original\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        run("checkout", "-q", "-b", "pr-branch")
+        (worktree / "shared.txt").write_text("pr edit\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "pr change")
+        run("checkout", "-q", "main")
+        (worktree / "shared.txt").write_text("main edit\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "main change")
+        run("checkout", "-q", "pr-branch")
+
+        conflict = _detect_pr_base_merge_conflict(worktree, "main")
+        assert conflict is not None
+        assert "shared.txt" in conflict
+
+    def test_returns_none_on_missing_base_ref(self, tmp_path: Path) -> None:
+        import subprocess
+
+        from pdd.checkup_review_loop import _detect_pr_base_merge_conflict
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        for cmd in (
+            ["init", "-q", "-b", "main"],
+            ["config", "user.email", "t@e.com"],
+            ["config", "user.name", "T"],
+        ):
+            subprocess.run(
+                ["git", *cmd], cwd=worktree, check=True, capture_output=True
+            )
+        (worktree / "a.py").write_text("x=1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "base"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        assert (
+            _detect_pr_base_merge_conflict(worktree, "refs/heads/does-not-exist")
+            is None
+        )
+
+    def test_loop_short_circuits_on_preflight_conflict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import (
+            ReviewLoopConfig,
+            run_checkup_review_loop,
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *_a, **_k: (worktree, ""))
+        monkeypatch.setattr(
+            mod, "_fetch_pr_metadata",
+            lambda *_a, **_k: {"base_ref": "main", "base_local_ref": "main"},
+        )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *_a, **_k: None)
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda _w: "abc1234")
+        monkeypatch.setattr(
+            mod, "_detect_pr_base_merge_conflict",
+            lambda _w, _b: "CONFLICT (content): Merge conflict in shared.py",
+        )
+
+        called: Dict[str, int] = {"review": 0, "fix": 0, "post": 0}
+
+        def fake_run_review(*_a: Any, **_k: Any):
+            called["review"] += 1
+            raise AssertionError("must not invoke reviewer on conflict")
+
+        def fake_run_fix(*_a: Any, **_k: Any):
+            called["fix"] += 1
+            raise AssertionError("must not invoke fixer on conflict")
+
+        posted_reports: List[str] = []
+
+        def fake_post(_ctx: Any, report: str, _use: bool) -> None:
+            called["post"] += 1
+            posted_reports.append(report)
+
+        monkeypatch.setattr(mod, "_run_review", fake_run_review)
+        monkeypatch.setattr(mod, "_run_fix", fake_run_fix)
+        monkeypatch.setattr(mod, "_post_review_loop_report", fake_post)
+
+        cfg = ReviewLoopConfig(
+            reviewers=("codex",),
+            max_rounds=3,
+            max_cost=50.0,
+            max_minutes=30.0,
+            require_all_reviewers_clean=True,
+            continue_on_reviewer_limit=False,
+            require_final_fresh_review=True,
+            enable_gates=True,
+        )
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path), config=cfg, cwd=tmp_path,
+            verbose=False, quiet=True, use_github_state=False,
+        )
+
+        assert success is True
+        assert called["review"] == 0
+        assert called["fix"] == 0
+        assert called["post"] == 1
+        assert "Pre-flight" in posted_reports[0] or "preflight" in posted_reports[0]
+        assert cost == 0.0
+
+
+class TestFilesChangedSinceHelper:
+    """Issue #1433 Bug #3 + Codex F4."""
+
+    def test_returns_empty_when_no_base(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _files_changed_since
+
+        assert _files_changed_since(tmp_path, "") == []
+
+    def test_returns_committed_diff_paths(self, tmp_path: Path) -> None:
+        import subprocess
+
+        from pdd.checkup_review_loop import _files_changed_since, _git_rev_parse_head
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "a.py").write_text("x=1\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        base_sha = _git_rev_parse_head(worktree)
+
+        (worktree / "a.py").write_text("x=2\n", encoding="utf-8")
+        (worktree / "b.py").write_text("y=1\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "fix")
+
+        files = _files_changed_since(worktree, base_sha)
+        assert sorted(files) == ["a.py", "b.py"]
+
+    def test_rename_surfaces_both_old_and_new_paths(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex review finding F4."""
+        import subprocess
+
+        from pdd.checkup_review_loop import _files_changed_since, _git_rev_parse_head
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "pdd").mkdir()
+        (worktree / "pdd" / "foo.py").write_text(
+            "x = 1\ny = 2\nz = 3\n", encoding="utf-8"
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        base_sha = _git_rev_parse_head(worktree)
+
+        (worktree / "tests").mkdir()
+        (worktree / "pdd" / "foo.py").rename(worktree / "tests" / "moved.py")
+        run("add", "-A")
+        run("commit", "-q", "-m", "rename pdd/foo.py to tests/moved.py")
+
+        files = _files_changed_since(worktree, base_sha)
+        assert "pdd/foo.py" in files, files
+        assert "tests/moved.py" in files, files

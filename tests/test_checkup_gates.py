@@ -313,6 +313,84 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "ruff" not in names
 
+    def test_emits_ruff_format_when_ruff_configured(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #1433 Bug #2: ``[tool.ruff]`` enables BOTH ``ruff check``
+        AND ``ruff format --check``. The pre-fix gate emitted only the
+        lint check, so PRs that failed CI's ``ruff format --check`` step
+        could still ride a clean checkup verdict to a not-mergeable
+        state. The format gate must use the same conditions as the lint
+        gate (configured, binary present, no tool-config touched) and
+        keep ``--`` end-of-options separator + absolute tool path.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        by_name = {g.name: g for g in gates}
+        assert "ruff-format" in by_name, (
+            f"missing ruff-format gate; saw {sorted(by_name)}"
+        )
+        cmd = by_name["ruff-format"].cmd
+        assert cmd[0] == "/usr/bin/ruff"
+        assert cmd[1] == "format"
+        assert "--check" in cmd
+        assert "--" in cmd
+        dash_idx = cmd.index("--")
+        path_idx = cmd.index("a.py")
+        assert dash_idx < path_idx, (
+            f"ruff-format `--` must precede file path: {cmd}"
+        )
+
+    def test_skips_ruff_format_when_pyproject_touched_by_pr(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-32 Findings 2 + 3 parity: ``python_tool_config_touched``
+        gates ALL three Python tool gates. The new ``ruff-format`` gate
+        must respect the same skip — a PR that edits ``pyproject.toml``
+        could otherwise poison ``[tool.ruff.format]`` to make the
+        format check pass over real divergence.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(
+                tmp_path, changed_files=("a.py", "pyproject.toml")
+            )
+        names = {g.name for g in gates}
+        assert "ruff" not in names
+        assert "ruff-format" not in names
+
+    def test_skips_ruff_format_when_ruff_unconfigured(
+        self, tmp_path: Path
+    ) -> None:
+        """The ``ruff-format`` gate must share ``[tool.ruff]`` presence
+        with the lint gate so a project that does not use ruff at all
+        does not see spurious format failures from ruff's defaults.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.poetry]\nname = 'x'\n", encoding="utf-8"
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" not in names
+
     def test_user_extra_allow_is_honored(self, tmp_path: Path) -> None:
         from pdd.checkup_gates import discover_gates
 
