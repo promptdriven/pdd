@@ -38,6 +38,25 @@
    - CLI 'prompts_dir' overrides CLI 'prompt_path' if both are provided.
    - Implement helpers: _find_pddrc_file, _load_pddrc_config, _detect_context, _get_context_config.
    - Provide utilities: list_available_contexts, detect_context_for_file, get_tests_dir_from_config.
+   - `.pddrc` Schema Validation (Issue #1198): `_load_pddrc_config` MUST call an
+     internal helper `_validate_pddrc_keys(config, pddrc_path)` after the basic
+     structure check and before returning. The helper walks the parsed `.pddrc`
+     dict and emits one `logging.warning()` per unrecognized key — never raises,
+     so loading always continues (warn-not-fail, backward compatible).
+     - Valid root-level keys: `version`, `contexts`.
+     - Valid per-context keys (inside each entry of `contexts`): `paths`, `defaults`.
+     - Valid keys within a context's `defaults` dict: `generate_output_path`,
+       `test_output_path`, `example_output_path`, `prompts_dir`, `prompt_path`,
+       `default_language`, `target_coverage`, `strength`, `temperature`, `budget`,
+       `max_attempts`, `outputs`.
+     - Warning message format (exact):
+       `WARNING: .pddrc contains unknown key '{key}' at path '{dotted_path}', ignored. Run 'pdd setup' to regenerate.`
+       where `dotted_path` is the dot-joined path from root to the offending key
+       (e.g. `contexts.default.defaults.typo_key`).
+     - Emit one `logging.warning()` call per unknown key (no aggregation, no dedup).
+     - Expose the three valid-key sets as module-level constants
+       (`_VALID_PDDRC_ROOT_KEYS`, `_VALID_CONTEXT_KEYS`, `_VALID_DEFAULTS_KEYS`)
+       so the `pdd config validate` command can import and reuse them.
    - Pass 'outputs' config through for template-based path generation.
    - `_resolve_config_hierarchy(cli_options, context_config, env_vars)` resolves keys:
      generate_output_path, test_output_path, example_output_path, prompts_dir,
