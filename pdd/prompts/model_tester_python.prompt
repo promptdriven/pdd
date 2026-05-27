@@ -19,11 +19,11 @@ Tests a single configured model by making one `litellm.completion()` call with a
 % Requirements
 1. Function: `test_model_interactive()` — show models from `~/.pdd/llm_model.csv`, let user pick one, test it, loop until user exits (empty input or "q")
 2. Test call: `litellm.completion(model=..., messages=[...], timeout=8)`. Only pass `api_key=` for single-var providers.
-3. The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3"). Use `parse_api_key_vars()` from provider_manager.
-   - Single var: resolve from env, pass as api_key= to litellm.
+3. The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3"). Use `parse_api_key_vars()` from provider_manager and `resolve_api_key_from_env()` for single-var lookup so `GOOGLE_API_KEY` satisfies Gemini rows that still name `GEMINI_API_KEY`.
+   - Single var: resolve from env including aliases, pass as api_key= to litellm.
    - Multi var: do NOT pass api_key= — litellm reads from os.environ (Bedrock, Azure, Vertex).
    - Empty: device flow or local model — no key needed.
-4. Before calling, show diagnostics: check each env var from the api_key field. Show `✓ Found (VAR)` / `✗ Not found (VAR)` per var, plus base URL if applicable.
+4. Before calling, show diagnostics: check each env var from the api_key field alias-aware. Show `✓ Found (VAR)` using the resolved alias or `✗ Not found (VAR)` per var, plus base URL if applicable.
    - For `GOOGLE_APPLICATION_CREDENTIALS`, also verify the path points to an existing file.
 5. After calling, show: `LLM call  ✓ OK (0.3s, $0.0001)` or `LLM call  ✗ error description`
 6. Calculate cost from token usage × CSV row's input/output prices per 1M tokens

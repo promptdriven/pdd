@@ -159,9 +159,19 @@ def mock_env():
     # don't depend on the developer's `~/.local/share/opencode/auth.json` or
     # `~/.config/opencode/opencode.json`. Environment-variable signals (which
     # tests do set explicitly) are still honored by `_has_opencode_credentials`.
+    # PR #1153 round-3: ``get_available_agents`` now pairs the resolved
+    # Google CLI binary (agy / gemini) with the matching OAuth file via the
+    # per-binary predicates rather than the combined helper. Mock all three
+    # so a developer's real ``~/.gemini/oauth_creds.json`` does not leak
+    # availability into tests that explicitly assume "no OAuth".
     with (
         patch.dict(os.environ, {}, clear=True),
         patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=False),
+        patch("pdd.agentic_common._has_agy_oauth_credentials", return_value=False),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=False,
+        ),
         patch("pdd.agentic_common._opencode_auth_file_has_credentials", return_value=False),
         patch("pdd.agentic_common._iter_opencode_config_texts", return_value=[]),
     ):
@@ -220,7 +230,9 @@ def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock
     """Test when all agents are available."""
     mock_shutil_which.return_value = "/usr/bin/fake"
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-    os.environ["GEMINI_API_KEY"] = "AIza..."
+    # GOOGLE_API_KEY is accepted by both agy and legacy gemini, so google is
+    # available regardless of which binary auto-mode selects.
+    os.environ["GOOGLE_API_KEY"] = "AIza..."
     os.environ["OPENAI_API_KEY"] = "sk-..."
 
     agents = get_available_agents()
@@ -549,7 +561,9 @@ def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_
     """Test fallback from Anthropic (failure) to Google (success)."""
     # Setup availability for both
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["GEMINI_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini; safe to use here
+    # regardless of which Google binary auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     
     # Setup subprocess responses
     # First call (Anthropic) fails
@@ -653,7 +667,7 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
     Specific test for Gemini cached token logic.
     Flash Pricing: Input $0.35, Cached Multiplier 0.5 (so $0.175 effective).
     """
-    mock_shutil_which.return_value = "/bin/gemini"
+    mock_shutil_which.side_effect = lambda name: "/bin/gemini" if name == "gemini" else None
     os.environ["GEMINI_API_KEY"] = "key"
     # Force only google to be available
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["google"]):
@@ -927,9 +941,10 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     This test verifies that such false positives are rejected and that the
     system falls back to a provider that performs real work.
     """
-    mock_shutil_which.return_value = "/bin/exe"
+    mock_shutil_which.side_effect = lambda name: "/bin/exe" if name in ("claude", "gemini") else None
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
+    os.environ["PDD_GOOGLE_CLI"] = "gemini"
 
     # First provider (Anthropic): Returns "success" with $0.00 cost and minimal output
     # This is a false positive - no work was actually done
@@ -951,15 +966,11 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     google_real_success.stderr = ""
 
     def run_side_effect(cmd, **kwargs):
-        # Check if CLI path contains the provider name (e.g., /bin/exe contains "exe")
-        # Since _find_cli_binary is mocked to return "/bin/exe", we need a different approach
-        # Check the command path or any element for provider identification
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
-        if "anthropic" in str(kwargs.get('env', {}).get('_provider', '')) or cmd == ["/bin/exe", "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]:
+        if "--dangerously-skip-permissions" in cmd:
             # Anthropic command pattern
-            if "--dangerously-skip-permissions" in cmd:
-                return anthropic_false_positive
-        if "--yolo" in cmd:  # Gemini command pattern
+            return anthropic_false_positive
+        if "--yolo" in cmd or "--print" in cmd:
+            # Legacy Gemini CLI (--yolo) or Antigravity CLI (--print)
             return google_real_success
         return MagicMock(returncode=1)
 
@@ -1015,7 +1026,17 @@ def test_get_available_agents_google_gemini_cli_oauth(
     """Gemini CLI stored OAuth credentials are sufficient for Google provider."""
     mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
 
-    with patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True):
+    # PR #1153 round-3: availability now pairs the resolved binary with the
+    # matching per-binary OAuth predicate. The resolved binary here is the
+    # legacy ``gemini``, so the legacy OAuth predicate is what gates the
+    # signal; patch both helpers to keep the combined one consistent.
+    with (
+        patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True),
+        patch(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            return_value=True,
+        ),
+    ):
         agents = get_available_agents()
 
     assert "google" in agents
@@ -1074,8 +1095,10 @@ def test_get_available_agents_google_vertex_ai_adc_auth(mock_shutil_which, mock_
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
-    mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
-    mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    # GOOGLE_API_KEY works with both agy and legacy gemini binaries, ensuring
+    # google is available regardless of which one auto-mode selects.
+    mock_env["GOOGLE_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
 
     agents = get_available_agents()
@@ -1354,8 +1377,9 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     Should trigger fallback.
     """
     # Setup availability for Anthropic and Google
-    mock_shutil_which.return_value = "/bin/cmd"
+    mock_shutil_which.side_effect = lambda name: "/bin/cmd" if name in ("claude", "gemini") else None
     mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["PDD_GOOGLE_CLI"] = "gemini"
     
     # 1. Anthropic: Success but suspicious (0 cost, short output)
     suspicious_response = MagicMock()
@@ -1400,7 +1424,9 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     _, kwargs = mock_subprocess_run.call_args
     stdin_content = kwargs.get("input", "")
     assert "Instruction" in stdin_content
-    assert ".agentic_prompt_" in stdin_content  # Self-referential instruction is in content
+    assert "You have full file access" in stdin_content
+    assert "Read the file" not in stdin_content
+    assert ".agentic_prompt_" not in stdin_content
 
     # Verify no temp files remain in tmp_path
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
@@ -1827,11 +1853,25 @@ class TestCliDiscoveryBug:
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTIGRAVITY_API_KEY", raising=False)
         monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
         monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+        # PR #1153 round-3: `get_available_agents` now pairs the resolved
+        # binary with the matching OAuth predicate. This test installs only
+        # the legacy `gemini` binary, so the legacy OAuth predicate is the
+        # one that gates availability; the combined helper is patched too
+        # for backward-compat with any caller that still reads it.
         monkeypatch.setattr(
             "pdd.agentic_common._has_gemini_oauth_credentials",
             lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_agy_oauth_credentials",
+            lambda: False,
         )
 
         npm_bin = tmp_path / ".npm-global" / "bin"

@@ -50,8 +50,8 @@
 
   6. **get_pdd_command(command_name) -> click.Command**:
      - Maps command name to Click command object
-     - Imports from pdd.commands module
-     - Supported: sync, update, bug, generate, test, fix
+     - Imports lazily from `pdd.commands` package exports, not per-command submodules (there is no `pdd.commands.sync` module)
+     - Supported: sync, update, bug, generate, test, fix, example, preprocess, split, change, detect, conflicts, crash
      - Returns None for unknown commands
 
   7. **execute_pdd_command(command_name, args, options, callback) -> CapturedOutput**:

@@ -59,11 +59,14 @@ def get_provider_key_names() -> List[str]:
             for row in reader:
                 api_key_field = row.get("api_key", "").strip()
                 if api_key_field:
-                    # Support pipe-delimited multi-var fields (e.g. "VAR1|VAR2|VAR3")
-                    for var in api_key_field.split("|"):
-                        var = var.strip()
-                        if var:
-                            key_names.add(var)
+                    # Support pipe-delimited fields and aliases such as
+                    # GOOGLE_API_KEY satisfying Gemini catalog rows.
+                    try:
+                        from pdd.provider_manager import expand_api_key_vars
+                        vars_ = expand_api_key_vars(api_key_field)
+                    except Exception:
+                        vars_ = [v.strip() for v in api_key_field.split("|") if v.strip()]
+                    key_names.update(vars_)
 
     except Exception as e:
         logger.error("Error reading llm_model.csv: %s", e)
@@ -186,15 +189,19 @@ def scan_environment() -> Dict[str, KeyInfo]:
             api_env_source_label = f"~/.pdd/api-env.{shell_name}"
 
         for key_name in key_names:
+            try:
+                from pdd.provider_manager import api_key_aliases
+                aliases = api_key_aliases(key_name)
+            except Exception:
+                aliases = [key_name]
+
             # Check in priority order, ensuring values are non-empty
-            if key_name in dotenv_vals:
+            if any(alias in dotenv_vals for alias in aliases):
                 result[key_name] = KeyInfo(source=".env file", is_set=True)
-            elif key_name in os.environ and os.environ[key_name].strip():
+            elif any(alias in os.environ and os.environ[alias].strip() for alias in aliases):
                 result[key_name] = KeyInfo(source="shell environment", is_set=True)
-            elif key_name in api_env_vals:
-                result[key_name] = KeyInfo(
-                    source=api_env_source_label, is_set=True
-                )
+            elif any(alias in api_env_vals for alias in aliases):
+                result[key_name] = KeyInfo(source=api_env_source_label, is_set=True)
             else:
                 # Key not found in any source or has empty value
                 result[key_name] = KeyInfo(source="", is_set=False)

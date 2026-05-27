@@ -339,8 +339,9 @@ class TestBootstrapSelectionTable:
         assert results[0].api_key_configured is True
 
     def test_multi_select_comma_separated(self, monkeypatch, tmp_path):
+        # New ordering: 1=claude, 2=codex, 3=agy, 4=gemini, 5=opencode.
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1,3"],
+            monkeypatch, tmp_path, ["1,4"],
             cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
         )
         assert len(results) == 2
@@ -349,7 +350,7 @@ class TestBootstrapSelectionTable:
 
     def test_multi_select_with_spaces(self, monkeypatch, tmp_path):
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1, 3"],
+            monkeypatch, tmp_path, ["1, 4"],
             cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
         )
         assert len(results) == 2
@@ -358,7 +359,7 @@ class TestBootstrapSelectionTable:
 
     def test_duplicate_input_deduplicated(self, monkeypatch, tmp_path):
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1,1,3"],
+            monkeypatch, tmp_path, ["1,1,4"],
             cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
         )
         assert len(results) == 2
@@ -514,7 +515,7 @@ class TestBootstrapApiKeyFlow:
         assert results[0].cli_name == "claude"
         assert results[0].api_key_configured is False  # API key still not set
         # The status line should report OAuth, not "not set" red ✗.
-        assert "OAuth/subscription login configured" in output
+        assert "OAuth/subscription/config credential configured" in output
         # The credential prompt must NOT fire (user only provided 1 input).
         assert "Enter your" not in output
 
@@ -579,18 +580,18 @@ class TestBootstrapApiKeyFlow:
         assert "limited functionality" in output.lower()
 
     def test_google_checks_gemini_key(self, monkeypatch, tmp_path):
-        """Google provider recognizes GEMINI_API_KEY."""
+        """Google provider recognizes GEMINI_API_KEY (position 4 = gemini)."""
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["3"],
+            monkeypatch, tmp_path, ["4"],
             cli_paths={"gemini": "/usr/bin/gemini"},
             env_keys={"GEMINI_API_KEY": "gm-test"},
         )
         assert results[0].api_key_configured is True
 
     def test_google_checks_google_api_key(self, monkeypatch, tmp_path):
-        """Google provider recognizes GOOGLE_API_KEY."""
+        """Google provider recognizes GOOGLE_API_KEY (position 4 = gemini)."""
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["3"],
+            monkeypatch, tmp_path, ["4"],
             cli_paths={"gemini": "/usr/bin/gemini"},
             env_keys={"GOOGLE_API_KEY": "gm-test"},
         )
