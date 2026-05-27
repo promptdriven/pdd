@@ -166,9 +166,22 @@ def preserve_git_work_tree():
 
 @pytest.fixture(autouse=True)
 def isolate_cloud_only_overrides(monkeypatch):
-    """Clear developer cloud-only env flags unless a test sets them."""
+    """Clear developer cloud-only env flags unless a test sets them.
+
+    PDD_QUIET is also cleared: it suppresses ``console.print`` in
+    ``pdd.preprocess`` and a handful of other modules. Tests that
+    exercise the ``pdd --quiet`` CLI (e.g. ``tests/test_quiet_flag.py``)
+    leak the flag globally because the CLI group callback writes
+    ``os.environ["PDD_QUIET"] = "1"`` and does not unwind it; subsequent
+    tests in the same pytest process that assert on stdout warnings
+    (e.g. ``test_preprocess.py::test_unresolved_include_*``) then see
+    no output and fail. The leak only surfaces when those tests land
+    in the same shard, which depends on bin-packing — exposed when
+    ``balance-chunks.py`` started splitting heavy files across chunks.
+    """
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+    monkeypatch.delenv("PDD_QUIET", raising=False)
 
 
 @pytest.fixture(autouse=True)
