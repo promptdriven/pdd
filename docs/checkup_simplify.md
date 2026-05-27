@@ -31,7 +31,7 @@ pdd checkup simplify --apply --since origin/main --attempts 3 --verify --evidenc
 **`--apply` is required** to invoke `/simplify`. Without it, PDD only lists eligible targets.
 
 `--apply` runs each attempt in a detached temporary worktree created from the
-same input state. Claude cannot overwrite unrelated local edits. PDD rejects
+same input state (attempts run sequentially today). Claude cannot overwrite unrelated local edits. PDD rejects
 any candidate that writes outside the selected files, prefers candidates whose
 `--verify` checks pass, and among those copies back the candidate affecting the
 fewest selected files. Backups
@@ -53,8 +53,10 @@ candidate worktree from the selected input files:
 Without `--since`, selected files must have a local diff against `HEAD`.
 `--apply --staged` refuses selected files that also have unstaged edits, so a
 candidate never replaces work outside the staged snapshot.
-Use `--verify` with multiple attempts; otherwise selection is conservative but
-cannot prove that a candidate preserves behavior.
+`--attempts` greater than 1 requires `--verify` so PDD can reject unproven
+candidates. Verification commands (format, lint, typecheck, tests) are scoped
+to the selected in-scope files only, so repo-wide tools like `ruff format` do
+not rewrite unrelated paths in the candidate worktree.
 
 ## Evidence
 

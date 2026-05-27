@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -426,6 +427,15 @@ def _rel_paths(files: Sequence[Path], repo_root: Path) -> List[str]:
     )
 
 
+def _scoped_verify_command(command: str, rel_paths: Sequence[str]) -> str:
+    """Append in-scope paths so repo-wide format/lint does not touch other files."""
+    command = command.strip()
+    if not command or not rel_paths:
+        return command
+    quoted = " ".join(shlex.quote(path) for path in rel_paths)
+    return f"{command} -- {quoted}"
+
+
 def _run_shell_step(
     command: str,
     cwd: Path,
@@ -462,16 +472,19 @@ def _run_verification(
     quiet: bool,
 ) -> Dict[str, str]:
     checks: Dict[str, str] = {}
-    has_python = any(p.suffix == ".py" for p in touched)
+    touched_files = [path for path in touched if path.is_file()]
+    rel_paths = _rel_paths(touched_files, repo_root)
+    has_python = any(path.suffix == ".py" for path in touched_files)
 
     if not no_format and commands.format.strip():
-        passed, _ = _run_shell_step(commands.format, repo_root, quiet=quiet)
+        format_cmd = _scoped_verify_command(commands.format, rel_paths)
+        passed, _ = _run_shell_step(format_cmd, repo_root, quiet=quiet)
         checks["format"] = "passed" if passed else "failed"
 
     if commands.lint.strip():
-        if has_python and touched:
+        if has_python and touched_files:
             lint_ok = True
-            for path in touched:
+            for path in touched_files:
                 if path.suffix != ".py":
                     continue
                 for lint_cmd in get_lint_commands(path):
@@ -483,15 +496,18 @@ def _run_verification(
                     lint_ok = lint_ok and passed
             checks["lint"] = "passed" if lint_ok else "failed"
         elif commands.lint.strip():
-            passed, _ = _run_shell_step(commands.lint, repo_root, quiet=quiet)
+            lint_cmd = _scoped_verify_command(commands.lint, rel_paths)
+            passed, _ = _run_shell_step(lint_cmd, repo_root, quiet=quiet)
             checks["lint"] = "passed" if passed else "failed"
 
     if has_python and commands.typecheck.strip():
-        passed, _ = _run_shell_step(commands.typecheck, repo_root, quiet=quiet)
+        typecheck_cmd = _scoped_verify_command(commands.typecheck, rel_paths)
+        passed, _ = _run_shell_step(typecheck_cmd, repo_root, quiet=quiet)
         checks["typecheck"] = "passed" if passed else "failed"
 
     if commands.test.strip():
-        passed, _ = _run_shell_step(commands.test, repo_root, quiet=quiet)
+        test_cmd = _scoped_verify_command(commands.test, rel_paths)
+        passed, _ = _run_shell_step(test_cmd, repo_root, quiet=quiet)
         checks["tests"] = "passed" if passed else "failed"
 
     return checks
@@ -645,6 +661,11 @@ def run_checkup_simplify(
     effective_attempts = attempts if attempts is not None else settings.attempts
     if effective_attempts < 1:
         raise ValueError("--attempts must be at least 1")
+    if apply and effective_attempts > 1 and not verify:
+        raise ValueError(
+            "--verify is required when --apply uses --attempts greater than 1; "
+            "without verification PDD cannot compare candidates safely."
+        )
     repo_root, targets = discover_simplify_targets(
         path=path,
         since=since,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -11,8 +12,11 @@ from click.testing import CliRunner
 
 from pdd.checkup_file_selection import discover_simplify_targets
 from pdd.checkup_simplify import (
+    SimplifyVerifyCommands,
     _build_simplify_slash_message,
     _parse_claude_code_version,
+    _run_verification,
+    _scoped_verify_command,
     check_claude_code_simplify_available,
     run_checkup_simplify,
 )
@@ -502,3 +506,73 @@ def test_staged_candidate_reads_staged_snapshot(tmp_path: Path, monkeypatch) -> 
     assert observed == ["value = 2\n"]
     assert result.success is True
     assert module.read_text(encoding="utf-8") == "value = 3\n"
+
+
+def test_scoped_verify_command_appends_paths() -> None:
+    assert _scoped_verify_command("ruff format", ["a.py", "b.py"]) == (
+        "ruff format -- a.py b.py"
+    )
+    assert _scoped_verify_command("ruff format", []) == "ruff format"
+
+
+@pytest.mark.skipif(shutil.which("ruff") is None, reason="ruff required")
+def test_run_verification_scopes_format_to_touched_files(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    in_scope = tmp_path / "in_scope.py"
+    out_scope = tmp_path / "out_scope.py"
+    in_scope.write_text("x=1\n", encoding="utf-8")
+    out_scope.write_text("y  =  2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    before_out_scope = out_scope.read_text(encoding="utf-8")
+
+    checks = _run_verification(
+        repo_root=tmp_path,
+        touched=[in_scope],
+        commands=SimplifyVerifyCommands(
+            format="ruff format",
+            lint="",
+            typecheck="",
+            test="",
+        ),
+        no_format=False,
+        quiet=True,
+    )
+
+    assert checks["format"] == "passed"
+    assert out_scope.read_text(encoding="utf-8") == before_out_scope
+
+
+def test_apply_multiple_attempts_requires_verify(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "sample.py"
+    module.write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    module.write_text("x = 2\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="--verify is required"):
+        run_checkup_simplify(
+            path=module,
+            apply=True,
+            since=None,
+            staged=False,
+            max_files=5,
+            attempts=2,
+            evidence=False,
+            verify=False,
+            no_format=True,
+            quiet=True,
+            verbose=False,
+        )
