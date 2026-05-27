@@ -54,6 +54,11 @@ _import_mocks = {
     "pdd.core.errors": mock_core_errors,
 }
 
+_saved_core_modules = {
+    name: module
+    for name, module in sys.modules.items()
+    if name.startswith("pdd.core.")
+}
 _saved_modules = {}
 for _mod_name, _mock in _import_mocks.items():
     _saved_modules[_mod_name] = sys.modules.get(_mod_name)
@@ -136,7 +141,7 @@ finally:
     _core_side_effects = [
         n for n in sys.modules
         if n.startswith("pdd.core.") and n not in _import_mocks
-        and n not in _saved_modules
+        and n not in _saved_core_modules
     ]
     for _name in _core_side_effects:
         sys.modules.pop(_name, None)
@@ -164,7 +169,7 @@ finally:
     for _name, _module in _saved_side_effect_modules.items():
         _restore_module_cache(_name, _module)
 
-del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_modules, _side_effect_module_names, _saved_side_effect_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name, _restore_module_cache
+del _import_mocks, _saved_core_modules, _saved_modules, _saved_generate_module, _saved_commands_modules, _side_effect_module_names, _saved_side_effect_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name, _restore_module_cache
 
 # --------------------------------------------------------------------------------
 # Z3 FORMAL VERIFICATION
@@ -540,6 +545,28 @@ def test_test_agentic_mode_options(runner, mock_agentic_test):
     assert result.exit_code == 0
     kwargs = mock_agentic_test.call_args[1]
     assert kwargs["use_github_state"] is False
+
+
+def test_test_agentic_mode_clean_restart(runner, mock_agentic_test):
+    """Test 'test' command forwards --clean-restart in Agentic mode."""
+    url = "https://github.com/user/repo/issues/1"
+    result = runner.invoke(generate_module.test, [url, "--clean-restart"])
+
+    assert result.exit_code == 0
+    kwargs = mock_agentic_test.call_args[1]
+    assert kwargs["clean_restart"] is True
+
+
+def test_test_clean_restart_rejects_non_issue_http_url(runner, mock_agentic_test):
+    """--clean-restart should only run for a GitHub issue URL."""
+    result = runner.invoke(
+        generate_module.test,
+        ["https://example.com/not-an-issue", "--clean-restart"],
+    )
+
+    assert result.exit_code != 0
+    assert "--clean-restart can only be used" in result.output
+    mock_agentic_test.assert_not_called()
 
 
 def test_test_agentic_mode_failure(runner):

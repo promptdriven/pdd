@@ -1,3 +1,9 @@
+<pdd-reason>CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).</pdd-reason>
+
+<pdd-dependency>agentic_bug_python.prompt</pdd-dependency>
+<pdd-dependency>bug_to_unit_test_python.prompt</pdd-dependency>
+<pdd-dependency>core/cloud_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Write a CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).
 
 <include>./context/python_preamble.prompt</include>

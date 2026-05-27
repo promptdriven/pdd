@@ -99,6 +99,12 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
+def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
+    """Return whether this invocation needs prompt-lint machine output."""
+    pairs = set(zip(arguments, arguments[1:]))
+    return "--json" in arguments and ("checkup", "lint") in pairs
+
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -362,9 +368,8 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
-    # JSON flags on nested commands must keep stdout parseable and avoid
-    # machine-oriented invocations producing local debug artifacts.
-    json_mode = "--json" in sys.argv
+    # Prompt-lint JSON output is intended for downstream machine consumers.
+    json_mode = _is_prompt_lint_json_invocation(sys.argv)
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 
@@ -474,6 +479,7 @@ def cli(
             )
 
     # Perform auto-update check unless disabled
+
     if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:
@@ -591,8 +597,16 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
                 else:
-                    # Generic output using potentially "Unknown Command" name
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_name}")
+                    # Generic output using potentially "Unknown Command" name.
+                    # Suppress the Model: segment when no model was used (zero-cost
+                    # no-ops like an all_synced sync return model_name="" or
+                    # "unknown"/"none"/"N/A") so the UI doesn't render a trailing
+                    # blank "Model: " label (#1103).
+                    model_repr = (model_name or "").strip()
+                    if model_repr and model_repr.lower() not in {"unknown", "n/a", "none", "skipped"}:
+                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
+                    else:
+                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
                 
                 # Display examples used for grounding
                 if isinstance(result_data, dict) and result_data.get("examplesUsed"):

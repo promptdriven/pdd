@@ -1,4 +1,5 @@
-"""Prompt lint command used by ``pdd checkup lint``."""
+"""Commands for inspecting prompt and story assets."""
+# pylint: disable=unknown-option-value
 from __future__ import annotations
 
 import json
@@ -8,6 +9,11 @@ from typing import Optional
 import click
 
 from ..prompt_lint import LintResult, run_llm_ambiguity_pass, scan_prompt, scan_stories
+
+
+@click.group(name="prompt")
+def prompt_group() -> None:
+    """Inspect and maintain prompt assets."""
 
 
 def _exit_code(results: list[LintResult], *, strict: bool) -> int:
@@ -35,21 +41,30 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     help="Treat all warnings as errors.",
 )
 @click.option(
-    "--ambiguity",
+    "--llm",
+    "use_llm",
     is_flag=True,
     default=False,
-    help="Run an advisory LLM ambiguity review through PDD Cloud.",
+    help=(
+        "Add advisory LLM review of ambiguous prompt/story prose (recommended for authoring; "
+        "requires PDD Cloud or configured API credentials)."
+    ),
 )
 @click.pass_context
-def prompt_lint(
+def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
     stories_dir: Optional[str],
     as_json: bool,
     strict: bool,
-    ambiguity: bool,
+    use_llm: bool,
 ) -> None:
-    """Lint prompts and user stories for ambiguity findings."""
+    """Lint prompts and user stories for quality and ambiguity (read-only, advisory).
+
+    By default, runs a fast local heuristic scan suitable for CI. For prompt authoring,
+    pass --llm to add an advisory LLM review of ambiguous prose (requires PDD Cloud
+    or configured API credentials). Results are never written back to your files.
+    """
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")
 
@@ -67,7 +82,7 @@ def prompt_lint(
         results.extend(scan_stories(Path(stories_dir), strict=strict))
 
     deterministic_exit_code = _exit_code(results, strict=strict)
-    if ambiguity:
+    if use_llm:
         obj = ctx.obj or {}
         use_cloud = not bool(obj.get("local", False))
         for result in results:
@@ -98,3 +113,6 @@ def prompt_lint(
     if strict:
         raise click.exceptions.Exit(_exit_code(results, strict=True))
     raise click.exceptions.Exit(deterministic_exit_code)
+
+
+prompt_group.add_command(prompt_lint)

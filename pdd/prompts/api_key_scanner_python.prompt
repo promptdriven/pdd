@@ -19,9 +19,9 @@ Discovers API keys needed by the user's configured models and reports their exis
 
 % Requirements
 1. Function: `scan_environment() -> Dict[str, KeyInfo]` — returns mapping of key name to KeyInfo(source, is_set). Does not store key values. Returns empty dict if no models are configured yet.
-2. Function: `get_provider_key_names() -> List[str]` — returns deduplicated sorted list of all non-empty api_key values from the user's CSV (`~/.pdd/llm_model.csv`)
-3. Dynamic discovery: extract all unique api_key column values from the user CSV — no hardcoded provider list. The api_key field may contain pipe-delimited multiple variable names (e.g. `AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME`); split on `|` and treat each as a separate key to scan
-4. Check sources in priority order:
+2. Function: `get_provider_key_names() -> List[str]` — returns deduplicated sorted list of all non-empty api_key values from the user's CSV (`~/.pdd/llm_model.csv`), expanded through provider_manager aliases.
+3. Dynamic discovery: extract all unique api_key column values from the user CSV — no hardcoded provider list. The api_key field may contain pipe-delimited multiple variable names (e.g. `AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME`); split on `|` and treat each as a separate key to scan. Use `expand_api_key_vars()` from provider_manager so `GOOGLE_API_KEY` is also scanned for catalog rows that name `GEMINI_API_KEY`.
+4. Check sources in priority order, accepting aliases from `api_key_aliases()` for each reported key:
    - .env file (via python-dotenv `dotenv_values`, read-only — always reads fresh on each scan)
    - Shell environment (`os.environ`)
    - ~/.pdd/api-env.{shell} (parse uncommented `export KEY=` lines)
@@ -36,6 +36,7 @@ The user CSV at ~/.pdd/llm_model.csv has columns:
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
 Rows with empty api_key may not require a key.
 The api_key column may contain pipe-delimited values (e.g. `AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME`) when a provider requires multiple keys.
+`GEMINI_API_KEY` and `GOOGLE_API_KEY` are aliases for Google Gemini direct-model rows.
 This file is created/managed by provider_manager when the user adds providers via `pdd setup`.
 </llm_model_csv_schema>
 

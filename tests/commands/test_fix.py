@@ -18,6 +18,11 @@ _import_mocks = {
     "pdd.agentic_e2e_fix": MagicMock(),
 }
 
+_saved_core_modules = {
+    module_name: module
+    for module_name, module in sys.modules.items()
+    if module_name.startswith("pdd.core.")
+}
 _saved_modules: dict[str, object] = {}
 for _module_name, _mock_module in _import_mocks.items():
     if _module_name in sys.modules:
@@ -37,7 +42,7 @@ _side_effect_modules = [
     for module_name in sys.modules
     if module_name.startswith("pdd.core.")
     and module_name not in _import_mocks
-    and module_name not in _saved_modules
+    and module_name not in _saved_core_modules
 ]
 # Popping from sys.modules alone leaves a stale reference on the `pdd.core`
 # parent package: `from pdd.core import X` still returns the OLD object (via
@@ -80,7 +85,16 @@ if "pdd.cli" in sys.modules:
     importlib.reload(sys.modules["pdd.cli"])
 
 del importlib
-del _import_mocks, _saved_modules, _module_name, _side_effect_modules, _templates_module, _real_theme, _real_handle_error
+del (
+    _import_mocks,
+    _saved_core_modules,
+    _saved_modules,
+    _module_name,
+    _side_effect_modules,
+    _templates_module,
+    _real_theme,
+    _real_handle_error,
+)
 del _commands_package
 
 
@@ -181,6 +195,44 @@ def test_agentic_mode_passes_all_options(runner: CliRunner, mock_deps) -> None:
     )
     # No --time was passed, so reasoning_time forwards as None.
     assert kwargs.get("reasoning_time") is None
+
+
+def test_agentic_clean_restart_disables_resume(runner: CliRunner, mock_deps) -> None:
+    issue_url = "https://github.com/example/repo/issues/822"
+    mock_deps["run_agentic_e2e_fix"].return_value = (
+        True,
+        "Applied fix",
+        0.5,
+        "gpt-4.1",
+        [],
+    )
+
+    result = runner.invoke(fix, ["--clean-restart", issue_url])
+
+    assert result.exit_code == 0
+    assert mock_deps["run_agentic_e2e_fix"].call_args.kwargs["resume"] is False
+    assert mock_deps["run_agentic_e2e_fix"].call_args.kwargs["clean_restart"] is True
+
+
+def test_clean_restart_rejected_outside_agentic_issue_mode(runner: CliRunner, mock_deps) -> None:
+    result = runner.invoke(
+        fix,
+        ["--clean-restart", "prompt.prompt", "code.py", "tests/test_fix.py", "error.log"],
+    )
+
+    assert result.exit_code != 0
+    assert "--clean-restart can only be used" in result.output
+    mock_deps["run_agentic_e2e_fix"].assert_not_called()
+    mock_deps["fix_main"].assert_not_called()
+
+
+def test_clean_restart_rejects_non_issue_http_url(runner: CliRunner, mock_deps) -> None:
+    result = runner.invoke(fix, ["--clean-restart", "https://example.com/not-an-issue"])
+
+    assert result.exit_code != 0
+    assert "--clean-restart can only be used" in result.output
+    mock_deps["run_agentic_e2e_fix"].assert_not_called()
+    mock_deps["fix_main"].assert_not_called()
 
 
 def test_agentic_failure_prints_failure_message(runner: CliRunner, mock_deps) -> None:

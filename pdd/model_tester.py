@@ -62,15 +62,16 @@ def _resolve_api_key(row: Dict[str, Any]) -> Tuple[Optional[str], str]:
         status_string is a human-readable description like '✓ Found (OPENAI_API_KEY)'.
     """
     key_name: str = str(row.get("api_key", "")).strip()
+    from pdd.provider_manager import api_key_aliases, resolve_api_key_from_env
 
     # No env var configured — litellm will use its own defaults
     if not key_name:
         return None, "(no key configured)"
 
     # Check environment
-    key_value = os.getenv(key_name, "")
+    key_value, resolved_key_name = resolve_api_key_from_env(key_name)
     if key_value:
-        return key_value.strip(), f"✓ Found ({key_name})"
+        return key_value.strip(), f"✓ Found ({resolved_key_name or key_name})"
 
     # Check if a .env file might have it (dotenv may not be loaded yet)
     try:
@@ -81,9 +82,10 @@ def _resolve_api_key(row: Dict[str, Any]) -> Tuple[Optional[str], str]:
             env_path = Path.cwd() / ".env"
         if env_path.is_file():
             vals = dotenv_values(env_path)
-            val = vals.get(key_name, "")
-            if val:
-                return val.strip(), f"✓ Found ({key_name} via .env)"
+            for alias in api_key_aliases(key_name):
+                val = vals.get(alias, "")
+                if val:
+                    return val.strip(), f"✓ Found ({alias} via .env)"
     except ImportError:
         pass
 
@@ -111,7 +113,7 @@ def _resolve_provider_auth(row: Dict[str, Any]) -> List[Tuple[str, str, bool]]:
     Returns a list of (label, status_string, is_ok) tuples.
     Driven by the CSV api_key field (pipe-delimited for multi-credential providers).
     """
-    from pdd.provider_manager import parse_api_key_vars
+    from pdd.provider_manager import parse_api_key_vars, resolve_api_key_from_env
 
     api_key_field = str(row.get("api_key", "")).strip()
     env_vars = parse_api_key_vars(api_key_field)
@@ -122,13 +124,13 @@ def _resolve_provider_auth(row: Dict[str, Any]) -> List[Tuple[str, str, bool]]:
 
     results: List[Tuple[str, str, bool]] = []
     for var in env_vars:
-        value = os.getenv(var, "")
+        value, resolved_var = resolve_api_key_from_env(var)
         if value:
             # Extra validation for credential file paths
             if var == "GOOGLE_APPLICATION_CREDENTIALS" and not Path(value).is_file():
                 results.append((var, f"⚠ Path set but file not found ({var})", False))
             else:
-                results.append((var, f"✓ Found ({var})", True))
+                results.append((var, f"✓ Found ({resolved_var or var})", True))
         else:
             results.append((var, f"✗ Not found ({var})", False))
 
@@ -180,7 +182,7 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
     Returns a dict with keys: success, duration_s, cost, error, tokens.
     """
     import litellm
-    from pdd.provider_manager import parse_api_key_vars
+    from pdd.provider_manager import parse_api_key_vars, resolve_api_key_from_env
 
     model_name: str = str(row.get("model", ""))
     base_url = _resolve_base_url(row)
@@ -199,7 +201,7 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
     env_vars = parse_api_key_vars(api_key_field)
 
     if len(env_vars) == 1:
-        key_value = os.getenv(env_vars[0], "")
+        key_value, _ = resolve_api_key_from_env(env_vars[0])
         if key_value:
             kwargs["api_key"] = key_value.strip()
     # Multi-var and empty: litellm reads env vars automatically

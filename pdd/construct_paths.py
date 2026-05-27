@@ -88,6 +88,7 @@ BUILTIN_EXT_MAP = {
     'svelte': '.svelte', 'vue': '.vue',
     # Common data/config formats
     'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
+    'markdown': '.md',
 }
 
 # Configuration loading functions
@@ -683,7 +684,6 @@ def _is_known_language(language_name: str) -> bool:
         # Additional languages from language_format.csv
         'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
         'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
-        'lisp', 'scheme', 'ada',
         'prisma', 'lean', 'agda',
         # Frontend / templating
         'svelte', 'vue', 'scss', 'sass', 'less',

@@ -6,13 +6,13 @@
     "functions": [
       {
         "name": "run_agentic_bug_orchestrator",
-        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]",
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
         "returns": "Tuple[bool, str, float, str, List[str]]",
         "sideEffects": [
           "Posts GitHub issue comments via post_step_comment",
           "Persists workflow state via save_workflow_state (local + optional GitHub state comment)",
           "Creates/removes git worktrees and branches under .pdd/worktrees/fix-issue-{N}/",
-          "Spawns external agentic CLI subprocesses (claude/gemini/codex/opencode)"
+          "Spawns external agentic CLI subprocesses (claude/agy/gemini/codex/opencode)"
         ]
       }
     ]
@@ -48,7 +48,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 ```
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 12 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -56,8 +56,23 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
 7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
-9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment
+9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment. If `clean_restart=True`, call `clear_workflow_state(...)` before any load, start from fresh in-memory state even if the clear fails, save `state["clean_restart"] = True`, post a visible Step 0 startup comment with `Mode: Clean restart`, and pass the effective clean-restart context to worktree/PR creation so old remote branches can be replaced safely. If a later normal resume loads `clean_restart=True` from state, continue using clean worktree and PR semantics.
 10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
+
+% Step 9 Structural Test Guard
+
+After Step 9 writes tests, the orchestrator scans generated or modified test files for structural/non-behavioral assertions such as `inspect.getsource`, `inspect.signature`, `assert hasattr(...)`, or source-string matching. The guard must catch structural tests introduced by Step 9 but must NOT retry only because the target test file already contained structural tests before Step 9 ran.
+
+Implementation requirements:
+1. Snapshot full pre-Step-9 test-file content before invoking Step 9, not just line counts.
+2. If a post-Step-9 file is byte-identical to the snapshot, report no new structural violations.
+3. If the snapshot is a strict line-prefix of the post-Step-9 file, scan only appended lines.
+4. If the file was rewritten rather than appended, run the full structural detector on the current content, then subtract violation identities already present in the pre-Step-9 snapshot. A violation identity should be stable across line moves, using the violation kind plus the offending stripped source line, not the line number. This prevents false retries when a model rewrites a file that already had an unrelated structural test, while still catching any new structural test added by the rewrite.
+5. If new structural violations remain, retry Step 9 once with feedback and backup/restore the rejected files as before.
+
+% Step 9 Fix-Location Coverage Check
+
+After Step 9 writes tests, the orchestrator deterministically verifies that generated tests cover every Step 6 `FIX_LOCATIONS` entry when there is more than one fix location. Direct references count when test content contains the dotted module path (`pdd.commands.generate`), slash path without extension (`pdd/commands/generate`), or basename as a word. For command modules under `pdd/commands/*.py`, a CliRunner test that imports `pdd.cli` and invokes a Click command declared in that module also counts as coverage for the command module. Extract command names from decorators such as `@click.command("example")` or `@click.command(name="generate")`. This avoids false retries when tests correctly exercise `pdd/commands/generate.py` through the public CLI entrypoint instead of importing the command module directly.
 
 % Step Execution
 For each step (1-12):
@@ -98,6 +113,56 @@ After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list t
 - After Step 11 parses E2E_FILES_CREATED, extend changed_files and update files_to_stage
 - This ensures Step 11 (E2E) and Step 12 (PR) know exactly which files to include
 - Step 12 prompt uses `{files_to_stage}` to display the explicit list of files to stage
+
+% Step 6 Scope Markers (issue #1208)
+
+After Step 6 completes, the orchestrator MUST parse three additional markers from raw output (outside the `<step_report>` block) in addition to the existing `FIX_LOCATIONS`, `EXPANSION_ITEMS`, and `PATTERN_SEARCH` markers:
+
+1. `SCOPE_CLASSIFICATION: LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING`
+   - Parse the LAST matching marker line so a post-retry promotion (see the PATTERN_SEARCH retry-path section below) wins over the original Step 6 emission on resume. The orchestrator appends an updated `SCOPE_CLASSIFICATION:` line whenever the retry promotes scope back to `SIBLING_PATTERN`, and this must remain the source of truth across resumes.
+   - Normalize to upper-case and validate against the three allowed values.
+   - If missing or unrecognized, default to `LOCALIZED` (backward compatible with older Step 6 runs).
+   - Expose via `context["scope_classification"]` so Steps 8 and 9 can render `{scope_classification}` in their templates.
+
+2. `NEEDS_FIX: <item> | <reason>`
+   - Parse ALL matching lines (one sibling per line).
+   - For each line, capture the item token (before the first `|`) and the full reason text. The item may be a source path or a stable value-level sibling ID such as `extension:.htm`, `command:resume`, `button:save`, `status:archived`, or `model:gpt-x`.
+   - Treat each parsed line as a confirmed sibling that must be added to the EXPANSION_ITEMS list passed to Steps 8 and 9 via `context["step6_expansion_items"]`.
+   - Only source/worktree path items may be merged into `FIX_LOCATIONS`. Value-level sibling IDs must stay out of `FIX_LOCATIONS` while still flowing into `EXPANSION_ITEMS`.
+   - Fold `NEEDS_FIX` items into the existing EXPANSION_ITEMS string using comma separation, deduplicating against entries already present from the `EXPANSION_ITEMS:` marker.
+
+3. `SAFE_EVIDENCE: <item> | <evidence location> | <reason>`
+   - Parse ALL matching lines for telemetry/audit purposes. SAFE_EVIDENCE entries are informational — they document the sibling search but are NOT added to `EXPANSION_ITEMS` or `FIX_LOCATIONS`.
+
+**Deterministic auto-downgrade.** If `SCOPE_CLASSIFICATION` is `SIBLING_PATTERN` but ZERO `NEEDS_FIX` lines were emitted, the orchestrator MUST downgrade the classification to `LOCALIZED` before threading it into Steps 8 and 9. This guards against partial sibling searches that would otherwise inflate scope without evidence. Log the downgrade so it appears in step output for debugging.
+
+**Threading.** The orchestrator must thread `scope_classification` into the context dict used to format Step 8 and Step 9 templates. Default to `"LOCALIZED"` in the initial context dict (alongside `fix_locations` and `step6_expansion_items`) so missing/early steps render cleanly.
+
+**Resume-derived Step 8 fields.** The orchestrator must also include `planned_test_count` in the initial context dict, defaulting to `"all"`. When resuming from a state that already has `step8_output`, recompute `planned_test_count` from that cached Step 8 output with `_count_planned_tests(...)` before formatting Step 9. Otherwise Step 9 can render a literal `{planned_test_count}` placeholder on resume and lose the exact planned-test-count instruction.
+
+% Step 6 PATTERN_SEARCH Retry Path (issue #1208 follow-up)
+
+When Step 6 emits a `PATTERN_SEARCH:` marker, the orchestrator runs a deterministic `grep -rE` to verify FIX_LOCATIONS is complete. Files found by grep but missing from FIX_LOCATIONS are sent back to the Step 6 model in a retry call. The retry output uses the SAME marker format as the original Step 6 output:
+
+```
+NEEDS_FIX: <path> | <reason it shares the root cause>
+SAFE_EVIDENCE: <path> | <line> | <reason it is safe>
+```
+
+The retry-path parsing contract:
+
+1. **NEEDS_FIX parsing must split on `|`.** Capture the path token (everything before the first `|`), strip backticks/whitespace, and discard the reason for FIX_LOCATIONS merge purposes. Treating the full `<path> | <reason>` string as a path produces a bogus filepath that downstream steps cannot resolve.
+2. **Confirmed siblings from the retry must flow into `context["step6_expansion_items"]`.** After merging the retry's NEEDS_FIX/SAFE_EVIDENCE into FIX_LOCATIONS, re-parse the retry output with the same `_parse_needs_fix`-style helper used for the original Step 6 output and fold each `(path, reason)` pair into the existing EXPANSION_ITEMS string via the same `_merge_needs_fix_into_expansion` helper. Step 8 reads `{step6_expansion_items}` (not `FIX_LOCATIONS`) when planning sibling test coverage, so siblings discovered only by the grep retry are otherwise invisible to Step 8/9.
+3. **Conservative default on retry failure.** If the retry call fails (rate limit, network error, agent abort), every **cap-fitted** unclassified grep file (the ≤50 slice that was sent to the LLM) is treated as `NEEDS_FIX` for FIX_LOCATIONS purposes AND appended to `step6_expansion_items` (with an empty reason). Overflow files (those beyond `_MAX_GREP_RESULTS`) are excluded from this default for the same reason as rule 3a — they have no evidence and must not coerce a broad audit. A `PATTERN_SEARCH_OVERFLOW` marker is emitted for them instead (see rule 3a).
+
+3a. **Retry cap and overflow handling.** When grep produces more than `_MAX_GREP_RESULTS` (currently 50) unclassified files, only the top-priority slice (≤ 50) is sent to the LLM retry — the context window cannot fit the rest. Overflow files (those beyond the cap) have NO LLM classification evidence and MUST NOT auto-default into `FIX_LOCATIONS` or `step6_expansion_items` — doing so would coerce a broad audit that the user never opted into, violating the spec rule "every expanded item has machine-readable evidence" and "broad analogous audits remain opt-in". Instead, after completing the retry path, emit a `PATTERN_SEARCH_OVERFLOW: N candidate(s) exceeded the LLM retry cap (50) and were NOT classified; review manually if a broader audit is desired: <file1>, <file2>...` line appended to `step6_output`. This makes the gap loud rather than silent while preserving the opt-in contract.
+4. **Basename collision discipline.** When the retry's `SAFE_EVIDENCE` lists a full-path file (e.g. `pdd/foo.py`) and grep also surfaced a different full-path file with the same basename (e.g. `tests/foo.py`) as unclassified, the unclassified file MUST still default to NEEDS_FIX and flow into `step6_expansion_items`. Basename-only exclusion is correct ONLY when the LLM emitted a bare basename (`foo.py`) AND there is exactly one grep-discovered file with that basename — i.e. the bare reference is unambiguous. This mirrors the `_is_classified` semantics in `_merge_fix_locations`.
+5. **Scope promotion on retry.** When the PATTERN_SEARCH retry produces sibling evidence (explicit `NEEDS_FIX` lines OR conservative defaults from unclassified grep hits) AND `context["scope_classification"]` is still `LOCALIZED`, the orchestrator MUST promote it to `SIBLING_PATTERN`. The promotion fires regardless of what the original Step 6 marker said — the trigger covers three Step 6 outputs:
+   - explicit `SIBLING_PATTERN` with zero `NEEDS_FIX` (auto-downgraded by `_apply_step6_scope_markers`)
+   - explicit `LOCALIZED` that nevertheless emitted `PATTERN_SEARCH`
+   - missing or unrecognized `SCOPE_CLASSIFICATION` (defaults to `LOCALIZED`) that emitted `PATTERN_SEARCH`
+   In all three, sibling evidence IS the classification signal; the original LLM marker is not load-bearing. `CROSS_CUTTING` is left alone (a strictly broader scope must not be narrowed by promotion). Step 8 otherwise receives the contradictory `LOCALIZED` + non-empty `step6_expansion_items` pair.
+6. **Resume safety.** After updating FIX_LOCATIONS and `step6_expansion_items`, append updated `FIX_LOCATIONS: <merged>`, `EXPANSION_ITEMS: <merged>`, one `NEEDS_FIX: <path> | <reason>` line per confirmed sibling, and (when scope was promoted) `SCOPE_CLASSIFICATION: <new>` to `context["step6_output"]`. The resume-side parsers MUST read the LAST `EXPANSION_ITEMS:` / `SCOPE_CLASSIFICATION:` marker so the post-retry values win, and `_apply_step6_scope_markers` must see the appended `NEEDS_FIX:` lines so it does not re-downgrade SIBLING_PATTERN back to LOCALIZED on resume.
 
 % Early Exit Conditions (Hard Stops)
 
@@ -148,17 +213,18 @@ The orchestrator must parse step output to detect stop conditions:
 
 Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
 
-1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False, *, clean_restart: bool = False) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
    - Branch name: `fix/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
    - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
-   - If branch already exists locally, delete with `git branch -D`
+   - If branch already exists locally, delete with `git branch -D` when `clean_restart=True` or `resume_existing=False`; clean restart must not preserve an old local `fix/issue-{issue_number}` branch even on the resume-restoration path.
    - Create worktree: `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 2. In orchestrator loop, before Step 7 (the first step that can write files — Step 7 may auto-fix prompt specifications and emits `PROMPT_FIXED`):
-   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=clean_restart)`
+   - When `clean_restart=True`, fetch `+refs/heads/fix/issue-{issue_number}:refs/remotes/origin/fix/issue-{issue_number}` to refresh Step 12 `--force-with-lease` metadata in the remote-tracking ref, but do not reuse that branch as the worktree base. Create from `_resolve_main_ref(git_root)`, refuse the literal `"HEAD"` fallback, and fail if an existing local `fix/issue-{issue_number}` branch cannot be deleted. This applies even when resume restoration calls `_setup_worktree(..., resume_existing=True, clean_restart=True)`.
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 7-12
    - Add `worktree_path` to context dict (for Step 12 prompt formatting)

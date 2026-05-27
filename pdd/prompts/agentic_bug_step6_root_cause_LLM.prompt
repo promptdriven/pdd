@@ -1,4 +1,4 @@
-<pdd-reason>Analyzes bug root cause with cross-cutting detection, variable reference audit, and state symmetry checks.</pdd-reason>
+<pdd-reason>Analyzes bug root cause and classifies scope as LOCALIZED/SIBLING_PATTERN/CROSS_CUTTING with mandatory sibling search.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to analyze the root cause of the issue.
 
@@ -84,15 +84,41 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
    - Identify the specific line(s) or logic that need to change
    - Note any related issues or implications
 
-8. **Assess fix scope: localized vs cross-cutting**
-   Determine whether the fix is localized to one function/module or requires a cross-cutting solution:
-   - **Localized**: The bug is in one function and can be fixed by modifying that function alone. Example: a wrong index, missing null check, incorrect calculation.
-   - **Cross-cutting**: The bug affects a concern that spans many call sites, and a per-function fix would mean modifying 5+ locations with the same pattern. Examples:
-     - A CLI flag (like --quiet, --verbose, --dry-run) that needs to be threaded through many functions → fix should be a centralized mechanism (env var, context object, global module), not adding a parameter to every function
-     - A configuration value read in many places → fix should be a config singleton or context, not passing the value through every call chain
-     - Error handling missing in many endpoints → fix should be centralized middleware or decorator, not adding try/catch to each one
-     - A state check needed at many call sites → fix should be a single check at the entry point or a decorator
-   If cross-cutting, note this in your root cause analysis and recommend the centralized approach. The fix may require creating a new module or utility, not just modifying existing code.
+8. **Assess fix scope: classify as LOCALIZED, SIBLING_PATTERN, or CROSS_CUTTING**
+   Classify the fix scope into exactly one of three categories. This classification is **mandatory** and is consumed by Steps 8 and 9 to drive test coverage.
+   - **LOCALIZED**: The bug is in one isolated path/module/function and can be fixed by modifying that single site alone. The root cause does NOT involve any shared symbol, helper, component, state field, marker, schema, event path, route, repeated code pattern, data table, enum, alias set, or value domain.
+     - Example: one button's local `onClick` handler points to the wrong route (the button's own code is the bug, not a shared component or routing helper).
+     - Example: a wrong index, missing null check, or incorrect calculation in a single function with no equivalent siblings.
+   - **SIBLING_PATTERN**: The root cause is local in nature, but the *same* failure mode could plausibly exist in other places that share a common pattern. You MUST search for and classify those sibling instances (see step 8a below). Examples:
+     - A resume/save/restore path drops a state marker — other resume paths that read/write the same state schema, marker, helper, or workflow pattern may have the same bug.
+     - One write site of a marker is missing handling that other write sites have — every other write site for the same marker is a candidate sibling.
+     - A shared event-routing path or message dispatcher has a wrong target — every consumer of that path is a candidate sibling.
+     - A mapping/normalization/canonicalization bug affects one named value — other values in the same domain are candidate siblings. Examples: file-extension aliases, command aliases, MIME/content types, language rows, provider/model aliases, status names, route/action variants, or UI controls driven by the same registry/config.
+   - **CROSS_CUTTING**: The fix belongs in a shared helper/component/state mechanism rather than many local patches. A per-call-site fix would mean modifying 5+ locations with the same pattern. Examples:
+     - A CLI flag (like --quiet, --verbose, --dry-run) that needs to be threaded through many functions → fix should be a centralized mechanism (env var, context object, global module), not adding a parameter to every function.
+     - A configuration value read in many places → fix should be a config singleton or context, not passing the value through every call chain.
+     - Error handling missing in many endpoints → fix should be centralized middleware or decorator, not adding try/catch to each one.
+     - A shared `Button` component or shared routing helper is wrong and breaks every consumer → fix the shared component, do not patch each consumer.
+   If `CROSS_CUTTING`, recommend the centralized approach. The fix may require creating a new module or utility, not just modifying existing code.
+
+8a. **Mandatory sibling search (when scope is SIBLING_PATTERN or CROSS_CUTTING)**
+    If the root cause involves any of the following shared elements, you MUST search the codebase for sibling instances and classify each one:
+    - A shared symbol, function, helper, or component
+    - A shared state field, marker, schema, or workflow checkpoint
+    - A shared event path, route, message dispatcher, or pub/sub topic
+    - A repeated code pattern (same shape of call, same data transformation) that appears in multiple places
+    - A shared config/data table, enum, registry, parser, normalizer, canonicalizer, alias list, extension map, content-type map, status-code map, or other value domain
+
+    Siblings are not limited to source files. A candidate sibling can be a path, command, route, UI control, enum member, config key, file extension, content type, language row, provider/model, state marker, or other domain value. If the issue names only one or two values from an equivalence class, enumerate the rest of that class from repository tables/config/docs and classify each case. For frontend button bugs, inspect the buttons sharing the same component/action registry — do not audit unrelated buttons that do not share the root cause.
+
+    **Extension/format canonicalization rule:** If the root cause rewrites, normalizes, canonicalizes, or validates a user-supplied file extension/format/content type, you MUST build an explicit value-domain matrix. Inspect repository language/format tables and maps, then check common aliases/dialects that flow through the same normalizer. Do not stop at the examples named by the issue. Use the actual language key produced by the affected code path, not a normalized guess: if code does `language.lower()`, then human labels like `C++`, `C#`, or `F#` become `c++`, `c#`, `f#`, and missing map entries may synthesize invalid suffixes such as `.c++`. Also check dialect suffixes under the base language when plausible: `.tsx` under `typescript`, `.jsx`/`.mjs`/`.cjs` under `javascript`, `.pyi` under `python`, `.bash` and `.zsh` under `shell` or `bash`. Treat a suffix as `NEEDS_FIX` if it rewrites under any plausible base-language path, even if it is also `SAFE_EVIDENCE` under a more specific dialect language. Mixed evidence is not safe overall: the unsafe path wins for expansion coverage. For example, `.zsh` may be safe when language is exactly `zsh`, but MUST still be emitted as `NEEDS_FIX: extension:.zsh | language=shell/bash ...` when the same artifact can flow through `shell` or `bash` and be rewritten to `.sh`. At minimum, consider families like: YAML `.yml`/`.yaml`; Markdown `.md`/`.markdown`; HTML `.html`/`.htm`; JavaScript `.js`/`.mjs`/`.cjs`/`.jsx`; TypeScript `.ts`/`.tsx`/`.mts`/`.cts`; Python `.py`/`.pyi`; Shell/Bash/Zsh `.sh`/`.bash`/`.zsh`; C/C++ `.c`/`.cc`/`.cpp`/`.cxx`/`.hpp`; plus other language rows in the repo's format table where the table extension differs from the normalizer's generated suffix. Emit `NEEDS_FIX: extension:<suffix> | ...` for every suffix that would be silently rewritten or rejected by the same root cause, and `SAFE_EVIDENCE: extension:<suffix> | ...` for checked suffixes that are already preserved.
+
+    For each candidate sibling found, classify it with machine-readable evidence using one of the two markers below. **Every expanded item MUST carry evidence — do not list a sibling without classifying it.**
+
+    - `NEEDS_FIX: <item> | <reason>` — the candidate exhibits the same failure mode/root cause and must be fixed or tested alongside the primary site. Use a stable path when the sibling is a file, or a stable domain ID such as `extension:.htm`, `command:resume`, `button:save`, `status:archived`, or `model:gpt-x` when the sibling is a value/case.
+    - `SAFE_EVIDENCE: <item> | <evidence location> | <reason>` — the candidate looks similar but is safe (e.g., different guard already present, different data flow, different invariant holds). Cite the specific file/line/table/config entry that proves it is safe.
+
+    **Stay scoped.** Do NOT expand into broad analogous audits ("audit every button", "audit every API endpoint") unless the root cause specifically points to a shared mechanism. Broad audits remain opt-in, not the default. If the scope is `LOCALIZED`, skip this step entirely — no sibling search is required.
 
 9. **Variable reference audit**
    After identifying the root cause variable/marker/field, grep for ALL references to it across the affected file(s). For each reference:
@@ -112,11 +138,11 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
 11. **Proposed Fix Validation**
     If the issue body proposes a specific fix (code snippets, file paths, or a described approach), independently validate its scope against your own findings:
     - Compare the set of affected locations/cases identified by the issue's proposed fix against the full set you found in steps 4-10 above
-    - Classify the result:
-      - `SCOPE_MATCH` — the issue's proposed fix covers the same scope as your independent analysis
-      - `SCOPE_EXPANSION` — your independent analysis found additional affected locations, cases, or files beyond what the issue proposes
+    - Classify the result (this is a SEPARATE concept from the `SCOPE_CLASSIFICATION` enum below — it describes how the *issue's proposed fix* compares to your analysis, not how the fix maps onto the codebase):
+      - `PROPOSED_FIX_MATCH` — the issue's proposed fix covers the same scope as your independent analysis
+      - `PROPOSED_FIX_EXPANSION` — your independent analysis found additional affected locations, cases, or files beyond what the issue proposes
       - `NO_PROPOSED_FIX` — the issue does not propose a specific fix
-    - If `SCOPE_EXPANSION`: list every affected item your analysis found that the issue's proposed fix does NOT cover. These are the items downstream steps (8, 9, 10) must include in their test plans and verification — not just the subset the issue mentions.
+    - If `PROPOSED_FIX_EXPANSION`: list every affected item your analysis found that the issue's proposed fix does NOT cover. These are the items downstream steps (8, 9, 10) must include in their test plans and verification — not just the subset the issue mentions.
     - **This step exists because issue authors may propose partial fixes.** Downstream steps must use YOUR full scope, not the issue's proposed scope.
 
 
@@ -156,10 +182,14 @@ problematic_code_snippet()
 2. ...
 
 ### Fix Scope
-- **Type:** [Localized | Cross-cutting]
-- [If cross-cutting]: **Affected call sites:** [List the 5+ locations that would need the same change]
-- [If cross-cutting]: **Centralized approach:** [Describe the single mechanism — env var, context object, new utility module, decorator — that would solve it in one place instead of N changes]
-- [If cross-cutting]: **New file needed?** [Yes/No — e.g., a `quiet.py` module, a config singleton, a middleware]
+- **Type:** [LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING]
+- **Why this classification:** [One sentence explaining why the root cause fits this category — what shared element (if any) drives the choice]
+- [If SIBLING_PATTERN]: **Sibling search performed:** [What you grepped/searched/enumerated and where, including value-domain tables/configs if relevant]
+- [If SIBLING_PATTERN]: **Confirmed siblings (NEEDS_FIX):** [List each `<item> | <reason>` entry for confirmed siblings]
+- [If SIBLING_PATTERN]: **Looked-but-safe (SAFE_EVIDENCE):** [List each `<item> | <evidence location> | <reason>` entry for candidates that turned out safe]
+- [If CROSS_CUTTING]: **Affected call sites:** [List the 5+ locations that would need the same change]
+- [If CROSS_CUTTING]: **Centralized approach:** [Describe the single mechanism — env var, context object, new utility module, decorator — that would solve it in one place instead of N changes]
+- [If CROSS_CUTTING]: **New file needed?** [Yes/No — e.g., a `quiet.py` module, a config singleton, a middleware]
 
 ### Sibling Bugs
 - **Variable reference audit:** [List all write/read sites for the root-cause variable. Flag any write site that handles a marker inconsistently compared to others]
@@ -168,10 +198,10 @@ problematic_code_snippet()
 
 ### Proposed Fix Validation
 - **Issue proposes a fix:** [Yes | No]
-- **Scope classification:** [SCOPE_MATCH | SCOPE_EXPANSION | NO_PROPOSED_FIX]
+- **Proposed fix coverage:** [PROPOSED_FIX_MATCH | PROPOSED_FIX_EXPANSION | NO_PROPOSED_FIX]
 - **Issue-proposed scope:** [List locations/cases the issue's fix covers, or "N/A"]
 - **Step 6 full scope:** [List ALL locations/cases your independent analysis found]
-- **Expansion items (if SCOPE_EXPANSION):** [List items found by your analysis but NOT covered by the issue's proposed fix. These MUST be included in downstream test plans and verification]
+- **Expansion items (if PROPOSED_FIX_EXPANSION):** [List items found by your analysis but NOT covered by the issue's proposed fix. These MUST be included in downstream test plans and verification]
 
 ### Fix Location
 - **File(s) to modify:** `path/to/root_cause_file.py`
@@ -183,15 +213,23 @@ problematic_code_snippet()
 *Proceeding to Step 7: Prompt Classification*
 </step_report>
 
-After the closing `</step_report>` tag, emit two machine-readable markers on their own lines (the orchestrator parses raw output for these — they MUST live OUTSIDE the report block):
+After the closing `</step_report>` tag, emit machine-readable markers on their own lines (the orchestrator parses raw output for these — they MUST live OUTSIDE the report block):
 
 ```
+SCOPE_CLASSIFICATION: LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING
 FIX_LOCATIONS: path/to/file1.py, path/to/file2.py
 EXPANSION_ITEMS: description of item 1, description of item 2
+NEEDS_FIX: path/to/sibling1.py | reason it shares the root cause
+NEEDS_FIX: extension:.htm | reason this value/case shares the root cause
+SAFE_EVIDENCE: path/to/looked_at.py | 42 | reason it is safe despite looking similar
+SAFE_EVIDENCE: extension:.yaml | pdd/data/language_format.csv:17 | reason this value/case is already safe
 ```
 
+- `SCOPE_CLASSIFICATION`: REQUIRED. Exactly one of `LOCALIZED`, `SIBLING_PATTERN`, or `CROSS_CUTTING`. Missing or unrecognized values default to `LOCALIZED` (backward compatible).
 - `FIX_LOCATIONS`: ALL files from "File(s) to modify" above, comma-separated on one line.
-- `EXPANSION_ITEMS`: If scope classification is `SCOPE_EXPANSION`, list every item your analysis found that the issue's proposed fix does NOT cover, comma-separated on one line. If `SCOPE_MATCH` or `NO_PROPOSED_FIX`, output: `EXPANSION_ITEMS: none`
+- `EXPANSION_ITEMS`: If "Proposed fix coverage" is `PROPOSED_FIX_EXPANSION`, list every item your analysis found that the issue's proposed fix does NOT cover, comma-separated on one line. If `PROPOSED_FIX_MATCH` or `NO_PROPOSED_FIX`, output: `EXPANSION_ITEMS: none`. NEEDS_FIX siblings (below) are folded into `EXPANSION_ITEMS` by the orchestrator — you do NOT need to duplicate them here. Note: "Proposed fix coverage" is independent of the `SCOPE_CLASSIFICATION:` enum (LOCALIZED | SIBLING_PATTERN | CROSS_CUTTING) — they describe different things and never collide.
+- `NEEDS_FIX`: Emit ONE line per confirmed sibling. Format: `NEEDS_FIX: <item> | <reason>`. Required when `SCOPE_CLASSIFICATION` is `SIBLING_PATTERN`; the orchestrator will auto-downgrade `SIBLING_PATTERN` to `LOCALIZED` if zero `NEEDS_FIX` lines are emitted (so partial searches do not silently inflate scope). `<item>` may be a file path or a stable value/case ID such as `extension:.htm` when the sibling is not a file.
+- `SAFE_EVIDENCE`: Emit ONE line per candidate sibling that turned out safe. Format: `SAFE_EVIDENCE: <item> | <evidence location> | <reason>`. These are informational — they document the search but are not added to `EXPANSION_ITEMS` or `FIX_LOCATIONS`.
 
 If the bug involves a **repeating pattern** across multiple files — a class of misuse that could occur in many places (e.g., unescaped user input, missing error handling, incorrect API usage, missing sanitization) — also output a grep-compatible regex that would find ALL instances of the problematic code pattern in the codebase:
 
@@ -216,5 +254,7 @@ Examples:
 - Search for existing patterns that solve analogous problems before recommending a fix approach
 - The fix location you recommend here directly determines which component pdd bug will create tests for — getting this wrong means tests will target the wrong code
 - If root cause is unclear, document what you learned and hypotheses
-- **Cross-cutting check**: Count how many call sites would need the same change. If 5+, stop and think about a centralized solution. A fix that patches 10 functions with the same `if not flag:` guard is a code smell — the right fix is usually one mechanism at a higher level.
-- Place your findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you. Keep `FIX_LOCATIONS:`, `EXPANSION_ITEMS:`, and `PATTERN_SEARCH:` markers OUTSIDE the tags so the orchestrator can parse them.
+- **Scope classification check**: You MUST emit exactly one `SCOPE_CLASSIFICATION:` marker. If the root cause involves any shared symbol, helper, component, state field, marker, schema, event path, or repeated pattern, the classification cannot be `LOCALIZED` — you must search for siblings and emit `NEEDS_FIX:` / `SAFE_EVIDENCE:` lines for each candidate.
+- **Cross-cutting check**: Count how many call sites would need the same change. If 5+, stop and think about a centralized solution. A fix that patches 10 functions with the same `if not flag:` guard is a code smell — the right fix is usually one mechanism at a higher level (classify as `CROSS_CUTTING`).
+- **Sibling-search discipline**: Searching for siblings is mandatory ONLY when the root cause involves a shared element. Do NOT expand into broad analogous audits by default — broad audits remain opt-in. Every expanded sibling MUST carry `NEEDS_FIX:` or `SAFE_EVIDENCE:` evidence.
+- Place your findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you. Keep `SCOPE_CLASSIFICATION:`, `FIX_LOCATIONS:`, `EXPANSION_ITEMS:`, `NEEDS_FIX:`, `SAFE_EVIDENCE:`, and `PATTERN_SEARCH:` markers OUTSIDE the tags so the orchestrator can parse them.
