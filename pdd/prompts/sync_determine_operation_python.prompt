@@ -30,6 +30,7 @@ You are an expert Python developer. Your task is to implement the core decision-
     -   **Bug #23**: Fingerprint commands prefixed with `skip:` indicate skipped operations; workflow is NOT complete.
     -   **Agentic Tests**: For non-Python languages, trust `run_report` success when `test_hash` is set (real test execution). `test_hash=None` indicates synthetic run_report from crash/verify.
     -   **Unparseable output**: `tests_passed=0`, `tests_failed=0`, `exit_code=0` → accept as `all_synced` (confidence=0.70).
+    -   **Staleness**: Must validate `run_report` staleness (hash matching) before recommending `fix` based on `tests_failed > 0` or recommending `crash` based on `exit_code != 0`.
 10. **Missing File Recovery**: `validate_expected_files` checks fingerprint expectations against disk. `_handle_missing_expected_files` returns appropriate recovery operation with priority: code → example → test.
 11. **Cost Estimation**: `estimate_operation_cost` returns dollar estimates per operation for budget tracking.
 12. **Stale Run Report Handling**: Run reports without a fingerprint are ignored (orphaned). After `auto-deps`, existing run reports are stale and ignored (the early auto-deps check fires before run_report processing).
