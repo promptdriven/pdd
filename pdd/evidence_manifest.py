@@ -21,6 +21,7 @@ _INCLUDE_RE = re.compile(
     r"<include(?:\s+[^>]*?)?>(.*?)</include>|```<([^>\n]+)>```",
     re.DOTALL | re.IGNORECASE,
 )
+_CONTRACT_RULES_RE = re.compile(r"<contract_rules\b", re.IGNORECASE)
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -181,12 +182,25 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
     }
 
 
-def _contract_statuses(prompt_file: Optional[str | Path]) -> dict[str, Any]:
+def _prompt_has_contract_rules(prompt_path: Path) -> bool:
+    """True when the prompt file declares a contract_rules section."""
+    try:
+        content = prompt_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(_CONTRACT_RULES_RE.search(content))
+
+
+def _contract_statuses(  # pylint: disable=too-many-return-statements
+    prompt_file: Optional[str | Path],
+) -> dict[str, Any]:
     if not prompt_file:
         return {"status": "not_applicable", "rules": {}}
     path = Path(prompt_file)
     if not path.is_file():
         return {"status": "not_available", "rules": {}}
+    if not _prompt_has_contract_rules(path):
+        return {"status": "not_applicable", "rules": {}}
     try:
         from .coverage_contracts import build_coverage  # pylint: disable=import-outside-toplevel
     except ImportError:
