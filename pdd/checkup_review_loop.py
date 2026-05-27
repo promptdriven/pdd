@@ -5085,11 +5085,17 @@ def _files_changed_since(worktree: Path, base_sha: str) -> List[str]:
         logger.debug("files-changed-since failed: %s", exc)
         return []
     if result.returncode != 0:
+        # Scrub git stderr before logging: it can include base/head
+        # SHAs, refspecs, or tokenized auth URLs from prior git
+        # operations harvested into the same stream.
+        scrubbed_stderr = _scrub_secrets(
+            (result.stderr or b"").decode("utf-8", errors="replace").strip()
+        )
         logger.debug(
             "files-changed-since git diff returned %s for %s..HEAD: %s",
             result.returncode,
             base,
-            (result.stderr or b"").decode("utf-8", errors="replace").strip(),
+            scrubbed_stderr,
         )
         return []
     raw = result.stdout or b""
@@ -5580,14 +5586,16 @@ def _load_prompt_source_map(
         # commits), or architecture.json is not in the HEAD tree.
         # Degrade gracefully rather than block, but emit enough
         # diagnostic for the operator to recognize a misconfigured
-        # worktree.
+        # worktree. Scrub stderr — git can echo back tokenized auth
+        # URLs from prior fetch retries in the same logger stream.
+        scrubbed_stderr = _scrub_secrets((result.stderr or "").strip())
         logger.warning(
             "prompt-source guard: architecture.json missing at HEAD "
             "in %s (git show exit=%s, stderr=%s); skipping prompt-"
             "drift enforcement for this round.",
             worktree,
             result.returncode,
-            (result.stderr or "").strip(),
+            scrubbed_stderr,
         )
         return None
     try:
@@ -5879,13 +5887,17 @@ def _check_architecture_registry_edit_guard(
         check=False,
     )
     if head_result.returncode != 0:
+        # Scrub stderr before logging — see _load_prompt_source_map
+        # for the same rationale (tokenized auth URLs from prior git
+        # operations can ride the same logger stream into CI capture).
+        scrubbed_stderr = _scrub_secrets((head_result.stderr or "").strip())
         logger.warning(
             "architecture-registry guard: architecture.json missing at "
             "HEAD in %s (git show exit=%s, stderr=%s); skipping "
             "registry-edit enforcement for this round.",
             worktree,
             head_result.returncode,
-            (head_result.stderr or "").strip(),
+            scrubbed_stderr,
         )
         return None
     try:
