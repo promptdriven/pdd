@@ -797,21 +797,38 @@ def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     return stem
 
 
-def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
+def _strip_language_suffix_with_subdir(
+    prompt_path: Path,
+    prompts_dir: Optional[str] = None,
+) -> str:
     """Strip language suffix from a prompt path, preserving subdirectory components.
 
     For nested prompts like ``prompts/commands/fix_python.prompt``, the
-    subdirectory relative to the ``prompts/`` root is part of the basename.
-    This function finds the ``prompts/`` ancestor directory and preserves
-    everything between it and the filename.
-
-    Falls back to :func:`_strip_language_suffix` (filename only) when the
-    path does not contain a ``prompts/`` component.
+    subdirectory relative to the configured prompts root is part of the
+    basename. When ``prompts_dir`` is supplied (typically from .pddrc), its
+    path segments are used as the anchor so a configured prompts root of
+    e.g. ``prompts/backend`` is treated as the root rather than the literal
+    ``prompts`` segment. Falls back to the literal ``prompts/`` anchor when
+    ``prompts_dir`` is not supplied or doesn't match the path.
     """
     stripped_name = _strip_language_suffix(prompt_path)
-
-    # Find the "prompts" directory in the path parts
     parts = prompt_path.parts
+
+    if prompts_dir:
+        normalized = str(prompts_dir).replace('\\', '/').rstrip('/')
+        dir_parts = tuple(p for p in normalized.split('/') if p and p != '.')
+        if dir_parts:
+            for start in range(len(parts) - len(dir_parts), -1, -1):
+                if start < 0:
+                    break
+                if tuple(parts[start:start + len(dir_parts)]) == dir_parts:
+                    anchor_end = start + len(dir_parts)
+                    subdir_parts = parts[anchor_end:-1]
+                    if subdir_parts:
+                        return str(Path(*subdir_parts) / stripped_name)
+                    return stripped_name
+
+    # Fall back to anchoring on the literal "prompts" segment
     try:
         prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
     except ValueError:
@@ -832,6 +849,7 @@ def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
 def _extract_basename(
     command: str,
     input_file_paths: Dict[str, Path],
+    prompts_dir: Optional[str] = None,
 ) -> str:
     """
     Deduce the project basename according to the rules explained in *Step A*.
@@ -842,7 +860,7 @@ def _extract_basename(
         if not prompt_path:
             raise ValueError("Could not determine prompt file for 'fix' command.")
 
-        prompt_basename = _strip_language_suffix_with_subdir(prompt_path)
+        prompt_basename = _strip_language_suffix_with_subdir(prompt_path, prompts_dir)
         
         unit_test_path = input_file_paths.get("unit_test_file")
         if not unit_test_path:
@@ -884,7 +902,7 @@ def _extract_basename(
     # General case: Use the primary prompt file
     prompt_path = _candidate_prompt_path(input_file_paths)
     if prompt_path:
-        return _strip_language_suffix_with_subdir(prompt_path)
+        return _strip_language_suffix_with_subdir(prompt_path, prompts_dir)
 
     # Fallback: If no prompt found (e.g., command only takes code files?),
     # use the first input file's stem. This requires input_file_paths not to be empty.
@@ -1259,7 +1277,11 @@ def construct_paths(
         if command in ("sync", "example", "test") and command_options.get("basename"):
             basename = command_options["basename"]
         else:
-            basename = _extract_basename(command, input_paths)
+            basename = _extract_basename(
+                command,
+                input_paths,
+                prompts_dir=resolved_config.get("prompts_dir"),
+            )
     except ValueError as exc:
          # Check if it's the specific error from the initial check (now done at start)
          # This try/except might not be needed if initial check is robust
