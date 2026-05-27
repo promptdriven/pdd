@@ -13,7 +13,7 @@ from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
-from .contracts import contracts_group
+from .contracts import contracts_cli
 from .prompt import prompt_lint
 
 
@@ -353,7 +353,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     Prompt lint:
       pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
     Contract checks:
-      pdd checkup contract check [OPTIONS] TARGET
+      pdd checkup contract check [OPTIONS] TARGET  (alias: ``pdd contracts check``)
     """
     ctx.ensure_object(dict)
 
@@ -383,9 +383,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         contract_args = list(ctx.args)
         if strict:
             contract_args.insert(0, "--strict")
-        exit_code = contracts_group.main(
+        exit_code = contracts_cli.main(
             args=contract_args,
-            prog_name=f"pdd checkup {target}",
+            prog_name=f"pdd checkup {target} check",
             standalone_mode=False,
             obj=ctx.obj,
         )
