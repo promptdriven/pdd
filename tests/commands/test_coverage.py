@@ -71,7 +71,8 @@ class TestCoverageBasic:
         prompt = _write(tmp_path, "foo_python.prompt", REFUND_PROMPT)
         runner = CliRunner()
         result = runner.invoke(coverage_cmd, ["--contracts", str(prompt)])
-        assert "foo_python.prompt" in result.output
+        clean_output = result.output.replace("\n", "").replace(" ", "")
+        assert "foo_python.prompt" in clean_output
 
     def test_output_contains_rule_ids(self, tmp_path):
         prompt = _write(tmp_path, "foo_python.prompt", REFUND_PROMPT)
