@@ -1,21 +1,64 @@
 # `pdd checkup simplify`
 
-Conservative simplification pass over selected source files using the configured
-agent provider (Claude Code, Codex, etc.).
+Conservative code cleanup via **Claude Code's bundled `/simplify`** skill. Claude's skill runs three review agents, aggregates findings, and applies quality and efficiency fixes. PDD can sample independent results and copy a conservatively selected verified candidate back to your working tree.
+
+## Requirements
+
+- A Claude Code release that provides the bundled `/simplify` skill
+- A git repository with selected changed code: local/staged changes, or committed branch changes selected with `--since REF`
+
+Install or update:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude update
+claude --version
+```
 
 ## Usage
 
 ```bash
-pdd checkup simplify [path] [--dry-run] [--apply] [--since REF] [--staged]
-pdd checkup simplify --since HEAD~1 --evidence
-pdd checkup simplify src/ --apply --verify
+# Preview files in scope (no Claude invocation)
+pdd checkup simplify
+pdd checkup simplify --since HEAD~1
+
+# Run Claude Code /simplify (edits working copy)
+pdd checkup simplify --apply
+pdd checkup simplify --apply pdd/foo.py --verify
+pdd checkup simplify --apply --since origin/main --attempts 3 --verify --evidence
 ```
 
-Default mode is **dry-run** (suggestions only). Use `--apply` to allow edits.
+**`--apply` is required** to invoke `/simplify`. Without it, PDD only lists eligible targets.
+
+`--apply` runs each attempt in a detached temporary worktree created from the
+same input state. Claude cannot overwrite unrelated local edits. PDD rejects
+any candidate that writes outside the selected files, prefers candidates whose
+`--verify` checks pass, and among those copies back the candidate affecting the
+fewest selected files. Backups
+are written to `.pdd/backups/simplify-<run_id>/`; candidate snapshots and the
+selection report are retained under `.pdd/evidence/checkups/simplify-<run_id>/`.
+
+## Git scope
+
+Claude Code `/simplify` operates on a diff. PDD builds that diff in each
+candidate worktree from the selected input files:
+
+| PDD flag | Effect |
+|----------|--------|
+| `--since REF` | Selects changed files and uses `REF` as candidate baseline; use this for committed branch or PR changes |
+| `--staged` | Limits to staged paths |
+| `[path]` | Limits to a file or directory |
+| `--attempts N` | Generates `N` independent candidates from the same baseline |
+
+Without `--since`, selected files must have a local diff against `HEAD`.
+`--apply --staged` refuses selected files that also have unstaged edits, so a
+candidate never replaces work outside the staged snapshot.
+Use `--verify` with multiple attempts; otherwise selection is conservative but
+cannot prove that a candidate preserves behavior.
 
 ## Evidence
 
-With `--evidence`, writes `.pdd/evidence/checkups/simplify-<run_id>.json`.
+With `--evidence`, writes `.pdd/evidence/checkups/simplify-<run_id>.json` including `engine`, `slash_command`, `claude_code_version`, and digest-detected `files_modified`.
 
 ## Configuration
 
@@ -24,6 +67,8 @@ Optional `[tool.pdd.checkup.simplify]` in `pyproject.toml`:
 ```toml
 [tool.pdd.checkup.simplify]
 max_files = 20
+attempts = 3
+focus = "focus on error handling"
 
 [tool.pdd.checkup.simplify.commands]
 format = "ruff format"
@@ -31,3 +76,19 @@ lint = "ruff check"
 typecheck = "mypy pdd"
 test = "pytest -q"
 ```
+
+The `focus` string is appended to the `/simplify` invocation (for example,
+`/simplify focus on error handling pdd/foo.py`). `CLAUDE_MODEL` may select a
+less expensive Claude model; `--attempts` is the sampling mechanism when you
+want several chances and a verified winner.
+
+## Demo
+
+Run the no-network demonstration, which stubs Claude's response while using the
+real isolation, candidate selection, and evidence code paths:
+
+```bash
+python examples/checkup_simplify_example.py
+```
+
+Reference: [Claude Code command documentation](https://code.claude.com/docs/en/commands).

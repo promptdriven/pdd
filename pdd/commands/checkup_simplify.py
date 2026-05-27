@@ -1,4 +1,4 @@
-"""``pdd checkup simplify`` — conservative agentic code simplification."""
+"""``pdd checkup simplify`` — Claude Code ``/simplify`` integration."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,30 +19,30 @@ from ..track_cost import track_cost
     "--apply",
     is_flag=True,
     default=False,
-    help="Apply safe simplifications (default is dry-run suggestions only).",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Explicitly run in dry-run mode (default when --apply is omitted).",
+    help="Run Claude Code /simplify (edits files). Without this flag, only list targets.",
 )
 @click.option(
     "--since",
     default=None,
-    help="Only simplify files changed since a Git ref (e.g. HEAD~1).",
+    help="Only include files changed since a Git ref (e.g. HEAD~1) in scope.",
 )
 @click.option(
     "--staged",
     is_flag=True,
     default=False,
-    help="Only simplify staged files.",
+    help="Only include staged files in scope.",
 )
 @click.option(
     "--max-files",
     type=int,
     default=None,
     help="Maximum number of files to process.",
+)
+@click.option(
+    "--attempts",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Independent /simplify candidates; the passing candidate touching fewest files wins.",
 )
 @click.option(
     "--evidence",
@@ -68,38 +68,34 @@ def checkup_simplify(
     ctx: click.Context,
     path: Optional[str],
     apply: bool,
-    dry_run: bool,
     since: Optional[str],
     staged: bool,
     max_files: Optional[int],
+    attempts: Optional[int],
     evidence: bool,
     verify: bool,
     no_format: bool,
 ) -> Optional[Tuple[str, float, str]]:
-    """Run a conservative simplification pass over selected source files."""
-    if apply and dry_run:
-        raise click.UsageError("Use either --apply or --dry-run, not both.")
-
+    """Run Claude Code bundled /simplify over selected source files."""
     if since and staged:
         raise click.UsageError("--since and --staged are mutually exclusive.")
 
-    mode = "apply" if apply else "dry-run"
     target_path = Path(path) if path else None
     obj = ctx.obj or {}
 
     try:
         result = run_checkup_simplify(
             path=target_path,
-            mode=mode,
+            apply=apply,
             since=since,
             staged=staged,
             max_files=max_files,
+            attempts=attempts,
             evidence=evidence,
             verify=verify,
             no_format=no_format,
             quiet=bool(obj.get("quiet")),
             verbose=bool(obj.get("verbose")),
-            reasoning_time=obj.get("time") if obj.get("time_explicit") else None,
         )
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
@@ -107,9 +103,8 @@ def checkup_simplify(
     if not obj.get("quiet"):
         for line in result.summary_lines:
             click.echo(line)
-        if result.provider:
+        if result.provider and apply:
             click.echo(f"\nAgent: {result.provider}  Cost: ${result.cost:.4f}")
 
     if result.exit_code:
         raise click.exceptions.Exit(result.exit_code)
-    return None

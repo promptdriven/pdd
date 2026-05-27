@@ -135,6 +135,22 @@ def _list_tracked_under(repo_root: Path, subpath: Optional[Path]) -> List[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _list_local_changes_under(repo_root: Path, subpath: Optional[Path]) -> List[str]:
+    args = ["diff", "--name-only", "HEAD"]
+    if subpath is not None:
+        rel = subpath.resolve().relative_to(repo_root.resolve()).as_posix()
+        if rel and rel != ".":
+            args.extend(["--", rel])
+    changed = _git_name_only(args, repo_root)
+    untracked_args = ["ls-files", "--others", "--exclude-standard"]
+    if subpath is not None:
+        rel = subpath.resolve().relative_to(repo_root.resolve()).as_posix()
+        if rel and rel != ".":
+            untracked_args.extend(["--", rel])
+    changed.extend(_git_name_only(untracked_args, repo_root))
+    return list(dict.fromkeys(changed))
+
+
 def _is_hard_excluded(rel_posix: str) -> bool:
     if rel_posix.startswith(".pdd/") and not rel_posix.startswith(".pdd/backups/"):
         if rel_posix.startswith(".pdd/evidence/") or rel_posix.startswith(".pdd/meta/"):
@@ -198,9 +214,13 @@ def discover_simplify_targets(
         if path.is_file():
             rel_candidates = [os.path.relpath(path.resolve(), repo_root).replace("\\", "/")]
         else:
-            rel_candidates = _list_tracked_under(repo_root, path.resolve())
+            rel_candidates = _list_local_changes_under(repo_root, path.resolve())
+            if not rel_candidates:
+                rel_candidates = _list_tracked_under(repo_root, path.resolve())
     else:
-        rel_candidates = _list_tracked_under(repo_root, None)
+        rel_candidates = _list_local_changes_under(repo_root, None)
+        if not rel_candidates:
+            rel_candidates = _list_tracked_under(repo_root, None)
 
     pddignore_patterns, pddignore_root = _load_pddignore(str(repo_root))
 

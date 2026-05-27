@@ -1,4 +1,4 @@
-"""Core logic for ``pdd checkup simplify``."""
+"""Core logic for ``pdd checkup simplify`` via Claude Code ``/simplify``."""
 from __future__ import annotations
 
 import hashlib
@@ -7,22 +7,29 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+import tomllib
 
 from rich.console import Console
 
-from .agentic_checkup import _extract_json_from_text
-from .agentic_common import get_available_agents, run_agentic_task, substitute_template_variables
+from .agentic_common import (
+    DEFAULT_TIMEOUT_SECONDS,
+    _extract_json_from_output,
+    _find_cli_binary,
+    _parse_provider_json,
+    _strip_anthropic_creds_for_claude_subprocess,
+    _subprocess_run,
+)
 from .checkup_file_selection import discover_simplify_targets
 from .get_lint_commands import get_lint_commands
-from .load_prompt_template import load_prompt_template
+from .git_porcelain import iter_changed_paths, run_porcelain_z
 
 console = Console()
 
-_SENTINEL_FILES = {"none", "n/a", "na", "null", ""}
 _DEFAULT_VERIFY_COMMANDS = {
     "format": "ruff format",
     "lint": "ruff check",
@@ -33,6 +40,8 @@ _DEFAULT_VERIFY_COMMANDS = {
 
 @dataclass
 class SimplifyVerifyCommands:
+    """Commands that validate a proposed simplify candidate."""
+
     format: str = _DEFAULT_VERIFY_COMMANDS["format"]
     lint: str = _DEFAULT_VERIFY_COMMANDS["lint"]
     typecheck: str = _DEFAULT_VERIFY_COMMANDS["typecheck"]
@@ -41,61 +50,182 @@ class SimplifyVerifyCommands:
 
 @dataclass
 class SimplifySettings:
+    """Repository configuration for selecting and verifying candidates."""
+
     max_files: int = 20
+    attempts: int = 1
+    focus: str = ""
     verify_commands: SimplifyVerifyCommands = field(default_factory=SimplifyVerifyCommands)
 
 
 @dataclass
 class SimplifyRunResult:
+    """Observable outcome of a preview or candidate-selection run."""
+
     success: bool
     exit_code: int
     cost: float
     provider: str
+    claude_code_version: str
+    slash_command: str
     files_analyzed: List[str]
     files_modified: List[str]
-    suggestions_count: int
+    agent_summary: str
+    attempts: int
+    selected_attempt: Optional[int]
     evidence_path: Optional[Path]
     summary_lines: List[str]
     checks: Dict[str, str] = field(default_factory=dict)
 
 
-def _parse_files_modified(output: str) -> List[str]:
-    match = re.search(r"FILES_MODIFIED:\s*(.*)", output, re.IGNORECASE)
+@dataclass
+class SimplifyCandidate:
+    """One isolated `/simplify` attempt over the same input files."""
+
+    attempt: int
+    success: bool
+    cost: float
+    agent_summary: str
+    files_modified: List[str]
+    checks: Dict[str, str]
+    artifact_dir: Path
+    rejection: str = ""
+
+
+def _parse_claude_code_version(version_output: str) -> Optional[Tuple[int, int, int]]:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", version_output)
     if not match:
-        return []
-    raw = match.group(1).strip()
-    if raw.lower() in _SENTINEL_FILES:
-        return []
-    paths = [
-        item.strip().strip("*")
-        for item in raw.split(",")
-        if item.strip() and item.strip().strip("*").lower() not in _SENTINEL_FILES
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _format_version(version: Tuple[int, int, int]) -> str:
+    return f"{version[0]}.{version[1]}.{version[2]}"
+
+
+def check_claude_code_simplify_available(
+    *,
+    quiet: bool,
+) -> Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]:
+    """Find Claude Code and record its version without inventing skill limits."""
+    del quiet
+    cli_path = _find_cli_binary("claude")
+    if not cli_path:
+        msg = (
+            "Claude Code CLI is required for `pdd checkup simplify`. "
+            "Install with: npm install -g @anthropic-ai/claude-code"
+        )
+        return None, None, msg
+
+    try:
+        result = subprocess.run(
+            [cli_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, None, f"Failed to run `claude --version`: {exc}"
+
+    version_text = (result.stdout or result.stderr or "").strip()
+    version_tuple = _parse_claude_code_version(version_text)
+    return cli_path, version_tuple, None
+
+
+def _build_simplify_slash_message(
+    rel_files: Sequence[str],
+    *,
+    focus: str,
+) -> str:
+    parts: List[str] = ["/simplify"]
+    focus_text = focus.strip()
+    if focus_text:
+        parts.append(focus_text)
+    parts.extend(rel_files)
+    return " ".join(parts)
+
+
+def run_claude_simplify_command(
+    slash_message: str,
+    repo_root: Path,
+    *,
+    cli_path: str,
+    verbose: bool,
+    quiet: bool,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> Tuple[bool, str, float, str]:
+    """Invoke Claude Code ``/simplify`` directly (not via ``run_agentic_task``)."""
+    env = os.environ.copy()
+    env["TERM"] = "dumb"
+    env["NO_COLOR"] = "1"
+    env["CI"] = "1"
+    env.pop("PDD_OUTPUT_COST_PATH", None)
+    env["GIT_WORK_TREE"] = str(repo_root)
+    _strip_anthropic_creds_for_claude_subprocess(env, verbose=verbose, quiet=quiet)
+
+    cmd = [
+        cli_path,
+        "-p",
+        slash_message,
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "json",
     ]
-    return list(dict.fromkeys(paths))
+    claude_model = env.get("CLAUDE_MODEL")
+    if claude_model:
+        cmd.extend(["--model", claude_model])
 
+    if verbose and not quiet:
+        console.print(f"[dim]Running: {' '.join(cmd[:3])} ...[/dim]")
 
-def _parse_simplify_report(output: str) -> Optional[Dict[str, Any]]:
-    for line in output.splitlines():
-        stripped = line.strip()
-        if stripped.upper().startswith("SIMPLIFY_REPORT_JSON:"):
-            payload = stripped.split(":", 1)[1].strip()
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-    return _extract_json_from_text(output)
+    try:
+        result = _subprocess_run(
+            cmd,
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Claude Code simplify timed out", 0.0, ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc), 0.0, ""
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "")[:2000]
+        return False, f"Claude Code exited {result.returncode}: {detail}", 0.0, ""
+
+    output_str = (result.stdout or "").strip()
+    if not output_str:
+        return False, "Claude Code returned empty output", 0.0, ""
+
+    try:
+        data = json.loads(output_str)
+    except json.JSONDecodeError:
+        try:
+            data = _extract_json_from_output(output_str)
+        except json.JSONDecodeError:
+            return (
+                False,
+                f"Invalid JSON from Claude Code: {output_str[:500]}",
+                0.0,
+                "",
+            )
+
+    success, text, cost, _model = _parse_provider_json("anthropic", data)
+    if not success:
+        return False, text or "Claude Code reported an error", cost, ""
+
+    return True, text or "", cost, text or ""
 
 
 def _load_settings(project_root: Path) -> SimplifySettings:
     settings = SimplifySettings()
     pyproject = project_root / "pyproject.toml"
     if not pyproject.is_file():
-        return settings
-    try:
-        import tomllib
-    except ImportError:
         return settings
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
@@ -106,6 +236,10 @@ def _load_settings(project_root: Path) -> SimplifySettings:
     simplify = pdd_tool.get("checkup", {}).get("simplify", {})
     if isinstance(simplify.get("max_files"), int):
         settings.max_files = max(1, simplify["max_files"])
+    if isinstance(simplify.get("attempts"), int):
+        settings.attempts = max(1, simplify["attempts"])
+    if isinstance(simplify.get("focus"), str):
+        settings.focus = simplify["focus"]
     commands = simplify.get("commands", {})
     if isinstance(commands, dict):
         for key in ("format", "lint", "typecheck", "test"):
@@ -150,44 +284,145 @@ def _detect_modified_by_digest(
     return modified
 
 
+def _git_changed_files(repo_root: Path) -> List[str]:
+    """Return tracked/untracked changed paths in a candidate worktree."""
+    entries = run_porcelain_z(repo_root, include_untracked=True)
+    if entries is None:
+        return []
+    return list(dict.fromkeys(iter_changed_paths(entries)))
+
+
+def _candidate_base_ref(since: Optional[str]) -> str:
+    return since or "HEAD"
+
+
+def _selected_input_has_diff(
+    repo_root: Path,
+    rel_files: Sequence[str],
+    *,
+    base_ref: str,
+) -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--quiet", base_ref, "--", *rel_files],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 1
+
+
+def _selected_has_unstaged_diff(repo_root: Path, rel_files: Sequence[str]) -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--quiet", "--", *rel_files],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 1
+
+
+def _prepare_candidate_worktree(
+    repo_root: Path,
+    targets: Sequence[Path],
+    *,
+    base_ref: str,
+    staged: bool,
+) -> Path:
+    """Create a clean detached worktree then materialize the selected input diff."""
+    candidate = Path(tempfile.mkdtemp(prefix="pdd-simplify-"))
+    shutil.rmtree(candidate)
+    result = subprocess.run(
+        ["git", "worktree", "add", "--detach", str(candidate), base_ref],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Could not create simplify candidate worktree: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+    root = repo_root.resolve()
+    try:
+        for source in targets:
+            rel = source.resolve().relative_to(root)
+            destination = candidate / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if staged:
+                staged_content = subprocess.run(
+                    ["git", "show", f":{rel.as_posix()}"],
+                    cwd=repo_root,
+                    capture_output=True,
+                    check=False,
+                )
+                if staged_content.returncode != 0:
+                    raise RuntimeError(
+                        f"Could not read staged content for {rel.as_posix()}"
+                    )
+                destination.write_bytes(staged_content.stdout)
+            else:
+                shutil.copy2(source, destination)
+    except (OSError, RuntimeError, ValueError):
+        _remove_candidate_worktree(repo_root, candidate)
+        raise
+    return candidate
+
+
+def _remove_candidate_worktree(repo_root: Path, candidate: Path) -> None:
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(candidate)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _save_candidate_files(
+    artifact_dir: Path,
+    candidate_root: Path,
+    files_modified: Sequence[str],
+) -> None:
+    for rel in files_modified:
+        source = candidate_root / rel
+        if not source.is_file():
+            continue
+        destination = artifact_dir / "files" / rel
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def _choose_candidate(
+    candidates: Sequence[SimplifyCandidate],
+    *,
+    verify: bool,
+) -> Optional[SimplifyCandidate]:
+    usable = [
+        candidate
+        for candidate in candidates
+        if candidate.success and not candidate.rejection
+    ]
+    if verify:
+        usable = [
+            candidate
+            for candidate in usable
+            if candidate.checks and all(value == "passed" for value in candidate.checks.values())
+        ]
+    changed = [candidate for candidate in usable if candidate.files_modified]
+    if changed:
+        usable = changed
+    if not usable:
+        return None
+    # Favor fewer affected files; the report retains alternatives for review.
+    return min(usable, key=lambda item: (len(item.files_modified), item.attempt))
+
+
 def _rel_paths(files: Sequence[Path], repo_root: Path) -> List[str]:
     return sorted(
         f.resolve().relative_to(repo_root.resolve()).as_posix()
         for f in files
         if f.is_file()
-    )
-
-
-def _load_simplify_prompt_template() -> str:
-    bundled = Path(__file__).resolve().parent / "prompts" / "checkup_simplify_LLM.prompt"
-    if bundled.is_file():
-        return bundled.read_text(encoding="utf-8")
-    template = load_prompt_template("checkup_simplify_LLM")
-    if not template:
-        raise RuntimeError("Failed to load checkup_simplify_LLM prompt template")
-    return template
-
-
-def _build_instruction(
-    *,
-    mode: str,
-    repo_root: Path,
-    rel_files: Sequence[str],
-) -> str:
-    template = _load_simplify_prompt_template()
-    file_list = "\n".join(f"- {path}" for path in rel_files) or "- (none)"
-    body = substitute_template_variables(
-        template,
-        {
-            "mode": mode,
-            "repo_root": str(repo_root),
-            "file_list": file_list,
-        },
-    )
-    return (
-        f"{body}\n\n"
-        "Work from the repository root. "
-        f"Analyze exactly these {len(rel_files)} file(s)."
     )
 
 
@@ -230,8 +465,8 @@ def _run_verification(
     has_python = any(p.suffix == ".py" for p in touched)
 
     if not no_format and commands.format.strip():
-        ok, _ = _run_shell_step(commands.format, repo_root, quiet=quiet)
-        checks["format"] = "passed" if ok else "failed"
+        passed, _ = _run_shell_step(commands.format, repo_root, quiet=quiet)
+        checks["format"] = "passed" if passed else "failed"
 
     if commands.lint.strip():
         if has_python and touched:
@@ -240,24 +475,24 @@ def _run_verification(
                 if path.suffix != ".py":
                     continue
                 for lint_cmd in get_lint_commands(path):
-                    ok, _ = _run_shell_step(
+                    passed, _ = _run_shell_step(
                         lint_cmd.command,
                         lint_cmd.cwd or repo_root,
                         quiet=quiet,
                     )
-                    lint_ok = lint_ok and ok
+                    lint_ok = lint_ok and passed
             checks["lint"] = "passed" if lint_ok else "failed"
         elif commands.lint.strip():
-            ok, _ = _run_shell_step(commands.lint, repo_root, quiet=quiet)
-            checks["lint"] = "passed" if ok else "failed"
+            passed, _ = _run_shell_step(commands.lint, repo_root, quiet=quiet)
+            checks["lint"] = "passed" if passed else "failed"
 
     if has_python and commands.typecheck.strip():
-        ok, _ = _run_shell_step(commands.typecheck, repo_root, quiet=quiet)
-        checks["typecheck"] = "passed" if ok else "failed"
+        passed, _ = _run_shell_step(commands.typecheck, repo_root, quiet=quiet)
+        checks["typecheck"] = "passed" if passed else "failed"
 
     if commands.test.strip():
-        ok, _ = _run_shell_step(commands.test, repo_root, quiet=quiet)
-        checks["tests"] = "passed" if ok else "failed"
+        passed, _ = _run_shell_step(commands.test, repo_root, quiet=quiet)
+        checks["tests"] = "passed" if passed else "failed"
 
     return checks
 
@@ -266,14 +501,17 @@ def _write_evidence(
     *,
     repo_root: Path,
     run_id: str,
-    mode: str,
     path_arg: Optional[str],
     since: Optional[str],
     staged: bool,
     files_analyzed: List[str],
     files_modified: List[str],
-    report: Optional[Dict[str, Any]],
+    slash_command: str,
+    claude_code_version: str,
+    agent_summary: str,
     checks: Dict[str, str],
+    attempts: Sequence[SimplifyCandidate],
+    selected_attempt: Optional[int],
 ) -> Path:
     evidence_dir = repo_root / ".pdd" / "evidence" / "checkups"
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -297,7 +535,10 @@ def _write_evidence(
         )
     payload: Dict[str, Any] = {
         "kind": "pdd.checkup.simplify",
+        "engine": "claude-code/simplify",
         "run_id": run_id,
+        "claude_code_version": claude_code_version,
+        "slash_command": slash_command,
         "target": {
             "path": path_arg,
             "since": since,
@@ -305,62 +546,77 @@ def _write_evidence(
         },
         "files_analyzed": files_analyzed,
         "files_modified": files_modified,
-        "mode": mode,
+        "agent_summary": agent_summary,
+        "selected_attempt": selected_attempt,
+        "attempts": [
+            {
+                "attempt": candidate.attempt,
+                "success": candidate.success,
+                "cost": candidate.cost,
+                "files_modified": candidate.files_modified,
+                "checks": candidate.checks,
+                "rejection": candidate.rejection or None,
+                "artifact_dir": str(candidate.artifact_dir.relative_to(repo_root)),
+            }
+            for candidate in attempts
+        ],
         "checks": checks,
         "claims": claims,
         "unchecked_claims": unchecked,
     }
-    if report:
-        payload["report"] = report
     out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return out_path
 
 
 def _render_summary(
     *,
-    mode: str,
     files_analyzed: List[str],
     files_modified: List[str],
-    suggestions_count: int,
-    report: Optional[Dict[str, Any]],
+    agent_summary: str,
+    slash_command: str,
+    claude_code_version: str,
     checks: Dict[str, str],
     evidence_path: Optional[Path],
+    preview_only: bool,
+    attempts: int,
+    selected_attempt: Optional[int],
 ) -> List[str]:
-    lines = ["PDD Checkup: simplify", ""]
-    lines.append(f"Files analyzed: {len(files_analyzed)}")
+    lines = ["PDD Checkup: simplify (Claude Code /simplify)", ""]
+    if preview_only:
+        lines.append("Preview only - pass --apply to run Claude Code /simplify.")
+        lines.append("")
+    lines.append(f"Claude Code: {claude_code_version or 'unknown'}")
+    lines.append(f"Command: {slash_command or '(not run)'}")
+    lines.append(f"Files in scope: {len(files_analyzed)}")
     lines.append(f"Files changed: {len(files_modified)}")
-    if mode == "dry-run":
-        lines.append(f"Suggestions only: {suggestions_count}")
+    if not preview_only:
+        lines.append(f"Attempts run: {attempts}")
+        lines.append(f"Selected attempt: {selected_attempt or '(none)'}")
     lines.append("")
-    lines.append("Simplifications:")
-    suggestions = []
-    if report and isinstance(report.get("suggestions"), list):
-        suggestions = report["suggestions"]
-    if not suggestions and not files_modified:
+    if files_analyzed and preview_only:
+        lines.append("Targets:")
+        for path in files_analyzed:
+            lines.append(f"  - {path}")
+        lines.append("")
+    if files_modified:
+        lines.append("Modified:")
+        for path in files_modified:
+            lines.append(f"  + {path}")
+    elif not preview_only:
+        lines.append("Modified:")
         lines.append("  (none)")
-    for entry in suggestions:
-        if not isinstance(entry, dict):
-            continue
-        path = entry.get("path", "?")
-        lines.append(f"  · {path}")
-        items = entry.get("items") or []
-        if isinstance(items, list):
-            for item in items:
-                lines.append(f"    - {item}")
-        elif isinstance(items, str):
-            lines.append(f"    - {items}")
-    for path in files_modified:
-        if any(
-            isinstance(entry, dict) and entry.get("path") == path
-            for entry in suggestions
-        ):
-            continue
-        lines.append(f"  ✓ {path}")
+    if agent_summary.strip() and not preview_only:
+        lines.append("")
+        lines.append("Summary:")
+        for line in agent_summary.strip().splitlines()[:12]:
+            lines.append(f"  {line}")
+        if agent_summary.count("\n") > 12:
+            lines.append("  ...")
     if checks:
         lines.append("")
         lines.append("Verification:")
         for name, status in checks.items():
-            symbol = "✓" if status == "passed" else "✗"
+            symbol = "PASS" if status == "passed" else "FAIL"
             lines.append(f"  {symbol} {name} {status}")
     if evidence_path is not None:
         lines.append("")
@@ -372,35 +628,23 @@ def _render_summary(
 def run_checkup_simplify(
     *,
     path: Optional[Path],
-    mode: str,
+    apply: bool,
     since: Optional[str],
     staged: bool,
     max_files: Optional[int],
+    attempts: Optional[int],
     evidence: bool,
     verify: bool,
     no_format: bool,
     quiet: bool,
     verbose: bool,
-    reasoning_time: Optional[float],
 ) -> SimplifyRunResult:
-    if not get_available_agents():
-        msg = "No agent providers are available (install Claude Code or Codex CLI and configure API keys)"
-        if not quiet:
-            console.print(f"[bold red]{msg}[/bold red]")
-        return SimplifyRunResult(
-            success=False,
-            exit_code=2,
-            cost=0.0,
-            provider="",
-            files_analyzed=[],
-            files_modified=[],
-            suggestions_count=0,
-            evidence_path=None,
-            summary_lines=[msg],
-        )
-
+    """Preview targets or apply the best acceptable isolated `/simplify` candidate."""
     settings = _load_settings(Path.cwd())
     effective_max = max_files if max_files is not None else settings.max_files
+    effective_attempts = attempts if attempts is not None else settings.attempts
+    if effective_attempts < 1:
+        raise ValueError("--attempts must be at least 1")
     repo_root, targets = discover_simplify_targets(
         path=path,
         since=since,
@@ -411,6 +655,9 @@ def run_checkup_simplify(
     settings = _load_settings(repo_root)
 
     rel_files = _rel_paths(targets, repo_root)
+    slash_command = _build_simplify_slash_message(rel_files, focus=settings.focus)
+    version_str = ""
+
     if not rel_files:
         msg = "No eligible source files found for simplification."
         if not quiet:
@@ -419,107 +666,253 @@ def run_checkup_simplify(
             success=True,
             exit_code=0,
             cost=0.0,
-            provider="",
+            provider="claude",
+            claude_code_version=version_str,
+            slash_command=slash_command,
             files_analyzed=[],
             files_modified=[],
-            suggestions_count=0,
+            agent_summary="",
+            attempts=0,
+            selected_attempt=None,
+            evidence_path=None,
+            summary_lines=_render_summary(
+                files_analyzed=[],
+                files_modified=[],
+                agent_summary="",
+                slash_command=slash_command,
+                claude_code_version=version_str,
+                checks={},
+                evidence_path=None,
+                preview_only=not apply,
+                attempts=0,
+                selected_attempt=None,
+            ),
+        )
+
+    if not apply:
+        summary_lines = _render_summary(
+            files_analyzed=rel_files,
+            files_modified=[],
+            agent_summary="",
+            slash_command=slash_command,
+            claude_code_version=version_str,
+            checks={},
+            evidence_path=None,
+            preview_only=True,
+            attempts=0,
+            selected_attempt=None,
+        )
+        return SimplifyRunResult(
+            success=True,
+            exit_code=0,
+            cost=0.0,
+            provider="claude",
+            claude_code_version=version_str,
+            slash_command=slash_command,
+            files_analyzed=rel_files,
+            files_modified=[],
+            agent_summary="",
+            attempts=0,
+            selected_attempt=None,
+            evidence_path=None,
+            summary_lines=summary_lines,
+        )
+
+    cli_path, version_tuple, version_error = check_claude_code_simplify_available(quiet=quiet)
+    version_str = _format_version(version_tuple) if version_tuple else ""
+    if version_error:
+        if not quiet:
+            console.print(f"[bold red]{version_error}[/bold red]")
+        return SimplifyRunResult(
+            success=False,
+            exit_code=2,
+            cost=0.0,
+            provider="claude",
+            claude_code_version=version_str,
+            slash_command=slash_command,
+            files_analyzed=rel_files,
+            files_modified=[],
+            agent_summary="",
+            attempts=0,
+            selected_attempt=None,
+            evidence_path=None,
+            summary_lines=[version_error],
+        )
+
+    base_ref = _candidate_base_ref(since)
+    if not _selected_input_has_diff(repo_root, rel_files, base_ref=base_ref):
+        msg = (
+            f"No selected diff found against {base_ref}. Claude Code /simplify reviews "
+            "changed code; use --since REF for committed branch changes or edit/stage "
+            "a selected file before running --apply."
+        )
+        if not quiet:
+            console.print(f"[yellow]{msg}[/yellow]")
+        return SimplifyRunResult(
+            success=True,
+            exit_code=0,
+            cost=0.0,
+            provider="claude",
+            claude_code_version=version_str,
+            slash_command=slash_command,
+            files_analyzed=rel_files,
+            files_modified=[],
+            agent_summary="",
+            attempts=0,
+            selected_attempt=None,
+            evidence_path=None,
+            summary_lines=["PDD Checkup: simplify", "", msg],
+        )
+    if staged and _selected_has_unstaged_diff(repo_root, rel_files):
+        msg = (
+            "--staged selected files also contain unstaged edits. Commit, stash, "
+            "or select a clean staged snapshot before --apply; PDD will not overwrite "
+            "unstaged work."
+        )
+        return SimplifyRunResult(
+            success=False,
+            exit_code=2,
+            cost=0.0,
+            provider="claude",
+            claude_code_version=version_str,
+            slash_command=slash_command,
+            files_analyzed=rel_files,
+            files_modified=[],
+            agent_summary="",
+            attempts=0,
+            selected_attempt=None,
             evidence_path=None,
             summary_lines=["PDD Checkup: simplify", "", msg],
         )
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    assert cli_path is not None
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     digests_before = {str(p.resolve()): _file_digest(p) for p in targets}
+    _backup_files(targets, repo_root, run_id)
+    artifacts_root = repo_root / ".pdd" / "evidence" / "checkups" / f"simplify-{run_id}"
+    candidates: List[SimplifyCandidate] = []
+    total_cost = 0.0
 
-    if mode == "apply":
-        _backup_files(targets, repo_root, run_id)
-
-    instruction = _build_instruction(mode=mode, repo_root=repo_root, rel_files=rel_files)
-    success, output, cost, provider = run_agentic_task(
-        instruction,
-        repo_root,
-        verbose=verbose,
-        quiet=quiet,
-        label="checkup-simplify",
-        reasoning_time=reasoning_time,
-    )
-
-    report = _parse_simplify_report(output) if output else None
-    agent_modified = _parse_files_modified(output)
-    digest_modified = _detect_modified_by_digest(targets, digests_before, repo_root)
-    files_modified = list(
-        dict.fromkeys(agent_modified or digest_modified)
-    )
-    # Normalize modified paths to repo-relative
-    normalized_modified: List[str] = []
-    for item in files_modified:
-        candidate = (repo_root / item).resolve()
-        if candidate.is_file():
-            normalized_modified.append(candidate.relative_to(repo_root).as_posix())
-        elif item in rel_files:
-            normalized_modified.append(item)
-    files_modified = list(dict.fromkeys(normalized_modified))
-
-    suggestions_count = 0
-    if report and isinstance(report.get("suggestions"), list):
-        suggestions_count = len(report["suggestions"])
-
-    checks: Dict[str, str] = {}
-    if verify:
-        if mode != "apply":
-            if not quiet:
-                console.print(
-                    "[yellow]--verify ignored: run with --apply to verify after edits.[/yellow]"
-                )
-        else:
-            checks = _run_verification(
-                repo_root=repo_root,
-                touched=[repo_root / p for p in files_modified],
-                commands=settings.verify_commands,
-                no_format=no_format,
+    for attempt_number in range(1, effective_attempts + 1):
+        candidate_root: Optional[Path] = None
+        artifact_dir = artifacts_root / f"attempt-{attempt_number}"
+        try:
+            candidate_root = _prepare_candidate_worktree(
+                repo_root,
+                targets,
+                base_ref=base_ref,
+                staged=staged,
+            )
+            candidate_targets = [candidate_root / rel for rel in rel_files]
+            before = {str(path.resolve()): _file_digest(path) for path in candidate_targets}
+            success, summary, cost, _ = run_claude_simplify_command(
+                slash_command,
+                candidate_root,
+                cli_path=cli_path,
+                verbose=verbose,
                 quiet=quiet,
             )
+            total_cost += cost
+            modified = _detect_modified_by_digest(candidate_targets, before, candidate_root)
+            checks: Dict[str, str] = {}
+            if success and verify and modified:
+                checks = _run_verification(
+                    repo_root=candidate_root,
+                    touched=[candidate_root / rel for rel in modified],
+                    commands=settings.verify_commands,
+                    no_format=no_format,
+                    quiet=quiet,
+                )
+                modified = _detect_modified_by_digest(candidate_targets, before, candidate_root)
+            changed_paths = set(_git_changed_files(candidate_root))
+            allowed = set(rel_files)
+            rejection = ""
+            unexpected = sorted(path for path in changed_paths if path not in allowed)
+            if unexpected:
+                success = False
+                rejection = "Claude edited out-of-scope files: " + ", ".join(unexpected)
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            _save_candidate_files(artifact_dir, candidate_root, modified)
+            candidates.append(
+                SimplifyCandidate(
+                    attempt=attempt_number,
+                    success=success,
+                    cost=cost,
+                    agent_summary=summary,
+                    files_modified=modified,
+                    checks=checks,
+                    artifact_dir=artifact_dir,
+                    rejection=rejection,
+                )
+            )
+        finally:
+            if candidate_root is not None:
+                _remove_candidate_worktree(repo_root, candidate_root)
+
+    selected = _choose_candidate(candidates, verify=verify)
+    selected_attempt = selected.attempt if selected else None
+    files_modified: List[str] = []
+    checks: Dict[str, str] = selected.checks if selected else {}
+    agent_summary = selected.agent_summary if selected else "No acceptable candidate was produced."
+    if selected is not None:
+        for target in targets:
+            if _file_digest(target) != digests_before[str(target.resolve())]:
+                raise RuntimeError(
+                    f"Selected source changed during simplify; refusing to overwrite {target}"
+                )
+        for rel in selected.files_modified:
+            source = selected.artifact_dir / "files" / rel
+            destination = repo_root / rel
+            if source.is_file():
+                shutil.copy2(source, destination)
+                files_modified.append(rel)
 
     evidence_path: Optional[Path] = None
     if evidence:
         evidence_path = _write_evidence(
             repo_root=repo_root,
             run_id=run_id,
-            mode=mode,
             path_arg=str(path) if path else None,
             since=since,
             staged=staged,
             files_analyzed=rel_files,
             files_modified=files_modified,
-            report=report,
+            slash_command=slash_command,
+            claude_code_version=version_str,
+            agent_summary=agent_summary,
             checks=checks,
+            attempts=candidates,
+            selected_attempt=selected_attempt,
         )
 
     summary_lines = _render_summary(
-        mode=mode,
         files_analyzed=rel_files,
         files_modified=files_modified,
-        suggestions_count=suggestions_count,
-        report=report,
+        agent_summary=agent_summary,
+        slash_command=slash_command,
+        claude_code_version=version_str,
         checks=checks,
         evidence_path=evidence_path,
+        preview_only=False,
+        attempts=len(candidates),
+        selected_attempt=selected_attempt,
     )
 
-    exit_code = 0
-    if not success:
-        exit_code = 2
-    elif suggestions_count > 0 and mode == "dry-run":
-        exit_code = 1
-    elif checks and any(status == "failed" for status in checks.values()):
-        exit_code = 2
+    success = selected is not None
+    exit_code = 0 if success else 2
 
     return SimplifyRunResult(
         success=success,
         exit_code=exit_code,
-        cost=cost,
-        provider=provider,
+        cost=total_cost,
+        provider="claude",
+        claude_code_version=version_str,
+        slash_command=slash_command,
         files_analyzed=rel_files,
         files_modified=files_modified,
-        suggestions_count=suggestions_count,
+        agent_summary=agent_summary,
+        attempts=len(candidates),
+        selected_attempt=selected_attempt,
         evidence_path=evidence_path,
         summary_lines=summary_lines,
         checks=checks,

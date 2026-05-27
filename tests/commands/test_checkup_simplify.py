@@ -1,4 +1,4 @@
-"""Tests for ``pdd checkup simplify``."""
+"""Tests for ``pdd checkup simplify`` (Claude Code /simplify)."""
 from __future__ import annotations
 
 import json
@@ -6,10 +6,16 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from pdd.checkup_file_selection import discover_simplify_targets
-from pdd.checkup_simplify import run_checkup_simplify
+from pdd.checkup_simplify import (
+    _build_simplify_slash_message,
+    _parse_claude_code_version,
+    check_claude_code_simplify_available,
+    run_checkup_simplify,
+)
 from pdd.commands.checkup import checkup
 
 
@@ -27,6 +33,74 @@ def _init_git_repo(root: Path) -> None:
         check=True,
         capture_output=True,
     )
+
+
+def test_parse_claude_code_version() -> None:
+    assert _parse_claude_code_version("2.1.63 (Claude Code)") == (2, 1, 63)
+    assert _parse_claude_code_version("no version") is None
+
+
+def test_version_probe_accepts_installed_version(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "1.0.35 (Claude Code)\n"
+            stderr = ""
+
+        return Result()
+
+    with patch("pdd.checkup_simplify._find_cli_binary", return_value="/bin/claude"):
+        with patch("pdd.checkup_simplify.subprocess.run", side_effect=fake_run):
+            path, version, err = check_claude_code_simplify_available(quiet=True)
+
+    assert path == "/bin/claude"
+    assert version == (1, 0, 35)
+    assert err is None
+
+
+def test_version_probe_does_not_reject_newer_claude(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "2.1.200 (Claude Code)\n"
+            stderr = ""
+
+        return Result()
+
+    with patch("pdd.checkup_simplify._find_cli_binary", return_value="/bin/claude"):
+        with patch("pdd.checkup_simplify.subprocess.run", side_effect=fake_run):
+            path, version, err = check_claude_code_simplify_available(quiet=True)
+
+    assert path == "/bin/claude"
+    assert version == (2, 1, 200)
+    assert err is None
+
+
+def test_version_gate_accepts_supported(monkeypatch) -> None:
+    monkeypatch.delenv("PDD_SKIP_CLAUDE_SIMPLIFY_VERSION_CHECK", raising=False)
+
+    def fake_run(cmd, **kwargs):
+        class Result:
+            stdout = "2.1.100 (Claude Code)\n"
+            stderr = ""
+
+        return Result()
+
+    with patch("pdd.checkup_simplify._find_cli_binary", return_value="/bin/claude"):
+        with patch("pdd.checkup_simplify.subprocess.run", side_effect=fake_run):
+            path, version, err = check_claude_code_simplify_available(quiet=True)
+
+    assert path == "/bin/claude"
+    assert version == (2, 1, 100)
+    assert err is None
+
+
+def test_build_simplify_slash_message() -> None:
+    msg = _build_simplify_slash_message(
+        ["pdd/foo.py", "pdd/bar.py"],
+        focus="focus on error handling",
+    )
+    assert msg.startswith("/simplify focus on error handling")
+    assert "pdd/foo.py" in msg
+    assert "pdd/bar.py" in msg
 
 
 def test_discover_simplify_targets_since_ref(tmp_path: Path) -> None:
@@ -60,14 +134,29 @@ def test_discover_simplify_targets_staged(tmp_path: Path) -> None:
     assert any(f.name == "staged.py" for f in files)
 
 
-def test_discover_since_and_staged_mutually_exclusive(tmp_path: Path) -> None:
-    import pytest
+def test_discover_defaults_to_local_changed_files(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    src = tmp_path / "pdd"
+    src.mkdir()
+    changed = src / "changed.py"
+    untouched = src / "untouched.py"
+    changed.write_text("x = 1\n", encoding="utf-8")
+    untouched.write_text("y = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+    changed.write_text("x = 2\n", encoding="utf-8")
 
+    _, files = discover_simplify_targets(cwd=tmp_path, max_files=10)
+
+    assert [path.name for path in files] == ["changed.py"]
+
+
+def test_discover_since_and_staged_mutually_exclusive(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="mutually exclusive"):
         discover_simplify_targets(since="HEAD~1", staged=True, cwd=tmp_path)
 
 
-def test_run_simplify_dry_run_no_file_writes(tmp_path: Path, monkeypatch) -> None:
+def test_preview_without_apply_does_not_invoke_claude(tmp_path: Path, monkeypatch) -> None:
     _init_git_repo(tmp_path)
     module = tmp_path / "pdd" / "sample.py"
     module.parent.mkdir(parents=True)
@@ -80,46 +169,87 @@ def test_run_simplify_dry_run_no_file_writes(tmp_path: Path, monkeypatch) -> Non
         check=True,
         capture_output=True,
     )
-
-    report = {
-        "kind": "pdd.checkup.simplify",
-        "files_analyzed": ["pdd/sample.py"],
-        "suggestions": [{"path": "pdd/sample.py", "items": ["inline redundant return"]}],
-        "summary": "1 suggestion",
-    }
-    agent_output = (
-        f"SIMPLIFY_REPORT_JSON: {json.dumps(report)}\n"
-        "FILES_MODIFIED: none\n"
-    )
-
     monkeypatch.chdir(tmp_path)
 
-    with patch("pdd.checkup_simplify.get_available_agents", return_value=["claude"]):
-        with patch("pdd.checkup_simplify.run_agentic_task", return_value=(True, agent_output, 0.1, "claude")):
+    with patch("pdd.checkup_simplify.run_claude_simplify_command") as mock_run, patch(
+        "pdd.checkup_simplify.check_claude_code_simplify_available"
+    ) as mock_probe:
+        result = run_checkup_simplify(
+            path=module,
+            apply=False,
+            since=None,
+            staged=False,
+            max_files=5,
+            attempts=None,
+            evidence=False,
+            verify=False,
+            no_format=False,
+            quiet=True,
+            verbose=False,
+        )
+
+    mock_run.assert_not_called()
+    mock_probe.assert_not_called()
+    assert module.read_text(encoding="utf-8") == original
+    assert result.files_modified == []
+    assert "Preview only" in "\n".join(result.summary_lines)
+
+
+def test_apply_invokes_claude_simplify(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "apply_me.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def before():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    module.write_text("def after():\n    return 2\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    captured: dict[str, str] = {}
+
+    def fake_simplify(slash_message, repo_root, **kwargs):
+        captured["slash"] = slash_message
+        captured["cwd"] = str(repo_root)
+        (repo_root / "pdd" / "apply_me.py").write_text(
+            "def simplified():\n    return 2\n",
+            encoding="utf-8",
+        )
+        return True, "Simplified 1 file.", 0.5, "Simplified 1 file."
+
+    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify):
+        with patch(
+            "pdd.checkup_simplify.check_claude_code_simplify_available",
+            return_value=("/bin/claude", (2, 1, 100), None),
+        ):
             result = run_checkup_simplify(
                 path=module,
-                mode="dry-run",
+                apply=True,
                 since=None,
                 staged=False,
                 max_files=5,
+                attempts=1,
                 evidence=True,
                 verify=False,
-                no_format=False,
+                no_format=True,
                 quiet=True,
                 verbose=False,
-                reasoning_time=None,
             )
 
-    assert module.read_text(encoding="utf-8") == original
-    assert result.files_modified == []
-    assert result.suggestions_count == 1
+    assert captured["slash"].startswith("/simplify")
+    assert "pdd/apply_me.py" in captured["slash"]
+    assert "pdd/apply_me.py" in result.files_modified
     assert result.evidence_path is not None
     payload = json.loads(result.evidence_path.read_text(encoding="utf-8"))
-    assert payload["kind"] == "pdd.checkup.simplify"
-    assert payload["mode"] == "dry-run"
+    assert payload["engine"] == "claude-code/simplify"
+    assert payload["slash_command"].startswith("/simplify")
 
 
-def test_checkup_cli_dispatches_simplify(tmp_path: Path, monkeypatch) -> None:
+def test_checkup_cli_dispatches_simplify_preview(tmp_path: Path, monkeypatch) -> None:
     _init_git_repo(tmp_path)
     module = tmp_path / "pdd" / "cli_sample.py"
     module.parent.mkdir(parents=True)
@@ -133,26 +263,28 @@ def test_checkup_cli_dispatches_simplify(tmp_path: Path, monkeypatch) -> None:
     )
     monkeypatch.chdir(tmp_path)
 
-    report = {
-        "kind": "pdd.checkup.simplify",
-        "files_analyzed": ["pdd/cli_sample.py"],
-        "suggestions": [],
-        "summary": "clean",
-    }
-    agent_output = f"SIMPLIFY_REPORT_JSON: {json.dumps(report)}\nFILES_MODIFIED: none\n"
-
-    with patch("pdd.checkup_simplify.get_available_agents", return_value=["claude"]):
-        with patch("pdd.checkup_simplify.run_agentic_task", return_value=(True, agent_output, 0.0, "claude")):
+    with patch("pdd.checkup_simplify.run_claude_simplify_command") as mock_run:
+        with patch(
+            "pdd.checkup_simplify.check_claude_code_simplify_available",
+            return_value=("/bin/claude", (2, 1, 100), None),
+        ):
             result = CliRunner().invoke(
                 checkup,
-                ["simplify", str(module), "--evidence"],
+                ["simplify", str(module)],
                 obj={"quiet": False, "verbose": False},
             )
 
+    mock_run.assert_not_called()
     assert result.exit_code == 0
     assert "PDD Checkup: simplify" in result.output
-    evidence_dir = tmp_path / ".pdd" / "evidence" / "checkups"
-    assert list(evidence_dir.glob("simplify-*.json"))
+
+
+def test_checkup_simplify_help_is_forwarded_to_nested_command() -> None:
+    result = CliRunner().invoke(checkup, ["simplify", "--help"])
+
+    assert result.exit_code == 0
+    assert "--attempts" in result.output
+    assert "Independent /simplify candidates" in result.output
 
 
 def test_apply_and_verify_flags(tmp_path: Path, monkeypatch) -> None:
@@ -167,18 +299,8 @@ def test_apply_and_verify_flags(tmp_path: Path, monkeypatch) -> None:
         check=True,
         capture_output=True,
     )
+    module.write_text("def changed():\n    return 1\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-
-    report = {
-        "kind": "pdd.checkup.simplify",
-        "files_analyzed": ["pdd/apply_me.py"],
-        "suggestions": [{"path": "pdd/apply_me.py", "items": ["simplified"]}],
-        "summary": "applied",
-    }
-    agent_output = (
-        f"SIMPLIFY_REPORT_JSON: {json.dumps(report)}\n"
-        "FILES_MODIFIED: pdd/apply_me.py\n"
-    )
 
     verify_calls: list[str] = []
 
@@ -186,22 +308,197 @@ def test_apply_and_verify_flags(tmp_path: Path, monkeypatch) -> None:
         verify_calls.append("ran")
         return {"format": "passed", "lint": "passed", "tests": "passed"}
 
-    with patch("pdd.checkup_simplify.get_available_agents", return_value=["claude"]):
-        with patch("pdd.checkup_simplify.run_agentic_task", return_value=(True, agent_output, 0.2, "claude")):
+    def fake_simplify(slash_message, repo_root, **kwargs):
+        (repo_root / "pdd" / "apply_me.py").write_text(
+            "def changed():\n    return 2\n",
+            encoding="utf-8",
+        )
+        return True, "done", 0.2, "done"
+
+    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify):
+        with patch(
+            "pdd.checkup_simplify.check_claude_code_simplify_available",
+            return_value=("/bin/claude", (2, 1, 100), None),
+        ):
             with patch("pdd.checkup_simplify._run_verification", side_effect=fake_verify):
                 result = run_checkup_simplify(
                     path=module,
-                    mode="apply",
+                    apply=True,
                     since=None,
                     staged=False,
                     max_files=5,
+                    attempts=1,
                     evidence=False,
                     verify=True,
                     no_format=True,
                     quiet=True,
                     verbose=False,
-                    reasoning_time=None,
                 )
 
     assert verify_calls == ["ran"]
     assert "pdd/apply_me.py" in result.files_modified
+
+
+def test_apply_attempts_selects_verified_candidate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "candidate.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def value():\n    return 0\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+    module.write_text("def value():\n    return 1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    seen = 0
+
+    def fake_simplify(_slash_message, repo_root, **_kwargs):
+        nonlocal seen
+        seen += 1
+        value = 20 if seen == 1 else 10
+        (repo_root / "pdd" / "candidate.py").write_text(
+            f"def value():\n    return {value}\n",
+            encoding="utf-8",
+        )
+        return True, f"candidate {seen}", 0.1, f"candidate {seen}"
+
+    def fake_verify(**kwargs):
+        content = (kwargs["repo_root"] / "pdd" / "candidate.py").read_text()
+        return {"tests": "failed" if "20" in content else "passed"}
+
+    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify), patch(
+        "pdd.checkup_simplify.check_claude_code_simplify_available",
+        return_value=("/bin/claude", (2, 1, 200), None),
+    ), patch("pdd.checkup_simplify._run_verification", side_effect=fake_verify):
+        result = run_checkup_simplify(
+            path=module,
+            apply=True,
+            since=None,
+            staged=False,
+            max_files=5,
+            attempts=2,
+            evidence=True,
+            verify=True,
+            no_format=True,
+            quiet=True,
+            verbose=False,
+        )
+
+    assert result.selected_attempt == 2
+    assert "return 10" in module.read_text(encoding="utf-8")
+
+
+def test_apply_rejects_out_of_scope_candidate_edits(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "selected.py"
+    other = tmp_path / "pdd" / "other.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("value = 1\n", encoding="utf-8")
+    other.write_text("other = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+    module.write_text("value = 2\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_simplify(_message, repo_root, **_kwargs):
+        (repo_root / "pdd" / "selected.py").write_text("value = 3\n", encoding="utf-8")
+        (repo_root / "pdd" / "other.py").write_text("other = 2\n", encoding="utf-8")
+        return True, "edited too far", 0.1, "claude"
+
+    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify), patch(
+        "pdd.checkup_simplify.check_claude_code_simplify_available",
+        return_value=("/bin/claude", (2, 1, 200), None),
+    ):
+        result = run_checkup_simplify(
+            path=module,
+            apply=True,
+            since=None,
+            staged=False,
+            max_files=5,
+            attempts=1,
+            evidence=True,
+            verify=False,
+            no_format=True,
+            quiet=True,
+            verbose=False,
+        )
+
+    assert result.success is False
+    assert result.exit_code == 2
+    assert module.read_text(encoding="utf-8") == "value = 2\n"
+
+
+def test_staged_apply_refuses_to_overwrite_unstaged_contents(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "selected.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+    module.write_text("value = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "pdd/selected.py"], cwd=tmp_path, check=True, capture_output=True)
+    module.write_text("value = 999\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.checkup_simplify.run_claude_simplify_command") as mock_simplify, patch(
+        "pdd.checkup_simplify.check_claude_code_simplify_available",
+        return_value=("/bin/claude", (2, 1, 200), None),
+    ):
+        result = run_checkup_simplify(
+            path=None,
+            apply=True,
+            since=None,
+            staged=True,
+            max_files=5,
+            attempts=1,
+            evidence=False,
+            verify=False,
+            no_format=True,
+            quiet=True,
+            verbose=False,
+        )
+
+    mock_simplify.assert_not_called()
+    assert result.success is False
+    assert result.exit_code == 2
+    assert module.read_text(encoding="utf-8") == "value = 999\n"
+
+
+def test_staged_candidate_reads_staged_snapshot(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "selected.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+    module.write_text("value = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "pdd/selected.py"], cwd=tmp_path, check=True, capture_output=True)
+    monkeypatch.chdir(tmp_path)
+    observed: list[str] = []
+
+    def fake_simplify(_message, repo_root, **_kwargs):
+        candidate_file = repo_root / "pdd" / "selected.py"
+        observed.append(candidate_file.read_text(encoding="utf-8"))
+        candidate_file.write_text("value = 3\n", encoding="utf-8")
+        return True, "safe", 0.1, "claude"
+
+    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify), patch(
+        "pdd.checkup_simplify.check_claude_code_simplify_available",
+        return_value=("/bin/claude", (2, 1, 200), None),
+    ):
+        result = run_checkup_simplify(
+            path=None,
+            apply=True,
+            since=None,
+            staged=True,
+            max_files=5,
+            attempts=1,
+            evidence=False,
+            verify=False,
+            no_format=True,
+            quiet=True,
+            verbose=False,
+        )
+
+    assert observed == ["value = 2\n"]
+    assert result.success is True
+    assert module.read_text(encoding="utf-8") == "value = 3\n"

@@ -134,6 +134,7 @@ complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suf
 complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
 
 # checkup command
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and not __fish_seen_subcommand_from simplify" -a simplify -d "Sample Claude Code /simplify candidates"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l validate-arch-includes -d "Validate architecture includes"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l project-root -r -d "Project root directory"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l strict -d "Strict checks"
@@ -161,6 +162,14 @@ complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-require-final-fre
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l blocking-severities -x -d "Comma-separated blocking severities"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l clean-reviewer-states -x -d "Comma-separated reviewer states treated as clean"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l fallback-reviewer-on-failure -d "Promote fixer to fallback reviewer if primary ends failed/missing (off by default)"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l apply -d "Run Claude Code /simplify and apply a selected candidate"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l since -x -d "Use a Git ref as the selected diff baseline"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l staged -d "Limit candidates to staged paths"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l max-files -x -d "Maximum selected source files"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l attempts -x -d "Independent simplify candidates to sample"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l evidence -d "Write candidate evidence report"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l verify -d "Verify candidates before selection"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from simplify" -l no-format -d "Skip formatting during candidate verification"
 
 # sync command
 complete -c pdd -n "__fish_seen_subcommand_from sync" -l max-attempts -x -d "Max attempts for loops"
