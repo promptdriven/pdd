@@ -9394,7 +9394,7 @@
         "functions": [
           {
             "name": "parse_prompt_contracts",
-            "signature": "(path, *, strict=False, stories_dir=None, tests_dir=None) -> PromptContractIR",
+            "signature": "(path: Path) -> PromptContractIR",
             "returns": "PromptContractIR"
           },
           {

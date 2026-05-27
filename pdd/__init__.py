@@ -1,11 +1,9 @@
 """PDD - Prompt Driven Development"""
 
-import importlib.metadata as _importlib_metadata
 from importlib.metadata import PackageNotFoundError, version as _metadata_version
 import os
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 
 def _derive_git_aligned_version() -> str | None:
@@ -59,19 +57,6 @@ def _load_package_version() -> str:
 
 
 __version__ = _load_package_version()
-
-
-_ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
-
-
-def _distribution_with_project_version(name: str):
-    """Expose pdd-cli metadata version consistent with ``__version__``."""
-    if name == "pdd-cli":
-        return SimpleNamespace(version=__version__)
-    return _ORIGINAL_DISTRIBUTION(name)
-
-
-_importlib_metadata.distribution = _distribution_with_project_version
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
