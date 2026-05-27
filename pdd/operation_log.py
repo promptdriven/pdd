@@ -20,9 +20,14 @@ PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
 
 
-def ensure_meta_dir() -> None:
-    """Ensure the .pdd/meta directory exists."""
-    os.makedirs(META_DIR, exist_ok=True)
+def ensure_meta_dir(project_root: Optional[Path] = None) -> None:
+    """Ensure the .pdd/meta directory exists.
+
+    When project_root is supplied, creates .pdd/meta under that root instead
+    of relative to the run CWD.
+    """
+    meta_dir = str(project_root / PDD_DIR / "meta") if project_root else META_DIR
+    os.makedirs(meta_dir, exist_ok=True)
 
 
 def _safe_basename(basename: str) -> str:
@@ -40,10 +45,15 @@ def get_log_path(basename: str, language: str) -> Path:
     return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_sync.log"
 
 
-def get_fingerprint_path(basename: str, language: str) -> Path:
-    """Get the path to the fingerprint JSON file for a specific module."""
-    ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}.json"
+def get_fingerprint_path(basename: str, language: str, project_root: Optional[Path] = None) -> Path:
+    """Get the path to the fingerprint JSON file for a specific module.
+
+    When project_root is supplied, returns a path under that root instead of
+    relative to the run CWD.
+    """
+    ensure_meta_dir(project_root=project_root)
+    meta_dir = (project_root / PDD_DIR / "meta") if project_root else Path(META_DIR)
+    return meta_dir / f"{_safe_basename(basename)}_{language}.json"
 
 
 def get_run_report_path(basename: str, language: str) -> Path:

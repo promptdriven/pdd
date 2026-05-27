@@ -842,7 +842,7 @@ def _extract_basename(
         if not prompt_path:
             raise ValueError("Could not determine prompt file for 'fix' command.")
 
-        prompt_basename = _strip_language_suffix(prompt_path)
+        prompt_basename = _strip_language_suffix_with_subdir(prompt_path)
         
         unit_test_path = input_file_paths.get("unit_test_file")
         if not unit_test_path:

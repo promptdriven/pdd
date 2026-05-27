@@ -54,8 +54,14 @@ def get_pdd_dir():
     """Get the .pdd directory relative to current working directory."""
     return Path.cwd() / '.pdd'
 
-def get_meta_dir():
-    """Get the metadata directory."""
+def get_meta_dir(project_root=None):
+    """Get the metadata directory.
+
+    When project_root is supplied, returns a path under that root instead of
+    relative to the run CWD.
+    """
+    if project_root is not None:
+        return Path(project_root) / '.pdd' / 'meta'
     return get_pdd_dir() / 'meta'
 
 def get_locks_dir():
