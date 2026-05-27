@@ -580,7 +580,7 @@ result = add(5, 3)  # Should return 8"""
     run_report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "exit_code": 0,
-        "tests_passed": 1,
+        "tests_passed": 0,
         "tests_failed": 0,
         "coverage": 100.0
     }
@@ -626,7 +626,7 @@ def test_regression_missing_code_with_low_coverage_run_report(pdd_test_environme
     run_report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "exit_code": 0,
-        "tests_passed": 1,
+        "tests_passed": 0,
         "tests_failed": 0,
         "coverage": 0.0,
         "test_hash": "ghi",
@@ -1299,7 +1299,7 @@ class TestIntegrationScenarios:
         run_report = {
             "timestamp": "2025-06-29T10:00:00",
             "exit_code": 0,
-            "tests_passed": 1,
+            "tests_passed": 0,
             "tests_failed": 0,
             "coverage": 100.0
         }
@@ -2964,7 +2964,7 @@ class TestStaleRunReportRegression:
         create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
             "timestamp": "2025-12-10T08:33:52.589258+00:00",
             "exit_code": 0,
-            "tests_passed": 1,
+            "tests_passed": 0,
             "tests_failed": 0,
             "coverage": 95.0
         })
@@ -3044,7 +3044,7 @@ class TestStaleRunReportRegression:
         create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
             "timestamp": "2025-12-10T08:33:52.589258+00:00",
             "exit_code": 0,
-            "tests_passed": 1,
+            "tests_passed": 0,
             "tests_failed": 0,
             "coverage": 0.0
         })
@@ -3195,7 +3195,7 @@ class TestFalsePositiveSuccessBugRegression:
         create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
             "timestamp": "2025-12-18T22:00:00.000000+00:00",  # Newer than fingerprint
             "exit_code": 0,
-            "tests_passed": 1,  # This is from example, not actual unit tests
+            "tests_passed": 0,  # This is from example, not actual unit tests
             "tests_failed": 0,
             "coverage": 0.0
             # test_hash is None (missing) - this was part of the bug
@@ -3265,7 +3265,7 @@ class TestFalsePositiveSuccessBugRegression:
         create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
             "timestamp": "2025-12-18T22:00:00.000000+00:00",
             "exit_code": 0,
-            "tests_passed": 1,
+            "tests_passed": 0,
             "tests_failed": 0,
             "coverage": 0.0
         })
@@ -3356,7 +3356,7 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
     create_run_report_file(rr_path, {
         "timestamp": "2025-01-01T00:00:00Z",
         "exit_code": 0,  # Success - crash was fixed
-        "tests_passed": 1,
+        "tests_passed": 0,
         "tests_failed": 0,
         "coverage": 95.0
     })
@@ -4274,7 +4274,7 @@ class TestFingerprintIncludeDependencies:
         create_run_report_file(rr_path, {
             "timestamp": "2026-02-23T00:00:00Z",
             "exit_code": 0,
-            "tests_passed": 1,
+            "tests_passed": 0,
             "tests_failed": 0,
             "coverage": 90.0,
         })
@@ -4860,3 +4860,158 @@ def test_get_filepath_dict_format_without_modules_key_returns_tuple(tmp_path):
         f"Expected (None, None) for dict without 'modules' key, got {result!r}. "
         "Line 343 returns bare None instead of the expected (None, None) tuple."
     )
+
+
+from unittest.mock import patch
+
+def test_issue1200_stale_state_skip_flags_exhausts_consecutive_fix_breaker(pdd_test_environment):
+    from pdd.sync_determine_operation import sync_determine_operation
+    from tests.test_sync_determine_operation import create_file, create_run_report_file, create_fingerprint_file, get_meta_dir, BASENAME, LANGUAGE
+
+    tmp_path = pdd_test_environment
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+
+    prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+    prompt_hash = create_file(prompt_path, "# prompt")
+    
+    code_path = tmp_path / "src" / f"{BASENAME}.py"
+    code_hash = create_file(code_path, "def foo(): pass")
+    
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    test_hash = create_file(test_path, "def test_fail(): assert False\n# changed")
+    example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+    example_hash = create_file(example_path, "def example(): pass")
+
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "2025-12-10T08:33:52.589258+00:00",
+        "exit_code": 1,
+        "tests_passed": 0,
+        "tests_failed": 2,
+        "coverage": 95.0,
+        "test_hash": "old_stale_hash"
+    })
+
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "0.0.81",
+        "timestamp": "2025-12-10T08:30:00.000000+00:00",
+        "command": "verify",
+        "prompt_hash": prompt_hash,
+        "code_hash": code_hash,
+        "test_hash": test_hash,
+        "example_hash": example_hash,
+    })
+
+    mock_paths = {
+        'prompt': prompt_path,
+        'code': code_path,
+        'test': test_path,
+        'example': tmp_path / "examples" / f"{BASENAME}_example.py"
+    }
+
+    with patch('pdd.sync_determine_operation.get_pdd_file_paths', return_value=mock_paths):
+        decision = sync_determine_operation(BASENAME, LANGUAGE, 90.0, 5.0, prompts_dir="prompts", skip_tests=False, skip_verify=False)
+    
+    assert decision.operation != 'fix', "Should not recommend fix based on stale tests_failed > 0"
+
+def test_issue1200_stale_run_report_crash_validation(pdd_test_environment):
+    # Scope addition: covers expansion item "sync_determine_operation.py must validate run_report staleness before recommending crash based on exit_code != 0"
+    from pdd.sync_determine_operation import sync_determine_operation
+    from tests.test_sync_determine_operation import create_file, create_run_report_file, create_fingerprint_file, get_meta_dir, BASENAME, LANGUAGE
+
+    tmp_path = pdd_test_environment
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+
+    prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+    prompt_hash = create_file(prompt_path, "# prompt")
+    
+    code_path = tmp_path / "src" / f"{BASENAME}.py"
+    code_hash = create_file(code_path, "def foo(): pass\n# changed")
+    
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    test_hash = create_file(test_path, "def test_fail(): pass")
+    example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+    example_hash = create_file(example_path, "def example(): pass")
+
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "2025-12-10T08:33:52.589258+00:00",
+        "exit_code": 1,
+        "tests_passed": 0,
+        "tests_failed": 0,
+        "coverage": 95.0,
+        "test_hash": "old_stale_hash" 
+    })
+
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "0.0.81",
+        "timestamp": "2025-12-10T08:30:00.000000+00:00",
+        "command": "generate",
+        "prompt_hash": prompt_hash,
+        "code_hash": code_hash,
+        "test_hash": test_hash,
+        "example_hash": example_hash,
+    })
+
+    mock_paths = {
+        'prompt': prompt_path,
+        'code': code_path,
+        'test': test_path,
+        'example': tmp_path / "examples" / f"{BASENAME}_example.py"
+    }
+
+    with patch('pdd.sync_determine_operation.get_pdd_file_paths', return_value=mock_paths):
+        decision = sync_determine_operation(BASENAME, LANGUAGE, 90.0, 5.0, prompts_dir="prompts", skip_tests=False, skip_verify=False)
+    
+    assert decision.operation != 'crash', "Should not recommend crash based on stale exit_code != 0"
+
+def test_issue1200_fresh_run_report_fix_and_crash_validation(pdd_test_environment):
+    # Regression prevention for Expansion items
+    from pdd.sync_determine_operation import sync_determine_operation
+    from tests.test_sync_determine_operation import create_file, create_run_report_file, create_fingerprint_file, get_meta_dir, BASENAME, LANGUAGE
+
+    tmp_path = pdd_test_environment
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+
+    prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+    prompt_hash = create_file(prompt_path, "# prompt")
+    
+    code_path = tmp_path / "src" / f"{BASENAME}.py"
+    code_hash = create_file(code_path, "def foo(): pass")
+    
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    test_hash = create_file(test_path, "def test_fail(): pass")
+    example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+    example_hash = create_file(example_path, "def example(): pass")
+
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "2025-12-10T08:33:52.589258+00:00",
+        "exit_code": 0,
+        "tests_passed": 0,
+        "tests_failed": 2,
+        "coverage": 95.0,
+        "test_hash": test_hash
+    })
+
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "0.0.81",
+        "timestamp": "2025-12-10T08:30:00.000000+00:00",
+        "command": "verify",
+        "prompt_hash": prompt_hash,
+        "code_hash": code_hash,
+        "test_hash": test_hash,
+        "example_hash": example_hash,
+    })
+
+    mock_paths = {
+        'prompt': prompt_path,
+        'code': code_path,
+        'test': test_path,
+        'example': tmp_path / "examples" / f"{BASENAME}_example.py"
+    }
+
+    with patch('pdd.sync_determine_operation.get_pdd_file_paths', return_value=mock_paths):
+        decision = sync_determine_operation(BASENAME, LANGUAGE, 90.0, 5.0, prompts_dir="prompts", skip_tests=False, skip_verify=False)
+    
+    assert decision.operation == 'fix', "Should recommend fix since tests_failed > 0 and report is fresh"

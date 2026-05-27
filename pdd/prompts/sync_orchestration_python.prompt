@@ -366,9 +366,9 @@ Detect and break infinite loops with these limits:
 - Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
-- Consecutive fix operations: Break after 5
-- Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
-- Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
+- Consecutive fix operations: Break after 5. In addition, track consecutive no-op fix iterations (where actual_cost == 0.0 and model == ""); reset on a real LLM call, and abort after 2 consecutive no-ops with a distinct error message.
+- Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3). Also track consecutive no-ops and abort after 2.
+- Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3). Also track consecutive no-ops and abort after 2.
 - Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)
 
 ### Budget and Lock Management
