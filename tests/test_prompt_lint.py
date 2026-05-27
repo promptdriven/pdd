@@ -15,8 +15,8 @@ from pdd.cli import cli
 from pdd.commands.checkup import checkup
 from pdd.prompt_lint import run_llm_ambiguity_pass
 
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "prompt_lint"
-REPO_ROOT = Path(__file__).parents[2]
+FIXTURES = Path(__file__).parent / "fixtures" / "prompt_lint"
+REPO_ROOT = Path(__file__).parent.parent
 
 
 def test_prompt_group_is_not_registered_on_public_cli() -> None:
