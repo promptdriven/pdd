@@ -1428,17 +1428,33 @@ def _discover_python_gates(
         # clean verdict. Emit as a SEPARATE gate so per-tool
         # ``--gate-allow`` filtering still works and the failure surfaces
         # under its own ``ruff-format`` name in the report.
-        gates.append(
-            Gate(
-                name="ruff-format",
-                cmd=[ruff_abs, "format", "--check", "--", *changed_py],
-                source="pyproject.toml:[tool.ruff]",
-                required_fix_hint=(
-                    "Run `ruff format` locally and commit the formatting "
-                    "changes."
-                ),
+        #
+        # Codex pass-4 finding 3: a project may use ruff for LINTING
+        # while running a different formatter (typically black). Firing
+        # ``ruff format --check`` against such a project would block
+        # clean verdicts on formatting rules CI does not enforce — a
+        # false-positive blocker. Tighten the trigger to an EXPLICIT
+        # opt-in signal: either ``[tool.ruff.format]`` is declared (the
+        # canonical way to express "yes, I use ruff format") OR
+        # ``[tool.black]`` is absent (no rival formatter declared, so
+        # the ruff toolchain is the only formatter available). Both
+        # conditions still require the lint gate's existing
+        # prerequisites (changed_py, ruff binary on PATH,
+        # ``[tool.ruff]`` present, no Python tool-config touched).
+        if _tool_section_present("ruff.format") or not _tool_section_present(
+            "black"
+        ):
+            gates.append(
+                Gate(
+                    name="ruff-format",
+                    cmd=[ruff_abs, "format", "--check", "--", *changed_py],
+                    source="pyproject.toml:[tool.ruff]",
+                    required_fix_hint=(
+                        "Run `ruff format` locally and commit the formatting "
+                        "changes."
+                    ),
+                )
             )
-        )
     black_abs = _resolve_tool("black", worktree)
     if (
         changed_py

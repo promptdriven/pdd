@@ -391,6 +391,62 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "ruff-format" not in names
 
+    def test_skips_ruff_format_when_black_also_declared(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex review pass-4 finding 3: a project may declare
+        ``[tool.ruff]`` for LINTING while running black for formatting.
+        Firing ``ruff format --check`` would block clean verdicts on
+        formatting rules CI does not enforce. When ``[tool.black]``
+        is declared the gate MUST skip ``ruff-format`` (ruff lint still
+        fires).
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n[tool.black]\nline-length = 100\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/tool"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        # Lint gate still fires (ruff configured + binary present).
+        assert "ruff" in names
+        # Format gate skipped because black is also declared.
+        assert "ruff-format" not in names
+
+    def test_emits_ruff_format_when_black_declared_but_ruff_format_opted_in(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex review pass-4 finding 3 corollary: when a project
+        EXPLICITLY opts into ruff format via ``[tool.ruff.format]``,
+        the gate MUST fire even when ``[tool.black]`` is also declared
+        (the operator declared both intentionally — perhaps migrating
+        from black, perhaps using ruff format with custom options).
+        Explicit opt-in wins over the black-also-declared default.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n"
+            "[tool.ruff.format]\nquote-style = \"double\"\n"
+            "[tool.black]\nline-length = 100\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/tool"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff" in names
+        assert "ruff-format" in names
+
     def test_user_extra_allow_is_honored(self, tmp_path: Path) -> None:
         from pdd.checkup_gates import discover_gates
 

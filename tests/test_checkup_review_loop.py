@@ -12018,6 +12018,94 @@ class TestCompanionSourceOfTruthFiles:
         )
         assert "Companion Source-Of-Truth Files To Inspect" not in prompt
 
+    def test_truncation_emits_marker_with_omitted_paths(self) -> None:
+        """Codex review pass-4 finding 2: silent truncation at
+        ``max_entries`` would let drift in omitted files ride a clean
+        verdict because the prompt language says "for each code file".
+        The collector MUST append a synthetic
+        ``{"__truncated__": True, ...}`` marker carrying the full
+        omitted-path list so the formatter can render the truncation
+        explicitly.
+        """
+        from pdd.checkup_review_loop import (
+            _collect_companion_source_of_truth_files,
+        )
+
+        # Build a fake worktree-style call by patching the helpers.
+        # We assert directly on the truncation behaviour by calling the
+        # collector with a tiny ``max_entries`` against a real worktree
+        # that has more eligible entries.
+        # Use 3 eligible entries with cap=2 to keep the test bounded.
+        # Use unittest.mock to avoid the heavy real-worktree setup —
+        # we want to exercise the truncation branch specifically.
+        import unittest.mock as mock
+        from pathlib import Path as _Path
+
+        with (
+            mock.patch(
+                "pdd.checkup_review_loop._pr_changed_files_all",
+                return_value=["pdd/a.py", "pdd/b.py", "pdd/c.py"],
+            ),
+            mock.patch(
+                "pdd.checkup_review_loop._load_prompt_source_map",
+                return_value={
+                    "pdd/a.py": "pdd/prompts/a_python.prompt",
+                    "pdd/b.py": "pdd/prompts/b_python.prompt",
+                    "pdd/c.py": "pdd/prompts/c_python.prompt",
+                },
+            ),
+        ):
+            companions = _collect_companion_source_of_truth_files(
+                _Path("/tmp/fake"),
+                pr_metadata=None,
+                max_entries=2,
+            )
+
+        # Two real entries + one truncation marker.
+        assert len(companions) == 3, companions
+        real = [c for c in companions if not c.get("__truncated__")]
+        marker = [c for c in companions if c.get("__truncated__")]
+        assert len(real) == 2
+        assert len(marker) == 1
+        m = marker[0]
+        assert m["total_eligible"] == 3
+        assert m["shown"] == 2
+        # The omitted list MUST contain the third code path so the
+        # reviewer can still inspect it explicitly.
+        assert "pdd/c.py" in m["omitted_code_paths"]
+
+    def test_format_renders_truncation_section_explicitly(self) -> None:
+        """The formatter MUST render the truncation marker as an
+        explicit 'ALSO inspect' note, not silently drop it.
+        """
+        from pdd.checkup_review_loop import _format_companion_source_of_truth
+
+        rendered = _format_companion_source_of_truth(
+            [
+                {
+                    "code_path": "pdd/a.py",
+                    "prompt_path": "pdd/prompts/a_python.prompt",
+                    "prompt_in_diff": False,
+                    "architecture_in_diff": False,
+                },
+                {
+                    "__truncated__": True,
+                    "total_eligible": 250,
+                    "shown": 200,
+                    "omitted_code_paths": ["pdd/x.py", "pdd/y.py"],
+                },
+            ]
+        )
+        assert "Truncated review scope" in rendered
+        assert "250" in rendered  # total_eligible
+        assert "first 200" in rendered  # shown
+        assert "pdd/x.py" in rendered
+        assert "pdd/y.py" in rendered
+        # The marker dict itself MUST NOT leak into the primary JSON
+        # block — only the omitted paths should appear in the
+        # truncation note section.
+        assert "__truncated__" not in rendered
+
 
 class TestPrBaseMergeConflictPreflight:
     """Issue #1433 Bug #1."""

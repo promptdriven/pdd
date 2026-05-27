@@ -1014,9 +1014,24 @@ def run_checkup_review_loop(
             "remediation."
         )
         artifacts_dir.mkdir(parents=True, exist_ok=True)
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # The raw ``preflight_conflict`` body comes from ``git merge-tree``
+        # stdout and CodeQL ``py/clear-text-storage-sensitive-data`` treats
+        # it as tainted (the scrubber it passed through is not modelled as
+        # a sanitizer). Persist a minimal marker artifact only — the full
+        # conflict description still flows through the synthetic blocker
+        # finding (``conflict_finding.evidence`` above) which IS modelled
+        # by CodeQL's scrub paths. Operators who need the raw merge-tree
+        # output can re-run ``git merge-tree --write-tree <base> HEAD``
+        # locally.
         _write_artifact(
             artifacts_dir / "preflight-base-merge-conflict.txt",
-            f"base_ref={base_for_preflight}\n\n{preflight_conflict}\n",
+            "Pre-flight base-merge conflict detected. "
+            "See the synthetic blocker finding "
+            "(reviewer='preflight:base-merge') for the conflict "
+            "description. Reproduce locally with "
+            "`git merge-tree --write-tree --no-messages <base> HEAD` "
+            "in the loop's worktree.\n",
         )
         report = _finalize(context, state, roles, artifacts_dir)
         _post_review_loop_report(context, report, use_github_state)
@@ -2222,10 +2237,18 @@ def _collect_companion_source_of_truth_files(
     Surface the companion files explicitly so the prompt builder can list
     them as part of the review scope.
 
-    Returns at most ``max_entries`` dicts to keep the prompt bounded for
-    very wide PRs. Only entries where at least one companion file is
-    OUTSIDE the diff are returned — when everything is in the diff the
-    reviewer's normal attention covers it and the section adds noise.
+    Returns at most ``max_entries`` companion dicts. When the eligible set
+    is larger, the LAST entry in the returned list is a synthetic marker
+    dict with ``__truncated__: True`` carrying ``total_eligible`` and
+    ``omitted_code_paths`` (full list of code-file paths the reviewer
+    must ALSO inspect — codex pass-4 finding 2: silent truncation lets
+    drift in omitted files ride a clean review when the prompt says
+    "for each code file"). The marker can be inspected by callers /
+    rendered explicitly by ``_format_companion_source_of_truth``.
+
+    Only entries where at least one companion file is OUTSIDE the diff
+    are returned — when everything is in the diff the reviewer's normal
+    attention covers it and the section adds noise.
 
     Always fail-open: any git/IO/JSON error returns ``[]`` so the prompt
     just omits the section.
@@ -2252,7 +2275,11 @@ def _collect_companion_source_of_truth_files(
 
     changed_set = {Path(p).as_posix() for p in changed}
     arch_in_diff = "architecture.json" in changed_set
-    companions: List[Dict[str, Any]] = []
+    # Build the full eligible set FIRST so the truncation marker (below)
+    # can report total_eligible accurately and enumerate the omitted
+    # paths. Walking ``mapping`` (the canonical code -> prompt registry)
+    # ensures eligibility is judged the same way regardless of cap.
+    eligible: List[Dict[str, Any]] = []
     for code_path in sorted(changed_set):
         prompt_path = mapping.get(code_path)
         if not prompt_path:
@@ -2263,7 +2290,7 @@ def _collect_companion_source_of_truth_files(
         # reviewer's normal attention window already covers them.
         if prompt_in_diff and arch_in_diff:
             continue
-        companions.append(
+        eligible.append(
             {
                 "code_path": code_path,
                 "prompt_path": prompt_path,
@@ -2271,9 +2298,25 @@ def _collect_companion_source_of_truth_files(
                 "architecture_in_diff": arch_in_diff,
             }
         )
-        if len(companions) >= max_entries:
-            break
-    return companions
+
+    if len(eligible) <= max_entries:
+        return eligible
+
+    # Truncation: keep the first ``max_entries`` real entries and append
+    # a synthetic marker describing what was omitted. The formatter
+    # MUST render the marker as an explicit "ALSO inspect" note so the
+    # reviewer knows the listed entries are not the complete set.
+    head = eligible[:max_entries]
+    omitted = eligible[max_entries:]
+    head.append(
+        {
+            "__truncated__": True,
+            "total_eligible": len(eligible),
+            "shown": max_entries,
+            "omitted_code_paths": [entry["code_path"] for entry in omitted],
+        }
+    )
+    return head
 
 
 def _maybe_run_fallback_reviewer(
@@ -3172,9 +3215,36 @@ def _format_companion_source_of_truth(
     even when those companions are unmodified. Returns ``""`` when there
     is nothing to surface so the section disappears from the prompt
     entirely.
+
+    Codex review pass-4 finding 2: when
+    ``_collect_companion_source_of_truth_files`` truncated at
+    ``max_entries`` it appended a synthetic marker
+    (``__truncated__: True``) carrying the full ``omitted_code_paths``
+    list. Render the marker as an explicit "ALSO inspect" note so the
+    reviewer never silently accepts a clean verdict over an omitted
+    drift surface.
     """
     if not companions:
         return ""
+    real_entries = [c for c in companions if not c.get("__truncated__")]
+    truncation = next((c for c in companions if c.get("__truncated__")), None)
+    truncation_note = ""
+    if truncation is not None:
+        omitted = truncation.get("omitted_code_paths", [])
+        total = truncation.get("total_eligible", len(real_entries) + len(omitted))
+        shown = truncation.get("shown", len(real_entries))
+        truncation_note = (
+            "\n\n**Truncated review scope (codex pass-4 finding 2).** The "
+            f"checkup found {total} code files in this PR's diff whose "
+            "prompt OR `architecture.json` entry is OUTSIDE the diff, but "
+            f"only the first {shown} are listed below. You MUST ALSO open "
+            "the prompt and architecture entry for every code file in the "
+            "following omitted list and apply the same review-scope rules. "
+            "Treat the omitted list as part of the JSON above — do not "
+            "issue a clean verdict without confirming you inspected the "
+            "companions for these files as well:\n"
+            f"{json.dumps(omitted, indent=2)}\n"
+        )
     return (
         "\n\n## Companion Source-Of-Truth Files To Inspect\n"
         "PDD's contract is that prompts are source of truth and code is "
@@ -3189,7 +3259,8 @@ def _format_companion_source_of_truth(
         "`critical` for runtime modules. When `prompt_in_diff` is false "
         "the prompt was NOT updated alongside the code change: that is "
         "the highest-risk drift surface.\n"
-        f"{json.dumps(list(companions), indent=2)}\n"
+        f"{json.dumps(list(real_entries), indent=2)}"
+        f"{truncation_note}\n"
     )
 
 
@@ -4940,9 +5011,11 @@ def _resolve_trusted_git_for_worktree(worktree: Path) -> Optional[str]:
         if resolved:
             return resolved
     except Exception as exc:  # noqa: BLE001 - defensive
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exception class name, never the message body.
         logger.debug(
-            "trusted-git lookup via checkup_gates failed: %s",
-            _scrub_secrets(f"{type(exc).__name__}: {exc}"),
+            "trusted-git lookup via checkup_gates failed (%s)",
+            type(exc).__name__,
         )
     import shutil
 
