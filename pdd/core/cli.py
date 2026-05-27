@@ -1,12 +1,13 @@
 """
 Main CLI class and entry point logic.
 """
-import os
-import sys
 import io
+import os
 import re
+import sys
+from typing import Any, List, Optional, TextIO, Tuple
+
 import click
-from typing import Any, List, Optional, Tuple, TextIO
 
 try:
     from .. import DEFAULT_STRENGTH, DEFAULT_TIME
@@ -24,11 +25,11 @@ from .dump import _write_core_dump
 from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
 
 
-def _show_cli_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+def _show_cli_version(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
     """Print distribution version and exit (reads metadata on every invocation)."""
     if not value or ctx.resilient_parsing:
         return
-    from .. import get_version
+    from .. import get_version  # pylint: disable=import-outside-toplevel
 
     click.echo(f"cli, version {get_version()}", color=ctx.color)
     ctx.exit()
@@ -56,21 +57,23 @@ class OutputCapture:
         self.buffer = io.StringIO()
 
     def write(self, text: str) -> int:
+        """Write text to both original stream and the internal buffer."""
         # Write to original stream so output is still displayed
         result = self.original_stream.write(text)
         # Also capture to buffer
         try:
             self.buffer.write(text)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             # If buffer write fails, don't break the original output
             pass
         return result
 
     def flush(self):
+        """Flush both the original stream and the internal buffer."""
         self.original_stream.flush()
         try:
             self.buffer.flush()
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass
 
     def isatty(self):
@@ -122,6 +125,7 @@ class PDDCLI(click.Group):
 
         self.format_options(ctx, formatter)
 
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements,inconsistent-return-statements
     def invoke(self, ctx):
         exception_to_handle = None
         user_abort = False  # Flag for user cancellation (fix for issue #186)
@@ -133,14 +137,16 @@ class PDDCLI(click.Group):
             user_abort = True
         except click.UsageError:
             raise  # Let Click handle it natively via BaseCommand.main() → echo()
-        except KeyboardInterrupt as e:
+        except KeyboardInterrupt as exc:
             # Handle keyboard interrupt (Ctrl+C) gracefully
-            exception_to_handle = e
-        except SystemExit as e:
-            # Let successful exits (code 0) pass through; for non-zero, exit with that code (e.g. intentional sys.exit(1) from a command)
-            if e.code == 0 or e.code is None:
+            exception_to_handle = exc
+        except SystemExit as exc:
+            # Let successful exits (code 0) pass through; for non-zero, exit with
+            # that code (e.g. intentional sys.exit(1) from a command)
+            if exc.code == 0 or exc.code is None:
                 raise
-            # Write core dump on intentional failure exit so debugging has a record (same as exception path)
+            # Write core dump on intentional failure exit so debugging has a
+            # record (same as exception path)
             try:
                 if ctx.obj is None:
                     ctx.obj = {}
@@ -155,9 +161,15 @@ class PDDCLI(click.Group):
                     if stdout_capture or stderr_capture:
                         captured_parts = []
                         if stdout_capture:
-                            captured_parts.append("=== STDOUT ===\n" + _strip_ansi_codes(stdout_capture.get_captured_output()))
+                            captured_parts.append(
+                                "=== STDOUT ===\n"
+                                + _strip_ansi_codes(stdout_capture.get_captured_output())
+                            )
                         if stderr_capture:
-                            captured_parts.append("=== STDERR ===\n" + _strip_ansi_codes(stderr_capture.get_captured_output()))
+                            captured_parts.append(
+                                "=== STDERR ===\n"
+                                + _strip_ansi_codes(stderr_capture.get_captured_output())
+                            )
                         terminal_output = "\n\n".join(captured_parts) if captured_parts else ""
                         if stdout_capture:
                             sys.stdout = stdout_capture.original_stream
@@ -165,23 +177,27 @@ class PDDCLI(click.Group):
                             sys.stderr = stderr_capture.original_stream
                 _write_core_dump(
                     ctx, [], invoked_subcommands, total_cost, terminal_output,
-                    exit_reason=f"Command exited with code {int(e.code) if e.code is not None else 1} (intentional failure).",
+                    exit_reason=(
+                        f"Command exited with code "
+                        f"{int(exc.code) if exc.code is not None else 1} "
+                        f"(intentional failure)."
+                    ),
                 )
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 pass
-            ctx.exit(int(e.code) if e.code is not None else 1)
+            ctx.exit(int(exc.code) if exc.code is not None else 1)
             return
-        except click.exceptions.Exit as e:
+        except click.exceptions.Exit as exc:
             # Successful exit: propagate for Click to finish cleanly.
-            if e.exit_code == 0:
+            if exc.exit_code == 0:
                 raise
-            # Intentional failure (e.g. checkup --validate-arch-includes, failed sync): do not
-            # route through handle_error — that misreports "unexpected error" after
-            # the command already printed diagnostics.
+            # Intentional failure (e.g. checkup --validate-arch-includes,
+            # failed sync): do not route through handle_error — that misreports
+            # "unexpected error" after the command already printed diagnostics.
             raise
-        except Exception as e:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             # Handle all other exceptions
-            exception_to_handle = e
+            exception_to_handle = exc
         else:
             # No exception, return normally
             return result
@@ -196,7 +212,7 @@ class PDDCLI(click.Group):
         try:
             if isinstance(ctx.obj, dict):
                 quiet = ctx.obj.get("quiet", False)
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass
 
         # Centralized error reporting
@@ -244,8 +260,14 @@ class PDDCLI(click.Group):
                     if stderr_capture:
                         sys.stderr = stderr_capture.original_stream
 
-            _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
-        except Exception:
+            _write_core_dump(
+                ctx,
+                normalized_results,
+                invoked_subcommands,
+                total_cost,
+                terminal_output,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
             # Never let core-dump logic itself crash the CLI
             pass
 
@@ -264,14 +286,20 @@ class PDDCLI(click.Group):
     "--force",
     is_flag=True,
     default=False,
-    help="Skip all interactive prompts (file overwrites, API key requests). Useful for CI/automation.",
+    help=(
+        "Skip all interactive prompts (file overwrites, API key requests). "
+        "Useful for CI/automation."
+    ),
 )
 @click.option(
     "--strength",
     type=click.FloatRange(0.0, 1.0),
     default=None,
     show_default=False,
-    help=f"Set the strength of the AI model (0.0 to 1.0). Default: {DEFAULT_STRENGTH} or .pddrc value.",
+    help=(
+        f"Set the strength of the AI model (0.0 to 1.0). "
+        f"Default: {DEFAULT_STRENGTH} or .pddrc value."
+    ),
 )
 @click.option(
     "--temperature",
@@ -285,7 +313,10 @@ class PDDCLI(click.Group):
     type=click.FloatRange(0.0, 1.0),
     default=None,
     show_default=True,
-    help="Controls reasoning allocation for LLMs (0.0-1.0). Uses DEFAULT_TIME if None.",
+    help=(
+        "Controls reasoning allocation for LLMs (0.0-1.0). "
+        "Uses DEFAULT_TIME if None."
+    ),
 )
 @click.option(
     "--verbose",
@@ -322,7 +353,10 @@ class PDDCLI(click.Group):
     "context_override",
     type=str,
     default=None,
-    help="Override automatic context detection and use the specified .pddrc context.",
+    help=(
+        "Override automatic context detection and "
+        "use the specified .pddrc context."
+    ),
 )
 @click.option(
     "--list-contexts",
@@ -335,14 +369,20 @@ class PDDCLI(click.Group):
     "--core-dump/--no-core-dump",
     "core_dump",
     default=True,
-    help="Write a JSON core dump for this run into .pdd/core_dumps (default: on). Use --no-core-dump to disable.",
+    help=(
+        "Write a JSON core dump for this run into .pdd/core_dumps "
+        "(default: on). Use --no-core-dump to disable."
+    ),
 )
 @click.option(
     "--keep-core-dumps",
     "keep_core_dumps",
     type=click.IntRange(min=0),
     default=10,
-    help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
+    help=(
+        "Number of core dumps to keep (default: 10, min: 0). "
+        "Older dumps are garbage collected after each dump write."
+    ),
 )
 @click.option(
     "--version",
@@ -353,6 +393,7 @@ class PDDCLI(click.Group):
     help="Show the version and exit.",
 )
 @click.pass_context
+# pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
 def cli(
     ctx: click.Context,
     force: bool,
@@ -389,6 +430,8 @@ def cli(
     if temperature is not None:
         ctx.obj["temperature"] = temperature
     ctx.obj["verbose"] = verbose
+    if "--json" in sys.argv:
+        quiet = True
     ctx.obj["quiet"] = quiet
     if quiet:
         os.environ["PDD_QUIET"] = "1"
@@ -415,7 +458,7 @@ def cli(
     # pre-existing value (e.g. from the worker env.yaml such as
     # CODEX_REASONING_EFFORT=xhigh for GPT-5.4 routing) alone.
     if time is not None:
-        from ..reasoning import time_to_effort_level
+        from ..reasoning import time_to_effort_level  # pylint: disable=import-outside-toplevel
         os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
@@ -424,7 +467,7 @@ def cli(
 
     # Garbage collect old core dumps on every CLI invocation (Issue #231)
     # This runs regardless of --no-core-dump to ensure cleanup always happens
-    from .dump import garbage_collect_core_dumps
+    from .dump import garbage_collect_core_dumps  # pylint: disable=import-outside-toplevel
     garbage_collect_core_dumps(keep=keep_core_dumps)
 
     # Set up terminal output capture if core_dump is enabled
@@ -440,15 +483,16 @@ def cli(
     if quiet:
         ctx.obj["verbose"] = False
         try:
-            from ..llm_invoke import set_quiet_logging
+            from ..llm_invoke import set_quiet_logging  # pylint: disable=import-outside-toplevel
             set_quiet_logging()
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass
 
     # Warn users who have not completed interactive setup unless they are running it now
     if _should_show_onboarding_reminder(ctx):
         console.print(
-            "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
+            "[warning]Complete onboarding with `pdd setup` to install tab "
+            "completion and configure API keys.[/warning]"
         )
         ctx.obj["reminder_shown"] = True
 
@@ -456,7 +500,7 @@ def cli(
     if list_contexts:
         try:
             names = list_available_contexts()
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             # Surface config errors as usage errors
             raise click.UsageError(f"Failed to load .pddrc: {exc}")
         # Print one per line; avoid Rich formatting for portability
@@ -469,7 +513,7 @@ def cli(
     if context_override:
         try:
             names = list_available_contexts()
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             # If .pddrc is malformed, propagate as usage error
             raise click.UsageError(f"Failed to load .pddrc: {exc}")
         if context_override not in names:
@@ -484,7 +528,7 @@ def cli(
                 console.print("[info]Checking for updates...[/info]")
             # Removed quiet=quiet argument as it caused TypeError
             auto_update()
-        except Exception as exception:  # Using more descriptive name
+        except Exception as exception:  # pylint: disable=broad-exception-caught
             if not quiet:
                 console.print(
                     f"[warning]Auto-update check failed:[/warning] {exception}", 
@@ -494,7 +538,10 @@ def cli(
     # If no subcommands were provided, show help and exit gracefully
     if ctx.invoked_subcommand is None and not ctx.protected_args:
         if not quiet:
-            console.print("[info]Run `pdd --help` for usage or `pdd setup` to finish onboarding.[/info]")
+            console.print(
+                "[info]Run `pdd --help` for usage or `pdd setup` to "
+                "finish onboarding.[/info]"
+            )
         click.echo(ctx.get_help())
         _restore_captured_streams(ctx)
         ctx.exit(0)
@@ -527,6 +574,7 @@ def _derive_success_from_normalized_results(normalized_results: List[Any]) -> bo
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
+# pylint: disable=too-many-locals,too-many-branches,too-many-statements,unused-argument
 def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float, str]]], **kwargs):
     """
     Processes results returned by executed commands and prints a summary.
@@ -540,18 +588,17 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     # tracked on ctx.obj by @track_cost — but avoid doing this during pytest
     # so unit tests continue to assert the "Unknown Command" output.
     if not invoked_subcommands:
-        import os as _os
-        if not _os.environ.get('PYTEST_CURRENT_TEST'):
+        if not os.environ.get('PYTEST_CURRENT_TEST'):
             try:
                 if ctx.obj and isinstance(ctx.obj, dict):
                     invoked_subcommands = ctx.obj.get('invoked_subcommands', []) or []
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 invoked_subcommands = []
     # Normalize results: Click may pass a single return value (e.g., a 3-tuple)
     # rather than a list of results. Wrap single 3-tuples so we treat them as
     # one step in the summary instead of three separate items.
     if results is None:
-        normalized_results: List[Any] = []
+        normalized_results = []
     elif isinstance(results, list):
         normalized_results = results
     elif isinstance(results, tuple) and len(results) == 3:
@@ -576,9 +623,13 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 # Check if it was install_completion (which normally returns None)
                 if command_name == "install_completion":
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
-                # If command name is unknown, and it might be install_completion which prints its own status
+                # If command name is unknown, and it might be install_completion
+                # which prints its own status
                 elif command_name.startswith("Unknown Command"):
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command executed (see output above for status details).")
+                    console.print(
+                        f"  [info]Step {i+1} ({command_name}):[/info] "
+                        f"Command executed (see output above for status details)."
+                    )
                 # Check if it was preprocess (which returns a dummy tuple on success)
                 # This case handles actual failure for preprocess
                 elif command_name == "preprocess":
@@ -590,10 +641,20 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
             result_data, cost, model_name = result_tuple
             total_cost += cost
             if not ctx.obj.get("quiet"):
-                # Special handling for preprocess success message (check actual command name)
-                actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
-                if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
+                # Special handling for preprocess success message
+                # Check actual command name if possible
+                actual_command_name = (
+                    invoked_subcommands[i] if i < num_commands else None
+                )
+                if (
+                    actual_command_name == "preprocess"
+                    and cost == 0.0
+                    and model_name == "local"
+                ):
+                    console.print(
+                        f"  [info]Step {i+1} ({command_name}):[/info] "
+                        f"Command completed (local)."
+                    )
                 else:
                     # Generic output using potentially "Unknown Command" name.
                     # Suppress the Model: segment when no model was used (zero-cost
@@ -601,11 +662,21 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     # "unknown"/"none"/"N/A") so the UI doesn't render a trailing
                     # blank "Model: " label (#1103).
                     model_repr = (model_name or "").strip()
-                    if model_repr and model_repr.lower() not in {"unknown", "n/a", "none", "skipped"}:
-                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
+                    if (
+                        model_repr
+                        and model_repr.lower()
+                        not in {"unknown", "n/a", "none", "skipped"}
+                    ):
+                        console.print(
+                            f"  [info]Step {i+1} ({command_name}):[/info] "
+                            f"Cost: ${cost:.6f}, Model: {model_repr}"
+                        )
                     else:
-                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
-                
+                        console.print(
+                            f"  [info]Step {i+1} ({command_name}):[/info] "
+                            f"Cost: ${cost:.6f}"
+                        )
+
                 # Display examples used for grounding
                 if isinstance(result_data, dict) and result_data.get("examplesUsed"):
                     console.print("    Examples used:")
@@ -614,8 +685,12 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                         title = ex.get("title", "Untitled")
                         console.print(f"      - {slug} (\"{title}\")")
 
-        # Handle dicts with examplesUsed (e.g. from commands not using track_cost but returning metadata)
-        elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed"):
+        # Handle dicts with examplesUsed (e.g. from commands not using
+        # track_cost but returning metadata)
+        elif (
+            isinstance(result_tuple, dict)
+            and result_tuple.get("examplesUsed")
+        ):
             if not ctx.obj.get("quiet"):
                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 console.print("    Examples used:")
@@ -628,15 +703,26 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
             # Handle unexpected return types if necessary
             if not ctx.obj.get("quiet"):
                 # Provide more detail on the unexpected type
-                console.print(f"  [warning]Step {i+1} ({command_name}):[/warning] Unexpected result format: {type(result_tuple).__name__} - {str(result_tuple)[:50]}...")
-
+                console.print(
+                    f"  [warning]Step {i+1} ({command_name}):[/warning] "
+                    f"Unexpected result format: "
+                    f"{type(result_tuple).__name__} - "
+                    f"{str(result_tuple)[:50]}..."
+                )
 
     if not ctx.obj.get("quiet"):
         # Only print total cost if at least one command potentially contributed cost
-        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
+        if any(
+            res is not None and isinstance(res, tuple) and len(res) == 3
+            for res in normalized_results
+        ):
             console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")
         # Indicate if the chain might have been incomplete due to errors
-        if num_results < num_commands and results is not None and not all(res is None for res in results): # Avoid printing if all failed
+        if (
+            num_results < num_commands
+            and results is not None
+            and not all(res is None for res in results)
+        ):  # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
 
@@ -674,7 +760,13 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 sys.stderr = stderr_capture.original_stream
 
     # Finally, write a core dump if requested
-    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
+    _write_core_dump(
+        ctx,
+        normalized_results,
+        invoked_subcommands,
+        total_cost,
+        terminal_output,
+    )
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
     if fatal:
         ctx.exit(1)
