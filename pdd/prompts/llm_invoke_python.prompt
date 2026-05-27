@@ -114,6 +114,8 @@
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to next highest ELO on failure.
     - Soft fallback: If base model not in CSV, attempt to find an alternative model from the same provider (by matching the provider prefix of `$PDD_MODEL_DEFAULT`). If an alternative from the same provider is found, use it as surrogate (silently, no warning). If no model from the same provider is available, raise a ValueError with a clear message indicating the configured model was not found and listing available providers — do NOT silently fall back to a model from a different provider (e.g., do not fall back to Anthropic when the user configured Gemini).
+    - strength = 0.5: Use base model, fallback to candidates with ELO closest to base on failure — sort remaining candidates ascending by `abs(coding_arena_elo - base_elo)`. This is the continuity limit of the `> 0.5` branch: as strength → 0.5 from above, the interpolated target ELO collapses to `base_elo`, so the correct ordering at exactly 0.5 is closest-ELO-to-base, not highest ELO.
+    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
 
 % API Key Management:
     - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").
