@@ -1,6 +1,8 @@
 <pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
 
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
+<pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
+<pdd-dependency>commands/contracts_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
 
@@ -11,6 +13,10 @@
 - Implement `pdd checkup lint ...` as the primary command to lint prompts and stories.
   The sub-invocation may use extra-argument dispatch, but `pdd checkup --help` and
   `pdd checkup lint --help` must both show the appropriate help output.
+- Dispatch `pdd checkup contract ...` / `pdd checkup contracts ...` to the contract
+  check command group without breaking issue-mode checkup behavior.
+  `pdd checkup contract check --help` must render the `contracts check` subcommand help
+  and exit 0 (no doubled `check` token, no missing TARGET error).
 - Params:
   - `target` arg (positional, optional — required for issue mode)
   - `--no-fix` flag

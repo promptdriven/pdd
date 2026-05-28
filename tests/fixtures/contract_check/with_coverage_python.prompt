@@ -1,0 +1,20 @@
+% Fixture: with_coverage_python.prompt
+% Coverage section is present and all referenced IDs exist.
+% Expected: 0 issues.
+
+<vocabulary>
+- authorized user: a caller whose Bearer JWT contains the "upload" scope and is unexpired
+- duplicate upload: an upload whose SHA-256 hash and tenant_id match a row in uploads with status="accepted"
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R2: The system MUST NOT accept duplicate uploads.
+R3: The system MUST return HTTP 201 on successful upload.
+</contract_rules>
+
+<coverage>
+- R1: test_unauthorized_rejected (tests/test_upload.py)
+- R2: test_duplicate_rejected (tests/test_upload.py)
+- R3: test_successful_upload (tests/test_upload.py)
+</coverage>
