@@ -37,14 +37,16 @@ HEAVY_FILE_THRESHOLD_DEFAULT = 300.0
 
 
 def _should_include_test_file(path: Path) -> bool:
-    """Exclude fixture-only test trees that are not part of the runnable suite."""
-    parts = path.parts
-    if "fixtures" in parts:
-        fixtures_idx = parts.index("fixtures")
-        fixture_subtree = parts[fixtures_idx + 1 :]
-        if fixture_subtree[:1] == ("one_session_eval",):
-            return False
-    return True
+    """Exclude fixture-only test trees that are not part of the runnable suite.
+
+    Everything under a ``fixtures/`` directory is scenario data for higher-level
+    tests (one-session eval, coverage contracts, etc.) and is excluded from
+    pytest collection by ``tests/fixtures/conftest.py``. Such files must never be
+    packed into a chunk: an explicit path on the pytest command line bypasses
+    ``collect_ignore_glob``, and some fixtures are intentionally broken (e.g.
+    syntax-error files used to exercise failed-state handling).
+    """
+    return "fixtures" not in path.parts
 
 
 def discover_test_files(test_dir: str) -> list[str]:
