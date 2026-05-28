@@ -15,6 +15,7 @@ from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from .contracts import contracts_cli
 from .coverage import coverage_cmd
+from .gate import gate_cmd
 from .prompt import prompt_lint
 
 
@@ -357,10 +358,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup contract check [OPTIONS] TARGET  (alias: ``pdd contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
+    Evidence gate:
+      pdd checkup gate [TARGET] [OPTIONS]  →  enforce evidence policy checks.
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in {"lint", "contract", "contracts", "coverage"}:
+    if show_help and target not in {"lint", "contract", "contracts", "coverage", "gate"}:
         click.echo(ctx.command.get_help(ctx))
         return None
 
@@ -423,6 +426,22 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         exit_code = coverage_cmd.main(
             args=list(ctx.args),
             prog_name="pdd checkup coverage",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+    if target == "gate":
+        gate_args = list(ctx.args)
+        if not gate_args or show_help:
+            click.echo(
+                gate_cmd.get_help(click.Context(gate_cmd, info_name="pdd checkup gate"))
+            )
+            return None
+        exit_code = gate_cmd.main(
+            args=gate_args,
+            prog_name="pdd checkup gate",
             standalone_mode=False,
             obj=ctx.obj,
         )
