@@ -4860,3 +4860,140 @@ def test_get_filepath_dict_format_without_modules_key_returns_tuple(tmp_path):
         f"Expected (None, None) for dict without 'modules' key, got {result!r}. "
         "Line 343 returns bare None instead of the expected (None, None) tuple."
     )
+
+
+# --- Issue #1252 Gap 1: project_root parameter on read_fingerprint / read_run_report ---
+# The spec requires both reads to accept BOTH a `paths` hint AND an optional
+# `project_root` and to forward BOTH explicitly to `get_meta_dir`. Accepting
+# `project_root` without threading it through is a regression — production
+# callers derive `project_root` from the prompt's `.pddrc` ancestor and the
+# read MUST honor that anchor rather than CWD.
+
+
+def test_read_fingerprint_accepts_project_root_kwarg():
+    """read_fingerprint must accept project_root as a keyword argument (Issue #1252 Gap 1)."""
+    import inspect
+    from pdd.sync_determine_operation import read_fingerprint as rf
+    sig = inspect.signature(rf)
+    assert "project_root" in sig.parameters, (
+        "read_fingerprint must accept a `project_root` kwarg "
+        "(Issue #1252 Gap 1 regression)"
+    )
+    assert "paths" in sig.parameters, (
+        "read_fingerprint must still accept a `paths` kwarg"
+    )
+
+
+def test_read_run_report_accepts_project_root_kwarg():
+    """read_run_report must accept project_root as a keyword argument (Issue #1252 Gap 1)."""
+    import inspect
+    from pdd.sync_determine_operation import read_run_report as rr
+    sig = inspect.signature(rr)
+    assert "project_root" in sig.parameters, (
+        "read_run_report must accept a `project_root` kwarg "
+        "(Issue #1252 Gap 1 regression)"
+    )
+    assert "paths" in sig.parameters, (
+        "read_run_report must still accept a `paths` kwarg"
+    )
+
+
+def test_read_fingerprint_forwards_project_root_to_get_meta_dir(tmp_path, monkeypatch):
+    """read_fingerprint must forward project_root explicitly to get_meta_dir."""
+    from pdd import sync_determine_operation as sdo
+
+    captured = {}
+    original = sdo.get_meta_dir
+
+    def spy(project_root=None, paths=None):
+        captured["project_root"] = project_root
+        captured["paths"] = paths
+        return original(project_root=project_root, paths=paths)
+
+    monkeypatch.setattr(sdo, "get_meta_dir", spy)
+
+    sdo.read_fingerprint("foo", "python", project_root=tmp_path)
+
+    assert captured["project_root"] == tmp_path, (
+        "read_fingerprint must forward project_root verbatim to get_meta_dir; "
+        "accepting it without threading it through is a regression."
+    )
+
+
+def test_read_run_report_forwards_project_root_to_get_meta_dir(tmp_path, monkeypatch):
+    """read_run_report must forward project_root explicitly to get_meta_dir."""
+    from pdd import sync_determine_operation as sdo
+
+    captured = {}
+    original = sdo.get_meta_dir
+
+    def spy(project_root=None, paths=None):
+        captured["project_root"] = project_root
+        captured["paths"] = paths
+        return original(project_root=project_root, paths=paths)
+
+    monkeypatch.setattr(sdo, "get_meta_dir", spy)
+
+    sdo.read_run_report("foo", "python", project_root=tmp_path)
+
+    assert captured["project_root"] == tmp_path, (
+        "read_run_report must forward project_root verbatim to get_meta_dir; "
+        "accepting it without threading it through is a regression."
+    )
+
+
+def test_read_fingerprint_anchors_on_explicit_project_root(tmp_path):
+    """When project_root is provided, the read MUST anchor on that root rather than CWD.
+
+    Sets up a fingerprint under `<project_root>/.pdd/meta/` and verifies the
+    read finds it even when CWD is elsewhere and `paths` is not provided.
+    """
+    from pdd.sync_determine_operation import read_fingerprint, Fingerprint
+    import json as _json
+
+    project_root = tmp_path / "subproject"
+    meta = project_root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    fp_path = meta / "foo_python.json"
+    fp_path.write_text(_json.dumps({
+        "pdd_version": "0.1.0",
+        "timestamp": "2026-01-01T00:00:00",
+        "command": "generate",
+        "prompt_hash": "abc",
+        "code_hash": None,
+        "example_hash": None,
+        "test_hash": None,
+    }), encoding="utf-8")
+
+    # Call from elsewhere — should still find the fingerprint via project_root
+    result = read_fingerprint("foo", "python", project_root=project_root)
+    assert result is not None, (
+        "read_fingerprint must anchor on project_root, not CWD, when the kwarg is set."
+    )
+    assert result.command == "generate"
+
+
+def test_read_run_report_anchors_on_explicit_project_root(tmp_path):
+    """When project_root is provided, the run-report read MUST anchor on that root."""
+    from pdd.sync_determine_operation import read_run_report
+    import json as _json
+
+    project_root = tmp_path / "subproject"
+    meta = project_root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    rr_path = meta / "foo_python_run.json"
+    rr_path.write_text(_json.dumps({
+        "timestamp": "2026-01-01T00:00:00",
+        "exit_code": 0,
+        "tests_passed": 3,
+        "tests_failed": 0,
+        "coverage": 95.0,
+        "test_hash": "deadbeef",
+    }), encoding="utf-8")
+
+    result = read_run_report("foo", "python", project_root=project_root)
+    assert result is not None, (
+        "read_run_report must anchor on project_root, not CWD, when the kwarg is set."
+    )
+    assert result.exit_code == 0
+    assert result.tests_passed == 3
