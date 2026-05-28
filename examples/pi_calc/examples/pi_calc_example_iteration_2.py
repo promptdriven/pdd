@@ -52,25 +52,29 @@ def pi_calc(n_terms: int = 100000) -> float:
 
 if __name__ == "__main__":
     print("--- Demonstrating the pi_calc function ---")
-    print(f"Value of math.pi for comparison: {math.pi}\n")
+    print(f"Value of math.pi for comparison: {math.pi}
+")
 
     # 1. Basic usage with default parameters
     # Calling the function without arguments uses the default n_terms=100,000.
     print("1. Calculating Pi with default number of terms (100,000):")
     pi_approximation_default = pi_calc()
-    print(f"   Approximation: {pi_approximation_default}\n")
+    print(f"   Approximation: {pi_approximation_default}
+")
 
     # 2. Custom usage with a specified number of terms
     # A smaller number of terms results in a less accurate approximation.
     print("2. Calculating Pi with a small number of terms (10):")
     pi_approximation_small = pi_calc(n_terms=10)
-    print(f"   Approximation: {pi_approximation_small}\n")
+    print(f"   Approximation: {pi_approximation_small}
+")
 
     # 3. High-precision usage
     # A larger number of terms results in a more accurate approximation.
     print("3. Calculating Pi with a large number of terms (1,000,000):")
     pi_approximation_large = pi_calc(n_terms=1000000)
-    print(f"   Approximation: {pi_approximation_large}\n")
+    print(f"   Approximation: {pi_approximation_large}
+")
 
     # 4. Handling expected errors
     # The function raises specific errors for invalid input, which can be caught.
@@ -81,7 +85,8 @@ if __name__ == "__main__":
         print("   - Attempting to use a negative number of terms...")
         pi_calc(n_terms=-50)
     except ValueError as e:
-        print(f"     Successfully caught expected error: {e}\n")
+        print(f"     Successfully caught expected error: {e}
+")
 
     # Example of catching a TypeError for non-integer input
     try:
