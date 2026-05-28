@@ -2735,6 +2735,10 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
         def step_side_effect(step_num, *_args, **_kwargs):
             if step_num == 7:
                 return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            if step_num == 5:
+                # Clean Step 5 so the --no-fix Step-5 gate does not fire and
+                # the run reaches Step 7 (whose verdict is the canonical report).
+                return (True, _step5_pass_output(), 0.0, "fake-model")
             return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
@@ -2774,6 +2778,10 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
         def step_side_effect(step_num, *_args, **_kwargs):
             if step_num == 7:
                 return (True, self._GATE_FAIL_STEP7, 0.0, "fake-model")
+            if step_num == 5:
+                # Clean Step 5 so the --no-fix Step-5 gate does not fire and
+                # Step 7's (failing) verdict becomes the canonical report.
+                return (True, _step5_pass_output(), 0.0, "fake-model")
             return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
@@ -2934,6 +2942,12 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
         def step_side_effect(step_num, *_args, **_kwargs):
             if step_num == 7:
                 return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            if step_num == 5:
+                # Real Step-5 failure so the fixer runs and there is a fix
+                # to push — only then is the push-failure path reachable.
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
             return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
@@ -2944,6 +2958,12 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
                 pr_comment_mock,
             ),
             patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            # Fixer touched an in-scope file (the Step-5 failure path), so the
+            # worktree is dirty and the push is attempted.
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_changed_files",
+                return_value=["tests/test_main.py"],
+            ),
             patch(
                 "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
                 return_value="",
@@ -2988,6 +3008,13 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
         def step_side_effect(step_num, *_args, **_kwargs):
             if step_num == 7:
                 return (True, next(step7_outputs), 0.0, "fake-model")
+            if step_num == 5:
+                # Real Step-5 failure so the fixer runs and there is a fix
+                # to push — the rebase/reverify path is only reachable when a
+                # push actually happens.
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
             return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
@@ -2998,6 +3025,10 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
                 pr_comment_mock,
             ),
             patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_changed_files",
+                return_value=["tests/test_main.py"],
+            ),
             patch(
                 "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
                 return_value="",
