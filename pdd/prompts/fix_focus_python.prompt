@@ -1,4 +1,4 @@
-<pdd-reason>Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction — zero I/O, zero LLM calls.</pdd-reason>
+<pdd-reason>Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets; all other functions are pure AST/stdlib.</pdd-reason>
 
 <pdd-interface>
 {
@@ -23,7 +23,7 @@
 % You are an expert Python Software Engineer. Your goal is to write a utility Python module `fix_focus` that provides static analysis helpers for focused code repair.
 
 ### Role and Scope:
-This module provides AST-based helpers that `fix_error_loop` and `fix_main` use when a dev unit is too large for effective full-file LLM repair. It depends only on the Python standard library (`ast`, `re`, `textwrap`) plus `pydantic` for `DiagnosisResult`. All public functions degrade silently on parse errors, returning safe empty values rather than raising exceptions.
+This module provides AST-based helpers that `fix_error_loop` and `fix_main` use when a dev unit is too large for effective full-file LLM repair. It uses the Python standard library (`ast`, `re`, `textwrap`) and `pydantic` for `DiagnosisResult`. The one external dependency is `llm_invoke` (imported lazily inside `_llm_diagnose_functions` to avoid circular imports): that function makes a single lightweight LLM call only when fast-path traceback parsing cannot identify failing functions. All public functions degrade silently on parse errors, returning safe empty values rather than raising exceptions.
 
 ### Non-Responsibilities:
 - Does not read or write files.
@@ -44,7 +44,7 @@ This module provides AST-based helpers that `fix_error_loop` and `fix_main` use 
 
 6. **`extract_function_names_from_traceback(error: str) -> list[str]`:** Parse a Python traceback string and return unique function names from traceback frames. Returns `[]` if the result would be 0 names (nothing parseable) or more than 3 names (too ambiguous for fast-path). Never raises.
 
-7. **`prepare_focused_inputs(...) -> Optional[FocusedInputs]`:** Main entry point. Identifies failing functions via fast-path traceback parsing or a Phase-1 LLM call, extracts matching code slices, narrows the test file to only the failing tests (using `_extract_test_slices`), and returns a `FocusedInputs`. Returns `None` on any failure so callers fall back to full-file repair silently.
+7. **`prepare_focused_inputs(...) -> Optional[FocusedInputs]`:** Main entry point. Identifies failing functions via fast-path traceback parsing (`extract_function_names_from_traceback`); if that returns no names, falls back to `_llm_diagnose_functions` which calls `llm_invoke` with a lightweight strength/time cap to get a `DiagnosisResult`. Then extracts matching code slices, narrows the test file to only the failing tests (using `_extract_test_slices`), and returns a `FocusedInputs`. Returns `None` on any failure so callers fall back to full-file repair silently.
 
 8. **`reconstruct_code(original_code, fixed_focused_code, slices) -> str`:** Parses the LLM's fixed output, matches updated functions by qualified name (falling back to simple name), reindents dedented slices to their original indentation, and splices them into `original_code`. Returns `original_code` unchanged if anything fails. Never raises.
 
@@ -55,6 +55,9 @@ This module provides AST-based helpers that `fix_error_loop` and `fix_main` use 
 - Reconstruction uses `textwrap.indent` to reindent dedented slices back to their original level before splicing.
 
 ### Dependencies:
+<pdd-dependency>
+    <include select="def:llm_invoke">pdd/prompts/llm_invoke_python.prompt</include>
+</pdd-dependency>
 <python_preamble>
     <include>context/python_preamble.prompt</include>
 </python_preamble>

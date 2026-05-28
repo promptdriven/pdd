@@ -16,7 +16,7 @@ from rich.console import Console
 
 from . import DEFAULT_TIME
 from .agentic_fix import run_agentic_fix
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_request_timeout
 from .failure_classification import (
     FailureKind,
     classify_failure,
@@ -117,8 +117,15 @@ def run_pytest_on_file(
     Returns: (failures, errors, warnings, output_log)
     """
     del verification_program
+    # Filter the primary test file out of extra_files: run_pytest_and_capture_output
+    # already prepends the primary path, so passing it again causes double-execution.
+    extra = (
+        [f for f in test_files if Path(f).resolve() != Path(test_file).resolve()]
+        if test_files
+        else None
+    )
     try:
-        result = run_pytest_and_capture_output(test_file, extra_files=test_files)
+        result = run_pytest_and_capture_output(test_file, extra_files=extra or None)
     except TypeError:
         result = run_pytest_and_capture_output(test_file)
     test_results = result.get("test_results") or []
@@ -270,7 +277,7 @@ def cloud_fix_errors(
             CloudConfig.get_endpoint_url("fixCode"),
             json=payload,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            timeout=get_cloud_timeout(),
+            timeout=get_cloud_request_timeout(),
         )
         response.raise_for_status()
     except Exception as exc:
