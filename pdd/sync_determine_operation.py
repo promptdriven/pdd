@@ -54,9 +54,23 @@ def get_pdd_dir():
     """Get the .pdd directory relative to current working directory."""
     return Path.cwd() / '.pdd'
 
-def get_meta_dir():
-    """Get the metadata directory."""
-    return get_pdd_dir() / 'meta'
+def get_meta_dir(project_root=None, paths=None):
+    """Get the metadata directory.
+
+    Resolution order (Issue #1211):
+      1. Explicit `project_root` argument
+      2. .pddrc reachable upward from any path in `paths`
+         (handles a subproject .pddrc that lives BELOW run CWD)
+      3. .pddrc reachable upward from CWD
+      4. Run CWD (legacy behavior)
+    """
+    if project_root is not None:
+        return Path(project_root) / '.pdd' / 'meta'
+    try:
+        from .operation_log import _resolve_meta_dir
+    except ImportError:  # direct (non-package) import path
+        from operation_log import _resolve_meta_dir  # type: ignore
+    return _resolve_meta_dir(project_root=None, paths=paths)
 
 def get_locks_dir():
     """Get the locks directory."""
@@ -1499,9 +1513,18 @@ def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str
     return hasher.hexdigest()
 
 
-def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
-    """Reads and validates the JSON fingerprint file."""
-    meta_dir = get_meta_dir()
+def read_fingerprint(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> Optional[Fingerprint]:
+    """Reads and validates the JSON fingerprint file.
+
+    `paths` (Issue #1211): when provided, the meta directory is resolved
+    via upward .pddrc detection from those file paths so subprojects whose
+    .pddrc lives BELOW run CWD are honored.
+    """
+    meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     
@@ -1527,9 +1550,18 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
         return None
 
 
-def read_run_report(basename: str, language: str) -> Optional[RunReport]:
-    """Reads and validates the JSON run report file."""
-    meta_dir = get_meta_dir()
+def read_run_report(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> Optional[RunReport]:
+    """Reads and validates the JSON run report file.
+
+    `paths` (Issue #1211): when provided, the meta directory is resolved
+    via upward .pddrc detection from those file paths so subprojects whose
+    .pddrc lives BELOW run CWD are honored.
+    """
+    meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
     run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     
@@ -1801,8 +1833,8 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
     # Also check that run_report exists and code works (exit_code == 0)
     # Without this, newly generated code would incorrectly be marked as "complete"
     if basename and language:
-        run_report = read_run_report(basename, language)
-        
+        run_report = read_run_report(basename, language, paths=paths)
+
         # Bug #349: If tests passed, consider workflow complete even if exit_code != 0
         # This handles cases where tooling (like pytest-cov) returns non-zero exit code
         # despite all tests passing.
@@ -1849,7 +1881,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                     return False
                 if not run_report.test_hash:
                     # Legacy run_report without test_hash - check fingerprint timestamp as fallback
-                    fingerprint = read_fingerprint(basename, language)
+                    fingerprint = read_fingerprint(basename, language, paths=paths)
                     if fingerprint:
                         # If fingerprint is newer than run_report, run_report might be stale
                         from datetime import datetime
@@ -1865,7 +1897,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         # Without this, workflow would be "complete" after crash even though verify hasn't run
         # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_verify:
-            fingerprint = read_fingerprint(basename, language)
+            fingerprint = read_fingerprint(basename, language, paths=paths)
             if fingerprint:
                 # If command starts with 'skip:', the operation was skipped, not completed
                 if fingerprint.command.startswith('skip:'):
@@ -1878,7 +1910,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         # This prevents false positive success when skip_verify=True but tests are still required
         # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_tests:
-            fp = read_fingerprint(basename, language)
+            fp = read_fingerprint(basename, language, paths=paths)
             if fp:
                 # If command starts with 'skip:', the operation was skipped, not completed
                 if fp.command.startswith('skip:'):
@@ -1918,23 +1950,29 @@ def check_for_dependencies(prompt_content: str) -> bool:
     return has_xml_deps or has_explicit_deps
 
 
-def _check_example_success_history(basename: str, language: str) -> bool:
+def _check_example_success_history(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> bool:
     """
     Check if the example has run successfully before by examining historical fingerprints and run reports.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
-    
+        paths: Optional path hints (Issue #1211) so meta dir resolves to the
+            subproject .pdd/meta when invoked from a parent CWD.
+
     Returns:
         True if the example has run successfully before, False otherwise
     """
-    meta_dir = get_meta_dir()
-    
+    meta_dir = get_meta_dir(paths=paths)
+
     # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
     # Cache fingerprint and run report to avoid redundant I/O operations
-    fingerprint = read_fingerprint(basename, language)
-    current_run_report = read_run_report(basename, language)
+    fingerprint = read_fingerprint(basename, language, paths=paths)
+    current_run_report = read_run_report(basename, language, paths=paths)
     
     # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
     if fingerprint and fingerprint.command == 'verify':
@@ -2057,8 +2095,18 @@ def _perform_sync_analysis(
     # 7. fix (resolve bugs found by tests)
     # 8. update (sync changes back to prompt)
     
+    # Issue #1211: resolve file paths first so fingerprint/run-report reads
+    # below can locate the subproject .pdd/meta via upward .pddrc detection
+    # from those paths — even when run CWD is above the subproject.
+    try:
+        _initial_paths = get_pdd_file_paths(
+            basename, language, prompts_dir, context_override=context_override
+        )
+    except Exception:
+        _initial_paths = {}
+
     # Read fingerprint early since we need it for crash verification
-    fingerprint = read_fingerprint(basename, language)
+    fingerprint = read_fingerprint(basename, language, paths=_initial_paths)
 
     # Check if auto-deps just completed - ALWAYS regenerate code after auto-deps
     # This must be checked early, before any run_report processing, because:
@@ -2079,7 +2127,7 @@ def _perform_sync_analysis(
             }
         )
 
-    run_report = read_run_report(basename, language)
+    run_report = read_run_report(basename, language, paths=_initial_paths)
     # Only process runtime signals (crash/fix/test) if we have a fingerprint
     # Without a fingerprint, run_report is stale/orphaned and should be ignored
     if run_report and fingerprint:
@@ -2180,7 +2228,7 @@ def _perform_sync_analysis(
 
             if not tests_passed_successfully:
                 # Context-aware decision: prefer 'fix' over 'crash' when example has run successfully before
-                has_example_run_successfully = _check_example_success_history(basename, language)
+                has_example_run_successfully = _check_example_success_history(basename, language, paths=_initial_paths)
 
                 if has_example_run_successfully:
                     return SyncDecision(
@@ -2451,7 +2499,7 @@ def _perform_sync_analysis(
         # Handle incomplete workflow when all files exist (including test)
         # This addresses the blind spot where crash/verify/test logic only runs when test is missing
         if (paths['code'].exists() and paths['example'].exists() and paths['test'].exists()):
-            run_report = read_run_report(basename, language)
+            run_report = read_run_report(basename, language, paths=paths)
 
             # BUG 4 & 1: No run_report OR crash detected (exit_code != 0)
             if not run_report or run_report.exit_code != 0:
@@ -2530,7 +2578,7 @@ def _perform_sync_analysis(
             not skip_tests and not paths['test'].exists()):
 
             # Check if example has been crash-tested and verified before allowing test generation
-            run_report = read_run_report(basename, language)
+            run_report = read_run_report(basename, language, paths=paths)
 
             # For non-Python languages (including TypeScript), the agentic test generator may create
             # test files with different extensions or at different paths. If the run_report
@@ -2745,7 +2793,12 @@ def _perform_sync_analysis(
         if 'prompt' in changes:
             # Prompt and derived files both changed — stale fingerprint.
             # Delete metadata and re-run analysis fresh (will hit the "no fingerprint" path).
-            meta_dir = get_meta_dir()
+            # Issue #1211: resolve meta dir via paths so we delete from the
+            # subproject's .pdd/meta — not from a parent CWD orphan. Reading
+            # from one location and deleting from another (round-3 bug) would
+            # leave the stale fingerprint in place and recurse into
+            # _perform_sync_analysis with the same state, looping forever.
+            meta_dir = get_meta_dir(paths=paths)
             safe_bn = _safe_basename(basename)
             fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
             rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
