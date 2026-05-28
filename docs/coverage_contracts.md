@@ -1,27 +1,46 @@
-# `pdd checkup coverage`
+# Contract coverage matrix (`pdd coverage --contracts`)
 
 Build an inspectable rule-to-evidence matrix for `.prompt` files that define `<contract_rules>`.
 No LLM required — pure static analysis.
+
+Issue [#823](https://github.com/promptdriven/pdd/issues/823) specifies the top-level CLI:
+
+```bash
+pdd coverage --contracts
+pdd coverage --contracts --json
+pdd coverage --contracts prompts/refund_payment_python.prompt
+```
+
+The same engine is available under checkup:
+
+```bash
+pdd checkup coverage prompts/refund_payment_python.prompt
+```
+
+On `pdd coverage`, `--contracts` is a compatibility flag (coverage is implied by the command name).
 
 ---
 
 ## Quick start
 
 ```bash
-# Single file
-pdd checkup coverage prompts/refund_payment_python.prompt
+# Single file (issue #823 entry point)
+pdd coverage --contracts prompts/refund_payment_python.prompt
 
 # Directory (scans recursively, skips *_LLM.prompt)
-pdd checkup coverage prompts/
+pdd coverage --contracts prompts/
 
 # JSON output for CI
-pdd checkup coverage --json prompts/
+pdd coverage --contracts --json prompts/
 
 # Custom story and test directories
-pdd checkup coverage \
-    --stories user_stories \
+pdd coverage --contracts \
+    --stories-dir user_stories \
     --tests-dir   tests \
     prompts/refund_payment_python.prompt
+
+# Equivalent nested form
+pdd checkup coverage --json prompts/
 ```
 
 Default directories:
@@ -32,7 +51,7 @@ Default directories:
 Runnable demo files live in `examples/coverage_contracts_demo/`:
 
 ```bash
-pdd checkup coverage \
+pdd coverage --contracts \
   --stories-dir examples/coverage_contracts_demo/user_stories \
   --tests-dir examples/coverage_contracts_demo/tests \
   examples/coverage_contracts_demo/prompts/refund_payment_python.prompt
@@ -119,12 +138,21 @@ Cross-module format is also supported:
 - prompts/refund_payment_python.prompt#R3: description
 ```
 
-Stories without a `<!-- pdd-story-prompts: ... -->` comment are **not** linked to any prompt and are skipped.
+Stories **without** `<!-- pdd-story-prompts: ... -->` apply to the prompt set under evaluation (same convention as `pdd/user_story_tests.py`). Stories **with** metadata are scoped to the listed prompt filenames or paths.
 
 ### 3. Test file heuristic
 
 Test files (`test_*.py`) are scanned **recursively** in `--tests-dir` using a conservative heuristic.
 Only `test*` functions that **explicitly reference a rule ID** are counted.
+
+**Single-prompt runs** accept unqualified references (for example `test_R1_rejects_zero`).
+
+**Directory runs** require **prompt-qualified** references so one shared `R1` on two prompts cannot mark both as covered from a single test. Use a docstring or signature line such as:
+
+```python
+def test_only_foo():
+    """refund_payment_python.prompt#R1: covers rule"""
+```
 
 **Recognised patterns (documented heuristic):**
 
@@ -191,7 +219,22 @@ Prompt: prompts/legacy_utility_python.prompt
 - No rules reported
 - No errors raised
 
-This means `pdd checkup coverage` is safe to run against any repository, even those that pre-date the contract rules convention.
+This means `pdd coverage --contracts` (and `pdd checkup coverage`) is safe to run against any repository, even those that pre-date the contract rules convention.
+
+---
+
+## Pull request scope and dependencies
+
+The coverage matrix (**#823**) is static analysis only; it does not call an LLM.
+
+| Piece | Role | Required for #823? |
+|-------|------|--------------------|
+| `pdd coverage --contracts` / `pdd checkup coverage` | Coverage CLI and `pdd/coverage_contracts.py` | **Yes** |
+| `pdd contracts check` / `pdd checkup contract check` | Authoring lint for contract sections | **No** — optional companion |
+| `pdd checkup lint` | Prompt/user-story quality lint | **No** |
+| `pdd evidence` / `--evidence` manifests (#824) | Run audit receipts | **No** — separate feature |
+
+Some PRs stack contract check, lint, coverage, and evidence for one review pass. That is a release convenience, not a runtime dependency.
 
 ---
 

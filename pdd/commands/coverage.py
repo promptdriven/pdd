@@ -4,10 +4,10 @@ Coverage commands — contract coverage matrix.
 
 Usage examples::
 
+    pdd coverage --contracts prompts/refund_payment_python.prompt
+    pdd coverage --contracts prompts/
+    pdd coverage --contracts --json prompts/
     pdd checkup coverage prompts/refund_payment_python.prompt
-    pdd checkup coverage prompts/
-    pdd checkup coverage --json prompts/
-    pdd checkup coverage --stories-dir user_stories --tests-dir tests prompts/
 """
 from __future__ import annotations
 

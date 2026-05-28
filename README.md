@@ -57,6 +57,8 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
+For a rule-to-story/test coverage matrix (`pdd coverage --contracts`, `pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+
 ## Installation
 
 ### Prerequisites for macOS

@@ -175,8 +175,10 @@ def scan_story_evidence(
     rule_id → [story_filename, ...] for rules covered by stories
     that link to prompt_path.
 
-    The story must have a <!-- pdd-story-prompts: ... --> comment
-    that includes the prompt's filename (or relative path).
+    Story linking follows ``pdd/user_story_tests.py``: stories with
+    ``<!-- pdd-story-prompts: ... -->`` must list the prompt filename
+    (or path); stories without that metadata apply to the prompt set
+    under evaluation.
     """
     evidence: dict[str, list[str]] = {}
     if not stories_dir.exists():
@@ -216,9 +218,9 @@ def scan_story_validation_failures(
     """
     Return rule_id -> validation failure descriptions for linked stories.
 
-    This is intentionally deterministic and uses the existing story-linking
-    convention: only stories with pdd-story-prompts metadata matching the prompt
-    are considered. A linked story that claims rule coverage but has no
+    This is intentionally deterministic and uses the same story-linking rules
+    as :func:`scan_story_evidence` (including metadata-less stories that apply
+    to the prompt set). A linked story that claims rule coverage but has no
     ``## Acceptance Criteria`` section is considered failed coverage evidence.
     """
     failures: dict[str, list[str]] = {}
