@@ -1,0 +1,22 @@
+<pdd-reason>Implements deterministic checks for prompt contract sections and story coverage references.</pdd-reason>
+
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+
+% Write `pdd/contract_check.py`.
+%
+% This module is the deterministic contract-check engine used by `pdd contracts check`
+% and `pdd checkup contract check`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Expose public API:
+  - `check_prompt(path, *, strict=False) -> ContractResult`
+  - `check_directory(directory, *, strict=False) -> List[ContractResult]`
+  - `check_stories(stories_dir, prompts_dir, *, strict=False) -> List[ContractResult]`
+- Parse contract sections via `pdd/contract_ir.py` (do not re-implement parsing here).
+- MUST-NOT coverage check must only treat explicit leading `<coverage>` entries as coverage.
+- Provide stable JSON-serializable results (`as_dict()`).
+
+% Deliverables
+- Code: `pdd/contract_check.py`
