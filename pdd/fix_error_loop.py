@@ -723,6 +723,11 @@ def fix_error_loop(unit_test_file: str,
             _code_for_llm = _focused.focused_code if _focused else code_contents
             _tests_for_llm = _focused.focused_tests if _focused else unit_test_contents
 
+            # Focused repair is code-only: when only a test slice was provided, tell
+            # the LLM not to update tests so the contract is explicit rather than
+            # silently discarding whatever the LLM returns.
+            _effective_protect_tests = protect_tests or bool(_focused)
+
             if use_cloud:
                 # Use cloud LLM for fix - local test results passed via formatted_log
                 try:
@@ -737,7 +742,7 @@ def fix_error_loop(unit_test_file: str,
                         verbose=verbose,
                         time=time,
                         code_file_ext=os.path.splitext(code_file)[1],
-                        protect_tests=protect_tests,
+                        protect_tests=_effective_protect_tests,
                         failure_classification=failure_hint,
                     )
                 except RuntimeError as cloud_err:
@@ -758,7 +763,7 @@ def fix_error_loop(unit_test_file: str,
                         temperature,
                         verbose=verbose,
                         time=time,
-                        protect_tests=protect_tests,
+                        protect_tests=_effective_protect_tests,
                         language=get_language(os.path.splitext(code_file)[1]),
                         failure_classification=failure_hint,
                     )
@@ -774,7 +779,7 @@ def fix_error_loop(unit_test_file: str,
                     temperature,
                     verbose=verbose,
                     time=time,  # Pass time parameter
-                    protect_tests=protect_tests,
+                    protect_tests=_effective_protect_tests,
                     language=get_language(os.path.splitext(code_file)[1]),
                     failure_classification=failure_hint,
                 )
