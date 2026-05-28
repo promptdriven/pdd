@@ -664,8 +664,16 @@ class TestDiscoverGates:
         )
         run("add", ".")
         run("commit", "-q", "-m", "add ruff-format hook")
+        import shutil as _shutil
+        _real_which = _shutil.which
+
+        def _which_ruff_only(name: str, **kw: object) -> object:
+            if name == "ruff":
+                return "/usr/bin/ruff"
+            return _real_which(name, **kw)
+
         with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
         ):
             gates = discover_gates(
                 tmp_path,
@@ -673,7 +681,9 @@ class TestDiscoverGates:
                 base_ref="HEAD~1",
             )
         names = {g.name for g in gates}
-        # PR-introduced signal MUST not count.
+        # PR-introduced signal MUST not count — the base had no
+        # id: ruff-format, so _file_has_unchanged_ruff_format_signal
+        # returns False and the gate is suppressed.
         assert "ruff-format" not in names
 
     def test_ruff_format_respects_pre_commit_hook_files_scope(
