@@ -119,6 +119,45 @@ def _has_unexpired_raw_jwt() -> bool:
     return False
 
 
+def _has_unexpired_jwt_with_confirmed_audience_mismatch() -> bool:
+    """Return True only if the cache has an unexpired JWT whose audience is
+    decoded successfully and confirmed to differ from the expected environment
+    audience.
+
+    Unlike _has_unexpired_raw_jwt(), this returns False when the JWT is
+    malformed or unparseable so that a corrupt cache does not incorrectly
+    trigger the audience-mismatch path in get_auth_status().  Malformed JWTs
+    should fall through to the refresh-token flow rather than causing it to be
+    cleared.
+    """
+    expected_aud = _get_expected_jwt_audience()
+    if not expected_aud:
+        return False
+
+    if not JWT_CACHE_FILE.exists():
+        return False
+
+    try:
+        with open(JWT_CACHE_FILE, "r") as f:
+            cache = json.load(f)
+        expires_at = cache.get("expires_at", 0)
+        if not isinstance(expires_at, (int, float)):
+            return False
+        if expires_at > time.time() + 300:
+            jwt = cache.get("id_token") or cache.get("jwt")
+            if not jwt:
+                return False
+            actual_aud = _get_jwt_audience(jwt)
+            # Only a confirmed mismatch: audience was parsed but belongs to a
+            # different environment.  If actual_aud is None the token is
+            # malformed; do not treat that as an audience mismatch.
+            return actual_aud is not None and actual_aud != expected_aud
+    except Exception:
+        pass
+
+    return False
+
+
 def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
     """
     Check JWT cache file for valid token.
@@ -324,9 +363,12 @@ def get_auth_status() -> Dict[str, Any]:
         - cached: bool - True if using cached JWT (vs refresh token)
         - expires_at: Optional[float] - JWT expiration timestamp if cached
     """
-    # Peek at the raw file before the audience-aware check may delete it.
-    # This lets us distinguish "no JWT at all" from "JWT exists but wrong env".
-    had_raw_jwt = _has_unexpired_raw_jwt()
+    # Check whether the cache holds an unexpired JWT with a *confirmed* audience
+    # mismatch before the audience-aware read below may delete the file.
+    # Using the confirmed-mismatch check (rather than the raw-JWT check) means
+    # malformed/unparseable JWTs do NOT trigger this path — they fall through to
+    # the refresh-token flow instead of incorrectly clearing it.
+    jwt_audience_mismatch = _has_unexpired_jwt_with_confirmed_audience_mismatch()
 
     # First check JWT cache (audience-aware)
     cache_valid, expires_at = get_jwt_cache_info()
@@ -337,16 +379,15 @@ def get_auth_status() -> Dict[str, Any]:
             "expires_at": expires_at,
         }
 
-    # If a JWT existed but was rejected due to audience mismatch, do NOT fall
-    # back to the refresh token.  The refresh token is environment-specific
-    # too and cannot produce a valid JWT for this environment, so reporting
-    # authenticated=True here would create a split-brain frontend state.
-    expected_aud = _get_expected_jwt_audience()
-    if expected_aud and had_raw_jwt:
-        # Also clear the refresh token so that repeated status checks remain
-        # unauthenticated.  Without this, the second call sees had_raw_jwt=False
-        # (the JWT file was deleted above) and falls through to the refresh
-        # token, recreating the split-brain state.
+    # If the cached JWT had a confirmed audience mismatch (parseable token for
+    # the wrong environment), do NOT fall back to the refresh token.  The
+    # refresh token is environment-specific too and cannot produce a valid JWT
+    # for this environment, so reporting authenticated=True here would create a
+    # split-brain frontend state.  Also clear the refresh token so that repeated
+    # status checks remain unauthenticated: without this, the second call sees
+    # jwt_audience_mismatch=False (the JWT file was deleted above) and falls
+    # through to the refresh token, recreating the split-brain state.
+    if jwt_audience_mismatch:
         clear_refresh_token()
         return {
             "authenticated": False,

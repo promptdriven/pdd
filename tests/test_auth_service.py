@@ -719,12 +719,11 @@ def test_get_auth_status_unauthenticated(mock_refresh_status, mock_get_jwt):
 
 
 @patch('pdd.auth_service.clear_refresh_token')
-@patch('pdd.auth_service._get_expected_jwt_audience')
-@patch('pdd.auth_service._has_unexpired_raw_jwt')
+@patch('pdd.auth_service._has_unexpired_jwt_with_confirmed_audience_mismatch')
 @patch('pdd.auth_service.get_jwt_cache_info')
 @patch('pdd.auth_service._get_refresh_token_status')
 def test_get_auth_status_wrong_audience_with_refresh_token_returns_unauthenticated(
-    mock_refresh_status, mock_get_jwt, mock_has_raw_jwt, mock_expected_aud, mock_clear_refresh
+    mock_refresh_status, mock_get_jwt, mock_has_mismatch, mock_clear_refresh
 ):
     """Wrong-audience JWT must not fall back to refresh token (split-brain fix).
 
@@ -733,8 +732,7 @@ def test_get_auth_status_wrong_audience_with_refresh_token_returns_unauthenticat
     wrong environment.  This caused the frontend to show a signed-in state
     while every JWT-gated API call failed.
     """
-    mock_expected_aud.return_value = "prompt-driven-development-stg"
-    mock_has_raw_jwt.return_value = True   # JWT file existed before audience check deleted it
+    mock_has_mismatch.return_value = True   # Confirmed audience mismatch detected
     mock_get_jwt.return_value = (False, None)  # Audience-aware check rejected it
     mock_refresh_status.return_value = ("prod_refresh_token", None)  # Refresh token present
     mock_clear_refresh.return_value = (True, None)
@@ -805,6 +803,50 @@ def test_get_auth_status_wrong_audience_invalidation_is_durable(monkeypatch, tmp
     assert second["authenticated"] is False, (
         "Second call must remain unauthenticated (durable invalidation)"
     )
+
+def test_get_auth_status_malformed_jwt_does_not_clear_refresh_token(monkeypatch, tmp_path):
+    """Malformed/unparseable JWT must not trigger the audience-mismatch path.
+
+    If the JWT in the cache file cannot be decoded (e.g. corrupted bytes, wrong
+    encoding), _has_unexpired_jwt_with_confirmed_audience_mismatch() must return
+    False.  get_auth_status() must then fall through to the refresh-token check
+    and report authenticated=True — it must NOT clear the refresh token.
+    """
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+
+    cache_file = tmp_path / "jwt_cache"
+    now = int(time.time())
+    # Write a cache entry with a malformed JWT (not valid base64-encoded JSON payload)
+    cache_file.write_text(
+        json.dumps({
+            "id_token": "not.a.valid.jwt",
+            "expires_at": now + 3600,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    refresh_cleared = []
+
+    def fake_clear_refresh():
+        refresh_cleared.append(True)
+        return (True, None)
+
+    monkeypatch.setattr(auth_service, "clear_refresh_token", fake_clear_refresh)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: ("valid_refresh_token", None),
+    )
+
+    status = auth_service.get_auth_status()
+
+    assert not refresh_cleared, "clear_refresh_token must NOT be called for a malformed JWT"
+    assert status["authenticated"] is True, "Should fall through to refresh token"
+    assert status["cached"] is False
+
 
 @patch('pdd.auth_service.get_jwt_cache_info')
 def test_get_auth_status_authenticates_with_legacy_server_auth_token(
