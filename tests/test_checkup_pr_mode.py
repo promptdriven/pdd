@@ -47,6 +47,47 @@ def _step7_clean_output(label: str = "All Issues Fixed") -> str:
     return f"{label}\n{STEP7_CLEAN_JSON}"
 
 
+# Issue #1212: Step 5 must emit a structured ``failure_signal`` fenced block
+# (the orchestrator fails CLOSED when it is missing/malformed, so a stubbed
+# Step 5 that returns plain prose is now treated as an unverified failure).
+# These helpers give tests the canonical clean / failing block shapes.
+def _step5_pass_output() -> str:
+    """Step-5 stub output for a clean run (no test failures found)."""
+    return (
+        "All tests passed.\n"
+        "```failure_signal\n"
+        "command: pytest -q\n"
+        "exit_code: 0\n"
+        "status: pass\n"
+        "failing_ids: none\n"
+        "artifact_path: inline\n"
+        "output: |\n"
+        "  42 passed in 0.42s\n"
+        "```"
+    )
+
+
+def _step5_fail_output(failing_path: str = "tests/test_main.py") -> str:
+    """Step-5 stub output for a real test failure on ``failing_path``.
+
+    The path is echoed into ``failing_ids``/``output`` so the orchestrator's
+    scope/causal guards recognise an in-scope fix that touches it.
+    """
+    return (
+        f"FAILED: {failing_path}::test_x - AssertionError\n"
+        "```failure_signal\n"
+        "command: pytest -q\n"
+        "exit_code: 1\n"
+        "status: fail\n"
+        f"failing_ids: {failing_path}::test_x\n"
+        "artifact_path: inline\n"
+        "output: |\n"
+        f"  {failing_path}::test_x FAILED\n"
+        "  1 failed\n"
+        "```"
+    )
+
+
 # ---------------------------------------------------------------------------
 # _parse_pr_url
 # ---------------------------------------------------------------------------
@@ -2360,6 +2401,11 @@ def _run_orch_with_fake_step7(
         executed.append(step_num)
         if step_num == 7:
             return (True, fake_step7, 0.0, "fake-model")
+        if step_num == 5:
+            # Step 5 is clean here — these tests exercise the Step 7 gate,
+            # not the fixer. The clean failure_signal block lets the run
+            # reach Step 7 instead of fail-closing on a missing block.
+            return (True, _step5_pass_output(), 0.0, "fake-model")
         return (True, f"Step {step_num} output", 0.0, "fake-model")
 
     wt = tmp_path / "wt"
@@ -2471,8 +2517,11 @@ class TestStep7GateInPrFixMode:
             tmp_path, step7
         )
         assert success is True, msg
-        # Push must be invoked exactly once when the gate passes.
-        push_mock.assert_called_once()
+        # Issue #1212: Step 5 is clean here, so the fixer is skipped and the
+        # worktree has no changes — a clean run must NOT push (zero-commit
+        # convergence). Push-when-fixes-exist is covered by
+        # TestPrModeFixPushBack.
+        push_mock.assert_not_called()
         # Step 8 must still be skipped in PR mode.
         assert 8 not in executed
 
