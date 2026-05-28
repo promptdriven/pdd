@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import re
+import textwrap
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -53,14 +54,16 @@ class FunctionSlice:
     name: str
     start_line: int   # 1-indexed, inclusive (first decorator or 'def' line)
     end_line: int     # 1-indexed, inclusive (last line of the function body)
-    source: str       # raw source lines for this function (including leading whitespace)
+    source: str       # dedented source of this function (ready for top-level use)
+    qualname: str = ""  # qualified name, e.g. "ClassName.method" or "function"
+    indent: int = 0     # original indentation in the source file (number of spaces)
 
 
 @dataclass
 class FocusedInputs:
     """Inputs produced by prepare_focused_inputs() for a focused LLM fix call."""
     focused_code: str           # concatenated source of the matched function slices
-    focused_tests: str          # unit-test content (full, for now)
+    focused_tests: str          # relevant subset of test file (full file as fallback)
     slices: list[FunctionSlice] = field(default_factory=list)
 
 
@@ -147,8 +150,13 @@ def build_skeleton(code: str) -> str:
 
 def _get_all_functions(code: str) -> list[FunctionSlice]:
     """
-    Parse *code* and return a FunctionSlice for every function/method,
-    including decorators in the slice boundaries.
+    Parse *code* and return a FunctionSlice for every top-level function and
+    every method of a top-level class.
+
+    Each slice is dedented so it is valid as a standalone top-level definition.
+    The original indentation is stored in ``FunctionSlice.indent`` and the
+    qualified name (e.g. ``ClassName.method``) is stored in
+    ``FunctionSlice.qualname``.
     """
     try:
         tree = ast.parse(code)
@@ -158,26 +166,58 @@ def _get_all_functions(code: str) -> list[FunctionSlice]:
     lines = code.splitlines(keepends=True)
     slices: list[FunctionSlice] = []
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Include decorators: the first decorator's line, if any.
-            if node.decorator_list:
-                start = node.decorator_list[0].lineno  # 1-indexed
-            else:
-                start = node.lineno  # 1-indexed
-
-            end = node.end_lineno  # type: ignore[attr-defined]  # 1-indexed inclusive
-            source = "".join(lines[start - 1 : end])
-            slices.append(
-                FunctionSlice(
-                    name=node.name,
-                    start_line=start,
-                    end_line=end,
-                    source=source,
-                )
+    def _extract(
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        class_name: str | None,
+    ) -> None:
+        start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+        end = node.end_lineno  # type: ignore[attr-defined]
+        raw_source = "".join(lines[start - 1 : end])
+        first_line = lines[start - 1]
+        original_indent = len(first_line) - len(first_line.lstrip())
+        dedented = textwrap.dedent(raw_source)
+        qualname = f"{class_name}.{node.name}" if class_name else node.name
+        slices.append(
+            FunctionSlice(
+                name=node.name,
+                qualname=qualname,
+                start_line=start,
+                end_line=end,
+                source=dedented,
+                indent=original_indent,
             )
+        )
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _extract(node, None)
+        elif isinstance(node, ast.ClassDef):
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    _extract(child, node.name)
 
     return slices
+
+
+# ---------------------------------------------------------------------------
+# Format slices for the LLM
+# ---------------------------------------------------------------------------
+
+def _format_slice_for_llm(slc: FunctionSlice) -> str:
+    """
+    Return the slice source formatted for inclusion in the focused-repair prompt.
+
+    Top-level functions are returned as-is (already dedented).
+    Class methods are wrapped in a minimal class stub so the LLM sees them as
+    valid Python and can round-trip them back with their class context intact.
+    """
+    if slc.qualname == slc.name:
+        # Top-level function: dedented source is already valid Python.
+        return slc.source
+    # Class method: wrap in a minimal class stub.
+    class_name = slc.qualname.split(".")[0]
+    indented_method = textwrap.indent(slc.source, "    ")
+    return f"class {class_name}:\n{indented_method}"
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +249,89 @@ def extract_function_names_from_traceback(error: str) -> list[str]:
     if 1 <= len(names) <= 3:
         return names
     return []
+
+
+# ---------------------------------------------------------------------------
+# Test slice extractor  (narrows the test file to only the failing tests)
+# ---------------------------------------------------------------------------
+
+_PYTEST_FAILED = re.compile(
+    r'^(?:FAILED|ERROR)\s+[^\s:]+::([A-Za-z_][A-Za-z0-9_]*)',
+    re.MULTILINE,
+)
+
+
+def _extract_test_slices(error: str, unit_test: str) -> str:
+    """
+    Extract only the failing test functions/classes from *unit_test*.
+
+    Parses pytest FAILED/ERROR lines to identify target names, then uses AST
+    to extract those top-level functions/classes plus module-level imports and
+    fixture definitions.  Returns *unit_test* unchanged when extraction fails,
+    produces no targets, or the result is not meaningfully smaller.
+    """
+    try:
+        target_names: list[str] = list(
+            dict.fromkeys(m.group(1) for m in _PYTEST_FAILED.finditer(error))
+        )
+        if not target_names:
+            return unit_test
+
+        try:
+            tree = ast.parse(unit_test)
+        except SyntaxError:
+            return unit_test
+
+        lines = unit_test.splitlines(keepends=True)
+        preamble_parts: list[str] = []
+        test_parts: list[str] = []
+
+        for node in tree.body:
+            node_end = getattr(node, "end_lineno", node.lineno)
+
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                chunk = "".join(lines[node.lineno - 1 : node_end])
+                preamble_parts.append(chunk)
+
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                deco_start = (
+                    node.decorator_list[0].lineno if node.decorator_list else node.lineno
+                )
+                chunk = "".join(lines[deco_start - 1 : node_end])
+                is_fixture = any(
+                    (isinstance(d, ast.Attribute) and d.attr in ("fixture",))
+                    or (isinstance(d, ast.Name) and d.id in ("fixture",))
+                    for d in node.decorator_list
+                )
+                if node.name in target_names:
+                    test_parts.append(chunk)
+                elif is_fixture:
+                    preamble_parts.append(chunk)
+
+            elif isinstance(node, ast.ClassDef):
+                deco_start = (
+                    node.decorator_list[0].lineno if node.decorator_list else node.lineno
+                )
+                chunk = "".join(lines[deco_start - 1 : node_end])
+                if node.name in target_names:
+                    test_parts.append(chunk)
+                # Non-target helper classes are omitted.
+
+        if not test_parts:
+            return unit_test
+
+        preamble = "".join(preamble_parts).rstrip("\n")
+        body = "\n\n".join(t.rstrip("\n") for t in test_parts)
+        result = f"{preamble}\n\n{body}\n" if preamble else f"{body}\n"
+
+        # Only use the extracted version if it is meaningfully smaller.
+        if len(result) >= 0.9 * len(unit_test):
+            return unit_test
+
+        return result
+
+    except Exception:
+        return unit_test
 
 
 # ---------------------------------------------------------------------------
@@ -320,10 +443,16 @@ def prepare_focused_inputs(
         if not matched:
             return None
 
-        focused_code = "\n\n".join(s.source for s in matched)
+        # Build focused code using class stubs for methods so the LLM receives
+        # valid Python and can return it with class context preserved.
+        focused_code = "\n\n".join(_format_slice_for_llm(s) for s in matched)
+
+        # Extract only the failing test functions/classes to reduce the test payload.
+        focused_tests = _extract_test_slices(error, unit_test)
+
         return FocusedInputs(
             focused_code=focused_code,
-            focused_tests=unit_test,
+            focused_tests=focused_tests,
             slices=matched,
         )
 
@@ -344,31 +473,40 @@ def reconstruct_code(
     Splice updated function bodies from *fixed_focused_code* back into
     *original_code* at the line offsets recorded in *slices*.
 
-    Only the named functions that appear in *slices* are replaced; all other
-    content in *original_code* is preserved unchanged.
+    Matches fixed functions by qualified name (e.g. ``ClassName.method``) when
+    the LLM preserved the class stub wrapper, falling back to simple name
+    matching otherwise.  Each fixed slice is reindented from its dedented form
+    to the original indentation level before splicing.
 
     Returns *original_code* unchanged if splicing fails for any reason.
     """
     try:
-        target_names = {s.name for s in slices}
-
-        # Extract the fixed versions of only the targeted functions.
         all_fixed = _get_all_functions(fixed_focused_code)
-        fixed_by_name: dict[str, str] = {
-            f.name: f.source for f in all_fixed if f.name in target_names
-        }
-
-        if not fixed_by_name:
+        if not all_fixed:
             return original_code
+
+        # Build lookup tables: qualified name → dedented fixed source,
+        # and simple name → dedented fixed source (fallback).
+        fixed_by_qualname: dict[str, str] = {f.qualname: f.source for f in all_fixed}
+        fixed_by_name: dict[str, str] = {f.name: f.source for f in all_fixed}
 
         lines = original_code.splitlines(keepends=True)
 
-        # Process in reverse line order to prevent offset drift when line counts differ.
+        # Process in reverse line order to prevent offset drift.
         for slc in sorted(slices, key=lambda s: s.start_line, reverse=True):
-            if slc.name not in fixed_by_name:
+            # Prefer qualname match (handles class stubs and avoids collisions);
+            # fall back to simple name match for plain top-level returns.
+            fixed_dedented = fixed_by_qualname.get(slc.qualname) or fixed_by_name.get(slc.name)
+            if fixed_dedented is None:
                 continue
-            fixed_source = fixed_by_name[slc.name]
-            fixed_lines = fixed_source.splitlines(keepends=True)
+
+            # Reindent the fixed (dedented) source to the original indent level.
+            if slc.indent > 0:
+                fixed_indented = textwrap.indent(fixed_dedented, " " * slc.indent)
+            else:
+                fixed_indented = fixed_dedented
+
+            fixed_lines = fixed_indented.splitlines(keepends=True)
             lines[slc.start_line - 1 : slc.end_line] = fixed_lines
 
         return "".join(lines)

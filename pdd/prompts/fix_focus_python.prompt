@@ -5,40 +5,54 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "extract_skeleton", "signature": "(source: str) -> str", "returns": "str"},
-      {"name": "extract_function_slices", "signature": "(source: str, function_names: list[str]) -> dict[str, str]", "returns": "dict[str, str]"},
-      {"name": "extract_failing_functions", "signature": "(traceback: str) -> list[str]", "returns": "list[str]"},
-      {"name": "reconstruct_source", "signature": "(original: str, updated_slices: dict[str, str]) -> str", "returns": "str"}
+      {"name": "build_skeleton", "signature": "(code: str) -> str", "returns": "str"},
+      {"name": "extract_function_names_from_traceback", "signature": "(error: str) -> list[str]", "returns": "list[str]"},
+      {"name": "prepare_focused_inputs", "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]", "returns": "Optional[FocusedInputs]"},
+      {"name": "reconstruct_code", "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str", "returns": "str"},
+      {"name": "is_large", "signature": "(code: str, unit_test: str) -> bool", "returns": "bool"}
+    ],
+    "models": [
+      {"name": "DiagnosisResult", "fields": ["function_names: list[str]"]},
+      {"name": "FunctionSlice", "fields": ["name: str", "qualname: str", "start_line: int", "end_line: int", "source: str", "indent: int"]},
+      {"name": "FocusedInputs", "fields": ["focused_code: str", "focused_tests: str", "slices: list[FunctionSlice]"]}
     ]
   }
 }
 </pdd-interface>
 
-% You are an expert Python Software Engineer. Your goal is to write a pure-utility Python module `fix_focus` that provides static analysis helpers for focused code repair.
+% You are an expert Python Software Engineer. Your goal is to write a utility Python module `fix_focus` that provides static analysis helpers for focused code repair.
 
 ### Role and Scope:
-This module provides AST-based helpers that `fix_error_loop` uses when a dev unit is too large for effective full-file LLM repair. It has **zero I/O**, makes **zero LLM calls**, and depends only on the Python standard library (`ast`, `re`). All functions degrade silently on parse errors, returning safe empty values rather than raising exceptions.
+This module provides AST-based helpers that `fix_error_loop` and `fix_main` use when a dev unit is too large for effective full-file LLM repair. It depends only on the Python standard library (`ast`, `re`, `textwrap`) plus `pydantic` for `DiagnosisResult`. All public functions degrade silently on parse errors, returning safe empty values rather than raising exceptions.
 
 ### Non-Responsibilities:
-- Does not call any LLM or external service.
 - Does not read or write files.
 - Does not orchestrate fix attempts or retries.
-- Does not own the threshold logic (that belongs to `fix_error_loop`).
+- Does not own the threshold logic exposed to callers (that is `is_large()`).
 
-### Requirements:
-1. **`DiagnosisResult` model:** A Pydantic v2 model with `suspected_functions: list[str]` (names of functions the LLM believes are broken) and `confidence: float` (0.0–1.0). Used by `fix_error_loop` as the structured output type for Phase 1 LLM diagnosis results; `fix_error_loop` receives this from the Phase 1 LLM call and then passes `suspected_functions` to `extract_function_slices`.
+### Public API:
 
-2. **`extract_skeleton(source: str) -> str`:** Parse `source` with `ast.parse`; return a string containing only function and method definitions with their signatures, decorators, docstrings, and type annotations — bodies replaced by `...`. If parsing fails, return `""`.
+1. **`DiagnosisResult` model:** A Pydantic v2 model with `function_names: list[str]` — the names of functions the LLM believes are broken. Returned by the internal Phase-1 LLM diagnosis call; callers pass `function_names` to the slice extraction logic.
 
-3. **`extract_function_slices(source: str, function_names: list[str]) -> dict[str, str]`:** Return a mapping of `{function_name: source_slice}` for each named top-level function or method. Each slice is the exact original source text (including decorators) at its original line offsets. If a name is not found or parsing fails, omit that name from the result. Never raise.
+2. **`FunctionSlice` dataclass:** Holds `name` (simple name), `qualname` (e.g. `ClassName.method` or plain `function`), `start_line`, `end_line` (1-indexed, inclusive), `source` (dedented source, valid as standalone top-level Python), and `indent` (original indentation in the source file, in spaces).
 
-4. **`extract_failing_functions(traceback: str) -> list[str]`:** Parse a pytest traceback string and return the list of unique function or method names that appear in `FAILED` lines or traceback frames. Returns `[]` if the traceback is empty or unparseable. Never raises.
+3. **`FocusedInputs` dataclass:** Holds `focused_code` (concatenated formatted slices for the LLM), `focused_tests` (relevant subset of the test file, or full file as fallback), and `slices: list[FunctionSlice]` (the matched slices, for reconstruction).
 
-5. **`reconstruct_source(original: str, updated_slices: dict[str, str]) -> str`:** Given the original source and a mapping of `{function_name: new_body}`, splice each new body into the original at the line offsets of the matching function. Functions not present in `updated_slices` are left unchanged. If any splice fails, return `original` unchanged. Never raises.
+4. **`is_large(code: str, unit_test: str) -> bool`:** Returns `True` when focused repair should be considered (either file exceeds its threshold).
 
-6. **Silent error handling:** Every public function MUST catch all exceptions internally and return the documented safe empty value (`""`, `{}`, `[]`, or `original`). Callers must never need a try/except around these functions.
+5. **`build_skeleton(code: str) -> str`:** Parse `code` with `ast.parse`; return a string containing only function and method definitions with their signatures, decorators, docstrings, and type annotations — bodies replaced by `...`. If parsing fails, return `code` unchanged.
 
-7. **Stdlib-only:** MUST NOT import any third-party library except `pydantic` (for `DiagnosisResult`). All AST operations use `ast` from the standard library.
+6. **`extract_function_names_from_traceback(error: str) -> list[str]`:** Parse a Python traceback string and return unique function names from traceback frames. Returns `[]` if the result would be 0 names (nothing parseable) or more than 3 names (too ambiguous for fast-path). Never raises.
+
+7. **`prepare_focused_inputs(...) -> Optional[FocusedInputs]`:** Main entry point. Identifies failing functions via fast-path traceback parsing or a Phase-1 LLM call, extracts matching code slices, narrows the test file to only the failing tests (using `_extract_test_slices`), and returns a `FocusedInputs`. Returns `None` on any failure so callers fall back to full-file repair silently.
+
+8. **`reconstruct_code(original_code, fixed_focused_code, slices) -> str`:** Parses the LLM's fixed output, matches updated functions by qualified name (falling back to simple name), reindents dedented slices to their original indentation, and splices them into `original_code`. Returns `original_code` unchanged if anything fails. Never raises.
+
+### Key Design Details:
+- `_get_all_functions()` uses a two-level class-aware recursive traversal (top-level functions and methods of top-level classes) rather than `ast.walk`, so it correctly tracks `qualname` and `indent` for methods.
+- Method slices are wrapped in a minimal class stub (e.g. `class ClassName:\n    def method(...)`) when building `focused_code`, so the LLM receives valid Python and the round-trip through `_get_all_functions` on the fixed output correctly recovers the qualified name.
+- `_extract_test_slices()` parses pytest FAILED/ERROR lines to identify target test names, then uses AST to extract only those top-level functions/classes plus module-level imports and fixtures.
+- Reconstruction uses `textwrap.indent` to reindent dedented slices back to their original level before splicing.
 
 ### Dependencies:
 <python_preamble>
@@ -47,4 +61,3 @@ This module provides AST-based helpers that `fix_error_loop` uses when a dev uni
 
 ### Deliverables:
 - Code: `pdd/fix_focus.py`
-- The module must include an `if __name__ == "__main__":` block demonstrating skeleton extraction and function slicing on a small inline source string.
