@@ -203,6 +203,7 @@ def _union_providers_into_pref(added: set) -> None:
 def _select_providers_to_keep(
     rows: List[Dict[str, str]],
     curatable: List[str],
+    available: Optional[List[str]] = None,
 ) -> Optional[List[str]]:
     """When the auto-configured models span more than one provider, ask the user
     which provider(s) `pdd --local` should use, and return the chosen provider
@@ -252,6 +253,13 @@ def _select_providers_to_keep(
         )
     }
     non_device = [p for p in providers if p not in device_providers]
+    # ``available`` = providers actually usable right now (credential-satisfied
+    # or device-login). The default-to-keep is chosen from these so a stale,
+    # now-keyless provider lingering in the CSV (e.g. Anthropic after the user
+    # switched to a Gemini-only environment) is offered for REMOVAL but is never
+    # the default to KEEP. Defaults to all curatable when not supplied (direct
+    # unit-test callers).
+    available_set = set(available) if available is not None else set(providers)
 
     def _best_elo(prov: str) -> float:
         best = 0.0
@@ -263,14 +271,15 @@ def _select_providers_to_keep(
                     pass
         return best
 
-    # First-time default is a SINGLE provider — the highest-ELO non-device one
-    # (a free device login must never be the default over a configured key).
-    # A single-provider default means accepting it (Enter) yields an
-    # unambiguous pin, so `pdd --local` cannot cost/ELO-route across providers
-    # (issue #1202). A user who genuinely wants several selects them explicitly;
-    # that explicit multi-provider choice is saved and honored as the default on
-    # re-run (so we don't override a deliberate multi-provider setup).
-    single_default = [max(non_device, key=_best_elo)] if non_device else providers[:1]
+    # First-time default is a SINGLE provider — the highest-ELO AVAILABLE
+    # non-device one (a free device login or a keyless stale provider must never
+    # be the default over a usable configured key). A single-provider default
+    # means accepting it (Enter) yields an unambiguous pin, so `pdd --local`
+    # cannot cost/ELO-route across providers (issue #1202). A user who genuinely
+    # wants several selects them explicitly; that explicit multi-provider choice
+    # is saved and honored as the default on re-run.
+    _default_pool = [p for p in non_device if p in available_set] or non_device
+    single_default = [max(_default_pool, key=_best_elo)] if _default_pool else providers[:1]
     saved = _load_selected_providers()
     default = [p for p in providers if p in saved] if saved else list(single_default)
     # A stale/foreign saved selection (no overlap with the current providers)
@@ -342,6 +351,7 @@ def _apply_provider_curation(
     rows: List[Dict[str, str]],
     curatable: List[str],
     user_csv: Path,
+    available: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     """Prompt for provider selection (when >1 curatable) and return ``rows`` with
     the unselected providers' PDD-managed rows removed. Device-login rows and
@@ -350,10 +360,11 @@ def _apply_provider_curation(
     confirmation + timestamped backup; hand-edited or user-added rows are
     preserved and the user is warned they may still be used. Returns ``rows``
     unchanged when there is no choice to make (<2 curatable providers) or the
-    user declines removal. Reused by both `_step2_configure_models_and_pddrc`
-    and the post-menu curation pass."""
+    user declines removal. ``available`` (usable providers) biases the
+    default-to-keep away from keyless/stale providers. Reused by both
+    `_step2_configure_models_and_pddrc` and the post-menu curation pass."""
     from pdd.provider_manager import _read_csv
-    selected = _select_providers_to_keep(rows, curatable)
+    selected = _select_providers_to_keep(rows, curatable, available)
     if selected is None:
         return rows
     selected_set = set(selected)
@@ -926,18 +937,39 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
             existing_models.add(m)
 
     combined = existing + new_rows
-    # Issue #1202: when several providers are configured, ask which the user
-    # actually wants `pdd --local` to use and curate the CSV down to those.
-    # Leaving every provider in the file lets cost/ELO auto-selection route to
-    # an unintended (often free device-login) provider. Only the reference-CSV
-    # providers the user has credentials for are curatable; local models and
-    # hand-edited custom rows are preserved untouched.
+    # Issue #1202: when several providers would end up in the CSV, ask which the
+    # user actually wants `pdd --local` to use and curate down to those. Leaving
+    # every provider in the file lets cost/ELO auto-selection route to an
+    # unintended (often free device-login) provider.
+    #
+    # `curatable` = the PDD-managed (reference) providers PRESENT IN THE FINAL
+    # `combined` set (not just the currently key-satisfied ones), so a stale row
+    # left from a prior selection — e.g. an Anthropic row whose key is no longer
+    # set after the user switched to Gemini — is still offered for removal rather
+    # than silently lingering. Local models and hand-edited/foreign providers are
+    # never curatable and are preserved untouched.
+    #
+    # `available` = the subset of those providers that are usable right now
+    # (credential-satisfied or device-login); it biases the default-to-keep so a
+    # keyless stale provider is removable but never the default to keep.
+    _ref_providers = _reference_providers()
     curatable = sorted({
         (r.get("provider") or "").strip()
-        for r in configured_models
-        if (r.get("provider") or "").strip()
+        for r in combined
+        if (r.get("provider") or "").strip() in _ref_providers
+        and not _is_local_row(r)
     })
-    combined = _apply_provider_curation(combined, curatable, user_csv)
+    available = sorted({
+        (r.get("provider") or "").strip()
+        for r in combined
+        if (r.get("provider") or "").strip() in _ref_providers
+        and not _is_local_row(r)
+        and (
+            not (r.get("api_key") or "").strip()
+            or api_key_requirements_satisfied(r.get("api_key") or "", found_key_names)
+        )
+    })
+    combined = _apply_provider_curation(combined, curatable, user_csv, available)
     try:
         _write_csv_atomic(user_csv, combined)
     except Exception as e:

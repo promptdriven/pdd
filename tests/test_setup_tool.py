@@ -1262,6 +1262,42 @@ def test_stale_saved_selection_does_not_empty_csv(tmp_path, monkeypatch):
     assert pref["selected_providers"] == ["Google Gemini"]
 
 
+def test_existing_stale_provider_rows_curated_on_env_switch(tmp_path, monkeypatch):
+    """Review finding: an EXISTING bundled row for a provider whose key is no
+    longer set (the user switched providers) must be offered for removal — not
+    silently kept alongside the new provider. Here the CSV already has an
+    Anthropic row, the user now has only GEMINI_API_KEY; setup must curate so the
+    CSV ends up Gemini-only (Anthropic is removable; Gemini is the default to
+    keep because it's the available provider)."""
+    ref = [
+        {"provider": "Anthropic", "model": "claude-opus-4-7", "api_key": "ANTHROPIC_API_KEY",
+         "base_url": "", "input": "5", "output": "25", "coding_arena_elo": "1565",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
+         "location": ""},
+        {"provider": "Google Gemini", "model": "gemini/flash", "api_key": "GEMINI_API_KEY",
+         "base_url": "", "input": "0.5", "output": "3", "coding_arena_elo": "1437",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
+         "location": ""},
+    ]
+    existing_anthropic = [dict(ref[0])]  # pristine bundled Anthropic row already in the CSV
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=ref,
+        user_csv_rows=existing_anthropic,
+        env_keys={"GEMINI_API_KEY": "sk-gem"},  # Anthropic key NOT set anymore
+        create_pddrc=True,
+        sidecar_providers=["Anthropic"],  # prior selection, now stale
+        # stale sidecar cleared; curatable = {Anthropic, Google Gemini} → prompt;
+        # default = Gemini (the available one); accept default, confirm removal.
+        input_sequence=["", "", "", ""],
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "gemini/flash" in content              # available provider kept
+    assert "claude-opus-4-7" not in content        # stale Anthropic row curated out
+    pref = json.loads((tmp_path / "home" / ".pdd" / "setup_preferences.json").read_text())
+    assert pref["selected_providers"] == ["Google Gemini"]
+
+
 def test_env_switch_clears_stale_sidecar(tmp_path, monkeypatch):
     """Review finding (follow-up): with a saved selection of Anthropic but only
     GEMINI_API_KEY now set (single available provider → no prompt), the stale
