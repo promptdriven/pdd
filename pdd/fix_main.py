@@ -338,6 +338,9 @@ def fix_main(
                     current_execution_is_local = True
 
         # Local execution path (for loop mode or when cloud failed/skipped)
+        # Initialize focused-state variables so the common save block below can
+        # always reference them regardless of which branch is taken.
+        _local_focused_slices = None
         if loop:
             # Determine if loop should use cloud for LLM calls (hybrid mode)
             # Local test execution stays local, but LLM fix calls can go to cloud
@@ -377,7 +380,6 @@ def fix_main(
             # Focused repair for large dev units (Issue #888): reduce the payload
             # sent to the local LLM by extracting only the relevant function slices.
             _local_focused = None
-            _local_focused_slices = None
             _local_code = input_strings["code_file"]
             _local_tests = input_strings["unit_test_file"]
             try:
@@ -436,8 +438,14 @@ def fix_main(
                 temp_code_file = os_module.path.join(test_dir, "code_temp.py")
 
                 try:
-                    # Write the fixed content (or original if not changed)
-                    test_content = fixed_unit_test if fixed_unit_test else input_strings["unit_test_file"]
+                    # Write the fixed content (or original if not changed).
+                    # In focused mode fixed_unit_test is only the failing-test slice;
+                    # always validate against the full original test file so that
+                    # success means the full suite passes, not just the subset.
+                    if _local_focused_slices:
+                        test_content = input_strings["unit_test_file"]
+                    else:
+                        test_content = fixed_unit_test if fixed_unit_test else input_strings["unit_test_file"]
                     code_content = fixed_code if fixed_code else input_strings["code_file"]
 
                     with open(temp_test_file, 'w') as f:
