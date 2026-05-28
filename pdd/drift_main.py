@@ -35,6 +35,10 @@ except ModuleNotFoundError:  # pragma: no cover - optional until gate lands on m
 
 DEFAULT_MAX_COST_USD = 20.0
 _COST_RE = re.compile(r"(?:Total\s+)?Cost:\s*\$([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+_POLICY_VALIDATION_KEYS = ("policy", "gate", "checkup_gate", "policy_gate")
+_SKIP_VALIDATION_STATUSES = frozenset(
+    {"", "not_applicable", "not_available", "skipped"}
+)
 
 
 @dataclass
@@ -286,12 +290,42 @@ def _candidate_relative_path(code_path: Path, project_root: Path) -> Path:
         return Path(code_path.name)
 
 
-def _sandbox_copy(candidate: Path, code_path: Path, project_root: Path, sandbox_root: Path) -> Path:
+def _ensure_package_inits(overlay_root: Path, module_path: Path) -> None:
+    """Add empty ``__init__.py`` files so package imports resolve under ``overlay_root``."""
+    try:
+        rel = module_path.relative_to(overlay_root)
+    except ValueError:
+        return
+    current = overlay_root
+    for part in rel.parts[:-1]:
+        current = current / part
+        init_file = current / "__init__.py"
+        if not init_file.exists():
+            init_file.write_text("", encoding="utf-8")
+
+
+def _build_pytest_overlay(
+    candidate: Path,
+    code_path: Path,
+    project_root: Path,
+    overlay_root: Path,
+) -> Optional[Path]:
+    """Build an isolated tree with the candidate module and copied tests."""
     rel = _candidate_relative_path(code_path, project_root)
-    dest = sandbox_root / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(candidate, dest)
-    return dest
+    module_dest = overlay_root / rel
+    module_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(candidate, module_dest)
+    _ensure_package_inits(overlay_root, module_dest)
+
+    tests = _discover_tests(code_path, project_root)
+    if not tests:
+        return None
+
+    overlay_tests = overlay_root / "tests"
+    overlay_tests.mkdir(parents=True, exist_ok=True)
+    for test_path in tests:
+        shutil.copy2(test_path, overlay_tests / test_path.name)
+    return overlay_tests
 
 
 def _run_pytest_for_candidate(
@@ -304,16 +338,26 @@ def _run_pytest_for_candidate(
     if not tests:
         return True
 
-    _sandbox_copy(candidate, code_path, project_root, sandbox_root)
-    env = os.environ.copy()
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = (
-        f"{sandbox_root}{os.pathsep}{existing}" if existing else str(sandbox_root)
+    overlay_root = sandbox_root / "pytest-overlay"
+    if overlay_root.exists():
+        shutil.rmtree(overlay_root)
+    overlay_root.mkdir(parents=True, exist_ok=True)
+
+    overlay_tests = _build_pytest_overlay(
+        candidate,
+        code_path,
+        project_root,
+        overlay_root,
     )
-    cmd = [sys.executable, "-m", "pytest", "-q", *[str(path) for path in tests]]
+    if overlay_tests is None:
+        return True
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(overlay_root)
+    cmd = [sys.executable, "-m", "pytest", "-q", str(overlay_tests)]
     completed = subprocess.run(
         cmd,
-        cwd=project_root,
+        cwd=overlay_root,
         capture_output=True,
         text=True,
         check=False,
@@ -322,18 +366,22 @@ def _run_pytest_for_candidate(
     return completed.returncode == 0
 
 
-def _stories_configured(manifest: Optional[ManifestView]) -> bool:
+def _validation_key_configured(manifest: Optional[ManifestView], keys: tuple[str, ...]) -> bool:
     if manifest is None:
         return False
-    status = (manifest.validation.get("detect_stories") or "").strip().lower()
-    return bool(status) and status not in {"not_applicable", "not_available", "skipped"}
+    for key in keys:
+        status = (manifest.validation.get(key) or "").strip().lower()
+        if status and status not in _SKIP_VALIDATION_STATUSES:
+            return True
+    return False
+
+
+def _stories_configured(manifest: Optional[ManifestView]) -> bool:
+    return _validation_key_configured(manifest, ("detect_stories",))
 
 
 def _verify_configured(manifest: Optional[ManifestView]) -> bool:
-    if manifest is None:
-        return False
-    status = (manifest.validation.get("verify") or "").strip().lower()
-    return bool(status) and status not in {"not_applicable", "not_available", "skipped"}
+    return _validation_key_configured(manifest, ("verify",))
 
 
 def _policy_configured(project_root: Path, manifest: Optional[ManifestView]) -> bool:
@@ -343,7 +391,9 @@ def _policy_configured(project_root: Path, manifest: Optional[ManifestView]) -> 
         project_root / "policy.yml",
         project_root / "policy.yaml",
     )
-    return manifest is not None or any(path.is_file() for path in policy_paths)
+    if any(path.is_file() for path in policy_paths):
+        return True
+    return _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS)
 
 
 def _run_stories_check(prompt_path: Path, project_root: Path) -> tuple[bool, float]:

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +11,7 @@ from pdd.drift_main import (
     DEFAULT_MAX_COST_USD,
     RunSnapshot,
     _public_api,
+    _run_pytest_for_candidate,
     run_drift,
 )
 from pdd.evidence_store import sha256_file
@@ -28,6 +28,90 @@ def _write_fixture(project: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return prompt, code
+
+
+def _write_pytest_package_fixture(project: Path) -> tuple[Path, Path]:
+    """Project with ``pdd`` package, module, and a test that imports it."""
+    prompt, code = _write_fixture(project)
+    init_py = code.parent / "__init__.py"
+    if not init_py.is_file():
+        init_py.write_text("", encoding="utf-8")
+    test_file = project / "tests" / "test_refund_payment.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "from pdd.refund_payment import refund_payment\n\n"
+        "def test_refund_payment_returns_input() -> None:\n"
+        "    assert refund_payment(5) == 5\n",
+        encoding="utf-8",
+    )
+    return prompt, code
+
+
+def test_pytest_for_candidate_exercises_candidate_not_baseline(tmp_path: Path) -> None:
+    """Broken candidate must fail even when baseline module on disk still passes."""
+    _write_pytest_package_fixture(tmp_path)
+    code = tmp_path / "pdd" / "refund_payment.py"
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    good_candidate = tmp_path / "good_candidate.py"
+    good_candidate.write_text(
+        "def refund_payment(amount: int) -> int:\n    return amount\n",
+        encoding="utf-8",
+    )
+    bad_candidate = tmp_path / "bad_candidate.py"
+    bad_candidate.write_text(
+        "def refund_payment(amount: int) -> int:\n    return 0\n",
+        encoding="utf-8",
+    )
+
+    assert _run_pytest_for_candidate(good_candidate, code, tmp_path, sandbox) is True
+    assert _run_pytest_for_candidate(bad_candidate, code, tmp_path, sandbox) is False
+
+    code.write_text(
+        "def refund_payment(amount: int) -> int:\n    return 0\n",
+        encoding="utf-8",
+    )
+    sandbox_b = tmp_path / "sandbox_b"
+    sandbox_b.mkdir()
+    assert _run_pytest_for_candidate(good_candidate, code, tmp_path, sandbox_b) is True
+
+
+def test_drift_passes_from_evidence_without_policy_gate(tmp_path: Path) -> None:
+    """Ordinary evidence manifests must not imply policy when gate is absent on main."""
+    prompt, code = _write_fixture(tmp_path)
+    manifest = tmp_path / ".pdd" / "evidence" / "devunits" / "refund_payment.latest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "prompt": {"path": str(prompt.relative_to(tmp_path))},
+                "outputs": [{"path": str(code.relative_to(tmp_path)), "sha256": sha256_file(code)}],
+                "validation": {
+                    "detect_stories": "not_available",
+                    "verify": "not_available",
+                    "unit_tests": "not_available",
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.drift_main._GATE_POLICY_AVAILABLE", False):
+        report = run_drift(
+            "refund_payment",
+            tmp_path,
+            runs=1,
+            dry_run=True,
+            from_evidence=manifest,
+        )
+
+    assert report.policy_check_skipped
+    assert not report.policy_check_unavailable
+    assert report.status == "stable"
 
 
 def test_drift_does_not_mutate_baseline_code_file(tmp_path: Path) -> None:

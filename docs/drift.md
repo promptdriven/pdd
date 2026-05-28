@@ -29,7 +29,7 @@ pdd checkup drift <devunit> --max-cost 5.0
 | **Tests** | Sandbox copy of each regenerated candidate via local pytest |
 | **Stories** | Prompt↔story consistency for the dev unit prompt (live `detect --stories` scope); not a direct re-validation of regenerated code semantics |
 | **Verify** | Candidate code against its verification program (live `pdd verify` on temp copies) |
-| **Policy** | Project/dev-unit evidence policy via `pdd checkup gate` when available; **fails closed** if policy is configured but gate is not installed |
+| **Policy** | `pdd checkup gate` when a policy file exists or evidence explicitly records a policy/gate validation key; **fails closed** only in that case if gate is not installed (ordinary evidence alone does not enable policy) |
 
 ## Cost Controls
 
