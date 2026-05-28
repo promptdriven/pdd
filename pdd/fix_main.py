@@ -138,6 +138,9 @@ def fix_main(
         # because loop mode requires running tests and verification programs locally
         cloud_execution_attempted = False
         cloud_execution_succeeded = False
+        # Always defined so the common save block can reference it even when the
+        # cloud path is skipped (no JWT, loop mode, etc.).
+        _fix_focused_slices = None
 
         if not loop and not current_execution_is_local:
             # Cloud auth cannot succeed in headless worker environments (no JWT
@@ -255,7 +258,13 @@ def fix_main(
                             temp_code_file = os.path.join(test_dir, "code_temp.py")
 
                             try:
-                                test_content = fixed_unit_test if fixed_unit_test else input_strings["unit_test_file"]
+                                # In focused mode fixed_unit_test is only a slice; validate
+                                # against the full original test file so that a success verdict
+                                # means the full suite passes, not just the subset.
+                                if _fix_focused_slices:
+                                    test_content = input_strings["unit_test_file"]
+                                else:
+                                    test_content = fixed_unit_test if fixed_unit_test else input_strings["unit_test_file"]
                                 code_content = fixed_code if fixed_code else input_strings["code_file"]
 
                                 with open(temp_test_file, 'w') as f:
@@ -478,12 +487,12 @@ def fix_main(
         # Skip test write when focused repair was used: the LLM only saw a
         # slice of the test file, so writing fixed_unit_test would truncate
         # the full file to just the failing subset.
-        if fixed_unit_test and not protect_tests and not _local_focused_slices:
+        if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:
             output_test_path = Path(output_file_paths["output_test"])
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
-        elif fixed_unit_test and (protect_tests or _local_focused_slices):
+        elif fixed_unit_test and (protect_tests or _local_focused_slices or _fix_focused_slices):
             if verbose:
                 rprint("[yellow]Unit test update skipped (protect_tests=True or focused repair active).[/yellow]")
 
