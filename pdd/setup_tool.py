@@ -338,7 +338,13 @@ def _apply_provider_curation(
 
     # Pristine = matches the shipped reference row for that model on every field
     # except api_key (which setup normalizes, e.g. GEMINI_API_KEY→GOOGLE_API_KEY).
+    # Also identify reference DEVICE-LOGIN providers (every bundled row has an
+    # empty api_key, e.g. GitHub Copilot) so their rows are removable even if an
+    # older bundled version left a slightly different ELO/cost — while a custom
+    # empty-api_key row under a KEYED provider (e.g. an OpenAI-compatible proxy)
+    # is NOT, and is preserved.
     ref_by_model: Dict[str, Dict[str, str]] = {}
+    ref_provider_api_keys: Dict[str, List[str]] = {}
     ref_csv = _ref_csv_path()
     if ref_csv.exists():
         try:
@@ -346,8 +352,16 @@ def _apply_provider_curation(
                 m = (r.get("model") or "").strip()
                 if m:
                     ref_by_model[m] = r
+                p = (r.get("provider") or "").strip()
+                if p:
+                    ref_provider_api_keys.setdefault(p, []).append(
+                        (r.get("api_key") or "").strip()
+                    )
         except Exception:
-            ref_by_model = {}
+            ref_by_model, ref_provider_api_keys = {}, {}
+    ref_device_providers = {
+        p for p, keys in ref_provider_api_keys.items() if keys and not any(keys)
+    }
     # Compare every field. api_key is compared with alias-awareness so the
     # GEMINI_API_KEY→GOOGLE_API_KEY normalization setup performs does not make a
     # genuinely untouched row look edited — but a user who changed api_key to any
@@ -377,12 +391,17 @@ def _apply_provider_curation(
             for f in _other_fields
         )
 
+    # Auto-remove ONLY PDD-managed rows under an unselected provider: rows
+    # byte-identical to a shipped reference row, OR any row whose provider is a
+    # reference device-login provider (e.g. Copilot). Anything else — a
+    # user-added custom row, an empty-api_key proxy under a KEYED provider, or an
+    # edited bundled row — is preserved and the user is warned.
     to_remove, kept_custom = [], []
     for r in rows:
         if not _unselected_curatable(r):
             continue
-        is_device = not (r.get("api_key") or "").strip()
-        if is_device or _is_pristine_bundled(r):
+        prov = (r.get("provider") or "").strip()
+        if _is_pristine_bundled(r) or prov in ref_device_providers:
             to_remove.append(r)
         else:
             kept_custom.append(r)
@@ -436,10 +455,29 @@ def _apply_provider_curation(
     return [r for r in rows if id(r) not in remove_ids]
 
 
+def _reference_providers() -> set:
+    """Distinct provider names present in the bundled reference CSV — the only
+    providers `pdd setup` manages/curates. Custom or foreign providers the user
+    hand-added are never curated."""
+    ref_csv = _ref_csv_path()
+    if not ref_csv.exists():
+        return set()
+    try:
+        from pdd.provider_manager import _read_csv
+        return {
+            (r.get("provider") or "").strip()
+            for r in _read_csv(ref_csv)
+            if (r.get("provider") or "").strip()
+        }
+    except Exception:
+        return set()
+
+
 def _usable_providers_in_csv() -> set:
-    """Providers `pdd --local` could actually use from the user CSV: credential-
-    satisfied or device-login. Local models (Ollama / LM Studio / localhost) are
-    excluded — they don't compete in cloud routing."""
+    """Reference-derived providers `pdd --local` could actually use from the user
+    CSV: credential-satisfied or device-login. Local models (Ollama / LM Studio /
+    localhost) and any custom/foreign provider NOT in the bundled reference CSV
+    are excluded — setup only curates the providers it manages."""
     from pdd.provider_manager import (
         _read_csv, _get_user_csv_path, api_key_requirements_satisfied,
     )
@@ -450,11 +488,14 @@ def _usable_providers_in_csv() -> set:
         rows = _read_csv(user_csv)
     except Exception:
         return set()
+    ref_providers = _reference_providers()
     found = [name for name, _ in _scan_for_api_keys_quiet()]
     return {
         (r.get("provider") or "").strip()
         for r in rows
-        if (r.get("provider") or "").strip() and not _is_local_row(r) and (
+        if (r.get("provider") or "").strip() in ref_providers
+        and not _is_local_row(r)
+        and (
             not (r.get("api_key") or "").strip()
             or api_key_requirements_satisfied(r.get("api_key") or "", found)
         )
