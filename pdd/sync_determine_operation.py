@@ -2128,6 +2128,17 @@ def _perform_sync_analysis(
         )
 
     run_report = read_run_report(basename, language, paths=_initial_paths)
+    if run_report and skip_tests:
+        # Ignore stale or failing cached test-results from run_report when skip_tests is active
+        run_report = RunReport(
+            timestamp=run_report.timestamp,
+            exit_code=run_report.exit_code,
+            tests_passed=run_report.tests_passed,
+            tests_failed=0,
+            coverage=run_report.coverage,
+            test_hash=run_report.test_hash,
+            test_files=run_report.test_files
+        )
     # Only process runtime signals (crash/fix/test) if we have a fingerprint
     # Without a fingerprint, run_report is stale/orphaned and should be ignored
     if run_report and fingerprint:

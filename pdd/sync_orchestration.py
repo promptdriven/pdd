@@ -2145,6 +2145,7 @@ def sync_orchestration(
         start_time = time.time()
         last_model_name: str = "unknown"
         operation_history: List[str] = []
+        consecutive_noop_fixes = 0
         operation_rollback: Optional[OperationFileRollback] = None
         terminal_reason: Optional[str] = None
         MAX_CYCLE_REPEATS = 2
@@ -2466,6 +2467,14 @@ def sync_orchestration(
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_fingerprint_atomic(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
+                        continue
+                    if operation == 'fix' and skip_tests:
+                        skipped_operations.append('fix')
+                        print(f"PDD_PHASE: skip:{operation}", flush=True)
+                        update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
+                        append_log_entry(basename, language, log_entry, paths=pdd_files)
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_fingerprint_atomic(basename, language, 'skip:fix', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'test' and skip_tests:
                         skipped_operations.append('test')
@@ -3353,6 +3362,35 @@ def sync_orchestration(
                             if pair:
                                 log_entry.setdefault("details", {})["llm_trace"] = pair
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
+
+                        if operation == 'fix':
+                            model_name_lower = str(model_name).strip().lower()
+                            if actual_cost == 0.0 and model_name_lower in ['', 'none', 'unknown', 'n/a']:
+                                consecutive_noop_fixes += 1
+                            else:
+                                consecutive_noop_fixes = 0
+                        else:
+                            consecutive_noop_fixes = 0
+
+                        if consecutive_noop_fixes >= 2:
+                            msg = f"Detected {consecutive_noop_fixes} consecutive no-op fix operations. Breaking loop."
+                            errors.append(msg)
+                            record_core_dump_error(
+                                command="sync",
+                                type="LogicalFailure",
+                                message=msg,
+                                details={
+                                    "basename": basename,
+                                    "language": language,
+                                    "reason": "consecutive_noop_fix_limit",
+                                    "consecutive": consecutive_noop_fixes,
+                                    "operations_completed": operations_completed,
+                                    "skipped_operations": skipped_operations,
+                                    "total_cost": current_cost_ref[0],
+                                },
+                            )
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "noop-fix", "count": consecutive_noop_fixes}, invocation_mode="sync", paths=pdd_files)
+                            break
 
                         # Post-operation checks (simplified)
                         if success and operation == 'crash':
