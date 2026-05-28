@@ -5,10 +5,24 @@ Tests authentication endpoints including status, logout, and login flow.
 Includes regression tests for bugs encountered during development.
 """
 
+import base64
+import json
 import sys
+import time
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
+
+
+def _unsigned_jwt(payload: dict[str, object]) -> str:
+    """Build an unsigned JWT-shaped token for cache/audience tests."""
+    header = {"alg": "none", "typ": "JWT"}
+
+    def encode(value: dict[str, object]) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{encode(header)}.{encode(payload)}.signature"
 
 
 # --- Test Plan ---
@@ -268,6 +282,84 @@ class TestAuthStatus:
                 assert isinstance(result, AuthStatus)
                 assert result.authenticated is True
                 assert result.cached is False
+
+    @pytest.mark.asyncio
+    async def test_get_auth_status_rejects_wrong_environment_cached_jwt(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Server /status must not authenticate a staging request with a prod JWT."""
+        from pdd import auth_service
+        from pdd.server.routes.auth import get_auth_status, AuthStatus
+
+        monkeypatch.setenv("PDD_ENV", "staging")
+        monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+        monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+        cache_file = tmp_path / "jwt_cache"
+        now = int(time.time())
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "id_token": _unsigned_jwt(
+                        {
+                            "aud": "prompt-driven-development",
+                            "email": "prod-user@example.com",
+                            "exp": now + 3600,
+                        }
+                    ),
+                    "expires_at": now + 3600,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+        with patch("pdd.server.routes.auth._has_refresh_token", return_value=False):
+            result = await get_auth_status()
+
+        assert isinstance(result, AuthStatus)
+        assert result.authenticated is False
+        assert result.cached is False
+        assert result.expires_at is None
+
+    @pytest.mark.asyncio
+    async def test_get_jwt_token_rejects_nested_wrong_environment_cached_jwt(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Server /jwt-token must return null for nested firebase.aud mismatch."""
+        from pdd import auth_service
+        from pdd.server.routes.auth import JWTTokenResponse, get_jwt_token
+
+        monkeypatch.setenv("PDD_ENV", "staging")
+        monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+        monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+        cache_file = tmp_path / "jwt_cache"
+        now = int(time.time())
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "id_token": _unsigned_jwt(
+                        {
+                            "aud": "ignored-wrapper-audience",
+                            "firebase": {"aud": "prompt-driven-development"},
+                            "email": "prod-user@example.com",
+                            "exp": now + 3600,
+                        }
+                    ),
+                    "expires_at": now + 3600,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+        result = await get_jwt_token()
+
+        assert isinstance(result, JWTTokenResponse)
+        assert result.jwt is None
 
 
 class TestLogout:

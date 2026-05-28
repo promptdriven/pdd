@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sys
@@ -75,6 +76,17 @@ def mock_env_vars(monkeypatch):
     monkeypatch.delenv("GITHUB_CLIENT_ID", raising=False)
     monkeypatch.delenv("GITHUB_CLIENT_ID_LOCAL", raising=False)
     monkeypatch.delenv("PDD_ENV", raising=False)
+
+
+def _unsigned_jwt(payload: dict[str, object]) -> str:
+    """Build an unsigned JWT-shaped token for cache/audience tests."""
+    header = {"alg": "none", "typ": "JWT"}
+
+    def encode(value: dict[str, object]) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{encode(header)}.{encode(payload)}.signature"
 
 # --- Helper Function Tests ---
 
@@ -201,6 +213,46 @@ def test_status_authenticated_corrupt_cache(runner, mock_dependencies):
     # Should still say authenticated, but username might be Unknown
     assert result.exit_code == 0
     assert "Authenticated as: Unknown" in result.output
+
+
+def test_status_rejects_wrong_environment_cached_jwt(runner, monkeypatch, tmp_path):
+    """CLI status must show signed out when the cached token audience is wrong."""
+    from pdd import auth_service
+
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: (None, None),
+    )
+    cache_file = tmp_path / "jwt_cache"
+    now = int(time.time())
+    cache_file.write_text(
+        json.dumps(
+            {
+                "id_token": _unsigned_jwt(
+                    {
+                        "aud": "prompt-driven-development",
+                        "email": "prod-user@example.com",
+                        "exp": now + 3600,
+                    }
+                ),
+                "expires_at": now + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+    monkeypatch.setattr("pdd.commands.auth.JWT_CACHE_FILE", cache_file)
+    monkeypatch.setattr("pdd.commands.auth.get_auth_status", auth_service.get_auth_status)
+
+    result = runner.invoke(auth_group, ["status"])
+
+    assert result.exit_code == 1
+    assert "Not authenticated" in result.output
+    assert "prod-user@example.com" not in result.output
 
 # --- Logout Command Tests ---
 

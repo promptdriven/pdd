@@ -65,6 +65,7 @@ Test Plan for pdd.auth_service
    - We can also verify the state machine logic of `get_auth_status` (e.g., if cached is True, authenticated MUST be True).
 """
 
+import base64
 import json
 import time
 import sys
@@ -109,6 +110,29 @@ def _blocking_keyring_op(*_args, **_kwargs):
 
 
 _AUTH_KEYRING_TIMEOUT_BUDGET = 0.75
+
+
+def _unsigned_jwt(payload: dict[str, object]) -> str:
+    """Build an unsigned JWT-shaped token for cache/audience tests."""
+    header = {"alg": "none", "typ": "JWT"}
+
+    def encode(value: dict[str, object]) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{encode(header)}.{encode(payload)}.signature"
+
+
+def _write_cached_jwt(cache_file, payload: dict[str, object]) -> str:
+    """Write a valid-time cache entry and return the JWT token."""
+    now = int(time.time())
+    token = _unsigned_jwt({**payload, "exp": now + 3600})
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(
+        json.dumps({"id_token": token, "expires_at": now + 3600}),
+        encoding="utf-8",
+    )
+    return token
 
 # --- Unit Tests ---
 
@@ -299,6 +323,191 @@ def test_get_cached_jwt_prefers_id_token_over_jwt(mock_home):
 
     token = auth_service.get_cached_jwt()
     assert token == "preferred_token"
+
+
+# --- Issue #1274: Environment-aware JWT audience validation ---
+
+def test_issue_1274_reproduction_auth_status_rejects_wrong_environment_cached_jwt(
+    monkeypatch,
+    tmp_path,
+):
+    """Reproduction from Step 5: staging must reject a cached production token."""
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: (None, None),
+    )
+
+    cache_file = tmp_path / "jwt_cache"
+    now = int(time.time())
+    cache_file.write_text(
+        json.dumps(
+            {
+                "id_token": _unsigned_jwt(
+                    {
+                        "aud": "prompt-driven-development",
+                        "email": "signed-in@example.com",
+                        "exp": now + 3600,
+                    }
+                ),
+                "expires_at": now + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    status = auth_service.get_auth_status()
+
+    assert status == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+    }
+    assert auth_service.get_cached_jwt() is None
+
+
+@pytest.mark.asyncio
+async def test_issue_1274_service_paths_reject_top_level_production_audience_on_staging(
+    monkeypatch,
+    tmp_path,
+):
+    """Every service read path must reject a prod-audience JWT under staging."""
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: (None, None),
+    )
+    monkeypatch.setattr(auth_service, "get_refresh_token", lambda: None)
+    cache_file = tmp_path / "jwt_cache"
+    _write_cached_jwt(
+        cache_file,
+        {
+            "aud": "prompt-driven-development",
+            "email": "prod-user@example.com",
+        },
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    assert auth_service.get_jwt_cache_info() == (False, None)
+    assert auth_service.get_cached_jwt() is None
+    assert auth_service.get_auth_status() == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+    }
+    assert await auth_service.verify_auth() == {
+        "valid": False,
+        "error": "No authentication credentials found",
+        "needs_reauth": True,
+        "username": None,
+    }
+
+
+def test_issue_1274_rejects_nested_firebase_production_audience_on_staging(
+    monkeypatch,
+    tmp_path,
+):
+    """Nested firebase.aud is also authoritative for Firebase ID token audience."""
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: (None, None),
+    )
+    cache_file = tmp_path / "jwt_cache"
+    _write_cached_jwt(
+        cache_file,
+        {
+            "aud": "ignored-wrapper-audience",
+            "firebase": {"aud": "prompt-driven-development"},
+            "email": "prod-user@example.com",
+        },
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    assert auth_service.get_jwt_cache_info() == (False, None)
+    assert auth_service.get_cached_jwt() is None
+    assert auth_service.get_auth_status() == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_issue_1274_accepts_matching_staging_audience_across_service_paths(
+    monkeypatch,
+    tmp_path,
+):
+    """A staging token remains valid when its audience matches staging config."""
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: (None, None),
+    )
+    cache_file = tmp_path / "jwt_cache"
+    token = _write_cached_jwt(
+        cache_file,
+        {
+            "aud": "prompt-driven-development-stg",
+            "email": "staging-user@example.com",
+        },
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    cache_valid, expires_at = auth_service.get_jwt_cache_info()
+
+    assert cache_valid is True
+    assert expires_at is not None
+    assert auth_service.get_cached_jwt() == token
+    assert auth_service.get_auth_status() == {
+        "authenticated": True,
+        "cached": True,
+        "expires_at": expires_at,
+    }
+    assert await auth_service.verify_auth() == {
+        "valid": True,
+        "error": None,
+        "needs_reauth": False,
+        "username": "staging-user@example.com",
+    }
+
+
+def test_issue_1274_expected_audience_override_allows_custom_project(
+    monkeypatch,
+    tmp_path,
+):
+    """PDD_JWT_EXPECTED_AUD must override environment-derived project IDs."""
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.setenv("PDD_JWT_EXPECTED_AUD", "custom-preview-project")
+    cache_file = tmp_path / "jwt_cache"
+    token = _write_cached_jwt(
+        cache_file,
+        {
+            "aud": "custom-preview-project",
+            "email": "preview-user@example.com",
+        },
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    cache_valid, expires_at = auth_service.get_jwt_cache_info()
+
+    assert cache_valid is True
+    assert expires_at is not None
+    assert auth_service.get_cached_jwt() == token
 
 # --- has_refresh_token Tests ---
 
