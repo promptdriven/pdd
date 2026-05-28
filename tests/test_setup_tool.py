@@ -187,7 +187,7 @@ def _run_setup_capture(tmp_path, monkeypatch, ref_csv_rows=None,
                        user_csv_rows=None, env_keys=None,
                        input_sequence=None, cli_results=None,
                        test_result=None, create_pddrc=False,
-                       has_provider_oauth=False):
+                       has_provider_oauth=False, sidecar_providers=None):
     """Run run_setup() with full environment control, capturing all output.
 
     Mocks at true boundaries only: CLI detection, user input, model testing,
@@ -232,6 +232,12 @@ def _run_setup_capture(tmp_path, monkeypatch, ref_csv_rows=None,
     # Pre-populate user CSV if needed
     if user_csv_rows:
         _write_csv_file(pdd_dir / "llm_model.csv", user_csv_rows)
+
+    # Pre-populate a saved provider selection (sidecar) if needed
+    if sidecar_providers is not None:
+        (pdd_dir / "setup_preferences.json").write_text(
+            json.dumps({"selected_providers": sidecar_providers})
+        )
 
     # Create .pddrc if requested
     if create_pddrc:
@@ -1237,42 +1243,52 @@ def test_stale_saved_selection_does_not_empty_csv(tmp_path, monkeypatch):
          "location": ""},
     ]
     combined_ref = gemini_ref + DEVICE_FLOW_CSV
-    monkeypatch.setattr(setup_tool, "_load_selected_providers", lambda: ["No Such Provider"])
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=combined_ref,
         env_keys={"GEMINI_API_KEY": "sk-gem"},
         create_pddrc=True,
+        sidecar_providers=["No Such Provider"],  # real stale sidecar
         # Stale selection ignored, 2 curatable → prompt fires; accept the default
         # (highest-ELO non-device = Google Gemini), then confirm removal of Copilot.
         input_sequence=["", "", "", ""],
     )
-    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    pdd_dir = tmp_path / "home" / ".pdd"
+    content = (pdd_dir / "llm_model.csv").read_text()
     assert "gemini/flash" in content       # available provider configured, not emptied
-    # And there must be at least one real model row written.
     assert content.strip().count("\n") >= 1
+    # The stale selection was repaired: sidecar now reflects the real choice.
+    pref = json.loads((pdd_dir / "setup_preferences.json").read_text())
+    assert pref["selected_providers"] == ["Google Gemini"]
 
 
-def test_env_switch_recovered_despite_stale_selection(tmp_path, monkeypatch):
-    """Review finding 2: with a saved selection of Anthropic but only
-    GEMINI_API_KEY now set, the saved selection matches nothing available, so it
-    is ignored and the user's Gemini key is honoured (not silently dropped)."""
+def test_env_switch_clears_stale_sidecar(tmp_path, monkeypatch):
+    """Review finding (follow-up): with a saved selection of Anthropic but only
+    GEMINI_API_KEY now set (single available provider → no prompt), the stale
+    sidecar must be CLEARED — not left as Anthropic. Otherwise a later run that
+    re-adds Anthropic would silently keep both providers (cross-routing). Here
+    the ref has only the Gemini row, so no prompt fires; the sidecar must end up
+    removed."""
     gemini_ref = [
         {"provider": "Google Gemini", "model": "gemini/flash", "api_key": "GEMINI_API_KEY",
          "base_url": "", "input": "0.5", "output": "3", "coding_arena_elo": "1437",
          "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
          "location": ""},
     ]
-    monkeypatch.setattr(setup_tool, "_load_selected_providers", lambda: ["Anthropic"])
+    pdd_dir = tmp_path / "home" / ".pdd"
     _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=gemini_ref,
         env_keys={"GEMINI_API_KEY": "sk-gem"},
         create_pddrc=True,
-        input_sequence=["", "", ""],  # single available provider → no prompt
+        sidecar_providers=["Anthropic"],  # stale: no Anthropic key set
+        input_sequence=["", "", ""],       # single available provider → no prompt
     )
-    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    content = (pdd_dir / "llm_model.csv").read_text()
     assert "gemini/flash" in content  # Gemini honoured despite stale Anthropic selection
+    # Stale sidecar must be gone so a later rerun re-curates fresh instead of
+    # silently keeping both providers.
+    assert not (pdd_dir / "setup_preferences.json").exists()
 
 
 def test_rerun_does_not_readd_dropped_provider(tmp_path, monkeypatch):

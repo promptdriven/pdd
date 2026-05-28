@@ -133,6 +133,17 @@ def _save_selected_providers(providers: List[str]) -> None:
         print(f"  {DIM}(could not save provider preference: {exc}){RESET}")
 
 
+def _clear_selected_providers() -> None:
+    """Delete the saved provider selection. Used when the saved selection has
+    gone stale (matches none of the currently-available providers), so it cannot
+    linger and silently re-enable cross-provider routing on a later run.
+    Best-effort; a missing file or removal error is non-fatal."""
+    try:
+        _provider_pref_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _keyed_providers_in_csv() -> set:
     """Return the set of providers in the user CSV that have at least one row
     whose api_key requirements are ACTUALLY satisfied in the environment (a real,
@@ -884,6 +895,16 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
         ]
         if _filtered:
             configured_models = _filtered
+        else:
+            # The saved selection matches none of the currently-available
+            # providers — it's stale (e.g. the user switched which API keys are
+            # set). REPAIR it: clear the sidecar so it can't linger. Without
+            # this, a later run that re-adds the saved provider would keep both
+            # it and the switched-to provider with no prompt, silently reopening
+            # cross-provider routing. After clearing, setup configures the
+            # available providers and the selection prompt re-establishes a
+            # correct choice when there is more than one.
+            _clear_selected_providers()
 
     user_csv = _get_user_csv_path()
     existing: List[Dict[str, str]] = []
