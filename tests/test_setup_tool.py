@@ -856,11 +856,14 @@ def test_eof_on_selection_uses_default(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.input", _raise_eof)
     monkeypatch.setattr("builtins.print", lambda *a, **k: None)
     rows = [
-        {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY"},
-        {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY"},
+        {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY",
+         "coding_arena_elo": "1500"},
+        {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY",
+         "coding_arena_elo": "1400"},
     ]
     selected = setup_tool._select_providers_to_keep(rows, ["Anthropic", "OpenAI"])
-    assert selected == ["Anthropic", "OpenAI"]  # both keyed → default keeps both
+    # First-time default is a single provider (highest ELO) → unambiguous pin.
+    assert selected == ["Anthropic"]
 
 
 def test_local_and_custom_rows_preserved_through_curation(tmp_path, monkeypatch):
@@ -962,6 +965,29 @@ def test_menu_add_provider_syncs_saved_selection(tmp_path, monkeypatch):
     setup_tool._sync_provider_pref_to_csv()
     data = json.loads((pdd_dir / "setup_preferences.json").read_text())
     assert data["selected_providers"] == ["Anthropic", "OpenAI"]
+
+
+def test_menu_sync_excludes_device_login_provider(tmp_path, monkeypatch):
+    """Codex full-review finding: the menu sync must NOT pull a device-login
+    provider (no api_key, e.g. Copilot) into the saved selection, or it would
+    become the default and bypass the device-login exclusion next run."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["Anthropic"]})
+    )
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_path.write_text(
+        "provider,model,api_key\n"
+        "Anthropic,claude,ANTHROPIC_API_KEY\n"
+        "Github Copilot,github_copilot/gpt-5,\n"  # device-login, no key
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    setup_tool._sync_provider_pref_to_csv()
+    data = json.loads((pdd_dir / "setup_preferences.json").read_text())
+    assert data["selected_providers"] == ["Anthropic"]  # Copilot NOT added
 
 
 def test_sync_does_not_create_sidecar_when_none_exists(tmp_path, monkeypatch):

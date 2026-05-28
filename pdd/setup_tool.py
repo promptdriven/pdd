@@ -125,24 +125,38 @@ def _sync_provider_pref_to_csv() -> None:
     user CSV. Called after the options menu, whose "Add a provider" path writes
     rows directly to `llm_model.csv`. Without this, a later `pdd setup` run would
     default to the stale saved selection and could drop the provider the user
-    just added through the menu (#1202 review). Only updates an EXISTING sidecar
-    — it never creates a curation policy the user didn't opt into."""
-    if _load_selected_providers() is None:
+    just added through the menu (#1202 review).
+
+    Only KEYED providers now present are unioned into the existing selection.
+    Device-login providers (no api_key, e.g. GitHub Copilot) are deliberately
+    NOT unioned in — `add_provider_from_registry` can leave rows behind even
+    when an auth step is skipped/failed, and a device login must never silently
+    become the saved default and bypass the device-login exclusion on the next
+    run. Only updates an EXISTING sidecar — it never creates a curation policy
+    the user didn't opt into."""
+    saved = _load_selected_providers()
+    if saved is None:
         return
     from pdd.provider_manager import _read_csv, _get_user_csv_path
     user_csv = _get_user_csv_path()
     if not user_csv.exists():
         return
     try:
-        providers = sorted({
-            (r.get("provider") or "").strip()
-            for r in _read_csv(user_csv)
-            if (r.get("provider") or "").strip()
-        })
+        rows = _read_csv(user_csv)
     except Exception:
         return
-    if providers:
-        _save_selected_providers(providers)
+    by_provider: Dict[str, List[Dict[str, str]]] = {}
+    for r in rows:
+        prov = (r.get("provider") or "").strip()
+        if prov:
+            by_provider.setdefault(prov, []).append(r)
+    keyed_now = {
+        prov for prov, prs in by_provider.items()
+        if any((r.get("api_key") or "").strip() for r in prs)
+    }
+    updated = sorted(set(saved) | keyed_now)
+    if updated and updated != sorted(saved):
+        _save_selected_providers(updated)
 
 
 def _select_providers_to_keep(
@@ -187,25 +201,33 @@ def _select_providers_to_keep(
             if (r.get("provider") or "").strip() == p
         )
     }
-    # The non-device providers are the safe default — never default to a set
-    # that includes a free device login over a configured key. This default is
-    # intentionally MULTI-select (all keyed providers), not single: a user who
-    # deliberately configured two paid keys may legitimately want either, and
-    # the menu shows every default-kept provider (marked '*') with an explicit
-    # removal warning, so accepting it is an informed choice rather than the
-    # silent free-login routing that #1202 is about. Users who want a strict
-    # single-provider pin simply select one entry.
-    non_device_default = [p for p in providers if p not in device_providers]
+    non_device = [p for p in providers if p not in device_providers]
 
+    def _best_elo(prov: str) -> float:
+        best = 0.0
+        for r in rows:
+            if (r.get("provider") or "").strip() == prov:
+                try:
+                    best = max(best, float(r.get("coding_arena_elo") or 0))
+                except (TypeError, ValueError):
+                    pass
+        return best
+
+    # First-time default is a SINGLE provider — the highest-ELO non-device one
+    # (a free device login must never be the default over a configured key).
+    # A single-provider default means accepting it (Enter) yields an
+    # unambiguous pin, so `pdd --local` cannot cost/ELO-route across providers
+    # (issue #1202). A user who genuinely wants several selects them explicitly;
+    # that explicit multi-provider choice is saved and honored as the default on
+    # re-run (so we don't override a deliberate multi-provider setup).
+    single_default = [max(non_device, key=_best_elo)] if non_device else providers[:1]
     saved = _load_selected_providers()
-    default = [p for p in providers if p in saved] if saved else list(non_device_default)
+    default = [p for p in providers if p in saved] if saved else list(single_default)
     # A stale/foreign saved selection (no overlap with the current providers)
-    # must fall back to the non-device default, NOT to "all" — otherwise a
-    # device login silently re-enters the pin, reopening #1202. When every
-    # curatable provider is device-login (no key to protect), fall back to a
-    # single provider rather than all, so the default never spans providers.
+    # falls back to the single non-device default — never to a multi/all set
+    # that could reopen cross-provider routing.
     if not default:
-        default = non_device_default or providers[:1]
+        default = single_default
 
     row_counts = {
         p: sum(1 for r in rows if (r.get("provider") or "").strip() == p)

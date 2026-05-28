@@ -338,8 +338,11 @@ export PROVIDER_API_KEY=your_api_key_here
 ```
 
 Some local-mode providers do not use API keys. GitHub Copilot models
-authenticate through LiteLLM's OAuth device flow; run `pdd setup` and choose
-the provider to complete that login.
+authenticate through LiteLLM's OAuth device flow; run `pdd setup`, then choose
+**Add a provider** from the options menu and pick GitHub Copilot to complete
+that device login. (The provider-selection prompt described above only decides
+which already-configured providers `pdd --local` uses — it does not perform the
+OAuth login.)
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
