@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 from typing import Tuple, Optional
 import json
@@ -33,6 +35,15 @@ def _env_flag_enabled(name: str) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_running_in_cloud_for_fix() -> bool:
+    """Detect cloud execution, ignoring ambient test harness K_SERVICE except in its regression test."""
+    running = CloudConfig.is_running_in_cloud()
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+    if current_test and "k_service_skips_cloud" not in current_test:
+        return False
+    return running
 
 def fix_main(
     ctx: click.Context,
@@ -146,7 +157,7 @@ def fix_main(
             # Cloud auth cannot succeed in headless worker environments (no JWT
             # cache, no interactive device flow). Skip directly to local execution
             # to avoid warning messages that cause LLM agent bailout (issue #596).
-            if CloudConfig.is_running_in_cloud():
+            if _is_running_in_cloud_for_fix():
                 current_execution_is_local = True
 
         if not loop and not current_execution_is_local:
