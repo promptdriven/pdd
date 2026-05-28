@@ -1142,6 +1142,24 @@ def test_invalid_selection_reprompts_instead_of_defaulting(tmp_path, monkeypatch
     assert "recognize" in output.lower()  # the re-prompt message was shown
 
 
+def test_partially_invalid_selection_reprompts(tmp_path, monkeypatch):
+    """Codex round-10 finding: an entry with ANY out-of-range/invalid token
+    (e.g. '1 99') must re-prompt rather than silently keeping the valid part —
+    the destructive removal makes silent partial-acceptance unsafe. Here the
+    user corrects to '1' (Anthropic)."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "1 99", "1", "", ""],
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "claude-sonnet" in content
+    assert "gpt-4o" not in content
+    assert "recognize" in output.lower()  # '1 99' was rejected, not partially kept
+
+
 def test_single_provider_no_selection_prompt(tmp_path, monkeypatch):
     """With only one configured provider there is no choice, so the selection
     prompt must not appear and must not consume an input."""

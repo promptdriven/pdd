@@ -294,13 +294,16 @@ def _select_providers_to_keep(
         if raw.lower() in ("a", "all"):
             chosen = list(providers)
             break
-        picked: List[str] = []
-        for tok in re.split(r"[,\s]+", raw):
-            if tok.isdigit() and 1 <= int(tok) <= len(providers):
-                picked.append(providers[int(tok) - 1])
-        picked = list(dict.fromkeys(picked))  # dedupe, preserve order
-        if picked:
-            chosen = picked
+        tokens = [t for t in re.split(r"[,\s]+", raw) if t]
+        valid = [
+            int(t) for t in tokens
+            if t.isdigit() and 1 <= int(t) <= len(providers)
+        ]
+        # Require EVERY token to be a valid in-range number. A partially-invalid
+        # entry like "1 99" must re-prompt rather than silently keeping "1",
+        # because the follow-up removes the unselected providers' rows.
+        if valid and len(valid) == len(tokens):
+            chosen = list(dict.fromkeys(providers[i - 1] for i in valid))
             break
         if attempt < max_attempts - 1:
             print(f"  {YELLOW}Didn't recognize '{raw}'. Enter the number(s) from "
