@@ -1936,7 +1936,12 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
 def _model_disallows_temperature(model_name: Any) -> bool:
     """Return True for models whose provider rejects the temperature parameter."""
     model_lower = str(model_name or "").lower()
-    return "claude-opus-4-7" in model_lower or "claude-opus-4.7" in model_lower
+    return (
+        "claude-opus-4-7" in model_lower
+        or "claude-opus-4.7" in model_lower
+        or "claude-opus-4-8" in model_lower
+        or "claude-opus-4.8" in model_lower
+    )
 
 
 # Regex anchored to the Gemini 3 family identifier so that:

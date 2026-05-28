@@ -347,7 +347,7 @@ The CSV includes columns for:
   blank for local and device-flow providers such as Ollama, LM Studio, and
   GitHub Copilot
 - `structured_output`: Whether the model supports structured JSON output
-- `reasoning_type`: Support for reasoning capabilities ("none", "budget", or "effort")
+- `reasoning_type`: Support for reasoning capabilities ("none", "budget", "effort", or "adaptive")
 
 For a concrete, up-to-date reference of supported models and example rows, see the bundled CSV in this repository: [pdd/data/llm_model.csv](pdd/data/llm_model.csv).
 

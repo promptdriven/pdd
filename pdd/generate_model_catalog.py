@@ -85,6 +85,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
+    "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-6": 1561,            # [CODE] #1
     "claude-opus-4-5": 1469,            # [CODE] #6
     "claude-opus-4-1": 1389,            # [CODE] #20
@@ -97,6 +98,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "claude-3-5-sonnet": 1310,          # [EST]
     "claude-haiku-4-5": 1303,           # [CODE]
     # Dot-separated aliases
+    "claude-opus-4.8": 1575,
     "claude-opus-4.6": 1561,
     "claude-opus-4.5": 1469,
     "claude-opus-4.1": 1389,
@@ -566,7 +568,7 @@ def _has_region(model_id: str) -> bool:
 # legacy budget shape. Direct-Anthropic-provider routes enforce this;
 # Azure AI / Bedrock / Vertex relays do not yet (as of 2026-05-24) — keep
 # those on budget/effort until separately audited.
-_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7"}
+_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
 
 
 def _is_adaptive_anthropic_model(model_id: str, litellm_provider: str) -> bool:
@@ -1067,6 +1069,24 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # LiteLLM's bundled registry. Keep this list small: these are compatibility
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
+    {
+        # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
+        # (pdd-opus) but is absent from litellm.model_cost until litellm
+        # ships it, so the litellm-driven build loop would drop it. Seed it
+        # here; the row is deduped automatically once litellm registers the
+        # model. Direct-Anthropic adaptive thinking only (legacy budget shape
+        # 400s on 4.8). ELO is resolved from STATIC_ELO_FALLBACK at build time.
+        "provider": "Anthropic",
+        "model": "claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 16000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+    },
     {
         "provider": "Google Vertex AI",
         "model": "vertex_ai/gemini-3-flash-preview",
