@@ -443,7 +443,17 @@ def run_metadata_sync(
                     )
                     _stage_log_exit("run_report", "dry_run", detail)
                 else:
-                    clear_run_report(basename, language)
+                    # Issue #1211: route the clear through the prompt/code
+                    # path hints so it targets the subproject's .pdd/meta —
+                    # matched on the prompt's nearest .pddrc — not a parent
+                    # CWD orphan. The fingerprint stage below uses the same
+                    # `paths` dict for save_fingerprint; without this clear
+                    # also using it, the finalize step would clear parent
+                    # metadata while writing fresh fingerprint to subproject.
+                    _rr_paths: Dict[str, Path] = {"prompt": prompt_path}
+                    if code_path is not None:
+                        _rr_paths["code"] = code_path
+                    clear_run_report(basename, language, paths=_rr_paths)
                     result.stages["run_report"] = StageStatus(
                         status="ok", detail=f"cleared run report for {detail}"
                     )
@@ -493,7 +503,12 @@ def run_metadata_sync(
                 # Falls back to "fix" when no prior fingerprint exists or the
                 # prior fingerprint was itself written by metadata_sync.
                 from .sync_determine_operation import read_fingerprint
-                _prev_fp = read_fingerprint(basename, language)
+                # Issue #1211: pass the same `paths` hint we use for
+                # save_fingerprint below so the preserved-command lookup
+                # reads from the subproject's .pdd/meta — otherwise the
+                # save anchors at the subproject while the staleness
+                # decision was based on a parent CWD orphan.
+                _prev_fp = read_fingerprint(basename, language, paths=paths)
                 _prev_cmd = getattr(_prev_fp, "command", None) if _prev_fp else None
                 _preserved_command = (
                     _prev_cmd
