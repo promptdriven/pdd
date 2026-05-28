@@ -329,22 +329,23 @@ def _apply_provider_curation(
     unchanged when there is no choice to make (<2 curatable providers) or the
     user declines removal. Reused by both `_step2_configure_models_and_pddrc`
     and the post-menu curation pass."""
-    from pdd.provider_manager import CSV_FIELDNAMES, _read_csv
+    from pdd.provider_manager import _read_csv
     selected = _select_providers_to_keep(rows, curatable)
     if selected is None:
         return rows
     selected_set = set(selected)
     curatable_set = set(curatable)
 
-    # Pristine = matches the shipped reference row for that model on every field
-    # except api_key (which setup normalizes, e.g. GEMINI_API_KEY→GOOGLE_API_KEY).
-    # Also identify reference DEVICE-LOGIN providers (every bundled row has an
-    # empty api_key, e.g. GitHub Copilot) so their rows are removable even if an
-    # older bundled version left a slightly different ELO/cost — while a custom
-    # empty-api_key row under a KEYED provider (e.g. an OpenAI-compatible proxy)
-    # is NOT, and is preserved.
+    # Identify PDD-managed rows by ROUTING identity: a row is auto-removable only
+    # if it routes to the same place as a bundled model — same model name and the
+    # same routing fields (base_url, api_key, location). Tuning metadata (ELO,
+    # costs, structured_output, reasoning_type, …) is allowed to drift between
+    # bundled-CSV versions, so a stale-but-untouched row (incl. a device-login
+    # Copilot row whose ELO changed) is still removable. But any row the user
+    # RE-POINTED (changed base_url / api_key / location) or ADDED (a model not in
+    # the reference) is preserved and warned — covering custom fine-tunes,
+    # OpenAI-compatible proxies, and edited Copilot rows alike.
     ref_by_model: Dict[str, Dict[str, str]] = {}
-    ref_provider_api_keys: Dict[str, List[str]] = {}
     ref_csv = _ref_csv_path()
     if ref_csv.exists():
         try:
@@ -352,27 +353,17 @@ def _apply_provider_curation(
                 m = (r.get("model") or "").strip()
                 if m:
                     ref_by_model[m] = r
-                p = (r.get("provider") or "").strip()
-                if p:
-                    ref_provider_api_keys.setdefault(p, []).append(
-                        (r.get("api_key") or "").strip()
-                    )
         except Exception:
-            ref_by_model, ref_provider_api_keys = {}, {}
-    ref_device_providers = {
-        p for p, keys in ref_provider_api_keys.items() if keys and not any(keys)
-    }
-    # Compare every field. api_key is compared with alias-awareness so the
-    # GEMINI_API_KEY→GOOGLE_API_KEY normalization setup performs does not make a
-    # genuinely untouched row look edited — but a user who changed api_key to any
-    # OTHER value IS detected as hand-edited and preserved.
+            ref_by_model = {}
     _gemini_aliases = {"GEMINI_API_KEY", "GOOGLE_API_KEY"}
-    _other_fields = [f for f in CSV_FIELDNAMES if f != "api_key"]
+    # Routing fields determine where a request goes and which credential it uses.
+    _routing_fields = ["base_url", "location"]
 
     def _api_key_pristine(row_key: str, ref_key: str) -> bool:
         row_key, ref_key = (row_key or "").strip(), (ref_key or "").strip()
         if row_key == ref_key:
             return True
+        # setup normalizes GEMINI_API_KEY→GOOGLE_API_KEY; treat as untouched.
         return bool(row_key) and bool(ref_key) \
             and {row_key, ref_key} <= _gemini_aliases
 
@@ -380,28 +371,25 @@ def _apply_provider_curation(
         prov = (row.get("provider") or "").strip()
         return prov in curatable_set and prov not in selected_set
 
-    def _is_pristine_bundled(row: Dict[str, str]) -> bool:
+    def _is_pdd_managed_row(row: Dict[str, str]) -> bool:
         ref = ref_by_model.get((row.get("model") or "").strip())
         if ref is None:
-            return False
+            return False  # a model the user added themselves
         if not _api_key_pristine(row.get("api_key", ""), ref.get("api_key", "")):
-            return False
+            return False  # re-pointed to a different credential
         return all(
             (row.get(f) or "").strip() == (ref.get(f) or "").strip()
-            for f in _other_fields
+            for f in _routing_fields
         )
 
-    # Auto-remove ONLY PDD-managed rows under an unselected provider: rows
-    # byte-identical to a shipped reference row, OR any row whose provider is a
-    # reference device-login provider (e.g. Copilot). Anything else — a
-    # user-added custom row, an empty-api_key proxy under a KEYED provider, or an
-    # edited bundled row — is preserved and the user is warned.
+    # Auto-remove ONLY PDD-managed rows (routing-identical to a bundled model)
+    # under an unselected provider. Anything the user re-pointed or added is
+    # preserved and the user is warned.
     to_remove, kept_custom = [], []
     for r in rows:
         if not _unselected_curatable(r):
             continue
-        prov = (r.get("provider") or "").strip()
-        if _is_pristine_bundled(r) or prov in ref_device_providers:
+        if _is_pdd_managed_row(r):
             to_remove.append(r)
         else:
             kept_custom.append(r)
