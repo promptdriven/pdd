@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from . import get_version
-from .coverage_contracts import build_coverage
-from .operation_log import infer_module_identity
 from .preprocess import (
     _extract_code_spans,
     _intersects_any_span,
@@ -244,6 +242,10 @@ def _contract_statuses(  # pylint: disable=too-many-return-statements
     if not _prompt_has_contract_rules(path):
         return {"status": "not_applicable", "rules": {}}
     try:
+        from .coverage_contracts import build_coverage  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return {"status": "not_available", "rules": {}}
+    try:
         result = build_coverage(path)
     except Exception:  # pylint: disable=broad-exception-caught
         return {"status": "not_available", "rules": {}}
@@ -288,7 +290,7 @@ def resolve_generate_output_paths(
     return [str(resolved)] if resolved else []
 
 
-def resolve_test_output_paths(
+def resolve_test_output_paths(  # pylint: disable=too-many-arguments
     prompt_file: str | Path,
     code_file: str | Path,
     *,
@@ -404,6 +406,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         if not prompt_path.is_absolute():
             prompt_path = root / prompt_path
     if basename is None and prompt_path:
+        from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
+
         basename, _ = infer_module_identity(prompt_path)
         basename = basename or prompt_path.stem
     basename = _safe_slug(basename or command.replace("pdd ", "", 1))

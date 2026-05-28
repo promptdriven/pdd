@@ -6,7 +6,6 @@ from pathlib import Path
 from click.testing import CliRunner
 
 import pdd
-from pdd import get_version
 from pdd.core.cli import cli as cli_command
 
 _PEP440_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:\.(?:dev|rc|a|b|post)\d+)?$")
@@ -25,31 +24,23 @@ def test_package_version_is_well_formed_and_not_a_fallback():
     assert _PEP440_VERSION.match(v), f"pdd.__version__ {v!r} is not valid PEP 440."
 
 
-def test_cli_version_reports_distribution_metadata():
-    """`pdd --version` reports the installed pdd-cli version."""
-    expected = get_version()
+def test_cli_version_reports_package_version():
+    """`pdd --version` reports ``pdd.__version__`` (git-aligned in dev checkouts)."""
     result = CliRunner().invoke(cli_command, ["--version"])
     assert result.exit_code == 0
-    assert f"version {expected}" in result.output
+    assert f"version {pdd.__version__}" in result.output
 
 
-def test_cli_version_reads_metadata_after_prior_invocation(monkeypatch):
-    """--version must not cache an older distribution version across invocations."""
-    versions = iter(["0.0.251.dev107", "0.0.251.dev110"])
+def test_importing_pdd_does_not_break_importlib_metadata_distribution():
+    """Importing pdd must not replace stdlib Distribution objects."""
+    import importlib.metadata as im
 
-    def _next_version(_package: str) -> str:
-        return next(versions)
-
-    monkeypatch.setattr("pdd._derive_git_aligned_version", lambda: None)
-    monkeypatch.setattr("pdd._metadata_version", _next_version)
-
-    runner = CliRunner()
-    first = runner.invoke(cli_command, ["--version"])
-    second = runner.invoke(cli_command, ["--version"])
-    assert first.exit_code == 0
-    assert second.exit_code == 0
-    assert "version 0.0.251.dev107" in first.output
-    assert "version 0.0.251.dev110" in second.output
+    dist = im.distribution("pdd-cli")
+    assert hasattr(dist, "metadata"), (
+        "importlib.metadata.distribution must return a real Distribution after `import pdd`"
+    )
+    assert dist.metadata["Name"] == "pdd-cli"
+    assert dist.files is not None
 
 
 def test_version_matches_expected_for_current_state():

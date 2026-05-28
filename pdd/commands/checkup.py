@@ -388,14 +388,15 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if strict:
             contract_args.insert(0, "--strict")
         if show_help:
+            # Because `checkup` owns `--help` (add_help_option=False) Click will eagerly
+            # consume a trailing `--help` and not forward it to `contracts`. For the
+            # documented canonical path `pdd checkup contract check --help`, render the
+            # `contracts check` help directly and exit 0.
             if not contract_args or contract_args[:1] == ["check"]:
                 contracts_check_cmd = contracts_cli.get_command(ctx, "check")
                 click.echo(
                     contracts_check_cmd.get_help(
-                        click.Context(
-                            contracts_check_cmd,
-                            info_name=f"pdd checkup {target} check",
-                        )
+                        click.Context(contracts_check_cmd, info_name=f"pdd checkup {target} check")
                     )
                 )
                 return None
@@ -408,6 +409,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if exit_code:
             raise click.exceptions.Exit(exit_code)
         return None
+
     if target == "coverage":
         if show_help:
             click.echo(

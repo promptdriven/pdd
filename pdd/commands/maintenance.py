@@ -196,6 +196,11 @@ def sync(
                 cost_usd=cost,
                 temperature=ctx.obj.get("temperature", 0.0),
                 basename="global-sync",
+                validation={
+                    "detect_stories": "not_available",
+                    "unit_tests": "not_available",
+                    "verify": "not_available",
+                },
             )
         return global_result
 
@@ -238,6 +243,11 @@ def sync(
                 cost_usd=cost,
                 temperature=ctx.obj.get("temperature", 0.0),
                 basename="agentic-sync",
+                validation={
+                    "detect_stories": "not_available",
+                    "unit_tests": "not_available",
+                    "verify": "not_available",
+                },
             )
         return agentic_result
 

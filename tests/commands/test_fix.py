@@ -18,6 +18,11 @@ _import_mocks = {
     "pdd.agentic_e2e_fix": MagicMock(),
 }
 
+_saved_core_modules = {
+    module_name: module
+    for module_name, module in sys.modules.items()
+    if module_name.startswith("pdd.core.")
+}
 _saved_modules: dict[str, object] = {}
 for _module_name, _mock_module in _import_mocks.items():
     if _module_name in sys.modules:
@@ -37,7 +42,7 @@ _side_effect_modules = [
     for module_name in sys.modules
     if module_name.startswith("pdd.core.")
     and module_name not in _import_mocks
-    and module_name not in _saved_modules
+    and module_name not in _saved_core_modules
 ]
 # Popping from sys.modules alone leaves a stale reference on the `pdd.core`
 # parent package: `from pdd.core import X` still returns the OLD object (via
@@ -82,6 +87,7 @@ if "pdd.cli" in sys.modules:
 del importlib
 del (
     _import_mocks,
+    _saved_core_modules,
     _saved_modules,
     _module_name,
     _side_effect_modules,
