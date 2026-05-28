@@ -408,6 +408,111 @@ class TestNoFixMode:
         assert "test failure" in msg.lower()
         assert "missing or malformed" in msg.lower()
 
+    def test_nofix_pr_step5_skipped_on_resume_returns_failure(self, tmp_path):
+        """Resumed --no-fix --pr must still fail when cached Step 5 is skipped.
+
+        Round-14 Finding 1: when start_step > 5 the Step 5 block in the loop
+        is skipped via `continue`, so the post-loop gate must read from
+        step_outputs (loaded from state) to catch the cached skipped status.
+        """
+        from unittest.mock import patch as _patch
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        step5_skipped_out = (
+            "No test suite found.\n"
+            "```failure_signal\n"
+            "status: skipped\n"
+            "exit_code: skipped\n"
+            "failing_ids: none\n"
+            "artifact_path: none\n"
+            "output: No tests found.\n"
+            "```\n"
+        )
+        # Simulate cached state where Step 5 completed with status: skipped
+        cached_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "deadbeef0000",
+            "last_completed_step": 5,
+            "step_outputs": {
+                "1": "Discovered project",
+                "2": "Deps ok",
+                "3": "Build ok",
+                "4": "Interfaces ok",
+                "5": step5_skipped_out,
+            },
+            "changed_files": [],
+            "total_cost": 0.1,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+
+        def run_step(step_num, _name, _ctx, **_kw):
+            return (True, ALL_ISSUES_FIXED, 0.0, "fake")
+
+        with (
+            _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+            _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+            _patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(cached_state, None)),
+            _patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
+            _patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=run_step),
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False, f"Expected failure, got success. msg={msg!r}"
+        assert "skipped" in msg.lower()
+        assert "tests did not run" in msg.lower()
+
+    def test_nofix_pr_step5_refusal_writes_artifact(self, tmp_path):
+        """--no-fix --pr refusal must write a durable artifact file."""
+        step5_out = (
+            "No tests.\n"
+            "```failure_signal\n"
+            "status: skipped\n"
+            "exit_code: skipped\n"
+            "failing_ids: none\n"
+            "artifact_path: none\n"
+            "output: No tests.\n"
+            "```\n"
+        )
+        self._run_pr_nofix(tmp_path, step5_out)
+        art_dir = tmp_path / ".pdd" / "checkup-pr-200"
+        assert art_dir.exists(), "Artifact directory was not created"
+        assert (art_dir / "nofix-step5-skipped-refusal.txt").exists(), (
+            "Refusal artifact file was not written"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Worktree Handling

@@ -2630,47 +2630,52 @@ def _run_agentic_checkup_orchestrator_inner(
                     last_model_used,
                 )
 
-            if step_num == 5 and pr_mode:
-                # --no-fix --pr: apply the same Step 5 logical-status
-                # contract as the fix loop (issue #1212 round-12).
-                # skipped/failed/missing-block all mean we have no test
-                # evidence and must not continue to report a verified
-                # result via Step 7.  Non-PR no-fix runs are unaffected.
-                step5_stored = context.get("step5_output", "") or ""
-                _sig_fields, _sig_missing = _parse_failure_signal_block(step5_stored)
-                _status_val = str(_sig_fields.get("status", "")).strip().lower()
-                _block_missing = "__block__" in _sig_missing
-                _status_skipped = _status_val in _STEP5_SKIPPED_STATUSES
-                _status_pass = _status_val in {"pass", "ok", "success", "passed", "clean"}
-                _logical_failure = (
-                    _status_val in {"fail", "error", "failed", "failure"}
-                    or _block_missing
-                    or (not _status_pass and not _status_skipped)
+        # --no-fix --pr Step 5 status gate (issue #1212 round-14):
+        # Runs AFTER the 3/4/5 loop so it covers both fresh runs (Step 5
+        # just executed) and resumed runs (Step 5 skipped via start_step
+        # but output is already in step_outputs from loaded state).
+        # Non-PR no-fix runs are unaffected (pr_mode is False).
+        if pr_mode:
+            _s5_raw = step_outputs.get("5", "") or context.get("step5_output", "") or ""
+            if _s5_raw:
+                _s5f, _s5m = _parse_failure_signal_block(_s5_raw)
+                _s5v = str(_s5f.get("status", "")).strip().lower()
+                _s5_block_missing = "__block__" in _s5m
+                _s5_skipped = _s5v in _STEP5_SKIPPED_STATUSES
+                _s5_pass = _s5v in {"pass", "ok", "success", "passed", "clean"}
+                _s5_fail = (
+                    _s5v in {"fail", "error", "failed", "failure"}
+                    or _s5_block_missing
+                    or (not _s5_pass and not _s5_skipped)
                 )
-                if _status_skipped:
-                    return (
-                        False,
-                        "Step 5 reported status: skipped — tests did not run "
-                        "against the PR head. Refusing to report a verified "
-                        "result. Rerun pdd checkup --pr --no-fix once the test "
-                        "environment is healthy.",
-                        total_cost,
-                        last_model_used,
-                    )
-                if _logical_failure:
-                    _suffix = (
-                        " (failure_signal block missing or malformed)"
-                        if _block_missing
-                        else f" (status: {_status_val!r})"
-                    )
-                    return (
-                        False,
-                        f"Step 5 reported a test failure{_suffix}. "
-                        "Rerun pdd checkup --pr --no-fix after addressing the "
-                        "failures.",
-                        total_cost,
-                        last_model_used,
-                    )
+                if _s5_skipped or _s5_fail:
+                    _art = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+                    _art.mkdir(parents=True, exist_ok=True)
+                    if _s5_skipped:
+                        _nofix_refusal = (
+                            "Step 5 reported status: skipped — tests did not "
+                            "run against the PR head. Refusing to report a "
+                            "verified result. Rerun pdd checkup --pr --no-fix "
+                            "once the test environment is healthy."
+                        )
+                        (_art / "nofix-step5-skipped-refusal.txt").write_text(
+                            _nofix_refusal + "\n"
+                        )
+                    else:
+                        _s5_sfx = (
+                            " (failure_signal block missing or malformed)"
+                            if _s5_block_missing
+                            else f" (status: {_s5v!r})"
+                        )
+                        _nofix_refusal = (
+                            f"Step 5 reported a test failure{_s5_sfx}. "
+                            "Rerun pdd checkup --pr --no-fix after addressing "
+                            "the failures."
+                        )
+                        (_art / "nofix-step5-failure-refusal.txt").write_text(
+                            _nofix_refusal + "\n"
+                        )
+                    return (False, _nofix_refusal, total_cost, last_model_used)
 
         # Skip step 6 sub-steps.
         for sub_step in (6.1, 6.2, 6.3):
