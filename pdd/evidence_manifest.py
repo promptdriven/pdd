@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from . import get_version
-from .operation_log import infer_module_identity
 from .preprocess import (
     _extract_code_spans,
     _intersects_any_span,
@@ -291,7 +290,7 @@ def resolve_generate_output_paths(
     return [str(resolved)] if resolved else []
 
 
-def resolve_test_output_paths(
+def resolve_test_output_paths(  # pylint: disable=too-many-arguments
     prompt_file: str | Path,
     code_file: str | Path,
     *,
@@ -407,6 +406,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         if not prompt_path.is_absolute():
             prompt_path = root / prompt_path
     if basename is None and prompt_path:
+        from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
+
         basename, _ = infer_module_identity(prompt_path)
         basename = basename or prompt_path.stem
     basename = _safe_slug(basename or command.replace("pdd ", "", 1))

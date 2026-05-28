@@ -47,41 +47,39 @@ from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError
 
 
-try:
-    import pytest_mock  # noqa: F401
-except Exception:
-    class _MiniMocker:
-        """Small pytest-mock compatible subset used by this test suite."""
+class _MiniMocker:
+    """Small pytest-mock compatible subset used by this test suite."""
 
-        Mock = mock.Mock
-        MagicMock = mock.MagicMock
+    Mock = mock.Mock
+    MagicMock = mock.MagicMock
 
-        def __init__(self) -> None:
-            self._patchers: list[Any] = []
+    def __init__(self) -> None:
+        self._patchers: list[Any] = []
 
-        def patch(self, target: str, *args, **kwargs):
-            patcher = mock.patch(target, *args, **kwargs)
-            self._patchers.append(patcher)
-            return patcher.start()
+    def patch(self, target: str, *args, **kwargs):
+        patcher = mock.patch(target, *args, **kwargs)
+        self._patchers.append(patcher)
+        return patcher.start()
 
-        def spy(self, obj: Any, attribute: str):
-            original = getattr(obj, attribute)
-            patcher = mock.patch.object(obj, attribute, wraps=original)
-            self._patchers.append(patcher)
-            return patcher.start()
+    def spy(self, obj: Any, attribute: str):
+        original = getattr(obj, attribute)
+        patcher = mock.patch.object(obj, attribute, wraps=original)
+        self._patchers.append(patcher)
+        return patcher.start()
 
-        def stopall(self) -> None:
-            while self._patchers:
-                self._patchers.pop().stop()
+    def stopall(self) -> None:
+        while self._patchers:
+            self._patchers.pop().stop()
 
-    @pytest.fixture
-    def mocker():
-        """Fallback mocker fixture for environments without pytest-mock."""
-        helper = _MiniMocker()
-        try:
-            yield helper
-        finally:
-            helper.stopall()
+
+@pytest.fixture
+def mocker():
+    """Fallback mocker fixture for environments without pytest-mock."""
+    helper = _MiniMocker()
+    try:
+        yield helper
+    finally:
+        helper.stopall()
 
 
 # Load environment variables from .env early in collection.
