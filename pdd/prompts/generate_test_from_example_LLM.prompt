@@ -1,3 +1,14 @@
+<pdd-reason>Generates unit tests from example usage files with pattern-based exception assertions.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "generate_test_from_example", "signature": "(prompt_content: str, example_content: str, language: str)", "returns": "str (test file content)"}}
+    ]
+  }}
+}}
+</pdd-interface>
 % You are an expert Software Test Engineer. Your goal is to generate tests based on the intended behavior described in a prompt and demonstrated in an example file.
 
 % Here a description of what the code is supposed to do and was the prompt that generated the code: <prompt_that_generated_code>{prompt_that_generated_code}</prompt_that_generated_code>
@@ -38,6 +49,7 @@
       - NEVER mock: The function under test, pure computation, data validation, business logic
       - Mock return values MUST match the real return type from the source code — do not invent response shapes
     - The goal: test as much of YOUR code as possible while isolating external services that need credentials.
+    - CRITICAL: When testing that a function raises an exception, prefer `pytest.raises(ExcType, match=r"keyword1|keyword2")` with a regex pattern matching key semantic terms over exact-string `match=` arguments. If the error message content is an implementation detail, assert only the exception type. Exact-string `match=` values make tests brittle to regenerations that reword error messages while preserving behavior.
 <include optional>./context/test.prompt</include>
 
 <instructions>

@@ -420,8 +420,7 @@ class TestPddrcPrefixForNewModules:
         pddrc = {
             "contexts": {
                 "backend-utils": {
-                    "defaults": {"prompts_dir": "prompts/backend/utils"},
-                    "match": {"paths": ["backend/utils/"]}
+                    "defaults": {"prompts_dir": "prompts/backend/utils"}
                 }
             }
         }
