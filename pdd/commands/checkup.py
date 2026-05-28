@@ -13,6 +13,7 @@ from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
+from .checkup_simplify import checkup_simplify
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .prompt import prompt_lint
@@ -305,7 +306,7 @@ from .prompt import prompt_lint
 )
 @click.pass_context
 @track_cost
-def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,unknown-option-value
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
     show_help: bool,
@@ -417,8 +418,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "simplify":
-        from .checkup_simplify import checkup_simplify
-
         simplify_args = list(ctx.args)
         if show_help:
             simplify_args.append("--help")
