@@ -1,92 +1,24 @@
 """PDD - Prompt Driven Development"""
 
-import importlib.metadata as _importlib_metadata
 from importlib.metadata import PackageNotFoundError, version as _metadata_version
 import os
-import subprocess
-from pathlib import Path
-from types import SimpleNamespace
-
-_ORIGINAL_DISTRIBUTION = _importlib_metadata.distribution
-_ORIGINAL_METADATA_VERSION = _metadata_version
-
-
-def _derive_git_aligned_version() -> str | None:
-    """Return tag-aligned development version for the current git checkout."""
-    repo_root = Path(__file__).resolve().parents[1]
-    if not (repo_root / ".git").exists():
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "tag", "--list", "--merged", "HEAD", "--sort=-v:refname", "v*"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-        tags = [t.lstrip("v") for t in result.stdout.split()]
-        latest = next((t for t in tags if t.count(".") == 2), None)
-        if latest is None:
-            return None
-
-        head_tags = subprocess.check_output(
-            ["git", "tag", "--points-at", "HEAD"], cwd=repo_root, text=True
-        ).split()
-        if f"v{latest}" in head_tags:
-            return latest
-
-        parts = [int(x) for x in latest.split(".")]
-        parts[-1] += 1
-        return ".".join(str(p) for p in parts) + ".dev0"
-    except Exception:
-        return None
 
 
 def _load_package_version() -> str:
-    """Return a version aligned with current tag strategy."""
-    # Check if a test monkeypatched the module's _metadata_version binding
-    if _metadata_version is not _ORIGINAL_METADATA_VERSION:
-        try:
-            return _metadata_version("pdd-cli")
-        except Exception:
-            pass
-
+    """Return the installed pdd-cli distribution version."""
     try:
-        dist_version = _ORIGINAL_DISTRIBUTION("pdd-cli").version
+        return _metadata_version("pdd-cli")
     except PackageNotFoundError:
-        dist_version = "0.0.0+unknown"
+        return "0.0.0+unknown"
 
-    git_version = _derive_git_aligned_version()
-    if git_version is None:
-        return dist_version
 
-    # Prefer git-aligned version when installed metadata is stale for this checkout.
-    if dist_version != git_version:
-        return git_version
-    return dist_version
+__version__ = _load_package_version()
 
 
 def get_version() -> str:
-    """Return the installed pdd-cli version, reading distribution metadata each call."""
+    """Return the installed pdd-cli distribution version."""
     return _load_package_version()
 
-
-def __getattr__(name: str):
-    if name == "__version__":
-        return _load_package_version()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def _distribution_with_project_version(name: str):
-    """Expose pdd-cli metadata version consistent with ``__version__``."""
-    if name == "pdd-cli":
-        return SimpleNamespace(version=get_version())
-    return _ORIGINAL_DISTRIBUTION(name)
-
-
-_importlib_metadata.distribution = _distribution_with_project_version
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction

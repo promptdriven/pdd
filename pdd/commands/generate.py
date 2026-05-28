@@ -13,7 +13,11 @@ from ..context_generator_main import context_generator_main
 from ..track_cost import track_cost
 from ..operation_log import log_operation
 from ..core.errors import handle_error
-from ..evidence_manifest import write_evidence_manifest
+from ..evidence_manifest import (
+    resolve_generate_output_paths,
+    resolve_test_output_paths,
+    write_evidence_manifest,
+)
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
@@ -335,13 +339,24 @@ def generate(
         )
 
         if evidence:
+            ctx_obj = ctx.obj or {}
+            resolved_outputs = (
+                [output]
+                if output
+                else resolve_generate_output_paths(
+                    target_prompt_file,
+                    context_override=ctx_obj.get("context"),
+                    force=ctx_obj.get("force", False),
+                    quiet=ctx_obj.get("quiet", True),
+                )
+            )
             write_evidence_manifest(
                 command="pdd generate",
                 prompt_file=target_prompt_file,
-                output_files=[output] if output else (),
+                output_files=resolved_outputs,
                 model=model,
                 cost_usd=cost,
-                temperature=(ctx.obj or {}).get("temperature", 0.0),
+                temperature=ctx_obj.get("temperature", 0.0),
             )
         return generated_code, cost, model
 
@@ -603,10 +618,23 @@ def test(
             )
 
             if evidence:
+                ctx_obj = ctx.obj or {}
+                resolved_outputs = (
+                    [output]
+                    if output
+                    else resolve_test_output_paths(
+                        prompt_file,
+                        code_file,
+                        language=language,
+                        context_override=ctx_obj.get("context"),
+                        force=ctx_obj.get("force", False),
+                        quiet=ctx_obj.get("quiet", True),
+                    )
+                )
                 write_evidence_manifest(
                     command="pdd test",
                     prompt_file=prompt_file,
-                    output_files=[output] if output else (),
+                    output_files=resolved_outputs,
                     model=test_result.model,
                     cost_usd=test_result.cost,
                     validation={"unit_tests": "not_available"},

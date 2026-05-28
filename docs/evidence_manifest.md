@@ -37,13 +37,13 @@ Schema version 1 records:
 - contract coverage status when the prompt has contract rules
 - available validation outcomes and references to existing logs
 
-For a simple prompt with no expansion tags, `expanded_sha256` equals the prompt
-hash. Plain local file includes are expanded deterministically for hashing. If
-a prompt uses shell, web, variable, query-based, or otherwise effectful
-expansion, the command boundary cannot reproduce the exact expanded input
-without repeating effects; `expanded_sha256` is therefore `null` rather than a
-guessed value. Dynamic provenance can be filled in when generation exposes its
-original context snapshot.
+`expanded_sha256` is the SHA-256 of the prompt after `pdd.preprocess` with
+`recursive=True` and `double_curly_brackets=False` (the same deterministic
+include expansion used before generation). `context.includes` uses the shared
+include grammar (`path=` attributes, self-closing tags, backtick includes, and
+`include-many`) and skips include-looking text inside fenced or inline code.
+If a prompt uses shell, web, variable, query-based, or otherwise effectful
+expansion, `expanded_sha256` is `null` rather than a guessed value.
 
 Missing stories or contracts are reported as `not_applicable`; they do not make
 an otherwise successful command fail. The schema is packaged at

@@ -3,14 +3,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from . import get_version
 from .coverage_contracts import build_coverage
 from .operation_log import infer_module_identity
+from .preprocess import (
+    _extract_code_spans,
+    _intersects_any_span,
+    _parse_attrs,
+    compute_user_intent_paths,
+    preprocess,
+)
+from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 1
 _NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
@@ -18,11 +28,26 @@ _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
     re.IGNORECASE,
 )
-_INCLUDE_RE = re.compile(
-    r"<include(?:\s+[^>]*?)?>(.*?)</include>|```<([^>\n]+)>```",
+_INCLUDE_BODY_RE = re.compile(
+    r"<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>",
     re.DOTALL | re.IGNORECASE,
 )
+_INCLUDE_SELF_CLOSING_RE = re.compile(
+    r"<include\s+([^>]*?)\s*/>",
+    re.DOTALL | re.IGNORECASE,
+)
+_BACKTICK_INCLUDE_RE = re.compile(r"```<([^>]*?)>```", re.DOTALL)
 _CONTRACT_RULES_RE = re.compile(r"<contract_rules\b", re.IGNORECASE)
+
+
+@contextmanager
+def _project_cwd(project_root: Path) -> Iterator[None]:
+    previous = os.getcwd()
+    os.chdir(project_root)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 def _sha256_bytes(content: bytes) -> str:
@@ -54,6 +79,65 @@ def _resolve_include_path(raw_include: str, parent_file: Path, project_root: Pat
     return beside_parent
 
 
+def _include_path_literals_in_text(content: str) -> set[str]:  # pylint: disable=too-many-branches
+    """Paths the preprocessor would treat as user-intent includes (not in code spans)."""
+    paths: set[str] = set()
+    code_spans = _extract_code_spans(content)
+
+    for match in _INCLUDE_BODY_RE.finditer(content):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs_str = match.group(1) or ""
+        body = match.group(2) or ""
+        attrs = _parse_attrs(attrs_str)
+        path_value = (attrs.get("path") or body).strip()
+        if path_value and "${" not in path_value:
+            paths.add(path_value)
+
+    for match in _INCLUDE_SELF_CLOSING_RE.finditer(content):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs = _parse_attrs(match.group(1) or "")
+        path_value = (attrs.get("path") or "").strip()
+        if path_value and "${" not in path_value:
+            paths.add(path_value)
+
+    for match in _BACKTICK_INCLUDE_RE.finditer(content):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        path_value = match.group(1).strip()
+        if path_value and "${" not in path_value:
+            paths.add(path_value)
+
+    for match in re.finditer(
+        r"<include-many(?:\s+[^>]*?)?>(.*?)</include-many>",
+        content,
+        flags=re.DOTALL,
+    ):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        inner = match.group(1)
+        for part in inner.splitlines():
+            for item in part.split(","):
+                stripped = item.strip()
+                if stripped and "${" not in stripped:
+                    paths.add(stripped)
+
+    return paths
+
+
+def _include_paths_for_file(file_path: Path) -> set[str]:
+    """Union sync_order XML grammar with backtick/include-many user-intent paths."""
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return set()
+    paths = set(extract_includes_from_file(file_path))
+    paths |= _include_path_literals_in_text(content)
+    paths |= compute_user_intent_paths(content)
+    return paths
+
+
 def _existing_file_records(
     paths: Iterable[str | Path],
     project_root: Path,
@@ -78,20 +162,12 @@ def _existing_file_records(
 
 
 def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, str]]:
-    """Collect hashes for all reachable local includes (nested), without executing tags."""
-    try:
-        content = prompt_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-
+    """Collect hashes for reachable local includes using production include grammar."""
     records: list[dict[str, str]] = []
     seen: set[Path] = set()
 
-    def walk(file_path: Path, file_content: str) -> None:
-        for match in _INCLUDE_RE.finditer(file_content):
-            raw_include = (match.group(1) or match.group(2) or "").strip()
-            if not raw_include or "${" in raw_include:
-                continue
+    def walk(file_path: Path) -> None:
+        for raw_include in sorted(_include_paths_for_file(file_path)):
             include_path = _resolve_include_path(raw_include, file_path, project_root)
             if include_path in seen or not include_path.is_file():
                 continue
@@ -102,57 +178,22 @@ def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[
                     "sha256": _sha256_file(include_path),
                 }
             )
-            try:
-                nested_content = include_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            walk(include_path, nested_content)
+            walk(include_path)
 
-    walk(prompt_path, content)
+    walk(prompt_path)
     return records
 
 
-def _deterministic_expanded_hash(
-    content: str,
-    prompt_path: Path,
-    project_root: Path,
-) -> Optional[str]:
-    """Expand plain local includes only; resolve each include from its parent file."""
-
-    def expand_file(file_content: str, file_path: Path) -> Optional[str]:
-        if _UNSUPPORTED_EXPANSION_RE.search(file_content):
-            return None
-        expanded = file_content
-        for _ in range(25):
-            changed = False
-
-            def replace(match: re.Match[str]) -> str:
-                nonlocal changed
-                raw_include = (match.group(1) or match.group(2) or "").strip()
-                if not raw_include or "${" in raw_include:
-                    return match.group(0)
-                include_path = _resolve_include_path(raw_include, file_path, project_root)
-                if not include_path.is_file():
-                    return match.group(0)
-                try:
-                    nested_content = include_path.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    return match.group(0)
-                nested_expanded = expand_file(nested_content, include_path)
-                if nested_expanded is None:
-                    return match.group(0)
-                changed = True
-                return nested_expanded
-
-            expanded = _INCLUDE_RE.sub(replace, expanded)
-            if not changed:
-                return expanded
+def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[str]:
+    """Hash of prompt text after the same deterministic include expansion as generation."""
+    if _UNSUPPORTED_EXPANSION_RE.search(content) or _NONDETERMINISTIC_TAG_RE.search(content):
         return None
-
-    expanded_text = expand_file(content, prompt_path)
-    if expanded_text is None:
+    try:
+        with _project_cwd(project_root):
+            expanded = preprocess(content, recursive=True, double_curly_brackets=False)
+    except Exception:  # pylint: disable=broad-exception-caught
         return None
-    return _sha256_bytes(expanded_text.encode("utf-8"))
+    return _sha256_bytes(expanded.encode("utf-8"))
 
 
 def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dict[str, Any]:
@@ -178,7 +219,7 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
     return {
         "path": _display_path(path, project_root),
         "sha256": _sha256_bytes(content.encode("utf-8")),
-        "expanded_sha256": _deterministic_expanded_hash(content, path, project_root),
+        "expanded_sha256": _preprocessed_expanded_sha256(content, project_root),
         "uses_nondeterministic_tags": nondeterministic,
     }
 
@@ -205,7 +246,6 @@ def _contract_statuses(  # pylint: disable=too-many-return-statements
     try:
         result = build_coverage(path)
     except Exception:  # pylint: disable=broad-exception-caught
-        # Evidence enrichment must not make an otherwise valid run fail.
         return {"status": "not_available", "rules": {}}
     if not result.has_contract_rules:
         return {"status": "not_applicable", "rules": {}}
@@ -220,6 +260,65 @@ def _contract_statuses(  # pylint: disable=too-many-return-statements
             for rule in result.rules
         },
     }
+
+
+def resolve_generate_output_paths(
+    prompt_file: str | Path,
+    *,
+    output: Optional[str] = None,
+    context_override: Optional[str] = None,
+    force: bool = True,
+    quiet: bool = True,
+) -> list[str]:
+    """Resolve default or explicit generate output paths via construct_paths."""
+    from .construct_paths import construct_paths  # pylint: disable=import-outside-toplevel
+
+    command_options: dict[str, Any] = {}
+    if output is not None:
+        command_options["output"] = output
+    _, _, output_file_paths, _language = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=force,
+        quiet=quiet,
+        command="generate",
+        command_options=command_options or None,
+        context_override=context_override,
+    )
+    resolved = output_file_paths.get("output")
+    return [str(resolved)] if resolved else []
+
+
+def resolve_test_output_paths(
+    prompt_file: str | Path,
+    code_file: str | Path,
+    *,
+    output: Optional[str] = None,
+    language: Optional[str] = None,
+    context_override: Optional[str] = None,
+    force: bool = True,
+    quiet: bool = True,
+) -> list[str]:
+    """Resolve manual test output paths the same way cmd_test_main does."""
+    from .construct_paths import construct_paths  # pylint: disable=import-outside-toplevel
+
+    command_options: dict[str, Any] = {}
+    if output is not None:
+        command_options["output"] = output
+    if language is not None:
+        command_options["language"] = language
+    _, _, output_file_paths, _language = construct_paths(
+        input_file_paths={
+            "prompt_file": str(prompt_file),
+            "code_file": str(code_file),
+        },
+        force=force,
+        quiet=quiet,
+        command="test",
+        command_options=command_options or None,
+        context_override=context_override,
+    )
+    resolved = output_file_paths.get("output")
+    return [str(resolved)] if resolved else []
 
 
 def _safe_slug(value: str) -> str:
