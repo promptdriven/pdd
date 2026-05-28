@@ -400,6 +400,12 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                 chunk = "".join(lines[node.lineno - 1 : node_end])
                 preamble_parts.append(chunk)
 
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                # Module-level constants and assignments (e.g. CASES, TEST_DATA)
+                # used as shared test data; include so selected tests can reference them.
+                chunk = "".join(lines[node.lineno - 1 : node_end])
+                preamble_parts.append(chunk)
+
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 deco_start = (
                     node.decorator_list[0].lineno if node.decorator_list else node.lineno
@@ -408,7 +414,9 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                 is_fixture = _has_fixture_decorator(node.decorator_list)
                 if node.name in func_targets:
                     test_parts.append(chunk)
-                elif is_fixture:
+                elif is_fixture or not node.name.startswith("test_"):
+                    # Include fixtures and module-level helper functions so that
+                    # selected tests can call them without NameError.
                     preamble_parts.append(chunk)
 
             elif isinstance(node, ast.ClassDef):
