@@ -84,7 +84,7 @@ LOCKS_DIR = get_locks_dir()
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
-           '_check_example_success_history']
+           '_check_example_success_history', '__init__', '__enter__', '__exit__', 'acquire', 'release']
 
 
 def _safe_basename(basename: str) -> str:
@@ -1517,14 +1517,22 @@ def read_fingerprint(
     basename: str,
     language: str,
     paths: Optional[Dict[str, Path]] = None,
+    project_root: Optional[Path] = None,
 ) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file.
 
     `paths` (Issue #1211): when provided, the meta directory is resolved
     via upward .pddrc detection from those file paths so subprojects whose
     .pddrc lives BELOW run CWD are honored.
+
+    `project_root` (Issue #1252 Gap 1): when provided, anchor the read on
+    that root rather than CWD. Both `paths` and `project_root` are
+    forwarded explicitly to ``get_meta_dir``; accepting ``project_root``
+    without threading it through would be a regression — production
+    callers derive ``project_root`` from the prompt's ``.pddrc`` ancestor
+    and the read MUST honor that.
     """
-    meta_dir = get_meta_dir(paths=paths)
+    meta_dir = get_meta_dir(project_root=project_root, paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     
@@ -1554,14 +1562,22 @@ def read_run_report(
     basename: str,
     language: str,
     paths: Optional[Dict[str, Path]] = None,
+    project_root: Optional[Path] = None,
 ) -> Optional[RunReport]:
     """Reads and validates the JSON run report file.
 
     `paths` (Issue #1211): when provided, the meta directory is resolved
     via upward .pddrc detection from those file paths so subprojects whose
     .pddrc lives BELOW run CWD are honored.
+
+    `project_root` (Issue #1252 Gap 1): when provided, anchor the read on
+    that root rather than CWD. Both `paths` and `project_root` are
+    forwarded explicitly to ``get_meta_dir``; accepting ``project_root``
+    without threading it through would be a regression — production
+    callers derive ``project_root`` from the prompt's ``.pddrc`` ancestor
+    and the read MUST honor that.
     """
-    meta_dir = get_meta_dir(paths=paths)
+    meta_dir = get_meta_dir(project_root=project_root, paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
     run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     
