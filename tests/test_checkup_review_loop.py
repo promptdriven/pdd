@@ -12043,6 +12043,55 @@ class TestCompanionSourceOfTruthFiles:
         # The other 7 are reported as a count.
         assert marker["omitted_paths_remaining"] == 7
 
+    def test_surfaces_deleted_registered_module_via_base_mapping(self) -> None:
+        """Codex pass-14 finding 1: a PR that DELETES a registered module
+        drops it from the HEAD registry, so a HEAD-only lookup never
+        surfaces it — even though its owning prompt may have been left
+        behind (orphan drift). The collector MUST resolve the prompt for
+        deleted code paths from the BASE-side registry and surface it.
+        """
+        import unittest.mock as mock
+        from pathlib import Path as _Path
+
+        from pdd.checkup_review_loop import (
+            _collect_companion_source_of_truth_files,
+        )
+
+        def fake_map(worktree, head_ref="HEAD"):  # noqa: ANN001
+            if head_ref == "HEAD":
+                # Post-delete registry: the module is gone.
+                return {"pdd/other.py": "pdd/prompts/other_python.prompt"}
+            # Base registry still knows the deleted module.
+            return {
+                "pdd/other.py": "pdd/prompts/other_python.prompt",
+                "pdd/deleted.py": "pdd/prompts/deleted_python.prompt",
+            }
+
+        with (
+            mock.patch(
+                "pdd.checkup_review_loop._pr_changed_files_all",
+                return_value=["pdd/deleted.py"],
+            ),
+            mock.patch(
+                "pdd.checkup_review_loop._load_prompt_source_map",
+                side_effect=fake_map,
+            ),
+            mock.patch(
+                "pdd.checkup_review_loop._arch_entries_changed_set",
+                return_value={"pdd/deleted.py"},
+            ),
+        ):
+            companions = _collect_companion_source_of_truth_files(
+                _Path("/tmp/fake"),
+                pr_metadata={"base_local_ref": "main"},
+            )
+
+        entry = next(c for c in companions if c.get("code_path") == "pdd/deleted.py")
+        assert entry["prompt_path"] == "pdd/prompts/deleted_python.prompt"
+        # The owning prompt was NOT removed in the PR → orphan drift the
+        # reviewer must inspect.
+        assert entry["prompt_in_diff"] is False
+
     def test_collector_surfaces_module_when_arch_changed_for_unrelated_module(
         self, tmp_path: Path
     ) -> None:
@@ -12506,6 +12555,59 @@ class TestFilesChangedSinceHelper:
         files = _files_changed_since(worktree, base_sha)
         assert "pdd/foo.py" in files, files
         assert "tests/moved.py" in files, files
+
+    def test_scrubs_exception_message_from_log(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Codex pass-14 finding 2: when ``git diff`` raises, the helper
+        MUST log only the exception CLASS NAME, never the message body —
+        the raw text can carry a path/token and the log surface is treated
+        as public (py/clear-text-logging-sensitive-data).
+        """
+        import logging
+        import subprocess
+
+        from pdd.checkup_review_loop import _files_changed_since, _git_rev_parse_head
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=worktree, check=True, capture_output=True
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (worktree / "a.py").write_text("x=1\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        base_sha = _git_rev_parse_head(worktree)
+        (worktree / "a.py").write_text("x=2\n", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-q", "-m", "fix")
+
+        secret = "token=SECRET-VALUE-123"
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **k):  # noqa: ANN001, ANN002, ANN003
+            # Let _git_rev_parse_head succeed; only the diff call raises.
+            if "diff" in cmd:
+                raise OSError(secret)
+            return real_run(cmd, *a, **k)
+
+        with patch(
+            "pdd.checkup_review_loop.subprocess.run",
+            side_effect=fake_run,
+        ):
+            with caplog.at_level(logging.DEBUG, logger="pdd.checkup_review_loop"):
+                result = _files_changed_since(worktree, base_sha)
+
+        assert result == []
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "OSError" in log_text
+        assert secret not in log_text
 
 
 class TestGuardBaselineHeadRef:

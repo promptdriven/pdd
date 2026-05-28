@@ -2302,6 +2302,18 @@ def _collect_companion_source_of_truth_files(
         elif pr_metadata.get("base_ref"):
             base_ref_for_arch = f"origin/{str(pr_metadata['base_ref']).strip()}"
     arch_entry_changed_set = _arch_entries_changed_set(worktree, base_ref_for_arch)
+    # Codex pass-14 finding 1: a PR that DELETES a registered module no
+    # longer has that code_path in the HEAD registry (``mapping``), so the
+    # HEAD-only lookup silently drops it from review scope — exactly the
+    # "code path changed, source-of-truth lives elsewhere" case this
+    # feature exists to surface. Resolve the owning prompt for deleted
+    # paths from the BASE-side registry instead. (When the module's prompt
+    # AND architecture entry are also removed in the same PR, the
+    # both-in-diff skip below correctly drops it; the surfaced case is the
+    # orphan — code+entry removed but the prompt left behind.)
+    base_mapping: Optional[Dict[str, str]] = None
+    if base_ref_for_arch:
+        base_mapping = _load_prompt_source_map(worktree, head_ref=base_ref_for_arch)
     # Build the full eligible set FIRST so the truncation marker (below)
     # can report total_eligible accurately and enumerate the omitted
     # paths. Walking ``mapping`` (the canonical code -> prompt registry)
@@ -2309,6 +2321,10 @@ def _collect_companion_source_of_truth_files(
     eligible: List[Dict[str, Any]] = []
     for code_path in sorted(changed_set):
         prompt_path = mapping.get(code_path)
+        if not prompt_path and base_mapping:
+            # Deleted-module fallback: only fires for code paths absent
+            # from the HEAD registry (present/modified paths resolve above).
+            prompt_path = base_mapping.get(code_path)
         if not prompt_path:
             continue
         prompt_in_diff = prompt_path in changed_set
@@ -5317,7 +5333,12 @@ def _files_changed_since(worktree: Path, base_sha: str) -> List[str]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        logger.debug("files-changed-since failed: %s", exc)
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exception CLASS NAME (never the message body) so a
+        # tainted path/token in the exception text cannot reach the log
+        # surface (py/clear-text-logging-sensitive-data). The operator can
+        # reproduce locally with `git diff --name-status <base>..HEAD`.
+        logger.debug("files-changed-since failed: %s", type(exc).__name__)
         return []
     if result.returncode != 0:
         # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
