@@ -27,6 +27,13 @@ Manifests are written under:
 The versioned run path preserves audit history. The latest path provides a
 stable lookup for downstream automation.
 
+Enforce policy on latest manifests before merge:
+
+```bash
+pdd checkup gate
+pdd checkup gate <devunit> --json
+```
+
 ## Contents
 
 Schema version 1 records:

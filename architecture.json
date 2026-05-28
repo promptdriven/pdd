@@ -9503,10 +9503,134 @@
     }
   },
   {
+    "reason": "Reads dev-unit evidence manifests and exposes freshness helpers for policy enforcement.",
+    "description": "Loads `.pdd/evidence/devunits/*.latest.json` and compares on-disk prompt/output hashes to manifest records.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "evidence_store_python.prompt",
+    "filepath": "pdd/evidence_store.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_latest_manifests",
+            "signature": "(project_root: Path) -> list[Path]",
+            "returns": "list[Path]"
+          },
+          {
+            "name": "output_freshness",
+            "signature": "(manifest: ManifestView, project_root: Path) -> list[OutputFreshness]",
+            "returns": "list[OutputFreshness]"
+          },
+          {
+            "name": "prompt_freshness",
+            "signature": "(manifest: ManifestView) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Loads YAML and built-in policy for evidence gate require/allow/limit rules.",
+    "description": "Resolves `pdd checkup gate --policy` overrides merged with default gate policy.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "gate_policy_python.prompt",
+    "filepath": "pdd/gate_policy.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "default_policy",
+            "signature": "() -> GatePolicy",
+            "returns": "GatePolicy"
+          },
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[Path]) -> GatePolicy",
+            "returns": "GatePolicy"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Evaluates evidence manifest policy for CI merge gates on dev units.",
+    "description": "Runs deterministic checks on validation status, stale outputs, contract coverage, and cost limits.",
+    "dependencies": [
+      "evidence_store_python.prompt",
+      "gate_policy_python.prompt",
+      "contract_check_python.prompt",
+      "coverage_contracts_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "gate_python.prompt",
+    "filepath": "pdd/gate_main.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_gate_policy",
+            "signature": "(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult",
+            "returns": "GateResult"
+          },
+          {
+            "name": "evaluate_manifest",
+            "signature": "(manifest: ManifestView, project_root: Path, policy: GatePolicy, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> list[GateFailure]",
+            "returns": "list[GateFailure]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Checkup-scoped CLI for evidence policy gate (no top-level pdd gate).",
+    "description": "Dispatches `pdd checkup gate` to `run_gate_policy` with JSON and YAML policy options.",
+    "dependencies": [
+      "gate_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "commands/gate_python.prompt",
+    "filepath": "pdd/commands/gate.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "commands",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    }
+  },
+  {
     "reason": "Optional per-run JSON evidence manifests for supported commands.",
     "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
     "dependencies": [],
-    "priority": 242,
+    "priority": 243,
     "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [

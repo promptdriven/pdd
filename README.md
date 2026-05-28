@@ -2764,6 +2764,8 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
 
+**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` command.
+
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
@@ -2875,6 +2877,35 @@ pdd checkup \
   --review-loop \
   --review-only
 ```
+
+#### Evidence gate (`pdd checkup gate`)
+
+Deterministic CI gate over dev-unit evidence manifests (`.pdd/evidence/devunits/*.latest.json`). Producers are other PDD commands run with `--evidence` (see [docs/evidence_manifest.md](docs/evidence_manifest.md)); the gate only reads manifests and enforces policy.
+
+```bash
+# All dev units in the current project
+pdd checkup gate
+
+# One dev unit (basename)
+pdd checkup gate refund
+
+# Machine-readable output for CI
+pdd checkup gate --json
+
+# Custom policy overrides (require / allow / limits)
+pdd checkup gate --policy .pdd/policy.yml
+```
+
+Options:
+
+- `TARGET` (optional): dev-unit basename, or a specific `*.latest.json` path. Omitted = all latest manifests.
+- `--policy PATH`: YAML policy file (default: built-in policy).
+- `--json`: emit structured pass/fail JSON (exit 0/1).
+- `--stories-dir PATH` / `--tests-dir PATH`: optional paths for contract coverage checks.
+
+Default policy checks validation status (story / verify / unit tests), stale generated outputs, prompt freshness, unchecked critical contract rules, and optional cost/context limits. Failures include a stable `code`, message, and suggested `fix_command`.
+
+This is distinct from PR review-loop **deterministic gates** (`--no-gates` / `checkup_gates.py`), which run prettier/ruff/mypy-style checks on a PR worktree.
 
 ### 18. connect
 
