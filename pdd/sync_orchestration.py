@@ -1885,16 +1885,23 @@ def _create_mock_context(**kwargs) -> click.Context:
     return ctx
 
 
-def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
-    """Displays the sync log for a given basename and language."""
-    # Issue #1211: resolve via paths-aware helper. Without explicit paths
-    # we get CWD-upward .pddrc detection — covers the most common case.
-    log_file = get_log_path(basename, language)
+def _display_sync_log(
+    basename: str,
+    language: str,
+    verbose: bool = False,
+    paths: Optional[Dict[str, Path]] = None,
+) -> Dict[str, Any]:
+    """Displays the sync log for a given basename and language.
+
+    `paths` (Issue #1211) routes the log file lookup through the
+    subproject's .pdd/meta when invoked from a parent CWD.
+    """
+    log_file = get_log_path(basename, language, paths=paths)
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
 
-    log_entries = load_operation_log(basename, language)
+    log_entries = load_operation_log(basename, language, paths=paths)
     print(f"--- Sync Log for {basename} ({language}) ---")
 
     if not log_entries:
@@ -2007,6 +2014,19 @@ def sync_orchestration(
     from .sync_determine_operation import get_extension
     
     if dry_run:
+        # Issue #1211: best-effort path lookup so the log file resolves
+        # under the subproject's .pdd/meta even from a parent CWD.
+        # Only pass `paths` if discovery succeeded, to keep the
+        # positional-arg shape unchanged for callers/tests that don't
+        # care about the path hint.
+        try:
+            _dry_paths = get_pdd_file_paths(
+                basename, language, prompts_dir, context_override=context_override
+            )
+        except Exception:
+            _dry_paths = None
+        if _dry_paths:
+            return _display_sync_log(basename, language, verbose, paths=_dry_paths)
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---
@@ -2135,6 +2155,7 @@ def sync_orchestration(
                 "sync_start",
                 {"pid": os.getpid()},
                 invocation_mode="sync",
+                paths=pdd_files,
             )
         except Exception:
             # Best-effort logging; sync should proceed even if log setup fails.
@@ -2145,7 +2166,7 @@ def sync_orchestration(
         
         try:
             with SyncLock(basename, language):
-                log_event(basename, language, "lock_acquired", {"pid": os.getpid()}, invocation_mode="sync")
+                log_event(basename, language, "lock_acquired", {"pid": os.getpid()}, invocation_mode="sync", paths=pdd_files)
                 
                 while True:
                     budget_remaining = budget - current_cost_ref[0]
@@ -2154,14 +2175,14 @@ def sync_orchestration(
                         log_event(basename, language, "budget_exceeded", {
                             "total_cost": current_cost_ref[0], 
                             "budget": budget
-                        }, invocation_mode="sync")
+                        }, invocation_mode="sync", paths=pdd_files)
                         break
 
                     if budget_remaining < budget * 0.2 and budget_remaining > 0:
                         log_event(basename, language, "budget_warning", {
                             "remaining": budget_remaining,
                             "percentage": (budget_remaining / budget) * 100
-                        }, invocation_mode="sync")
+                        }, invocation_mode="sync", paths=pdd_files)
 
                     decision = sync_determine_operation(
                         basename,
@@ -2192,7 +2213,7 @@ def sync_orchestration(
                         )
                     if should_abort:
                         errors.append("User aborted sync via steering.")
-                        log_event(basename, language, "steering_abort", {"recommended": operation}, invocation_mode="sync")
+                        log_event(basename, language, "steering_abort", {"recommended": operation}, invocation_mode="sync", paths=pdd_files)
                         break
 
                     if steered_op != operation:
@@ -2202,6 +2223,7 @@ def sync_orchestration(
                             "steering_override",
                             {"recommended": operation, "chosen": steered_op, "reason": decision.reason},
                             invocation_mode="sync",
+                            paths=pdd_files,
                         )
                         operation = steered_op
                         # Keep decision.operation aligned with the chosen path for downstream logging.
@@ -2226,7 +2248,7 @@ def sync_orchestration(
                         recent_auto_deps = [op for op in operation_history[-3:] if op == 'auto-deps']
                         if len(recent_auto_deps) >= 2:
                             errors.append("Detected auto-deps infinite loop. Force advancing to generate operation.")
-                            log_event(basename, language, "cycle_detected", {"cycle_type": "auto-deps-infinite"}, invocation_mode="sync")
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "auto-deps-infinite"}, invocation_mode="sync", paths=pdd_files)
                             operation = 'generate'
                             decision.operation = 'generate' # Update decision too
 
@@ -2234,7 +2256,7 @@ def sync_orchestration(
                     if operation == 'auto-deps' and agentic_mode:
                         log_event(basename, language, "auto_deps_skipped", {
                             "reason": "auto-deps skipped in agentic mode — prompts have explicit dependencies"
-                        }, invocation_mode="sync")
+                        }, invocation_mode="sync", paths=pdd_files)
                         operation = 'generate'
                         decision.operation = 'generate'
 
@@ -2247,7 +2269,7 @@ def sync_orchestration(
                             recent_ops == ['verify', 'crash', 'verify', 'crash']):
                             # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
                             errors.append(f"Detected crash-verify cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
-                            log_event(basename, language, "cycle_detected", {"cycle_type": "crash-verify", "count": MAX_CYCLE_REPEATS}, invocation_mode="sync")
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "crash-verify", "count": MAX_CYCLE_REPEATS}, invocation_mode="sync", paths=pdd_files)
                             break
 
                     # Bug #4 fix: Detect test-fix cycle pattern
@@ -2259,7 +2281,7 @@ def sync_orchestration(
                             recent_ops == ['fix', 'test', 'fix', 'test']):
                             # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
                             errors.append(f"Detected test-fix cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
-                            log_event(basename, language, "cycle_detected", {"cycle_type": "test-fix", "count": MAX_CYCLE_REPEATS}, invocation_mode="sync")
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "test-fix", "count": MAX_CYCLE_REPEATS}, invocation_mode="sync", paths=pdd_files)
                             break
                                 
                     if operation == 'fix':
@@ -2353,7 +2375,7 @@ def sync_orchestration(
                                 "reason": f"test_extend not supported for {language} (or agentic_mode), {'accepting' if coverage_ok else 'rejecting'} current state",
                                 "coverage": current_rr.coverage if current_rr else None,
                                 "coverage_ok": coverage_ok
-                            }, invocation_mode="sync")
+                            }, invocation_mode="sync", paths=pdd_files)
                             if not coverage_ok:
                                 current_cov = current_rr.coverage if current_rr else 0.0
                                 errors.append(f"Coverage {current_cov:.1f}% below target {target_coverage:.1f}% after test_extend skip (agentic mode)")
@@ -2373,7 +2395,7 @@ def sync_orchestration(
                                 "reason": "Max extend attempts reached",
                                 "coverage": current_rr.coverage if current_rr else None,
                                 "coverage_ok": coverage_ok
-                            }, invocation_mode="sync")
+                            }, invocation_mode="sync", paths=pdd_files)
                             if not coverage_ok:
                                 current_cov = current_rr.coverage if current_rr else 0.0
                                 errors.append(f"Coverage {current_cov:.1f}% below target {target_coverage:.1f}% after {extend_attempts} test_extend attempts")
@@ -2432,7 +2454,7 @@ def sync_orchestration(
                             error_msg = decision.reason
                         
                         update_log_entry(log_entry, success=success, cost=0.0, model='none', duration=0.0, error=error_msg)
-                        append_log_entry(basename, language, log_entry)
+                        append_log_entry(basename, language, log_entry, paths=pdd_files)
                         break
                     
                     # Handle skips - save fingerprint with 'skip:' prefix to distinguish from actual execution
@@ -2441,7 +2463,7 @@ def sync_orchestration(
                         skipped_operations.append('verify')
                         print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
-                        append_log_entry(basename, language, log_entry)
+                        append_log_entry(basename, language, log_entry, paths=pdd_files)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_fingerprint_atomic(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
                         continue
@@ -2449,7 +2471,7 @@ def sync_orchestration(
                         skipped_operations.append('test')
                         print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
-                        append_log_entry(basename, language, log_entry)
+                        append_log_entry(basename, language, log_entry, paths=pdd_files)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_fingerprint_atomic(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
                         continue
@@ -2457,7 +2479,7 @@ def sync_orchestration(
                         skipped_operations.append('crash')
                         print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
-                        append_log_entry(basename, language, log_entry)
+                        append_log_entry(basename, language, log_entry, paths=pdd_files)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
@@ -2704,7 +2726,7 @@ def sync_orchestration(
                                         log_event(basename, language, "import_validation_failed", {
                                             "unresolved_imports": unresolved,
                                             "code_file": str(pdd_files['code']),
-                                        }, invocation_mode="sync")
+                                        }, invocation_mode="sync", paths=pdd_files)
                                 # Issue #624: Validate TypeScript/JavaScript imports after generation in agentic mode
                                 if agentic_mode and language.lower() in ('typescript', 'javascript', 'typescriptreact', 'javascriptreact') and pdd_files['code'].exists():
                                     unresolved = _validate_typescript_imports(
@@ -2720,7 +2742,7 @@ def sync_orchestration(
                                         log_event(basename, language, "import_validation_failed", {
                                             "unresolved_imports": unresolved,
                                             "code_file": str(pdd_files['code']),
-                                        }, invocation_mode="sync")
+                                        }, invocation_mode="sync", paths=pdd_files)
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
                                 pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
@@ -2821,7 +2843,7 @@ def sync_orchestration(
                                             pdd_files['example']
                                         )
                                     if auto_fixed:
-                                        log_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg}, invocation_mode="sync")
+                                        log_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg}, invocation_mode="sync", paths=pdd_files)
                                         # Retry running the example after auto-fix
                                         retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
                                             cmd_parts,
@@ -2830,7 +2852,7 @@ def sync_orchestration(
                                         )
                                         if retry_returncode == 0:
                                             # Auto-fix worked! Save run report and continue
-                                            log_event(basename, language, "auto_fix_success", {"message": auto_fix_msg}, invocation_mode="sync")
+                                            log_event(basename, language, "auto_fix_success", {"message": auto_fix_msg}, invocation_mode="sync", paths=pdd_files)
                                             if language.lower() == 'python' and pdd_files['test'].exists():
                                                 _execute_tests_and_create_run_report(
                                                     pdd_files['test'], basename, language, target_coverage,
@@ -3330,7 +3352,7 @@ def sync_orchestration(
                             pair = pop_last_pair(operation)
                             if pair:
                                 log_entry.setdefault("details", {})["llm_trace"] = pair
-                        append_log_entry(basename, language, log_entry)
+                        append_log_entry(basename, language, log_entry, paths=pdd_files)
 
                         # Post-operation checks (simplified)
                         if success and operation == 'crash':
@@ -3377,7 +3399,7 @@ def sync_orchestration(
                                      # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
                                      error_msg = f"Post-crash verification failed: {e}"
                                      errors.append(error_msg)
-                                     log_event(basename, language, "post_crash_verification_failed", {"error": str(e)}, invocation_mode="sync")
+                                     log_event(basename, language, "post_crash_verification_failed", {"error": str(e)}, invocation_mode="sync", paths=pdd_files)
                     
                         if success and operation == 'verify':
                             if _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
@@ -3450,7 +3472,7 @@ def sync_orchestration(
             traceback.print_exc()
         finally:
             try:
-                log_event(basename, language, "lock_released", {"pid": os.getpid(), "total_cost": current_cost_ref[0]}, invocation_mode="sync")
+                log_event(basename, language, "lock_released", {"pid": os.getpid(), "total_cost": current_cost_ref[0]}, invocation_mode="sync", paths=pdd_files)
             except: pass
             
         # Return result dict

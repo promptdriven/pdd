@@ -1161,7 +1161,19 @@ def test_dry_run_mode(orchestration_fixture):
 
     result = sync_orchestration(basename="calculator", language="python", dry_run=True, verbose=True)
 
-    mock_log_display.assert_called_once_with("calculator", "python", True)
+    # Issue #1211: dry-run now does a best-effort get_pdd_file_paths lookup
+    # and passes `paths=` to _display_sync_log when discovery succeeds, so
+    # the log file resolves under a subproject .pdd/meta from a parent CWD.
+    # Accept either the legacy 3-arg call (no .pddrc / discovery failed) or
+    # the 4-arg paths-hinted call.
+    assert mock_log_display.call_count == 1
+    call_args = mock_log_display.call_args
+    assert call_args.args[:3] == ("calculator", "python", True), (
+        f"_display_sync_log expected ('calculator', 'python', True, ...), got {call_args!r}"
+    )
+    extra_kwargs = {k: v for k, v in call_args.kwargs.items() if k != "paths"}
+    assert not extra_kwargs, f"unexpected extra kwargs: {extra_kwargs!r}"
+
     assert result == mock_log_display.return_value
     # Ensure main workflow components were not touched
     orchestration_fixture['SyncLock'].assert_not_called()
@@ -2684,7 +2696,7 @@ def test_sync_orchestration_fix_captures_truncated_test_output_excerpt(tmp_path,
 
     seen_log_entries = []
 
-    def capture_append(_basename, _language, entry):
+    def capture_append(_basename, _language, entry, **_kwargs):
         seen_log_entries.append(entry)
 
     with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
@@ -2754,7 +2766,7 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
 
     seen_entries = []
 
-    def capture_append(_b, _l, entry):
+    def capture_append(_b, _l, entry, **_kwargs):
         seen_entries.append(entry)
 
     # Pretend llm trace was recorded for this op (without calling real llm).

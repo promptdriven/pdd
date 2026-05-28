@@ -273,18 +273,25 @@ def _prompts_dir_for_prompt(prompt_path: Path) -> Optional[str]:
     return context_config.get("prompts_dir") or None
 
 
-def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:
+def load_operation_log(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """
     Load all log entries for a module.
-    
+
     Args:
         basename: Module basename.
         language: Module language.
-        
+        paths: Optional path hints (Issue #1211) so the log file is
+            resolved under the subproject's .pdd/meta when run CWD lives
+            above the subproject.
+
     Returns:
         List of log entries (dictionaries).
     """
-    log_path = get_log_path(basename, language)
+    log_path = get_log_path(basename, language, paths=paths)
     entries = []
     
     if log_path.exists():
@@ -400,10 +407,14 @@ def log_event(
     language: str,
     event_type: str,
     details: Any,
-    invocation_mode: str = "manual"
+    invocation_mode: str = "manual",
+    paths: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Log a special event to the sync log.
+
+    `paths` (Issue #1211) routes the entry through the subproject's
+    .pdd/meta when run CWD lives above the subproject.
     """
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -412,7 +423,7 @@ def log_event(
         "details": details,
         "invocation_mode": invocation_mode
     }
-    append_log_entry(basename, language, entry)
+    append_log_entry(basename, language, entry, paths=paths)
 
 
 def save_fingerprint(

@@ -322,6 +322,65 @@ def test_e2e_fix_basename_flows_into_subproject_fingerprint_path(
     )
 
 
+def test_e2e_log_event_and_display_anchor_at_subproject(tmp_path, monkeypatch):
+    """Reviewer round-5: lifecycle events (sync_start, lock_acquired, budget,
+    cycle, release) and the dry-run/log display must all anchor at the
+    subproject .pdd/meta when the user runs from a parent CWD.
+
+    Before this fix log_event() had no `paths` parameter so every
+    lifecycle event landed at parent CWD .pdd/meta while
+    fingerprints/run reports went to the subproject — a split log
+    invisible to `pdd sync --dry-run` from the same parent CWD.
+    """
+    from pdd.operation_log import log_event, load_operation_log, get_log_path
+
+    repo_root = tmp_path / "repo_root"
+    repo_root.mkdir()
+    subproject = repo_root / "extensions" / "github_pdd_app"
+    subproject.mkdir(parents=True)
+    (subproject / ".pddrc").write_text(_PDDRC_NESTED_APP, encoding="utf-8")
+    prompt = subproject / "prompts" / "src" / "routers" / "webhook_handlers_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("p", encoding="utf-8")
+
+    monkeypatch.chdir(repo_root)
+
+    paths_hint = {"prompt": prompt}
+    # Emit two lifecycle events with the hint (mirrors sync_orchestration's
+    # log_event calls after pdd_files is resolved).
+    log_event(
+        "webhook_handlers", "python", "sync_start",
+        {"pid": 1234}, invocation_mode="sync", paths=paths_hint,
+    )
+    log_event(
+        "webhook_handlers", "python", "lock_acquired",
+        {"pid": 1234}, invocation_mode="sync", paths=paths_hint,
+    )
+
+    expected_log = subproject / ".pdd" / "meta" / "webhook_handlers_python_sync.log"
+    actual_log = get_log_path("webhook_handlers", "python", paths=paths_hint)
+    assert actual_log == expected_log, (
+        f"get_log_path resolved to {actual_log!r}, expected {expected_log!r}"
+    )
+    assert expected_log.exists(), (
+        f"Lifecycle events not written to subproject log {expected_log!r}; "
+        f"this is the round-5 split-log bug"
+    )
+
+    # And load_operation_log with the same hint can read them back.
+    entries = load_operation_log("webhook_handlers", "python", paths=paths_hint)
+    event_types = [e.get("event_type") for e in entries if "event_type" in e]
+    assert "sync_start" in event_types and "lock_acquired" in event_types, (
+        f"Subproject log missing expected events; got {event_types!r}"
+    )
+
+    # No orphan log under parent CWD.
+    parent_log = repo_root / ".pdd" / "meta" / "webhook_handlers_python_sync.log"
+    assert not parent_log.exists(), (
+        f"Parent CWD has orphan log {parent_log!r} — log_event bypassed paths hint"
+    )
+
+
 def test_e2e_decorator_basename_aligns_with_sync_when_pddrc_sets_prompts_dir(
     tmp_path, monkeypatch
 ):
