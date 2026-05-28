@@ -9,6 +9,7 @@ import pytest
 from pdd.checkup_simplify_engines import (
     build_agentic_simplify_instruction,
     build_simplify_command_repr,
+    check_simplify_engine_available,
     normalize_simplify_engine,
     resolve_simplify_engine,
     run_simplify_engine_command,
@@ -63,6 +64,34 @@ def test_resolve_auto_raises_when_no_engine_available() -> None:
     ):
         with pytest.raises(ValueError, match="No simplify engine available"):
             resolve_simplify_engine("auto")
+
+
+def test_build_simplify_command_repr_auto() -> None:
+    assert build_simplify_command_repr("auto", ["pdd/foo.py"], focus="") == (
+        "agentic-simplify (auto)"
+    )
+
+
+def test_claude_engine_accepts_unparseable_version_for_apply() -> None:
+    with patch(
+        "pdd.checkup_simplify_engines.check_claude_code_simplify_available",
+        return_value=("/bin/claude", None, None),
+    ):
+        version, provider, error = check_simplify_engine_available("claude", quiet=True)
+    assert provider == "claude"
+    assert error is None
+    assert version == "unknown"
+
+
+def test_resolve_auto_falls_back_when_claude_version_unparseable() -> None:
+    with patch(
+        "pdd.checkup_simplify_engines.check_claude_code_simplify_available",
+        return_value=("/bin/claude", None, None),
+    ), patch(
+        "pdd.checkup_simplify_engines.get_available_agents",
+        return_value=["openai"],
+    ):
+        assert resolve_simplify_engine("auto") == "codex"
 
 
 def test_resolve_auto_falls_back_to_codex() -> None:

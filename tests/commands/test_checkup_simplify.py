@@ -161,6 +161,79 @@ def test_discover_since_and_staged_mutually_exclusive(tmp_path: Path) -> None:
         discover_simplify_targets(since="HEAD~1", staged=True, cwd=tmp_path)
 
 
+def test_auto_preview_does_not_resolve_engine(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "auto_preview.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def value():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    def forbid_resolve(*_args, **_kwargs):
+        raise AssertionError("resolve_simplify_engine must not run in preview mode")
+
+    preview_patches = (
+        patch(
+            "pdd.checkup_simplify_engines.check_claude_code_simplify_available",
+            return_value=(None, None, "missing"),
+        ),
+        patch("pdd.checkup_simplify_engines.get_available_agents", return_value=[]),
+        patch("pdd.checkup_simplify.resolve_simplify_engine", side_effect=forbid_resolve),
+    )
+
+    with preview_patches[0], preview_patches[1], preview_patches[2], patch(
+        "pdd.checkup_simplify.discover_simplify_targets",
+        return_value=(tmp_path, []),
+    ):
+        no_targets = run_checkup_simplify(
+            path=None,
+            apply=False,
+            since=None,
+            staged=False,
+            max_files=5,
+            attempts=None,
+            engine="auto",
+            evidence=False,
+            verify=False,
+            no_format=False,
+            quiet=True,
+            verbose=False,
+        )
+
+    assert no_targets.success is True
+    assert no_targets.exit_code == 0
+    assert no_targets.files_analyzed == []
+    assert "auto" in "\n".join(no_targets.summary_lines).lower()
+    assert "Preview only" in "\n".join(no_targets.summary_lines)
+
+    module.write_text("def value():\n    return 2\n", encoding="utf-8")
+    with preview_patches[0], preview_patches[1], preview_patches[2]:
+        preview = run_checkup_simplify(
+            path=module,
+            apply=False,
+            since=None,
+            staged=False,
+            max_files=5,
+            attempts=None,
+            engine="auto",
+            evidence=False,
+            verify=False,
+            no_format=False,
+            quiet=True,
+            verbose=False,
+        )
+
+    assert preview.success is True
+    assert preview.files_analyzed
+    assert "Preview only" in "\n".join(preview.summary_lines)
+
+
 def test_preview_without_apply_does_not_invoke_claude(tmp_path: Path, monkeypatch) -> None:
     _init_git_repo(tmp_path)
     module = tmp_path / "pdd" / "sample.py"

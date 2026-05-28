@@ -674,16 +674,11 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
     requested_engine = normalize_simplify_engine(
         engine if engine is not None else settings.engine
     )
-    resolved_engine = resolve_simplify_engine(requested_engine)
     slash_command = build_simplify_command_repr(
-        resolved_engine, rel_files, focus=settings.focus
+        requested_engine, rel_files, focus=settings.focus
     )
     version_str = ""
-    provider_name = (
-        "claude"
-        if resolved_engine == "claude"
-        else check_simplify_engine_available(requested_engine, quiet=True)[1]
-    )
+    provider_name = requested_engine
 
     if not rel_files:
         msg = "No eligible source files found for simplification."
@@ -708,7 +703,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
                     files_modified=[],
                     agent_summary="",
                     slash_command=slash_command,
-                    engine=resolved_engine,
+                    engine=requested_engine,
                     claude_code_version=version_str,
                     checks={},
                     evidence_path=None,
@@ -726,7 +721,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
                 files_modified=[],
                 agent_summary="",
                 slash_command=slash_command,
-                engine=resolved_engine,
+                engine=requested_engine,
                 claude_code_version=version_str,
                 checks={},
                 evidence_path=None,
@@ -751,6 +746,10 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             summary_lines=summary_lines,
         )
 
+    resolved_engine = resolve_simplify_engine(requested_engine)
+    slash_command = build_simplify_command_repr(
+        resolved_engine, rel_files, focus=settings.focus
+    )
     version_label, provider_name, version_error = check_simplify_engine_available(
         requested_engine, quiet=quiet
     )

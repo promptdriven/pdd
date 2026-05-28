@@ -37,13 +37,19 @@ def normalize_simplify_engine(engine: Optional[str], *, default: str = "claude")
     return value
 
 
+def _claude_available_for_auto(*, quiet: bool) -> bool:
+    """True when Claude Code is installed with a parseable version for ``auto``."""
+    cli_path, version_tuple, error = check_claude_code_simplify_available(quiet=quiet)
+    return cli_path is not None and error is None and version_tuple is not None
+
+
 def resolve_simplify_engine(engine: str) -> str:
     """Resolve ``auto`` to the first available concrete engine."""
     normalized = normalize_simplify_engine(engine)
     if normalized != "auto":
         return normalized
 
-    if check_claude_code_simplify_available(quiet=True)[2] is None:
+    if _claude_available_for_auto(quiet=True):
         return "claude"
 
     available = set(get_available_agents())
@@ -102,6 +108,8 @@ def build_simplify_command_repr(
     focus: str,
 ) -> str:
     """Human-readable command representation for summaries and evidence."""
+    if engine == "auto":
+        return "agentic-simplify (auto)"
     if engine == "claude":
         return build_simplify_slash_message(rel_files, focus=focus)
     return f"agentic-simplify ({engine})"
@@ -128,11 +136,13 @@ def check_simplify_engine_available(
     """Return ``(version_label, provider_name, error_message)`` for an engine."""
     resolved = resolve_simplify_engine(engine)
     if resolved == "claude":
-        _cli_path, version_tuple, error = check_claude_code_simplify_available(quiet=quiet)
+        cli_path, version_tuple, error = check_claude_code_simplify_available(quiet=quiet)
         if error:
             return "", "claude", error
+        if cli_path is None:
+            return "", "claude", error or "Claude Code CLI is not available"
         if version_tuple is None:
-            return "", "claude", "Could not parse Claude Code version"
+            return "unknown", "claude", None
         version_label = f"{version_tuple[0]}.{version_tuple[1]}.{version_tuple[2]}"
         return version_label, "claude", None
 
