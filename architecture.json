@@ -2551,7 +2551,8 @@
     "dependencies": [
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
-      "core/cloud_python.prompt"
+      "core/cloud_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
