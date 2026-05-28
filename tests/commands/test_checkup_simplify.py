@@ -53,8 +53,8 @@ def test_version_probe_accepts_installed_version(monkeypatch) -> None:
 
         return Result()
 
-    with patch("pdd.checkup_simplify._find_cli_binary", return_value="/bin/claude"):
-        with patch("pdd.checkup_simplify.subprocess.run", side_effect=fake_run):
+    with patch("pdd.checkup_simplify_claude._find_cli_binary", return_value="/bin/claude"):
+        with patch("pdd.checkup_simplify_claude.subprocess.run", side_effect=fake_run):
             path, version, err = check_claude_code_simplify_available(quiet=True)
 
     assert path == "/bin/claude"
@@ -70,8 +70,8 @@ def test_version_probe_does_not_reject_newer_claude(monkeypatch) -> None:
 
         return Result()
 
-    with patch("pdd.checkup_simplify._find_cli_binary", return_value="/bin/claude"):
-        with patch("pdd.checkup_simplify.subprocess.run", side_effect=fake_run):
+    with patch("pdd.checkup_simplify_claude._find_cli_binary", return_value="/bin/claude"):
+        with patch("pdd.checkup_simplify_claude.subprocess.run", side_effect=fake_run):
             path, version, err = check_claude_code_simplify_available(quiet=True)
 
     assert path == "/bin/claude"
@@ -89,8 +89,8 @@ def test_version_gate_accepts_supported(monkeypatch) -> None:
 
         return Result()
 
-    with patch("pdd.checkup_simplify._find_cli_binary", return_value="/bin/claude"):
-        with patch("pdd.checkup_simplify.subprocess.run", side_effect=fake_run):
+    with patch("pdd.checkup_simplify_claude._find_cli_binary", return_value="/bin/claude"):
+        with patch("pdd.checkup_simplify_claude.subprocess.run", side_effect=fake_run):
             path, version, err = check_claude_code_simplify_available(quiet=True)
 
     assert path == "/bin/claude"
@@ -176,8 +176,8 @@ def test_preview_without_apply_does_not_invoke_claude(tmp_path: Path, monkeypatc
     )
     monkeypatch.chdir(tmp_path)
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command") as mock_run, patch(
-        "pdd.checkup_simplify.check_claude_code_simplify_available"
+    with patch("pdd.checkup_simplify.run_simplify_engine_command") as mock_run, patch(
+        "pdd.checkup_simplify.check_simplify_engine_available"
     ) as mock_probe:
         result = run_checkup_simplify(
             path=module,
@@ -186,6 +186,7 @@ def test_preview_without_apply_does_not_invoke_claude(tmp_path: Path, monkeypatc
             staged=False,
             max_files=5,
             attempts=None,
+            engine=None,
             evidence=False,
             verify=False,
             no_format=False,
@@ -217,8 +218,7 @@ def test_apply_invokes_claude_simplify(tmp_path: Path, monkeypatch) -> None:
 
     captured: dict[str, str] = {}
 
-    def fake_simplify(slash_message, repo_root, **kwargs):
-        captured["slash"] = slash_message
+    def fake_simplify(_engine, _rel_files, repo_root, **kwargs):
         captured["cwd"] = str(repo_root)
         (repo_root / "pdd" / "apply_me.py").write_text(
             "def simplified():\n    return 2\n",
@@ -226,10 +226,10 @@ def test_apply_invokes_claude_simplify(tmp_path: Path, monkeypatch) -> None:
         )
         return True, "Simplified 1 file.", 0.5, "Simplified 1 file."
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify):
+    with patch("pdd.checkup_simplify.run_simplify_engine_command", side_effect=fake_simplify):
         with patch(
-            "pdd.checkup_simplify.check_claude_code_simplify_available",
-            return_value=("/bin/claude", (2, 1, 100), None),
+            "pdd.checkup_simplify.check_simplify_engine_available",
+            return_value=("2.1.100", "claude", None),
         ):
             result = run_checkup_simplify(
                 path=module,
@@ -238,6 +238,7 @@ def test_apply_invokes_claude_simplify(tmp_path: Path, monkeypatch) -> None:
                 staged=False,
                 max_files=5,
                 attempts=1,
+                engine=None,
                 evidence=True,
                 verify=False,
                 no_format=True,
@@ -245,8 +246,8 @@ def test_apply_invokes_claude_simplify(tmp_path: Path, monkeypatch) -> None:
                 verbose=False,
             )
 
-    assert captured["slash"].startswith("/simplify")
-    assert "pdd/apply_me.py" in captured["slash"]
+    assert result.slash_command.startswith("/simplify")
+    assert "pdd/apply_me.py" in result.slash_command
     assert "pdd/apply_me.py" in result.files_modified
     assert result.evidence_path is not None
     payload = json.loads(result.evidence_path.read_text(encoding="utf-8"))
@@ -268,10 +269,10 @@ def test_checkup_cli_dispatches_simplify_preview(tmp_path: Path, monkeypatch) ->
     )
     monkeypatch.chdir(tmp_path)
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command") as mock_run:
+    with patch("pdd.checkup_simplify.run_simplify_engine_command") as mock_run:
         with patch(
-            "pdd.checkup_simplify.check_claude_code_simplify_available",
-            return_value=("/bin/claude", (2, 1, 100), None),
+            "pdd.checkup_simplify.check_simplify_engine_available",
+            return_value=("2.1.100", "claude", None),
         ):
             result = CliRunner().invoke(
                 checkup,
@@ -289,7 +290,57 @@ def test_checkup_simplify_help_is_forwarded_to_nested_command() -> None:
 
     assert result.exit_code == 0
     assert "--attempts" in result.output
+    assert "--engine" in result.output
     assert "Independent /simplify candidates" in result.output
+
+
+def test_apply_codex_engine_writes_evidence(tmp_path: Path, monkeypatch) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pdd" / "codex_target.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def before():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    module.write_text("def after():\n    return 2\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_simplify(engine, _rel_files, repo_root, **kwargs):
+        assert engine == "codex"
+        (repo_root / "pdd" / "codex_target.py").write_text(
+            "def simplified():\n    return 2\n",
+            encoding="utf-8",
+        )
+        return True, "agentic simplify", 0.3, "openai"
+
+    with patch("pdd.checkup_simplify.run_simplify_engine_command", side_effect=fake_simplify):
+        with patch(
+            "pdd.checkup_simplify.check_simplify_engine_available",
+            return_value=("codex-cli", "openai", None),
+        ):
+            result = run_checkup_simplify(
+                path=module,
+                apply=True,
+                since=None,
+                staged=False,
+                max_files=5,
+                attempts=1,
+                engine="codex",
+                evidence=True,
+                verify=False,
+                no_format=True,
+                quiet=True,
+                verbose=False,
+            )
+
+    assert result.provider == "openai"
+    assert result.evidence_path is not None
+    payload = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert payload["engine"] == "openai-codex/simplify"
 
 
 def test_apply_and_verify_flags(tmp_path: Path, monkeypatch) -> None:
@@ -313,17 +364,17 @@ def test_apply_and_verify_flags(tmp_path: Path, monkeypatch) -> None:
         verify_calls.append("ran")
         return {"format": "passed", "lint": "passed", "tests": "passed"}
 
-    def fake_simplify(slash_message, repo_root, **kwargs):
+    def fake_simplify(_engine, _rel_files, repo_root, **kwargs):
         (repo_root / "pdd" / "apply_me.py").write_text(
             "def changed():\n    return 2\n",
             encoding="utf-8",
         )
-        return True, "done", 0.2, "done"
+        return True, "done", 0.2, "claude"
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify):
+    with patch("pdd.checkup_simplify.run_simplify_engine_command", side_effect=fake_simplify):
         with patch(
-            "pdd.checkup_simplify.check_claude_code_simplify_available",
-            return_value=("/bin/claude", (2, 1, 100), None),
+            "pdd.checkup_simplify.check_simplify_engine_available",
+            return_value=("2.1.100", "claude", None),
         ):
             with patch("pdd.checkup_simplify._run_verification", side_effect=fake_verify):
                 result = run_checkup_simplify(
@@ -333,6 +384,7 @@ def test_apply_and_verify_flags(tmp_path: Path, monkeypatch) -> None:
                     staged=False,
                     max_files=5,
                     attempts=1,
+                    engine=None,
                     evidence=False,
                     verify=True,
                     no_format=True,
@@ -357,7 +409,7 @@ def test_apply_attempts_selects_verified_candidate(
     monkeypatch.chdir(tmp_path)
     seen = 0
 
-    def fake_simplify(_slash_message, repo_root, **_kwargs):
+    def fake_simplify(_engine, _rel_files, repo_root, **_kwargs):
         nonlocal seen
         seen += 1
         value = 20 if seen == 1 else 10
@@ -371,9 +423,9 @@ def test_apply_attempts_selects_verified_candidate(
         content = (kwargs["repo_root"] / "pdd" / "candidate.py").read_text()
         return {"tests": "failed" if "20" in content else "passed"}
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify), patch(
-        "pdd.checkup_simplify.check_claude_code_simplify_available",
-        return_value=("/bin/claude", (2, 1, 200), None),
+    with patch("pdd.checkup_simplify.run_simplify_engine_command", side_effect=fake_simplify), patch(
+        "pdd.checkup_simplify.check_simplify_engine_available",
+        return_value=("2.1.200", "claude", None),
     ), patch("pdd.checkup_simplify._run_verification", side_effect=fake_verify):
         result = run_checkup_simplify(
             path=module,
@@ -382,6 +434,7 @@ def test_apply_attempts_selects_verified_candidate(
             staged=False,
             max_files=5,
             attempts=2,
+            engine=None,
             evidence=True,
             verify=True,
             no_format=True,
@@ -405,14 +458,14 @@ def test_apply_rejects_out_of_scope_candidate_edits(tmp_path: Path, monkeypatch)
     module.write_text("value = 2\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    def fake_simplify(_message, repo_root, **_kwargs):
+    def fake_simplify(_engine, _rel_files, repo_root, **_kwargs):
         (repo_root / "pdd" / "selected.py").write_text("value = 3\n", encoding="utf-8")
         (repo_root / "pdd" / "other.py").write_text("other = 2\n", encoding="utf-8")
         return True, "edited too far", 0.1, "claude"
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify), patch(
-        "pdd.checkup_simplify.check_claude_code_simplify_available",
-        return_value=("/bin/claude", (2, 1, 200), None),
+    with patch("pdd.checkup_simplify.run_simplify_engine_command", side_effect=fake_simplify), patch(
+        "pdd.checkup_simplify.check_simplify_engine_available",
+        return_value=("2.1.200", "claude", None),
     ):
         result = run_checkup_simplify(
             path=module,
@@ -421,6 +474,7 @@ def test_apply_rejects_out_of_scope_candidate_edits(tmp_path: Path, monkeypatch)
             staged=False,
             max_files=5,
             attempts=1,
+            engine=None,
             evidence=True,
             verify=False,
             no_format=True,
@@ -444,9 +498,9 @@ def test_staged_apply_refuses_to_overwrite_unstaged_contents(tmp_path: Path, mon
     subprocess.run(["git", "add", "pdd/selected.py"], cwd=tmp_path, check=True, capture_output=True)
     module.write_text("value = 999\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    with patch("pdd.checkup_simplify.run_claude_simplify_command") as mock_simplify, patch(
-        "pdd.checkup_simplify.check_claude_code_simplify_available",
-        return_value=("/bin/claude", (2, 1, 200), None),
+    with patch("pdd.checkup_simplify.run_simplify_engine_command") as mock_simplify, patch(
+        "pdd.checkup_simplify.check_simplify_engine_available",
+        return_value=("2.1.200", "claude", None),
     ):
         result = run_checkup_simplify(
             path=None,
@@ -455,6 +509,7 @@ def test_staged_apply_refuses_to_overwrite_unstaged_contents(tmp_path: Path, mon
             staged=True,
             max_files=5,
             attempts=1,
+            engine=None,
             evidence=False,
             verify=False,
             no_format=True,
@@ -480,15 +535,15 @@ def test_staged_candidate_reads_staged_snapshot(tmp_path: Path, monkeypatch) -> 
     monkeypatch.chdir(tmp_path)
     observed: list[str] = []
 
-    def fake_simplify(_message, repo_root, **_kwargs):
+    def fake_simplify(_engine, _rel_files, repo_root, **_kwargs):
         candidate_file = repo_root / "pdd" / "selected.py"
         observed.append(candidate_file.read_text(encoding="utf-8"))
         candidate_file.write_text("value = 3\n", encoding="utf-8")
         return True, "safe", 0.1, "claude"
 
-    with patch("pdd.checkup_simplify.run_claude_simplify_command", side_effect=fake_simplify), patch(
-        "pdd.checkup_simplify.check_claude_code_simplify_available",
-        return_value=("/bin/claude", (2, 1, 200), None),
+    with patch("pdd.checkup_simplify.run_simplify_engine_command", side_effect=fake_simplify), patch(
+        "pdd.checkup_simplify.check_simplify_engine_available",
+        return_value=("2.1.200", "claude", None),
     ):
         result = run_checkup_simplify(
             path=None,
@@ -497,6 +552,7 @@ def test_staged_candidate_reads_staged_snapshot(tmp_path: Path, monkeypatch) -> 
             staged=True,
             max_files=5,
             attempts=1,
+            engine=None,
             evidence=False,
             verify=False,
             no_format=True,
@@ -676,6 +732,7 @@ def test_discover_respects_pyproject_defaults_from_subdirectory(
         staged=False,
         max_files=None,
         attempts=None,
+        engine=None,
         evidence=False,
         verify=False,
         no_format=True,
@@ -735,6 +792,7 @@ def test_apply_multiple_attempts_requires_verify(tmp_path: Path, monkeypatch) ->
             staged=False,
             max_files=5,
             attempts=2,
+            engine=None,
             evidence=False,
             verify=False,
             no_format=True,

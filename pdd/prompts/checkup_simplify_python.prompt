@@ -1,4 +1,4 @@
-% Write `pdd/checkup_simplify.py`, implementing candidate-based Claude Code `/simplify` execution.
+% Write `pdd/checkup_simplify.py` and `pdd/checkup_simplify_engines.py`, implementing candidate-based multi-provider simplify execution.
 
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>checkup_file_selection_python.prompt</pdd-dependency>
@@ -7,7 +7,8 @@
 <pdd-reason>Uses Claude Code's bundled simplify skill to sample conservative cleanup candidates and select a verified result without exposing unrelated local edits.</pdd-reason>
 
 % Public API
-- `run_checkup_simplify(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult`
+- `run_checkup_simplify(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], engine: Optional[str], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult`
+- `run_simplify_engine_command(engine: str, rel_files: Sequence[str], repo_root: Path, *, focus: str, verbose: bool, quiet: bool, timeout: float) -> Tuple[bool, str, float, str]`
 - `run_claude_simplify_command(slash_message: str, repo_root: Path, *, cli_path: str, verbose: bool, quiet: bool, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Tuple[bool, str, float, str]`
 - `check_claude_code_simplify_available(*, quiet: bool) -> Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]`
 
@@ -28,14 +29,15 @@
 - Back up selected inputs before applying a winner. Retain attempt artifacts and optional JSON evidence under `.pdd/evidence/checkups/`.
 
 % Configuration
-- Read `[tool.pdd.checkup.simplify]` keys `max_files`, `attempts`, and `focus`.
+- Read `[tool.pdd.checkup.simplify]` keys `max_files`, `attempts`, `focus`, and `engine` (`claude`, `codex`, `gemini`, `opencode`, or `auto`).
 - Read optional verification commands under `[tool.pdd.checkup.simplify.commands]`.
 - Pass `CLAUDE_MODEL` through to Claude Code when configured.
 
-% Provider expansion (reference only; runtime still uses Claude Code `/simplify`)
-- Shared workflow: `checkup_simplify_workflow_LLM.prompt`
-- Provider invoke profiles: `checkup_simplify_invoke_claude_code_LLM.prompt`, `checkup_simplify_invoke_codex_LLM.prompt`, `checkup_simplify_invoke_gemini_LLM.prompt`, `checkup_simplify_invoke_opencode_LLM.prompt`
-- Do not wire alternate CLIs into `run_checkup_simplify` until product explicitly expands scope.
+% Provider engines
+- `claude`: invoke Claude Code bundled `/simplify` via `run_claude_simplify_command`.
+- `codex`, `gemini`, `opencode`: run `checkup_simplify_workflow_LLM.prompt` through `run_agentic_task` with `PDD_AGENTIC_PROVIDER` forced to `openai`, `google`, or `opencode`.
+- `auto`: prefer `claude` when available, else the first available agentic provider.
+- Provider invoke profiles (`checkup_simplify_invoke_*_LLM.prompt`) document CLI-specific setup for humans and other LLM harnesses.
 
 % Code output
-- Code: `pdd/checkup_simplify.py`
+- Code: `pdd/checkup_simplify.py`, `pdd/checkup_simplify_engines.py`

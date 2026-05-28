@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -18,15 +16,20 @@ import tomllib
 
 from rich.console import Console
 
-from .agentic_common import (
-    DEFAULT_TIMEOUT_SECONDS,
-    _extract_json_from_output,
-    _find_cli_binary,
-    _parse_provider_json,
-    _strip_anthropic_creds_for_claude_subprocess,
-    _subprocess_run,
-)
 from .checkup_file_selection import discover_simplify_targets, resolve_simplify_repo_root
+from .checkup_simplify_claude import (  # pylint: disable=unused-import
+    _parse_claude_code_version,
+    build_simplify_slash_message as _build_simplify_slash_message,
+    check_claude_code_simplify_available,
+    run_claude_simplify_command,
+)
+from .checkup_simplify_engines import (
+    build_simplify_command_repr,
+    check_simplify_engine_available,
+    normalize_simplify_engine,
+    resolve_simplify_engine,
+    run_simplify_engine_command,
+)
 from .get_lint_commands import get_lint_commands
 from .git_porcelain import iter_changed_paths, run_porcelain_z
 
@@ -57,6 +60,7 @@ class SimplifySettings:
     max_files: int = 20
     attempts: int = 1
     focus: str = ""
+    engine: str = "claude"
     verify_commands: SimplifyVerifyCommands = field(default_factory=SimplifyVerifyCommands)
 
 
@@ -106,6 +110,7 @@ class SimplifyEvidenceInput:
     files_analyzed: List[str]
     files_modified: List[str]
     slash_command: str
+    engine: str
     claude_code_version: str
     agent_summary: str
     checks: Dict[str, str]
@@ -121,6 +126,7 @@ class SimplifySummaryInput:
     files_modified: List[str]
     agent_summary: str
     slash_command: str
+    engine: str
     claude_code_version: str
     checks: Dict[str, str]
     evidence_path: Optional[Path]
@@ -129,134 +135,8 @@ class SimplifySummaryInput:
     selected_attempt: Optional[int]
 
 
-def _parse_claude_code_version(version_output: str) -> Optional[Tuple[int, int, int]]:
-    match = re.search(r"(\d+)\.(\d+)\.(\d+)", version_output)
-    if not match:
-        return None
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-
-
 def _format_version(version: Tuple[int, int, int]) -> str:
     return f"{version[0]}.{version[1]}.{version[2]}"
-
-
-def check_claude_code_simplify_available(
-    *,
-    quiet: bool,
-) -> Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]:
-    """Find Claude Code and record its version without inventing skill limits."""
-    del quiet
-    cli_path = _find_cli_binary("claude")
-    if not cli_path:
-        msg = (
-            "Claude Code CLI is required for `pdd checkup simplify`. "
-            "Install with: npm install -g @anthropic-ai/claude-code"
-        )
-        return None, None, msg
-
-    try:
-        result = subprocess.run(
-            [cli_path, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, None, f"Failed to run `claude --version`: {exc}"
-
-    version_text = (result.stdout or result.stderr or "").strip()
-    version_tuple = _parse_claude_code_version(version_text)
-    return cli_path, version_tuple, None
-
-
-def _build_simplify_slash_message(
-    rel_files: Sequence[str],
-    *,
-    focus: str,
-) -> str:
-    parts: List[str] = ["/simplify"]
-    focus_text = focus.strip()
-    if focus_text:
-        parts.append(focus_text)
-    parts.extend(rel_files)
-    return " ".join(parts)
-
-
-def run_claude_simplify_command(  # pylint: disable=too-many-arguments
-    slash_message: str,
-    repo_root: Path,
-    *,
-    cli_path: str,
-    verbose: bool,
-    quiet: bool,
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> Tuple[bool, str, float, str]:
-    """Invoke Claude Code ``/simplify`` directly (not via ``run_agentic_task``)."""
-    env = os.environ.copy()
-    env["TERM"] = "dumb"
-    env["NO_COLOR"] = "1"
-    env["CI"] = "1"
-    env.pop("PDD_OUTPUT_COST_PATH", None)
-    env["GIT_WORK_TREE"] = str(repo_root)
-    _strip_anthropic_creds_for_claude_subprocess(env, verbose=verbose, quiet=quiet)
-
-    cmd = [
-        cli_path,
-        "-p",
-        slash_message,
-        "--dangerously-skip-permissions",
-        "--output-format",
-        "json",
-    ]
-    claude_model = env.get("CLAUDE_MODEL")
-    if claude_model:
-        cmd.extend(["--model", claude_model])
-
-    if verbose and not quiet:
-        console.print(f"[dim]Running: {' '.join(cmd[:3])} ...[/dim]")
-
-    try:
-        result = _subprocess_run(
-            cmd,
-            cwd=repo_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            start_new_session=True,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "Claude Code simplify timed out", 0.0, ""
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, str(exc), 0.0, ""
-
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "")[:2000]
-        return False, f"Claude Code exited {result.returncode}: {detail}", 0.0, ""
-
-    output_str = (result.stdout or "").strip()
-    if not output_str:
-        return False, "Claude Code returned empty output", 0.0, ""
-
-    try:
-        data = json.loads(output_str)
-    except json.JSONDecodeError:
-        try:
-            data = _extract_json_from_output(output_str)
-        except json.JSONDecodeError:
-            return (
-                False,
-                f"Invalid JSON from Claude Code: {output_str[:500]}",
-                0.0,
-                "",
-            )
-
-    success, text, cost, _model = _parse_provider_json("anthropic", data)
-    if not success:
-        return False, text or "Claude Code reported an error", cost, ""
-
-    return True, text or "", cost, text or ""
 
 
 def _load_settings(project_root: Path) -> SimplifySettings:
@@ -277,6 +157,8 @@ def _load_settings(project_root: Path) -> SimplifySettings:
         settings.attempts = max(1, simplify["attempts"])
     if isinstance(simplify.get("focus"), str):
         settings.focus = simplify["focus"]
+    if isinstance(simplify.get("engine"), str):
+        settings.engine = normalize_simplify_engine(simplify["engine"])
     commands = simplify.get("commands", {})
     if isinstance(commands, dict):
         for key in ("format", "lint", "typecheck", "test"):
@@ -660,7 +542,7 @@ def _write_evidence(evidence: SimplifyEvidenceInput) -> Path:
         )
     payload: Dict[str, Any] = {
         "kind": "pdd.checkup.simplify",
-        "engine": "claude-code/simplify",
+        "engine": _evidence_engine_id(evidence.engine),
         "run_id": evidence.run_id,
         "claude_code_version": evidence.claude_code_version,
         "slash_command": evidence.slash_command,
@@ -695,12 +577,24 @@ def _write_evidence(evidence: SimplifyEvidenceInput) -> Path:
     return out_path
 
 
+def _evidence_engine_id(engine: str) -> str:
+    mapping = {
+        "claude": "claude-code/simplify",
+        "codex": "openai-codex/simplify",
+        "gemini": "google-gemini/simplify",
+        "opencode": "opencode/simplify",
+    }
+    return mapping.get(engine, f"{engine}/simplify")
+
+
 def _render_summary(summary: SimplifySummaryInput) -> List[str]:
-    lines = ["PDD Checkup: simplify (Claude Code /simplify)", ""]
+    engine_label = summary.engine
+    lines = [f"PDD Checkup: simplify ({engine_label})", ""]
     if summary.preview_only:
-        lines.append("Preview only - pass --apply to run Claude Code /simplify.")
+        lines.append("Preview only - pass --apply to run the simplify agent.")
         lines.append("")
-    lines.append(f"Claude Code: {summary.claude_code_version or 'unknown'}")
+    lines.append(f"Engine: {engine_label}")
+    lines.append(f"Agent version: {summary.claude_code_version or 'unknown'}")
     lines.append(f"Command: {summary.slash_command or '(not run)'}")
     lines.append(f"Files in scope: {len(summary.files_analyzed)}")
     lines.append(f"Files changed: {len(summary.files_modified)}")
@@ -748,6 +642,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
     staged: bool,
     max_files: Optional[int],
     attempts: Optional[int],
+    engine: Optional[str],
     evidence: bool,
     verify: bool,
     no_format: bool,
@@ -776,8 +671,19 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
     )
 
     rel_files = _rel_paths(targets, repo_root)
-    slash_command = _build_simplify_slash_message(rel_files, focus=settings.focus)
+    requested_engine = normalize_simplify_engine(
+        engine if engine is not None else settings.engine
+    )
+    resolved_engine = resolve_simplify_engine(requested_engine)
+    slash_command = build_simplify_command_repr(
+        resolved_engine, rel_files, focus=settings.focus
+    )
     version_str = ""
+    provider_name = (
+        "claude"
+        if resolved_engine == "claude"
+        else check_simplify_engine_available(requested_engine, quiet=True)[1]
+    )
 
     if not rel_files:
         msg = "No eligible source files found for simplification."
@@ -787,7 +693,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             success=True,
             exit_code=0,
             cost=0.0,
-            provider="claude",
+            provider=provider_name,
             claude_code_version=version_str,
             slash_command=slash_command,
             files_analyzed=[],
@@ -802,6 +708,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
                     files_modified=[],
                     agent_summary="",
                     slash_command=slash_command,
+                    engine=resolved_engine,
                     claude_code_version=version_str,
                     checks={},
                     evidence_path=None,
@@ -819,6 +726,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
                 files_modified=[],
                 agent_summary="",
                 slash_command=slash_command,
+                engine=resolved_engine,
                 claude_code_version=version_str,
                 checks={},
                 evidence_path=None,
@@ -831,7 +739,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             success=True,
             exit_code=0,
             cost=0.0,
-            provider="claude",
+            provider=provider_name,
             claude_code_version=version_str,
             slash_command=slash_command,
             files_analyzed=rel_files,
@@ -843,8 +751,10 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             summary_lines=summary_lines,
         )
 
-    cli_path, version_tuple, version_error = check_claude_code_simplify_available(quiet=quiet)
-    version_str = _format_version(version_tuple) if version_tuple else ""
+    version_label, provider_name, version_error = check_simplify_engine_available(
+        requested_engine, quiet=quiet
+    )
+    version_str = version_label
     if version_error:
         if not quiet:
             console.print(f"[bold red]{version_error}[/bold red]")
@@ -852,7 +762,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             success=False,
             exit_code=2,
             cost=0.0,
-            provider="claude",
+            provider=provider_name,
             claude_code_version=version_str,
             slash_command=slash_command,
             files_analyzed=rel_files,
@@ -867,9 +777,9 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
     base_ref = _candidate_base_ref(since)
     if not _selected_input_has_diff(repo_root, rel_files, base_ref=base_ref):
         msg = (
-            f"No selected diff found against {base_ref}. Claude Code /simplify reviews "
-            "changed code; use --since REF for committed branch changes or edit/stage "
-            "a selected file before running --apply."
+            f"No selected diff found against {base_ref}. Simplify reviews changed code; "
+            "use --since REF for committed branch changes or edit/stage a selected file "
+            "before running --apply."
         )
         if not quiet:
             console.print(f"[yellow]{msg}[/yellow]")
@@ -877,7 +787,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             success=True,
             exit_code=0,
             cost=0.0,
-            provider="claude",
+            provider=provider_name,
             claude_code_version=version_str,
             slash_command=slash_command,
             files_analyzed=rel_files,
@@ -898,7 +808,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             success=False,
             exit_code=2,
             cost=0.0,
-            provider="claude",
+            provider=provider_name,
             claude_code_version=version_str,
             slash_command=slash_command,
             files_analyzed=rel_files,
@@ -910,7 +820,6 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             summary_lines=["PDD Checkup: simplify", "", msg],
         )
 
-    assert cli_path is not None
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     digests_before = {str(p.resolve()): _file_digest(p) for p in targets}
     _backup_files(targets, repo_root, run_id)
@@ -930,13 +839,15 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             )
             candidate_targets = [candidate_root / rel for rel in rel_files]
             before = {str(path.resolve()): _file_digest(path) for path in candidate_targets}
-            success, summary, cost, _ = run_claude_simplify_command(
-                slash_command,
+            success, summary, cost, attempt_provider = run_simplify_engine_command(
+                requested_engine,
+                rel_files,
                 candidate_root,
-                cli_path=cli_path,
+                focus=settings.focus,
                 verbose=verbose,
                 quiet=quiet,
             )
+            provider_name = attempt_provider or provider_name
             total_cost += cost
             modified = _detect_modified_by_digest(candidate_targets, before, candidate_root)
             checks: Dict[str, str] = {}
@@ -955,7 +866,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             unexpected = sorted(path for path in changed_paths if path not in allowed)
             if unexpected:
                 success = False
-                rejection = "Claude edited out-of-scope files: " + ", ".join(unexpected)
+                rejection = "Agent edited out-of-scope files: " + ", ".join(unexpected)
             artifact_dir.mkdir(parents=True, exist_ok=True)
             _save_candidate_files(artifact_dir, candidate_root, modified)
             candidates.append(
@@ -1004,6 +915,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
                 files_analyzed=rel_files,
                 files_modified=files_modified,
                 slash_command=slash_command,
+                engine=resolved_engine,
                 claude_code_version=version_str,
                 agent_summary=agent_summary,
                 checks=selected_checks,
@@ -1018,6 +930,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
             files_modified=files_modified,
             agent_summary=agent_summary,
             slash_command=slash_command,
+            engine=resolved_engine,
             claude_code_version=version_str,
             checks=selected_checks,
             evidence_path=evidence_path,
@@ -1034,7 +947,7 @@ def run_checkup_simplify(  # pylint: disable=too-many-arguments
         success=success,
         exit_code=exit_code,
         cost=total_cost,
-        provider="claude",
+        provider=provider_name,
         claude_code_version=version_str,
         slash_command=slash_command,
         files_analyzed=rel_files,

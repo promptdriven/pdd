@@ -1,4 +1,4 @@
-"""``pdd checkup simplify`` — Claude Code ``/simplify`` integration."""
+"""``pdd checkup simplify`` — multi-provider simplify integration."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +19,16 @@ from ..track_cost import track_cost
     "--apply",
     is_flag=True,
     default=False,
-    help="Run Claude Code /simplify (edits files). Without this flag, only list targets.",
+    help="Run the simplify agent (edits files). Without this flag, only list targets.",
+)
+@click.option(
+    "--engine",
+    type=click.Choice(["claude", "codex", "gemini", "opencode", "auto"]),
+    default=None,
+    help=(
+        "Simplify engine: claude (Claude Code /simplify), codex, gemini, opencode, "
+        "or auto (prefer claude, else first available agent)."
+    ),
 )
 @click.option(
     "--since",
@@ -64,7 +73,7 @@ from ..track_cost import track_cost
 )
 @click.pass_context
 @track_cost
-def checkup_simplify(  # pylint: disable=too-many-arguments
+def checkup_simplify(  # pylint: disable=too-many-arguments,too-many-locals
     ctx: click.Context,
     *,
     path: Optional[str],
@@ -73,11 +82,12 @@ def checkup_simplify(  # pylint: disable=too-many-arguments
     staged: bool,
     max_files: Optional[int],
     attempts: Optional[int],
+    engine: Optional[str],
     evidence: bool,
     verify: bool,
     no_format: bool,
 ) -> Optional[Tuple[str, float, str]]:
-    """Run Claude Code bundled /simplify over selected source files."""
+    """Run simplify over selected source files using the configured engine."""
     if since and staged:
         raise click.UsageError("--since and --staged are mutually exclusive.")
 
@@ -92,6 +102,7 @@ def checkup_simplify(  # pylint: disable=too-many-arguments
             staged=staged,
             max_files=max_files,
             attempts=attempts,
+            engine=engine,
             evidence=evidence,
             verify=verify,
             no_format=no_format,

@@ -1,6 +1,6 @@
 # `pdd checkup simplify`
 
-Conservative code cleanup via **Claude Code's bundled `/simplify`** skill. Claude's skill runs three review agents, aggregates findings, and applies quality and efficiency fixes. PDD can sample independent results and copy a conservatively selected verified candidate back to your working tree.
+Conservative code cleanup via **Claude Code's bundled `/simplify`** skill (default) or PDD's **agentic providers** (`--engine codex|gemini|opencode|auto`). PDD samples independent results in isolated worktrees and copies a conservatively selected verified candidate back to your working tree.
 
 ## Requirements
 
@@ -22,10 +22,12 @@ claude --version
 pdd checkup simplify
 pdd checkup simplify --since HEAD~1
 
-# Run Claude Code /simplify (edits working copy)
+# Run simplify (edits working copy)
 pdd checkup simplify --apply
 pdd checkup simplify --apply pdd/foo.py --verify
 pdd checkup simplify --apply --since origin/main --attempts 3 --verify --evidence
+pdd checkup simplify --apply --engine codex --verify
+pdd checkup simplify --apply --engine auto --verify
 ```
 
 **`--apply` is required** to invoke `/simplify`. Without it, PDD only lists eligible targets.
@@ -82,6 +84,7 @@ Optional `[tool.pdd.checkup.simplify]` in `pyproject.toml`:
 max_files = 20
 attempts = 3
 focus = "focus on error handling"
+engine = "claude"  # claude | codex | gemini | opencode | auto
 
 [tool.pdd.checkup.simplify.commands]
 format = "ruff format"
@@ -106,9 +109,15 @@ python examples/checkup_simplify_example.py
 
 Reference: [Claude Code command documentation](https://code.claude.com/docs/en/commands).
 
-## Multi-provider profiles (reference)
+## Multi-provider engines
 
-The shipped command still uses Claude Code `/simplify` only. For Codex, Gemini, OpenCode, or IDE
-agents that should follow the same conservative workflow, see
-[checkup_simplify_providers.md](checkup_simplify_providers.md) and
-`pdd/prompts/checkup_simplify_workflow_LLM.prompt`.
+| `--engine` | Runtime |
+|------------|---------|
+| `claude` (default) | Claude Code `/simplify` |
+| `codex` | `checkup_simplify_workflow_LLM.prompt` via `run_agentic_task` (`openai`) |
+| `gemini` | same workflow via `google` |
+| `opencode` | same workflow via `opencode` |
+| `auto` | prefer `claude`, else first available agentic provider |
+
+CLI-specific setup notes for humans and other LLM harnesses:
+[checkup_simplify_providers.md](checkup_simplify_providers.md).
