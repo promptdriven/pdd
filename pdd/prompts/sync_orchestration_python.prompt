@@ -326,11 +326,11 @@ Use these functions from `operation_log` module (already imported above):
 - `load_operation_log(basename, language)` - Load JSONL log entries (handles backward compatibility for entries without `invocation_mode`)
 - `create_log_entry(operation, reason, invocation_mode, estimated_cost, confidence, decision_type)` - Create log entry dict
 - `update_log_entry(entry, success, cost, model, duration, error)` - Add execution results to log entry
-- `append_log_entry(basename, language, entry)` - Append entry to log file
-- `log_event(basename, language, event_type, details, invocation_mode)` - Log system events (lock_acquired, budget_warning, etc.)
-- `save_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
+- `append_log_entry(basename, language, entry, paths=None)` - Append entry to log file; pass `paths=pdd_files` so the log anchors at the subproject `.pdd/meta` (issue #1211)
+- `log_event(basename, language, event_type, details, invocation_mode, paths=None)` - Log system events (lock_acquired, budget_warning, etc.); pass `paths=pdd_files` for subproject anchoring
+- `save_fingerprint(basename, language, operation, paths=None, cost, model)` - Save fingerprint after success; pass `paths=pdd_files` for subproject anchoring
 - `save_run_report(basename, language, report_data)` - Save RunReport dict
-- `clear_run_report(basename, language)` - Remove stale run report
+- `clear_run_report(basename, language, paths=None)` - Remove stale run report; pass `paths=pdd_files` for subproject anchoring
 
 **Creating sync log entries from SyncDecision**: Extract fields from the decision object:
 ```python
