@@ -555,63 +555,63 @@ COMPLETED_TEST_COMMANDS = {'test', 'fix', 'update'}
 
 class SyncLock:
     """Context manager for handling file-descriptor based locking."""
-    
+
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
         self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language.lower()}.lock"
         self.fd = None
         self.current_pid = os.getpid()
-    
+
     def __enter__(self):
         self.acquire()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
-    
+
     def acquire(self):
         """Acquire the lock, handling stale locks and re-entrancy."""
         # Ensure lock directory exists
         self.lock_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             # Check if lock file exists
             if self.lock_file.exists():
                 try:
                     # Read PID from lock file
                     stored_pid = int(self.lock_file.read_text().strip())
-                    
+
                     # Check if this is the same process (re-entrancy)
                     if stored_pid == self.current_pid:
                         return
-                    
+
                     # Check if the process is still running
                     if psutil.pid_exists(stored_pid):
                         raise TimeoutError(f"Lock held by running process {stored_pid}")
-                    
+
                     # Stale lock - remove it
                     self.lock_file.unlink(missing_ok=True)
-                    
+
                 except (ValueError, FileNotFoundError):
                     # Invalid lock file - remove it
                     self.lock_file.unlink(missing_ok=True)
-            
+
             # Create lock file and acquire file descriptor lock
             self.lock_file.touch()
             self.fd = open(self.lock_file, 'w')
-            
+
             if HAS_FCNTL:
                 # POSIX systems
                 fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             elif HAS_MSVCRT:
                 # Windows systems
                 msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
-            
+
             # Write current PID to lock file
             self.fd.write(str(self.current_pid))
             self.fd.flush()
-            
+
         except (IOError, OSError) as e:
             # Ensure file descriptor is closed and lock file removed on ANY failure
             try:
@@ -627,7 +627,7 @@ class SyncLock:
                     pass
             # Re-raise so caller receives the original exception (tests expect RuntimeError etc.)
             raise
-    
+
     def release(self):
         """Release the lock and clean up."""
         if self.fd:
@@ -636,13 +636,13 @@ class SyncLock:
                     fcntl.flock(self.fd.fileno(), fcntl.LOCK_UN)
                 elif HAS_MSVCRT:
                     msvcrt.locking(self.fd.fileno(), msvcrt.LK_UNLCK, 1)
-                
+
                 self.fd.close()
                 self.fd = None
-                
+
                 # Remove lock file
                 self.lock_file.unlink(missing_ok=True)
-                
+
             except (IOError, OSError):
                 # Best effort cleanup
                 pass
@@ -1155,11 +1155,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
                 }
-        
+
         input_file_paths = {
             "prompt_file": prompt_path
         }
-        
+
         # Call construct_paths to get configuration-aware paths
         resolved_config, input_strings, output_file_paths, detected_language = construct_paths(
             input_file_paths=input_file_paths,
@@ -1218,7 +1218,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if not code_dir.endswith('/'):
                     code_dir = code_dir + '/'
                 code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
-        
+
         # Get configured paths for example and test files using construct_paths
         # Note: construct_paths requires files to exist, so we need to handle the case
         # where code file doesn't exist yet (during initial sync startup)
@@ -1230,7 +1230,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_path_obj.parent.mkdir(parents=True, exist_ok=True)
                 code_path_obj.touch()
                 temp_code_created = True
-            
+
             try:
                 # Get example path using example command
                 # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
@@ -1259,12 +1259,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 except FileNotFoundError:
                     # Test file doesn't exist yet - create default path
                     test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
-                
+
             finally:
                 # Clean up temporary file if we created it
                 if temp_code_created and code_path_obj.exists() and code_path_obj.stat().st_size == 0:
                     code_path_obj.unlink()
-            
+
         except Exception as e:
             # Log the specific exception that's causing fallback to wrong paths
             import logging
@@ -1272,7 +1272,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             logger.warning(f"construct_paths failed in get_pdd_file_paths: {type(e).__name__}: {e}")
             logger.warning(f"Falling back to .pddrc-aware path construction")
             logger.warning(f"prompt_path: {prompt_path}, code_path: {code_path}")
-            
+
             # Improved fallback: try to use construct_paths with just prompt_file to get proper directory configs
             try:
                 # Get configured directories by using construct_paths with just the prompt file
@@ -1300,7 +1300,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 except Exception:
                     # If test path construction fails, use default naming
                     test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
-                
+
             except Exception:
                 # Final fallback to deriving from code path if all else fails
                 code_path_obj = Path(code_path)
@@ -1309,11 +1309,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_ext = code_path_obj.suffix
                 example_path = code_dir / f"{code_stem}_example{code_ext}"
                 test_path = code_dir / f"test_{code_stem}{code_ext}"
-        
+
         # Ensure all paths are Path objects
         if isinstance(code_path, str):
             code_path = Path(code_path)
-        
+
         # Keep paths as they are (absolute or relative as returned by construct_paths)
         # This ensures consistency with how construct_paths expects them
 
@@ -1369,7 +1369,7 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists."""
     if not file_path.exists():
         return None
-    
+
     try:
         hasher = hashlib.sha256()
         with open(file_path, 'rb') as f:
@@ -1504,14 +1504,14 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
-    
+
     if not fingerprint_file.exists():
         return None
-    
+
     try:
         with open(fingerprint_file, 'r') as f:
             data = json.load(f)
-        
+
         return Fingerprint(
             pdd_version=data['pdd_version'],
             timestamp=data['timestamp'],
@@ -1532,14 +1532,14 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
     run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
-    
+
     if not run_report_file.exists():
         return None
-    
+
     try:
         with open(run_report_file, 'r') as f:
             data = json.load(f)
-        
+
         return RunReport(
             timestamp=data['timestamp'],
             exit_code=data['exit_code'],
@@ -1600,7 +1600,7 @@ def get_git_diff(file_path: Path) -> str:
             text=True,
             cwd=file_path.parent if file_path.parent.exists() else Path.cwd()
         )
-        
+
         if result.returncode == 0:
             return result.stdout
         else:
@@ -1632,19 +1632,19 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
 def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]:
     """
     Validate that files expected to exist based on fingerprint actually exist.
-    
+
     Args:
         fingerprint: The last known good state fingerprint
         paths: Dict mapping file types to their expected Path objects
-    
+
     Returns:
         Dict mapping file types to existence status
     """
     validation = {}
-    
+
     if not fingerprint:
         return validation
-    
+
     # Check each file type that has a hash in the fingerprint
     if fingerprint.code_hash:
         validation['code'] = paths['code'].exists()
@@ -1652,16 +1652,16 @@ def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str,
         validation['example'] = paths['example'].exists()
     if fingerprint.test_hash:
         validation['test'] = paths['test'].exists()
-        
+
     return validation
 
 
 def _handle_missing_expected_files(
-    missing_files: List[str], 
-    paths: Dict[str, Path], 
+    missing_files: List[str],
+    paths: Dict[str, Path],
     fingerprint: Fingerprint,
-    basename: str, 
-    language: str, 
+    basename: str,
+    language: str,
     prompts_dir: str,
     skip_tests: bool = False,
     skip_verify: bool = False
@@ -1669,7 +1669,7 @@ def _handle_missing_expected_files(
     """
     Handle the case where expected files are missing.
     Determine the appropriate recovery operation.
-    
+
     Args:
         missing_files: List of file types that are missing
         paths: Dict mapping file types to their expected Path objects
@@ -1679,11 +1679,11 @@ def _handle_missing_expected_files(
         prompts_dir: Directory containing prompt files
         skip_tests: If True, skip test generation
         skip_verify: If True, skip verification operations
-    
+
     Returns:
         SyncDecision object with the appropriate recovery operation
     """
-    
+
     # Priority: regenerate from the earliest missing component
     if 'code' in missing_files:
         # Code file missing - start from the beginning
@@ -1697,7 +1697,7 @@ def _handle_missing_expected_files(
                     estimated_cost=estimate_operation_cost('auto-deps'),
                     details={
                         'decision_type': 'heuristic',
-                        'missing_files': missing_files, 
+                        'missing_files': missing_files,
                         'prompt_path': str(paths['prompt']),
                         'has_dependencies': True
                     }
@@ -1710,12 +1710,12 @@ def _handle_missing_expected_files(
                     estimated_cost=estimate_operation_cost('generate'),
                     details={
                         'decision_type': 'heuristic',
-                        'missing_files': missing_files, 
+                        'missing_files': missing_files,
                         'prompt_path': str(paths['prompt']),
                         'has_dependencies': False
                     }
                 )
-    
+
     elif 'example' in missing_files and paths['code'].exists():
         # Code exists but example missing
         return SyncDecision(
@@ -1725,11 +1725,11 @@ def _handle_missing_expected_files(
             estimated_cost=estimate_operation_cost('example'),
             details={
                 'decision_type': 'heuristic',
-                'missing_files': missing_files, 
+                'missing_files': missing_files,
                 'code_path': str(paths['code'])
             }
         )
-    
+
     elif 'test' in missing_files and paths['code'].exists() and paths['example'].exists():
         # Code and example exist but test missing
         if skip_tests:
@@ -1741,7 +1741,7 @@ def _handle_missing_expected_files(
                 estimated_cost=estimate_operation_cost('nothing'),
                 details={
                     'decision_type': 'heuristic',
-                    'missing_files': missing_files, 
+                    'missing_files': missing_files,
                     'skip_tests': True
                 }
             )
@@ -1753,11 +1753,11 @@ def _handle_missing_expected_files(
                 estimated_cost=estimate_operation_cost('test'),
                 details={
                     'decision_type': 'heuristic',
-                    'missing_files': missing_files, 
+                    'missing_files': missing_files,
                     'code_path': str(paths['code'])
                 }
             )
-    
+
     # Fallback - regenerate everything
     return SyncDecision(
         operation='generate',
@@ -1802,13 +1802,13 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
     # Without this, newly generated code would incorrectly be marked as "complete"
     if basename and language:
         run_report = read_run_report(basename, language)
-        
+
         # Bug #349: If tests passed, consider workflow complete even if exit_code != 0
         # This handles cases where tooling (like pytest-cov) returns non-zero exit code
         # despite all tests passing.
         if not run_report:
             return False
-            
+
         # Check for success: either exit_code is 0 OR tests passed successfully
         is_success = (run_report.exit_code == 0) or (run_report.tests_passed > 0 and run_report.tests_failed == 0)
 
@@ -1897,7 +1897,7 @@ def check_for_dependencies(prompt_content: str) -> bool:
         '<web>',
         '<shell>'
     ]
-    
+
     # Check for explicit dependency management mentions
     explicit_dependency_indicators = [
         'auto-deps',
@@ -1906,46 +1906,46 @@ def check_for_dependencies(prompt_content: str) -> bool:
         'requires dependencies',
         'include dependencies'
     ]
-    
+
     prompt_lower = prompt_content.lower()
-    
+
     # Check for XML tags (case-sensitive for proper XML)
     has_xml_deps = any(indicator in prompt_content for indicator in xml_dependency_indicators)
-    
+
     # Check for explicit dependency mentions
     has_explicit_deps = any(indicator in prompt_lower for indicator in explicit_dependency_indicators)
-    
+
     return has_xml_deps or has_explicit_deps
 
 
 def _check_example_success_history(basename: str, language: str) -> bool:
     """
     Check if the example has run successfully before by examining historical fingerprints and run reports.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
-    
+
     Returns:
         True if the example has run successfully before, False otherwise
     """
     meta_dir = get_meta_dir()
-    
+
     # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
     # Cache fingerprint and run report to avoid redundant I/O operations
     fingerprint = read_fingerprint(basename, language)
     current_run_report = read_run_report(basename, language)
-    
+
     # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
     if fingerprint and fingerprint.command == 'verify':
         return True
-    
+
     # Strategy 2: Check current run report for successful runs (exit_code == 0)
     # Note: We check the current run report for successful history since it's updated
     # This allows for a simple check of recent success
     if current_run_report and current_run_report.exit_code == 0:
         return True
-    
+
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
     run_report_pattern = f"{glob.escape(_safe_basename(basename))}_{language.lower()}_run"
@@ -1953,13 +1953,13 @@ def _check_example_success_history(basename: str, language: str) -> bool:
         try:
             with open(file, 'r') as f:
                 data = json.load(f)
-            
+
             # If we find any historical run with exit_code == 0, the example has run successfully
             if data.get('exit_code') == 0:
                 return True
         except (json.JSONDecodeError, KeyError, IOError):
             continue
-    
+
     # Strategy 3: Check if fingerprint has example_hash and was created after successful operations
     # Commands that indicate example was working: 'example', 'verify', 'test', 'fix'
     if fingerprint and fingerprint.example_hash:
@@ -1967,7 +1967,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
         if fingerprint.command in successful_commands:
             # If the fingerprint was created after these commands, the example likely worked
             return True
-    
+
     return False
 
 
@@ -1985,7 +1985,7 @@ def sync_determine_operation(
 ) -> SyncDecision:
     """
     Core decision-making function for sync operations with skip flag awareness.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
@@ -1996,11 +1996,11 @@ def sync_determine_operation(
         skip_tests: If True, skip test generation and execution
         skip_verify: If True, skip verification operations
         read_only: If True, do not mutate metadata while analyzing state
-    
+
     Returns:
         SyncDecision object with the recommended operation
     """
-    
+
     analysis_read_only = read_only or log_mode
     if log_mode or read_only:
         # Skip locking for read-only analysis
@@ -2032,7 +2032,7 @@ def _perform_sync_analysis(
 ) -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
@@ -2042,21 +2042,21 @@ def _perform_sync_analysis(
         skip_tests: If True, skip test generation and execution
         skip_verify: If True, skip verification operations
         read_only: If True, avoid metadata mutations while analyzing state
-    
+
     Returns:
         SyncDecision object with the recommended operation
     """
     # 1. Check Runtime Signals First (Highest Priority)
     # Workflow Order (from whitepaper):
     # 1. auto-deps (find context/dependencies)
-    # 2. generate (create code module)  
+    # 2. generate (create code module)
     # 3. example (create usage example)
     # 4. crash (resolve crashes if code doesn't run)
     # 5. verify (verify example runs correctly after crash fix)
     # 6. test (generate unit tests)
     # 7. fix (resolve bugs found by tests)
     # 8. update (sync changes back to prompt)
-    
+
     # Read fingerprint early since we need it for crash verification
     fingerprint = read_fingerprint(basename, language)
 
@@ -2136,7 +2136,7 @@ def _perform_sync_analysis(
                     'fingerprint_command': fingerprint.command
                 }
             )
-        
+
         # Check test failures (after crash verification check)
         if run_report.tests_failed > 0:
             # First check if the test file actually exists
@@ -2171,7 +2171,7 @@ def _perform_sync_analysis(
                         'test_file_exists': False
                     }
                 )
-        
+
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
             # Bug #349: If tests passed, ignore non-zero exit code (likely tooling noise)
@@ -2210,7 +2210,7 @@ def _perform_sync_analysis(
                             'decision_rationale': 'crash_without_history'
                         }
                     )
-        
+
         if run_report.coverage < target_coverage:
             if skip_tests:
                 # When tests are skipped but coverage is low, consider workflow complete
@@ -2353,13 +2353,13 @@ def _perform_sync_analysis(
                         'tests_failed': run_report.tests_failed
                     }
                 )
-    
+
     # 2. Analyze File State
     paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
     # Issue #522: Pass stored include deps so prompt hash accounts for dependency changes
     stored_deps = fingerprint.include_deps if fingerprint else None
     current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-    
+
     # 3. Implement the Decision Tree
     if not fingerprint:
         # No Fingerprint (New or Untracked Unit)
@@ -2403,22 +2403,22 @@ def _perform_sync_analysis(
                     'fingerprint_found': False
                 }
             )
-    
+
     # CRITICAL FIX: Validate expected files exist before hash comparison
     if fingerprint:
         file_validation = validate_expected_files(fingerprint, paths)
         missing_expected_files = [
-            file_type for file_type, exists in file_validation.items() 
+            file_type for file_type, exists in file_validation.items()
             if not exists
         ]
-        
+
         if missing_expected_files:
             # Files are missing that should exist - need to regenerate
             # This prevents the incorrect analyze_conflict decision
             return _handle_missing_expected_files(
                 missing_expected_files, paths, fingerprint, basename, language, prompts_dir, skip_tests, skip_verify
             )
-    
+
     # Compare hashes only for files that actually exist (prevents None != "hash" false positives)
     changes = []
     if fingerprint:
@@ -2431,7 +2431,7 @@ def _perform_sync_analysis(
             changes.append('example')
         if paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
             changes.append('test')
-    
+
     if not changes:
         # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
         if _is_workflow_complete(paths, skip_tests, skip_verify, basename, language):
@@ -2457,7 +2457,7 @@ def _perform_sync_analysis(
             if not run_report or run_report.exit_code != 0:
                 # Bug #349: If tests passed, ignore non-zero exit code
                 tests_passed_successfully = run_report and run_report.tests_passed > 0 and run_report.tests_failed == 0
-                
+
                 if not tests_passed_successfully:
                     return SyncDecision(
                         operation='crash',
@@ -2495,7 +2495,7 @@ def _perform_sync_analysis(
             # Need to re-run tests to get accurate results
             # Bug #349: Also check if tests passed successfully even if exit_code != 0
             is_success = run_report and ((run_report.exit_code == 0) or (run_report.tests_passed > 0 and run_report.tests_failed == 0))
-            
+
             if is_success:
                 return SyncDecision(
                     operation='test',
@@ -2525,7 +2525,7 @@ def _perform_sync_analysis(
                     'example_exists': False
                 }
             )
-        
+
         if (paths['code'].exists() and paths['example'].exists() and
             not skip_tests and not paths['test'].exists()):
 
@@ -2616,7 +2616,7 @@ def _perform_sync_analysis(
                         'workflow_stage': 'test_generation'
                     }
                 )
-        
+
         # Some files are missing but no changes detected
         if not paths['code'].exists():
             if paths['prompt'].exists():
@@ -2635,7 +2635,7 @@ def _perform_sync_analysis(
                             'previous_command': fingerprint.command
                         }
                     )
-                
+
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
                 if check_for_dependencies(prompt_content):
                     return SyncDecision(
@@ -2663,11 +2663,11 @@ def _perform_sync_analysis(
                             'has_dependencies': False
                         }
                     )
-    
+
     elif len(changes) == 1:
         # Simple Changes (Single File Modified)
         change = changes[0]
-        
+
         if change == 'prompt':
             prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
             if check_for_dependencies(prompt_content):
@@ -2696,7 +2696,7 @@ def _perform_sync_analysis(
                         'prompt_changed': True
                     }
                 )
-        
+
         elif change == 'code':
             return SyncDecision(
                 operation='update',
@@ -2709,7 +2709,7 @@ def _perform_sync_analysis(
                     'code_changed': True
                 }
             )
-        
+
         elif change == 'test':
             return SyncDecision(
                 operation='test',
@@ -2722,7 +2722,7 @@ def _perform_sync_analysis(
                     'test_changed': True
                 }
             )
-        
+
         elif change == 'example':
             return SyncDecision(
                 operation='verify',
@@ -2735,7 +2735,7 @@ def _perform_sync_analysis(
                     'example_changed': True
                 }
             )
-    
+
     else:
         # Complex Changes (Multiple Files Modified)
         # CRITICAL: Only treat as conflict if prompt changed along with derived artifacts
@@ -2839,7 +2839,7 @@ def _perform_sync_analysis(
                         'prompt_changed': False
                     }
                 )
-    
+
     # Fallback - should not reach here normally
     return SyncDecision(
         operation='nothing',
@@ -2865,18 +2865,18 @@ def analyze_conflict_with_llm(
 ) -> SyncDecision:
     """
     Resolve complex sync conflicts using an LLM.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
         fingerprint: The last known good state
         changed_files: List of files that have changed
         prompts_dir: Directory containing prompt files
-    
+
     Returns:
         SyncDecision object with LLM-recommended operation
     """
-    
+
     try:
         # 1. Load LLM Prompt
         prompt_template = load_prompt_template("sync_analysis_LLM")
@@ -2893,10 +2893,10 @@ def analyze_conflict_with_llm(
                     'changed_files': changed_files
                 }
             )
-        
+
         # 2. Gather file paths and diffs
         paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
-        
+
         # Generate diffs for changed files
         # Escape braces in diffs to prevent .format() from interpreting
         # code content like {uid} as template placeholders
@@ -2911,7 +2911,7 @@ def analyze_conflict_with_llm(
             else:
                 diffs[f"{file_type}_diff"] = ""
                 diffs[f"{file_type}_path"] = str(paths.get(file_type, ''))
-        
+
         # 3. Format the prompt
         formatted_prompt = prompt_template.format(
             fingerprint=json.dumps({
@@ -2933,7 +2933,7 @@ def analyze_conflict_with_llm(
             example_path=diffs.get('example_path', ''),
             test_path=diffs.get('test_path', '')
         )
-        
+
         # 4. Invoke LLM with caching for determinism
         response = llm_invoke(
             prompt=formatted_prompt,
@@ -2942,16 +2942,16 @@ def analyze_conflict_with_llm(
             temperature=0.0,  # Use temperature 0 for deterministic output
             verbose=False
         )
-        
+
         # 5. Parse and validate response
         try:
             llm_result = json.loads(response['result'])
-            
+
             # Validate required keys
             required_keys = ['next_operation', 'reason', 'confidence']
             if not all(key in llm_result for key in required_keys):
                 raise ValueError("Missing required keys in LLM response")
-            
+
             # Check confidence threshold
             confidence = float(llm_result.get('confidence', 0.0))
             if confidence < 0.75:
@@ -2967,13 +2967,13 @@ def analyze_conflict_with_llm(
                         'confidence_threshold': 0.75
                     }
                 )
-            
+
             # Extract operation and details
             operation = llm_result['next_operation']
             reason = llm_result['reason']
             merge_strategy = llm_result.get('merge_strategy', {})
             follow_up_operations = llm_result.get('follow_up_operations', [])
-            
+
             return SyncDecision(
                 operation=operation,
                 reason=f"LLM analysis: {reason}",
@@ -2988,7 +2988,7 @@ def analyze_conflict_with_llm(
                 },
                 prerequisites=follow_up_operations
             )
-            
+
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             # Invalid LLM response - fallback to manual merge
             return SyncDecision(
@@ -3004,7 +3004,7 @@ def analyze_conflict_with_llm(
                     'llm_error': True
                 }
             )
-    
+
     except Exception as e:
         # Any other error - fallback to manual merge
         return SyncDecision(
@@ -3026,13 +3026,13 @@ if __name__ == "__main__":
     if len(sys.argv) < 3 or len(sys.argv) > 4:
         print("Usage: python sync_determine_operation.py <basename> <language> [target_coverage]")
         sys.exit(1)
-    
+
     basename = sys.argv[1]
     language = sys.argv[2]
     target_coverage = float(sys.argv[3]) if len(sys.argv) == 4 else 90.0
-    
+
     decision = sync_determine_operation(basename, language, target_coverage)
-    
+
     print(f"Operation: {decision.operation}")
     print(f"Reason: {decision.reason}")
     print(f"Estimated Cost: ${decision.estimated_cost:.2f}")

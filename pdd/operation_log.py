@@ -104,17 +104,17 @@ def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[
 def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:
     """
     Load all log entries for a module.
-    
+
     Args:
         basename: Module basename.
         language: Module language.
-        
+
     Returns:
         List of log entries (dictionaries).
     """
     log_path = get_log_path(basename, language)
     entries = []
-    
+
     if log_path.exists():
         try:
             with open(log_path, 'r', encoding='utf-8') as f:
@@ -131,29 +131,29 @@ def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:
         except Exception:
             # If log is corrupt or unreadable, return empty list rather than crashing
             pass
-            
+
     return entries
 
 
 def append_log_entry(
-    basename: str, 
-    language: str, 
+    basename: str,
+    language: str,
     entry: Dict[str, Any]
 ) -> None:
     """
     Append a single entry to the module's sync log.
-    
+
     Args:
         basename: Module basename.
         language: Module language.
         entry: Dictionary of data to log.
     """
     log_path = get_log_path(basename, language)
-    
+
     # Ensure standard fields exist
     if "timestamp" not in entry:
         entry["timestamp"] = datetime.now().isoformat()
-    
+
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry) + "\n")
