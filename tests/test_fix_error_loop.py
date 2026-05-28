@@ -1852,3 +1852,117 @@ def test_fix_error_loop_non_python_subprocess_has_cwd(
         f"got cwd={actual_cwd}. fix_error_loop must use TestCommand.cwd, "
         f"not Path(test_file).parent ({test_dir})."
     )
+
+
+# ============================================================================
+# Failure-aware retry: syntax/import early-exit and classification hint
+# ============================================================================
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_failure_aware_syntax_stops_after_one_attempt_when_signature_unchanged(
+    mock_subprocess, mock_fix, mock_pytest, mock_files, tmp_path
+):
+    """
+    Regression: when the initial failure is a syntax/import error, and the LLM
+    fix does not change the error signature, the loop must stop after exactly
+    one LLM attempt -- not two.
+
+    The bug was that last_syntax_signature started as "" so the first unchanged
+    signature never matched, burning a second LLM call before stopping.
+    """
+    code, test, prompt = mock_files
+
+    # A log string that classify_failure() recognises as SYNTAX_IMPORT and
+    # extract_failure_signature() yields a stable, non-empty signature for.
+    syntax_log = (
+        'FAILED tests/test_code.py\n'
+        'ImportError while loading conftest\n'
+        'E   ImportError: No module named "missing_dep"\n'
+        '  File "code.py", line 3, in <module>\n'
+        '    import missing_dep\n'
+    )
+
+    # Initial run: syntax error.  Post-fix run: identical syntax error.
+    mock_pytest.side_effect = [
+        (1, 0, 0, syntax_log),
+        (1, 0, 0, syntax_log),
+    ]
+
+    # LLM returns something (but the underlying failure is unchanged).
+    mock_fix.return_value = (False, True, "", "def foo(): pass", "analysis", 0.1, "mock-model")
+
+    # Verification program succeeds so we don't short-circuit through that path.
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+    mock_subprocess.return_value.stderr = ""
+
+    fix_error_loop(
+        test, code, prompt, "prompt", "verify.py",
+        strength=0.5, temperature=0.0, max_attempts=5, budget=10.0,
+        failure_aware_retries=True,
+        agentic_fallback=False,
+        error_log_file=str(tmp_path / "error_log.txt"),
+    )
+
+    assert mock_fix.call_count == 1, (
+        f"Expected exactly 1 LLM attempt before stopping on unchanged syntax error, "
+        f"got {mock_fix.call_count}. The loop burned extra attempts because "
+        "last_syntax_signature was not seeded from the initial failure."
+    )
+
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_fix_errors_receives_failure_classification_hint(
+    mock_subprocess, mock_fix, mock_pytest, mock_files, tmp_path
+):
+    """
+    The local fix_errors_from_unit_tests call must receive failure_classification=
+    populated from failure_classification_hint() when failure_aware_retries=True.
+    Without this, the LLM prompt's <failure_classification> block says
+    'Not classified' even for known failure kinds.
+    The cloud fallback-to-local path must also pass the parameter.
+    """
+    code, test, prompt = mock_files
+
+    syntax_log = (
+        'SyntaxError: invalid syntax\n'
+        '  File "code.py", line 7\n'
+        '    def broken(\n'
+    )
+
+    # Initial fail, then pass so the loop exits cleanly after one attempt.
+    mock_pytest.side_effect = [
+        (1, 0, 0, syntax_log),
+        (0, 0, 0, "passed"),
+    ]
+
+    mock_fix.return_value = (False, True, "", "def foo(): pass", "analysis", 0.1, "mock-model")
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+    mock_subprocess.return_value.stderr = ""
+
+    fix_error_loop(
+        test, code, prompt, "prompt", "verify.py",
+        strength=0.5, temperature=0.0, max_attempts=3, budget=10.0,
+        failure_aware_retries=True,
+        agentic_fallback=False,
+        error_log_file=str(tmp_path / "error_log.txt"),
+    )
+
+    assert mock_fix.call_count >= 1, "fix_errors_from_unit_tests should have been called"
+
+    # Extract the failure_classification kwarg from the first call.
+    _, kwargs = mock_fix.call_args_list[0]
+    classification = kwargs.get("failure_classification")
+    assert classification is not None, (
+        "fix_errors_from_unit_tests was called without failure_classification=. "
+        "The LLM prompt's <failure_classification> block will say 'Not classified' "
+        "even for syntax/import failures."
+    )
+    assert "syntax" in classification.lower(), (
+        f"Expected classification hint to mention 'syntax', got: {classification!r}"
+    )

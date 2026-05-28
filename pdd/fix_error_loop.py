@@ -400,7 +400,10 @@ def fix_error_loop(
     best_state: dict[str, Any] = {"fails": fails, "errs": errs, "warns": warns, "code": code_content, "test": unit_test_content, "iteration": 0}
     current_state = dict(best_state)
     consecutive_timeouts_without_improvement = 0
-    last_syntax_signature = ""
+    if failure_aware_retries and classify_failure(output_log) == FailureKind.SYNTAX_IMPORT:
+        last_syntax_signature = extract_failure_signature(output_log)
+    else:
+        last_syntax_signature = ""
 
     for attempt in range(1, max_attempts + 1):
         last_attempt = attempt
@@ -432,30 +435,30 @@ def fix_error_loop(
                     target_test, target_code, prompt, output_log, error_log_file, strength, temperature, verbose, time, ext, effective_protect_tests, classification
                 )
             else:
-                local_error_payload = f"[PDD failure classification] {classification}\n{output_log}" if classification else output_log
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                    target_test, target_code, prompt, local_error_payload, error_log_file,
+                    target_test, target_code, prompt, output_log, error_log_file,
                     strength=strength,
                     temperature=temperature,
                     time=time,
                     verbose=verbose,
                     protect_tests=effective_protect_tests,
+                    failure_classification=classification,
                 )
         except Exception as exc:
             if use_cloud:
                 try:
-                    local_error_payload = f"[PDD failure classification] {classification}\n{output_log}" if classification else output_log
                     update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                         unit_test=target_test,
                         code=target_code,
                         prompt=prompt,
-                        error=local_error_payload,
+                        error=output_log,
                         error_file=error_log_file,
                         strength=strength,
                         temperature=temperature,
                         time=time,
                         verbose=verbose,
                         protect_tests=effective_protect_tests,
+                        failure_classification=classification,
                     )
                 except Exception as local_exc:
                     with open(error_log_file, "a", encoding="utf-8") as log_file:
