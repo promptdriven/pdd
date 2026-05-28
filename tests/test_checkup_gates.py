@@ -758,6 +758,160 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "ruff-format" not in names
 
+    def test_pyproject_opt_in_ignores_pre_commit_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-10 finding 1: ``[tool.ruff.format]`` opts in all
+        Python files. A pre-commit hook with ``files: ^src/`` must NOT
+        filter the gate's file list — that scope belongs to the pre-commit
+        step, not to ``ruff format`` invoked directly. Pre-fix code applied
+        the scope unconditionally, silently dropping files outside the hook
+        scope even when pyproject.toml was the opt-in.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "code.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        # pyproject opts in via [tool.ruff.format].
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff.format]\nquote-style = 'double'\n", encoding="utf-8"
+        )
+        # Pre-commit hook is scoped to src/ only — must NOT filter the gate.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        files: ^src/\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("src/code.py", "tests/a.py"),
+            )
+        by_name = {g.name: g for g in gates}
+        assert "ruff-format" in by_name
+        cmd = by_name["ruff-format"].cmd
+        # Both files must appear — pyproject scope is "all Python files".
+        assert "src/code.py" in cmd
+        assert "tests/a.py" in cmd
+
+    def test_skips_ruff_format_when_pr_narrowed_pre_commit_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-10 finding 2: a PR that changes ``files:``/``exclude:``
+        so changed files are excluded must NOT silently remove the gate.
+        The ``_file_has_unchanged_ruff_format_signal`` helper must also
+        compare the scope and return False when it changed.
+        """
+        import subprocess
+
+        from pdd.checkup_gates import discover_gates
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=tmp_path, check=True, capture_output=True
+            )
+
+        _git_init(tmp_path)
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # BASE: hook covers all Python files (no files: restriction).
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        # PR: narrows the scope to ^src/ — ``a.py`` would now be excluded.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        files: ^src/\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "narrow ruff-format scope")
+        import shutil as _shutil
+        _real_which = _shutil.which
+
+        def _which_ruff_only(name: str, **kw: object) -> object:
+            if name == "ruff":
+                return "/usr/bin/ruff"
+            return _real_which(name, **kw)
+
+        with patch(
+            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".pre-commit-config.yaml"),
+                base_ref="HEAD~1",
+            )
+        names = {g.name for g in gates}
+        # Scope changed → treat as PR-modified signal → gate must NOT fire
+        # from the CI-signal branch. (No pyproject opt-in either.)
+        assert "ruff-format" not in names
+
+    def test_multi_hook_union_covers_all_scopes(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-10 finding 3: when ``.pre-commit-config.yaml``
+        declares multiple ``id: ruff-format`` hooks with different
+        ``files:`` scopes, a file covered by ANY hook must appear in
+        the gate's argv. Pre-fix returned after the first hook, so files
+        covered only by later hooks were never format-checked.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "code.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "scripts").mkdir()
+        (tmp_path / "scripts" / "run.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # Two hooks with different scopes — union should cover both dirs.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        files: ^src/\n"
+            "      - id: ruff-format\n"
+            "        files: ^scripts/\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("src/code.py", "scripts/run.py"),
+            )
+        by_name = {g.name: g for g in gates}
+        assert "ruff-format" in by_name
+        cmd = by_name["ruff-format"].cmd
+        # Both files must appear via union of the two hook scopes.
+        assert "src/code.py" in cmd
+        assert "scripts/run.py" in cmd
+
     def test_emits_ruff_format_when_ci_signal_present_and_no_tool_ruff_section(
         self, tmp_path: Path
     ) -> None:

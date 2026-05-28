@@ -1470,18 +1470,22 @@ def _discover_python_gates(
             base_ref=base_ref,
         )
         if _tool_section_present("ruff.format") or ci_signaled:
-            # Codex pass-8 finding 3: respect the pre-commit hook's
-            # ``files:`` / ``exclude:`` scope when declared. Without
-            # this filter the gate would run ``ruff format --check
-            # -- <changed_py>`` against files the configured
-            # ruff-format hook would not check, producing
-            # false-positive blockers on paths CI's pre-commit step
-            # ignores. When no pre-commit scope is declared, fall
-            # back to the full ``changed_py`` set (pyproject opt-in
-            # has no per-file scope).
-            ruff_format_py = _filter_changed_py_for_ruff_format(
-                worktree, changed_py
-            )
+            if _tool_section_present("ruff.format"):
+                # Codex pass-9 finding 1: pyproject.toml ``[tool.ruff.format]``
+                # opts in all Python files. The pre-commit hook's
+                # ``files:``/``exclude:`` scope belongs to CI's pre-commit
+                # step, NOT to the pyproject setting. Applying it here would
+                # silently skip files that ``ruff format`` (invoked directly)
+                # would check, re-opening the CI-parity gap (#1433 Bug #2).
+                ruff_format_py = list(changed_py)
+            else:
+                # CI-signal opt-in: filter by the pre-commit hook scope so
+                # the gate only checks files the configured hook would see
+                # (codex pass-8 finding 3). A file is kept when it falls
+                # within ANY declared hook's scope (pass-9 finding 3 union).
+                ruff_format_py = _filter_changed_py_for_ruff_format(
+                    worktree, changed_py
+                )
             if ruff_format_py:
                 source_label = (
                     "pyproject.toml:[tool.ruff.format]"
@@ -2228,49 +2232,34 @@ def _sanitized_path(worktree: Path) -> str:
 _RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
 
 
-def _ruff_format_pre_commit_scope(
-    worktree: Path,
-) -> Optional[Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]]:
-    """Return the (files_regex, exclude_regex) scope of the
-    ``ruff-format`` hook declared in ``.pre-commit-config.yaml``.
+def _parse_ruff_format_scopes_from_text(
+    text: str,
+) -> List[Tuple[Optional[str], Optional[str]]]:
+    """Return raw ``(files_pat, exclude_pat)`` string pairs for ALL
+    ``id: ruff-format`` hooks found in YAML text.
 
-    Codex pass-8 finding 3: pre-commit hooks can scope file matching
-    via ``files:`` / ``exclude:`` regex patterns (and the file-level
-    top-level fields apply as defaults). When a project declares a
-    scoped ruff-format hook (e.g. ``files: ^src/``), running ``ruff
-    format --check`` against the worktree's full ``changed_py``
-    would block files the configured hook would not check. The
-    helper returns the resolved (files_regex, exclude_regex) tuple
-    so the caller can filter ``changed_py`` accordingly. Hook-level
-    fields override top-level fields; either may be ``None`` when
-    not declared. Returns ``None`` when no ``.pre-commit-config
-    .yaml`` exists, parsing fails, or no ``ruff-format`` hook is
-    declared — the caller MUST fall back to no scope filter in that
-    case (pyproject ``[tool.ruff.format]`` opt-in has no per-file
-    scope).
+    Shared by ``_ruff_format_pre_commit_scope`` (scope filtering) and
+    ``_file_has_unchanged_ruff_format_signal`` (scope-change comparison).
+    Returns an empty list on parse error or when no such hook exists.
+    Hook-level ``files:``/``exclude:`` override the top-level defaults
+    for that hook.
     """
     import yaml  # local import to keep top-of-module imports tight
 
-    pcc = worktree / ".pre-commit-config.yaml"
-    if not pcc.is_file():
-        return None
     try:
-        data = yaml.safe_load(pcc.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, yaml.YAMLError) as exc:
-        logger.debug(
-            "ruff-format pre-commit scope parse failed: %s",
-            type(exc).__name__,
-        )
-        return None
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
     if not isinstance(data, dict):
-        return None
+        return []
     top_files = data.get("files") if isinstance(data.get("files"), str) else None
     top_exclude = (
         data.get("exclude") if isinstance(data.get("exclude"), str) else None
     )
     repos = data.get("repos")
     if not isinstance(repos, list):
-        return None
+        return []
+    scopes: List[Tuple[Optional[str], Optional[str]]] = []
     for repo in repos:
         if not isinstance(repo, dict):
             continue
@@ -2278,9 +2267,7 @@ def _ruff_format_pre_commit_scope(
         if not isinstance(hooks, list):
             continue
         for hook in hooks:
-            if not isinstance(hook, dict):
-                continue
-            if hook.get("id") != "ruff-format":
+            if not isinstance(hook, dict) or hook.get("id") != "ruff-format":
                 continue
             hook_files = (
                 hook.get("files") if isinstance(hook.get("files"), str) else None
@@ -2290,49 +2277,95 @@ def _ruff_format_pre_commit_scope(
                 if isinstance(hook.get("exclude"), str)
                 else None
             )
-            files_pat = hook_files if hook_files is not None else top_files
-            exclude_pat = (
-                hook_exclude if hook_exclude is not None else top_exclude
-            )
-            files_re: Optional["re.Pattern[str]"] = None
-            exclude_re: Optional["re.Pattern[str]"] = None
-            if files_pat:
-                try:
-                    files_re = re.compile(files_pat)
-                except re.error:
-                    pass
-            if exclude_pat:
-                try:
-                    exclude_re = re.compile(exclude_pat)
-                except re.error:
-                    pass
-            return (files_re, exclude_re)
-    return None
+            scopes.append((
+                hook_files if hook_files is not None else top_files,
+                hook_exclude if hook_exclude is not None else top_exclude,
+            ))
+    return scopes
+
+
+def _ruff_format_pre_commit_scope(
+    worktree: Path,
+) -> Optional[List[Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]]]:
+    """Return compiled ``(files_re, exclude_re)`` pairs for ALL
+    ``id: ruff-format`` hooks in ``.pre-commit-config.yaml``.
+
+    Codex pass-8 finding 3: pre-commit hooks can scope file matching
+    via ``files:``/``exclude:`` regex patterns. Running ``ruff format
+    --check`` against the full ``changed_py`` would block files the
+    configured hook would not check.
+
+    Codex pass-9 finding 3: pre-fix returned after the FIRST matching
+    hook, silently dropping later hooks with different scopes. Now
+    returns a list with one entry per hook so callers can union them.
+
+    Returns ``None`` when the file is absent or unparseable (caller
+    falls back to no scope filter). Returns an empty list when the file
+    is present but declares no ``ruff-format`` hook (also treated as no
+    filter by the caller).
+    """
+    pcc = worktree / ".pre-commit-config.yaml"
+    if not pcc.is_file():
+        return None
+    try:
+        text = pcc.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.debug(
+            "ruff-format pre-commit scope read failed: %s",
+            type(exc).__name__,
+        )
+        return None
+    raw_scopes = _parse_ruff_format_scopes_from_text(text)
+    if not raw_scopes:
+        return None
+    result: List[
+        Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]
+    ] = []
+    for files_pat, exclude_pat in raw_scopes:
+        files_re: Optional["re.Pattern[str]"] = None
+        exclude_re: Optional["re.Pattern[str]"] = None
+        if files_pat:
+            try:
+                files_re = re.compile(files_pat)
+            except re.error:
+                pass
+        if exclude_pat:
+            try:
+                exclude_re = re.compile(exclude_pat)
+            except re.error:
+                pass
+        result.append((files_re, exclude_re))
+    return result
 
 
 def _filter_changed_py_for_ruff_format(
     worktree: Path, changed_py: Sequence[str]
 ) -> List[str]:
-    """Apply the ``.pre-commit-config.yaml`` ruff-format hook's
-    file scope to ``changed_py`` (codex pass-8 finding 3).
+    """Apply all ``.pre-commit-config.yaml`` ruff-format hook scopes to
+    ``changed_py``.
 
-    Returns ``changed_py`` unchanged when no scope is declared. Drops
-    paths that match the hook's ``exclude`` regex; keeps only paths
-    that match the hook's ``files`` regex when one is declared.
+    Codex pass-8 finding 3: filter by pre-commit hook scope so the
+    gate only checks files the configured hook would see.
+
+    Codex pass-9 finding 3: a file is kept when it falls within ANY
+    declared hook's scope (union). Pre-fix kept only files within the
+    FIRST hook's scope, silently dropping files that later hooks covered.
+
+    Returns ``changed_py`` unchanged when no scope is declared or when
+    the pre-commit config is absent/unreadable (fail-open).
     """
-    scope = _ruff_format_pre_commit_scope(worktree)
-    if scope is None:
-        return list(changed_py)
-    files_re, exclude_re = scope
-    if files_re is None and exclude_re is None:
+    scopes = _ruff_format_pre_commit_scope(worktree)
+    if not scopes:
         return list(changed_py)
     out: List[str] = []
     for path in changed_py:
-        if files_re is not None and not files_re.search(path):
-            continue
-        if exclude_re is not None and exclude_re.search(path):
-            continue
-        out.append(path)
+        for files_re, exclude_re in scopes:
+            if files_re is not None and not files_re.search(path):
+                continue
+            if exclude_re is not None and exclude_re.search(path):
+                continue
+            out.append(path)
+            break
     return out
 
 
@@ -2395,18 +2428,22 @@ def _file_has_unchanged_ruff_format_signal(
     worktree: Path, rel_path: str, base_ref: Optional[str]
 ) -> bool:
     """Return True if ``rel_path`` carries the ruff-format signal at
-    BOTH ``base_ref`` and the worktree version. Used by
-    ``_ruff_format_signaled_by_ci`` to distinguish a PR-introduced
-    signal (the PR diff just added ``id: ruff-format``) from an
-    unchanged signal (the file has it, the PR happened to touch
-    some other section). Codex pass-8 finding 2 — pre-fix whole-
-    file exclusion missed the latter case.
+    BOTH ``base_ref`` and the worktree version, AND the pre-commit hook
+    scope (``files:``/``exclude:``) is unchanged between those versions.
 
-    Fail-OPEN behaviour:
-    - If ``base_ref`` is missing or unresolvable, fall back to
-      the conservative pre-pass-8 behaviour (treat as if signal is
-      changed, i.e., do NOT trust it).
-    - If the post-PR version no longer has the signal, return False.
+    Codex pass-8 finding 2: distinguishes a PR-introduced signal from an
+    unchanged one. Pre-fix whole-file exclusion missed unchanged signals in
+    files touched for unrelated reasons.
+
+    Codex pass-9 finding 2: pre-fix only compared the regex presence; a PR
+    could narrow ``files:``/``exclude:`` to suppress the gate against its
+    own files even when ``id: ruff-format`` was already present. Now also
+    requires the set of ``(files_pat, exclude_pat)`` pairs to be identical
+    between base and HEAD. If the scope set changed the function returns
+    False (fail-open: no gate from a file where the PR touched the scope).
+
+    Fail-open: missing ``base_ref``, unresolvable git read, or missing
+    signal at either version all return False.
     """
     try:
         post_text = (worktree / rel_path).read_text(
@@ -2421,9 +2458,14 @@ def _file_has_unchanged_ruff_format_signal(
     pre_text = _git_show_text(worktree, base_ref, rel_path)
     if pre_text is None:
         return False
-    return bool(
-        _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(pre_text))
-    )
+    if not _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(pre_text)):
+        return False
+    # Codex pass-9 finding 2: also require scope unchanged.
+    pre_scopes = set(_parse_ruff_format_scopes_from_text(pre_text))
+    post_scopes = set(_parse_ruff_format_scopes_from_text(post_text))
+    if pre_scopes != post_scopes:
+        return False
+    return True
 
 
 def _ruff_format_signaled_by_ci(
