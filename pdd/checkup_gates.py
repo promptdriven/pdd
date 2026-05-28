@@ -2197,19 +2197,6 @@ def _sanitized_path(worktree: Path) -> str:
     return os.pathsep.join(clean)
 
 
-# Codex pass-7 finding 1: the original pattern (``\bruff\s+format\b``)
-# only matched the literal CI invocation form (``ruff format
-# --check``). Real-world ``.pre-commit-config.yaml`` files declare
-# the canonical hook via ``id: ruff-format`` (hyphen, not space), so
-# the pre-fix helper missed every project that uses the standard
-# pre-commit form. ``\bruff[\s-]+format\b`` matches both ``ruff
-# format`` (CI run lines) AND ``ruff-format`` (pre-commit hook id),
-# while ``\b`` word boundaries keep ``ruff_format`` / ``ruff.format``
-# substrings (file paths, attribute names) from triggering false
-# positives.
-# Used ONLY for .pre-commit-config.yaml where the hook id form is canonical.
-_RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
-
 # Codex pass-11 finding 2: workflow/CloudBuild YAML can contain
 # non-executable text like ``name: ruff format migration`` that
 # still matches a bare ``\bruff\s+format\b`` regex (the step *name*
@@ -2275,18 +2262,68 @@ def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
     return hooks_out
 
 
+# The pre-commit stage that never runs as part of the normal commit/CI
+# flow — a hook gated to it (explicitly via ``stages:`` or by inheriting
+# top-level ``default_stages``) runs only on an explicit
+# ``pre-commit run --hook-stage manual`` invocation.
+_PRE_COMMIT_MANUAL_STAGE = "manual"
+
+
+def _hook_runs_automatically(hook: Dict[str, object]) -> bool:
+    """Return True if a parsed (stage-merged) pre-commit hook runs as part
+    of the normal commit/CI flow rather than manual-only.
+
+    ``_parse_ruff_format_hooks_from_text`` merges top-level
+    ``default_stages`` into each hook's ``stages`` when the hook declares
+    none, so ``hook["stages"]`` reflects the EFFECTIVE stages. A hook with
+    no effective stages runs by default. A hook whose effective stages are
+    exactly the manual stage never runs automatically and MUST NOT count
+    as a ruff-format opt-in signal (issue #1433 review: an unchanged
+    ``stages: [manual]`` hook — or one inheriting top-level
+    ``default_stages: [manual]`` — was emitting a false blocking
+    ruff-format gate for ordinary changed Python files).
+    """
+    stages = hook.get("stages")
+    if isinstance(stages, str):
+        # Scalar form (e.g. ``stages: manual``): treat as a 1-element list
+        # so a manual-only scalar is honoured rather than mis-read as active.
+        stages = [stages]
+    if not isinstance(stages, list) or not stages:
+        return True
+    return any(s != _PRE_COMMIT_MANUAL_STAGE for s in stages)
+
+
+def _pre_commit_has_active_ruff_format(text: str) -> bool:
+    """Return True if ``.pre-commit-config.yaml`` text declares at least
+    one ``id: ruff-format`` hook that runs automatically (not manual-only).
+
+    This is the stage-aware pre-commit opt-in signal: a config whose only
+    ruff-format hook is manual-only (explicit ``stages: [manual]`` or an
+    inherited top-level ``default_stages: [manual]``) does NOT signal.
+    """
+    return any(
+        _hook_runs_automatically(hook)
+        for hook in _parse_ruff_format_hooks_from_text(text)
+    )
+
+
 def _parse_ruff_format_scopes_from_text(
     text: str,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
-    """Return raw ``(files_pat, exclude_pat)`` string pairs for ALL
-    ``id: ruff-format`` hooks found in YAML text.
+    """Return raw ``(files_pat, exclude_pat)`` string pairs for every
+    AUTOMATICALLY-RUNNING ``id: ruff-format`` hook found in YAML text.
 
-    Delegates to ``_parse_ruff_format_hooks_from_text`` and extracts
-    only the scope fields. Returns an empty list on parse error or when
-    no such hook exists.
+    Delegates to ``_parse_ruff_format_hooks_from_text`` and extracts only
+    the scope fields. Manual-only hooks (``stages: [manual]`` or inherited
+    ``default_stages: [manual]``) are skipped so their scope never narrows
+    or widens the gate's file set (issue #1433 review: the scope parser
+    previously dropped the merged ``stages`` value before filtering).
+    Returns an empty list on parse error or when no such hook exists.
     """
     result: List[Tuple[Optional[str], Optional[str]]] = []
     for hook in _parse_ruff_format_hooks_from_text(text):
+        if not _hook_runs_automatically(hook):
+            continue
         files_pat = hook.get("files")
         exclude_pat = hook.get("exclude")
         result.append(
@@ -2514,13 +2551,15 @@ def _file_has_unchanged_ruff_format_signal(
     could narrow ``files:``/``exclude:`` to suppress the gate against its
     own files. Added scope-set comparison.
 
-    Codex pass-11 finding 2 + 3:
-    - Workflow files use ``_RUFF_FORMAT_CMD_PATTERN`` (space only) so a
-      YAML key like ``name: ruff-format migration`` does not trigger a
-      false signal.
-    - For ``.pre-commit-config.yaml``, compare the full hook dicts (not
-      just files/exclude) so a PR that adds ``stages: [manual]`` to the
-      hook is also detected as a change and the signal is not counted.
+    Codex pass-11 finding 2 + 3 / issue #1433 review:
+    - Workflow files use the exec-context-aware ``_workflow_text_has_ruff
+      _format`` scan so a YAML key like ``name: ruff-format migration``
+      does not trigger a false signal.
+    - For ``.pre-commit-config.yaml`` the signal is stage-aware: a
+      manual-only ``id: ruff-format`` hook (explicit ``stages: [manual]``
+      or inherited ``default_stages: [manual]``) does not count. The full
+      hook dicts are also compared so a PR that adds ``stages: [manual]``
+      to an active hook is detected as a change and the signal drops.
 
     Fail-open: missing ``base_ref``, unresolvable git read, or missing
     signal at either version all return False.
@@ -2533,9 +2572,9 @@ def _file_has_unchanged_ruff_format_signal(
     # Use the same exec-context-aware check as the scanner so a step-name
     # false positive (``name: ruff format migration``) does not count.
     if is_pre_commit:
-        post_has_signal = bool(
-            _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(post_text))
-        )
+        # Stage-aware (issue #1433 review): an unchanged manual-only
+        # ruff-format hook must NOT count as a signal even in a touched file.
+        post_has_signal = _pre_commit_has_active_ruff_format(post_text)
     else:
         post_has_signal = _workflow_text_has_ruff_format(post_text)
     if not post_has_signal:
@@ -2546,9 +2585,7 @@ def _file_has_unchanged_ruff_format_signal(
     if pre_text is None:
         return False
     if is_pre_commit:
-        pre_has_signal = bool(
-            _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(pre_text))
-        )
+        pre_has_signal = _pre_commit_has_active_ruff_format(pre_text)
     else:
         pre_has_signal = _workflow_text_has_ruff_format(pre_text)
     if not pre_has_signal:
@@ -2591,11 +2628,13 @@ def _ruff_format_signaled_by_ci(
     ``[tool.ruff.format]`` section). Without this signal the gate
     would silently skip ``ruff-format`` and the original CI-parity
     gap (Bug #2) re-emerges as a false negative — local clean +
-    failing CI. Scan ``.pre-commit-config.yaml``, ``cloudbuild-*-
-    ci.yaml``, and ``.github/workflows/*.yml`` / ``*.yaml`` for the
-    ``\\bruff[\\s-]+format\\b`` pattern so both ``ruff format ...``
-    (CI run lines, codex pass-6) AND ``id: ruff-format`` (canonical
-    pre-commit hook id, codex pass-7 finding 1) trigger the signal.
+    failing CI. ``.pre-commit-config.yaml`` is scanned via the
+    stage-aware ``_pre_commit_has_active_ruff_format`` (an ``id:
+    ruff-format`` hook signals only when it runs automatically — not
+    manual-only); ``cloudbuild-*-ci.yaml`` and ``.github/workflows/
+    *.yml`` / ``*.yaml`` are scanned via the exec-context-aware
+    ``_workflow_text_has_ruff_format`` so a ``run: ruff format ...``
+    command triggers the signal but a step ``name:`` does not.
 
     Codex pass-7 finding 2: ``exclude_paths`` is a per-FILE
     suppression set (worktree-relative POSIX paths the PR diff
@@ -2607,15 +2646,14 @@ def _ruff_format_signaled_by_ci(
     matching the pre-pass-8 behaviour.
 
     Codex pass-8 finding 1: YAML ``#``-to-EOL comments are stripped
-    before the regex scan so a ``# TODO: enable ruff format`` or
-    similar mention in a comment does NOT trigger the signal.
+    before scanning so a ``# TODO: enable ruff format`` mention in a
+    comment does NOT trigger the signal.
 
-    Codex pass-11 finding 2: workflow/CloudBuild files use
-    ``_RUFF_FORMAT_CMD_PATTERN`` (space only) rather than
-    ``_RUFF_FORMAT_CI_PATTERN`` (hyphen + space). Job names like
-    ``name: ruff-format migration`` would match the hyphen form
-    without executing any ``ruff format`` command; the space-only
-    form requires an actual command-style invocation.
+    Issue #1433 review: the pre-commit signal is stage-aware — a
+    manual-only ``id: ruff-format`` hook (``stages: [manual]`` or an
+    inherited top-level ``default_stages: [manual]``) never runs in the
+    normal flow and must not opt the gate in. Workflow and CloudBuild
+    signals remain independent: either can opt in on its own.
 
     Fail-OPEN: any IO error returns ``(False, False)`` so the absence
     of a signal never blocks clean verdicts.
@@ -2664,8 +2702,11 @@ def _ruff_format_signaled_by_ci(
             )
             continue
         if is_pre_commit:
-            # Pre-commit: use the broader pattern (includes ``id: ruff-format``).
-            if _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(text)):
+            # Pre-commit: stage-aware signal (issue #1433 review). A
+            # manual-only ``id: ruff-format`` hook (explicit
+            # ``stages: [manual]`` or inherited ``default_stages: [manual]``)
+            # never runs in the normal flow and must NOT opt the gate in.
+            if _pre_commit_has_active_ruff_format(text):
                 pre_commit_signaled = True
         else:
             # Workflow/CloudBuild: use the exec-context-aware scan

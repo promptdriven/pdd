@@ -500,6 +500,100 @@ class TestDiscoverGates:
         by_name = {g.name: g for g in gates}
         assert by_name["ruff-format"].source == "ci-config:ruff format"
 
+    def test_skips_ruff_format_when_pre_commit_hook_stage_manual(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #1433 review (gltanaka): a ``.pre-commit-config.yaml``
+        ``id: ruff-format`` hook gated to ``stages: [manual]`` never runs
+        in the normal commit/CI flow, so it MUST NOT opt the gate in. The
+        pre-fix signal treated any ``id: ruff-format`` text as opt-in and
+        emitted a false blocking gate for ordinary changed Python files.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        stages: [manual]\n",
+            encoding="utf-8",
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" not in names
+
+    def test_skips_ruff_format_when_default_stages_manual_inherited(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #1433 review (gltanaka): a top-level
+        ``default_stages: [manual]`` is inherited by an ``id: ruff-format``
+        hook that declares no ``stages`` of its own — so the hook is
+        manual-only and MUST NOT opt the gate in. The merged-stages value
+        must be honoured, not dropped, when deciding the signal.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "default_stages: [manual]\n"
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" not in names
+
+    def test_workflow_signal_opts_in_despite_manual_pre_commit_hook(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #1433 review (gltanaka): workflow/CloudBuild signals stay
+        independent of the pre-commit signal. A manual-only pre-commit
+        ``id: ruff-format`` hook does not opt in, but a workflow that runs
+        ``ruff format --check`` MUST still emit the gate.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        # Manual-only pre-commit hook (would NOT signal on its own)...
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        stages: [manual]\n",
+            encoding="utf-8",
+        )
+        # ...but a real workflow invocation opts the gate in independently.
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text(
+            "jobs:\n  lint:\n    steps:\n      - run: ruff format --check .\n",
+            encoding="utf-8",
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" in names
+
     def test_emits_ruff_format_when_signaled_by_github_workflow(
         self, tmp_path: Path
     ) -> None:
