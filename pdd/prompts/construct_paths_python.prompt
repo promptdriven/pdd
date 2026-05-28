@@ -97,9 +97,33 @@
      Falls back to first .prompt file, then first file overall.
    - `_strip_language_suffix(path)`: Removes trailing '_<language>' from stem if _is_known_language
      returns True. Special case: does NOT strip '_prompt' from non-.prompt files.
+   - `_strip_language_suffix_with_subdir(prompt_path, prompts_dir=None)`: Preserves the subdirectory
+     between the prompts root and the prompt file. When `prompts_dir` is supplied (from .pddrc), it
+     anchors on that configured root so `prompts_dir: "prompts/backend"` with a prompt at
+     `prompts/backend/services/foo_python.prompt` produces subdir `services/foo` — NOT
+     `backend/services/foo`, which would cause double-nested output paths (issue #1211).
+     Falls back to the literal `prompts/` anchor when `prompts_dir` is not supplied or doesn't match.
+   - `_extract_basename(command, input_file_paths, prompts_dir=None)` threads the resolved `prompts_dir`
+     into `_strip_language_suffix_with_subdir` for both the `fix` branch and the general case.
    - Command-specific rules: 'detect' uses change_file, 'conflicts' combines prompt1/prompt2 (sorted),
      'fix' combines prompt+test basenames, 'change' uses change_prompt_file stem if present.
    - For sync/example/test, prefer basename from command_options to preserve subdirectory paths.
+   - .pddrc discovery (issue #1211): `construct_paths` runs `_find_pddrc_file()` from CWD and,
+     when `input_file_paths['prompt_file']` is supplied, also runs `_find_pddrc_file(Path(prompt_file))`
+     (the helper walks `[start] + start.parents`, so the raw prompt path resolves the right `.pddrc`
+     whether it names a file or a directory). It uses the prompt-file result only when its directory
+     is a descendant of the CWD result's directory (i.e., the prompt is inside a subproject).
+     Otherwise it uses the CWD result. This avoids accidentally loading a repo-root `.pddrc` when
+     the prompt file lives in an unrelated tree (e.g. a test fixture directory).
+   - Subproject path-resolution mode (issue #1211): when the selected `.pddrc` is a subproject that
+     lives BELOW the run CWD (the descendant case above, or when CWD has no `.pddrc` at all), an
+     effective `path_resolution_mode` of `"cwd"` is upgraded to `"config_base"`. Without this, relative
+     `.pddrc` output dirs (`generate_output_path`, `test_output_path`, `example_output_path`) would
+     resolve against the parent CWD and write outside the subproject — the discovery path used by
+     `sync`/`get_pdd_file_paths` forces `"cwd"`, so this override is what keeps `fix`/`sync` outputs
+     (and the fingerprint/run-report/log helpers that anchor off those paths) inside the subproject.
+     The override only flips `"cwd"`; it never touches an explicit `"config_base"`, so the unrelated-
+     fixture / `--context envonly` regression (where the CWD `.pddrc` is selected) is unaffected.
 
 6. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
    - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
