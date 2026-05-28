@@ -336,7 +336,21 @@ def generate_output_paths(
             source = "input_file_dirs"
             # For auto-deps, the 'output' key might not be in input_file_dirs, so fallback to input_file_dir
             specific_dir = input_file_dirs.get(output_key) or input_file_dir
-            final_path = os.path.join(specific_dir, default_filename)
+            # Issue #1211: when the basename carries a subdir chain (from a
+            # nested prompt under prompts/...), `specific_dir` already roots
+            # the output at the existing code/test file's directory. Joining
+            # `specific_dir` with `default_filename` would prepend that subdir
+            # chain a second time (e.g. src/routers/src/routers/foo.py).
+            # Use the filename-only form so the subdir chain is contributed
+            # exactly once — by `specific_dir`.
+            if '/' in basename:
+                _, name_part = basename.rsplit('/', 1)
+                filename_only = _get_default_filename(
+                    command, output_key, name_part, language, file_extension
+                )
+            else:
+                filename_only = default_filename
+            final_path = os.path.join(specific_dir, filename_only)
             logger.debug(f"{command.title()} command: using input file directory '{specific_dir}' for '{output_key}'")
 
         # 2. Check Context Configuration Path (.pddrc) - Note: for fix/auto-deps, input_file_dirs checked first above
