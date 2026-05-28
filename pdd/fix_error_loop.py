@@ -418,10 +418,11 @@ def fix_error_loop(
         target_code = focused_inputs.focused_code if focused_inputs else code_content
         target_test = focused_inputs.focused_tests if focused_inputs else unit_test_content
         classification = failure_classification_hint(classify_failure(output_log)) if failure_aware_retries else None
+        effective_protect_tests = protect_tests or bool(focused_inputs)
         try:
             if use_cloud:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
-                    target_test, target_code, prompt, output_log, error_log_file, strength, temperature, verbose, time, ext, protect_tests, classification
+                    target_test, target_code, prompt, output_log, error_log_file, strength, temperature, verbose, time, ext, effective_protect_tests, classification
                 )
             else:
                 local_error_payload = f"[PDD failure classification] {classification}\n{output_log}" if classification else output_log
@@ -431,7 +432,7 @@ def fix_error_loop(
                     temperature=temperature,
                     time=time,
                     verbose=verbose,
-                    protect_tests=protect_tests,
+                    protect_tests=effective_protect_tests,
                 )
         except Exception as exc:
             if use_cloud:
@@ -447,7 +448,7 @@ def fix_error_loop(
                         temperature=temperature,
                         time=time,
                         verbose=verbose,
-                        protect_tests=protect_tests,
+                        protect_tests=effective_protect_tests,
                     )
                 except Exception as local_exc:
                     with open(error_log_file, "a", encoding="utf-8") as log_file:
