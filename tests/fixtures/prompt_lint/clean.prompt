@@ -1,0 +1,19 @@
+% Fixture: no vague terms anywhere; concrete, observable language throughout.
+% This fixture produces 0 lint issues.
+
+<contract_rules>
+1. The function returns an integer exit code of 0 on success, 1 on failure.
+2. If the input file does not exist, raises FileNotFoundError.
+3. Writes output to the path specified by the --output flag.
+4. Logs the request ID to stdout before processing begins.
+</contract_rules>
+
+<requirements>
+- Accepts a positional PATH argument (string, required).
+- Emits a JSON object to stdout on success.
+- Exits with code 2 when the --format flag contains an unsupported value.
+</requirements>
+
+<vocabulary>
+- graceful: returns HTTP 409 with JSON error body
+</vocabulary>

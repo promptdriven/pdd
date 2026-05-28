@@ -10,6 +10,11 @@
       {"name": "remove_models_by_provider", "signature": "() -> bool", "returns": "bool"},
       {"name": "remove_individual_models", "signature": "() -> bool", "returns": "bool"},
       {"name": "parse_api_key_vars", "signature": "(api_key_field: str) -> List[str]", "returns": "List[str]"},
+      {"name": "api_key_aliases", "signature": "(key_name: str) -> List[str]", "returns": "List[str]"},
+      {"name": "expand_api_key_vars", "signature": "(api_key_field: str) -> List[str]", "returns": "List[str]"},
+      {"name": "api_key_requirements_satisfied", "signature": "(api_key_field: str, configured_key_names: Iterable[str]) -> bool", "returns": "bool"},
+      {"name": "resolve_api_key_from_env", "signature": "(key_name: str, env: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], Optional[str]]", "returns": "Tuple[Optional[str], Optional[str]]"},
+      {"name": "preferred_api_key_name", "signature": "(key_name: str) -> str", "returns": "str"},
       {"name": "is_multi_credential", "signature": "(api_key_field: str) -> bool", "returns": "bool"}
     ]
   }
@@ -34,6 +39,15 @@ persistence via shell-specific `api-env` files.
 
 2. `is_multi_credential(api_key_field)` — return True when api_key field contains
    multiple pipe-delimited env vars.
+
+2a. Google API key aliases: `GEMINI_API_KEY` and `GOOGLE_API_KEY` satisfy the
+    same Gemini direct-model credential requirement. Keep the catalog rows on
+    their existing `GEMINI_API_KEY` value, but expose helpers so setup,
+    api-key scanning, model testing, and llm_invoke can treat `GOOGLE_API_KEY`
+    as satisfying those rows without saving duplicate secrets:
+    `api_key_aliases`, `expand_api_key_vars`, `api_key_requirements_satisfied`,
+    `resolve_api_key_from_env`, and `preferred_api_key_name`. For prompting or
+    saving a missing Gemini key, prefer `GOOGLE_API_KEY`.
 
 3. Support complex-auth providers (Google Vertex AI, AWS Bedrock, Azure OpenAI,
    Azure AI, Github Copilot) that require multiple credentials or special auth flows.
@@ -90,4 +104,6 @@ empty for device-flow or local models.
 % Deliverables
 - Module at `pdd/provider_manager.py` exporting `add_provider_from_registry`,
   `add_custom_provider`, `remove_models_by_provider`, `remove_individual_models`,
-  `parse_api_key_vars`, `is_multi_credential`.
+  `parse_api_key_vars`, `api_key_aliases`, `expand_api_key_vars`,
+  `api_key_requirements_satisfied`, `resolve_api_key_from_env`,
+  `preferred_api_key_name`, `is_multi_credential`.

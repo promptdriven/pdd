@@ -1105,7 +1105,7 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
-_STEP5_SKIPPED_STATUSES = frozenset({"skipped", "skip", "no_tests", "n/a"})
+_STEP5_SKIPPED_STATUSES = frozenset({"skipped", "skip", "no_tests", "n/a", "n_a"})
 
 
 def _step5_failure_signal_status(step_output_value: str) -> str:
