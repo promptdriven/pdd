@@ -1272,7 +1272,10 @@ def _discover_npm_gates(
 
 
 def _discover_python_gates(
-    worktree: Path, changed_files: Sequence[str]
+    worktree: Path,
+    changed_files: Sequence[str],
+    *,
+    base_ref: Optional[str] = None,
 ) -> List[Gate]:
     gates: List[Gate] = []
     changed_py = [
@@ -1462,25 +1465,46 @@ def _discover_python_gates(
             ):
                 ci_touched_paths.add(path)
         ci_signaled = _ruff_format_signaled_by_ci(
-            worktree, exclude_paths=ci_touched_paths
+            worktree,
+            exclude_paths=ci_touched_paths,
+            base_ref=base_ref,
         )
         if _tool_section_present("ruff.format") or ci_signaled:
-            source_label = (
-                "pyproject.toml:[tool.ruff.format]"
-                if _tool_section_present("ruff.format")
-                else "ci-config:ruff format"
+            # Codex pass-8 finding 3: respect the pre-commit hook's
+            # ``files:`` / ``exclude:`` scope when declared. Without
+            # this filter the gate would run ``ruff format --check
+            # -- <changed_py>`` against files the configured
+            # ruff-format hook would not check, producing
+            # false-positive blockers on paths CI's pre-commit step
+            # ignores. When no pre-commit scope is declared, fall
+            # back to the full ``changed_py`` set (pyproject opt-in
+            # has no per-file scope).
+            ruff_format_py = _filter_changed_py_for_ruff_format(
+                worktree, changed_py
             )
-            gates.append(
-                Gate(
-                    name="ruff-format",
-                    cmd=[ruff_abs, "format", "--check", "--", *changed_py],
-                    source=source_label,
-                    required_fix_hint=(
-                        "Run `ruff format` locally and commit the formatting "
-                        "changes."
-                    ),
+            if ruff_format_py:
+                source_label = (
+                    "pyproject.toml:[tool.ruff.format]"
+                    if _tool_section_present("ruff.format")
+                    else "ci-config:ruff format"
                 )
-            )
+                gates.append(
+                    Gate(
+                        name="ruff-format",
+                        cmd=[
+                            ruff_abs,
+                            "format",
+                            "--check",
+                            "--",
+                            *ruff_format_py,
+                        ],
+                        source=source_label,
+                        required_fix_hint=(
+                            "Run `ruff format` locally and commit the formatting "
+                            "changes."
+                        ),
+                    )
+                )
     black_abs = _resolve_tool("black", worktree)
     if (
         changed_py
@@ -2063,7 +2087,11 @@ def discover_gates(
         base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
         gates.append(_git_diff_check_gate(trusted_git, base_spec))
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
-    gates.extend(_discover_python_gates(worktree, changed_files))
+    gates.extend(
+        _discover_python_gates(
+            worktree, changed_files, base_ref=base_ref
+        )
+    )
     # Stable order: git-diff-check first, then language-specific gates
     # in discovery order. The runner walks the list left-to-right so
     # operators see consistent artifact filenames across rounds.
@@ -2200,8 +2228,209 @@ def _sanitized_path(worktree: Path) -> str:
 _RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
 
 
+def _ruff_format_pre_commit_scope(
+    worktree: Path,
+) -> Optional[Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]]:
+    """Return the (files_regex, exclude_regex) scope of the
+    ``ruff-format`` hook declared in ``.pre-commit-config.yaml``.
+
+    Codex pass-8 finding 3: pre-commit hooks can scope file matching
+    via ``files:`` / ``exclude:`` regex patterns (and the file-level
+    top-level fields apply as defaults). When a project declares a
+    scoped ruff-format hook (e.g. ``files: ^src/``), running ``ruff
+    format --check`` against the worktree's full ``changed_py``
+    would block files the configured hook would not check. The
+    helper returns the resolved (files_regex, exclude_regex) tuple
+    so the caller can filter ``changed_py`` accordingly. Hook-level
+    fields override top-level fields; either may be ``None`` when
+    not declared. Returns ``None`` when no ``.pre-commit-config
+    .yaml`` exists, parsing fails, or no ``ruff-format`` hook is
+    declared — the caller MUST fall back to no scope filter in that
+    case (pyproject ``[tool.ruff.format]`` opt-in has no per-file
+    scope).
+    """
+    import yaml  # local import to keep top-of-module imports tight
+
+    pcc = worktree / ".pre-commit-config.yaml"
+    if not pcc.is_file():
+        return None
+    try:
+        data = yaml.safe_load(pcc.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, yaml.YAMLError) as exc:
+        logger.debug(
+            "ruff-format pre-commit scope parse failed: %s",
+            type(exc).__name__,
+        )
+        return None
+    if not isinstance(data, dict):
+        return None
+    top_files = data.get("files") if isinstance(data.get("files"), str) else None
+    top_exclude = (
+        data.get("exclude") if isinstance(data.get("exclude"), str) else None
+    )
+    repos = data.get("repos")
+    if not isinstance(repos, list):
+        return None
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        hooks = repo.get("hooks")
+        if not isinstance(hooks, list):
+            continue
+        for hook in hooks:
+            if not isinstance(hook, dict):
+                continue
+            if hook.get("id") != "ruff-format":
+                continue
+            hook_files = (
+                hook.get("files") if isinstance(hook.get("files"), str) else None
+            )
+            hook_exclude = (
+                hook.get("exclude")
+                if isinstance(hook.get("exclude"), str)
+                else None
+            )
+            files_pat = hook_files if hook_files is not None else top_files
+            exclude_pat = (
+                hook_exclude if hook_exclude is not None else top_exclude
+            )
+            files_re: Optional["re.Pattern[str]"] = None
+            exclude_re: Optional["re.Pattern[str]"] = None
+            if files_pat:
+                try:
+                    files_re = re.compile(files_pat)
+                except re.error:
+                    pass
+            if exclude_pat:
+                try:
+                    exclude_re = re.compile(exclude_pat)
+                except re.error:
+                    pass
+            return (files_re, exclude_re)
+    return None
+
+
+def _filter_changed_py_for_ruff_format(
+    worktree: Path, changed_py: Sequence[str]
+) -> List[str]:
+    """Apply the ``.pre-commit-config.yaml`` ruff-format hook's
+    file scope to ``changed_py`` (codex pass-8 finding 3).
+
+    Returns ``changed_py`` unchanged when no scope is declared. Drops
+    paths that match the hook's ``exclude`` regex; keeps only paths
+    that match the hook's ``files`` regex when one is declared.
+    """
+    scope = _ruff_format_pre_commit_scope(worktree)
+    if scope is None:
+        return list(changed_py)
+    files_re, exclude_re = scope
+    if files_re is None and exclude_re is None:
+        return list(changed_py)
+    out: List[str] = []
+    for path in changed_py:
+        if files_re is not None and not files_re.search(path):
+            continue
+        if exclude_re is not None and exclude_re.search(path):
+            continue
+        out.append(path)
+    return out
+
+
+def _strip_yaml_comments(text: str) -> str:
+    """Strip ``#``-to-EOL comments from a YAML-like text body.
+
+    Codex pass-8 finding 1: scanning the raw text matched
+    ``ruff-format`` / ``ruff format`` mentions inside comments or
+    TODOs, producing a false-positive ruff-format gate. YAML's only
+    line-comment syntax is ``#`` to end-of-line; strip it before the
+    regex scan. Conservative: ``#`` inside quoted strings is also
+    stripped (rare in CI configs and the worst-case effect is a
+    missed signal, not a false positive). Multi-line block strings
+    are still scanned in full since ``#`` mid-block is uncommon.
+    """
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        # Drop everything from the first ``#`` to EOL. Preserve the
+        # rest of the line so YAML structure context (key:, sequence
+        # markers) is still visible to the regex.
+        comment_at = line.find("#")
+        if comment_at >= 0:
+            line = line[:comment_at]
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def _git_show_text(worktree: Path, ref: str, path: str) -> Optional[str]:
+    """Return the contents of ``path`` at ``ref`` via ``git show``,
+    or ``None`` on any failure. Used to read the pre-PR version of
+    a CI config so the ruff-format helper can distinguish a PR that
+    introduced/modified the signal from one that left an existing
+    signal unchanged.
+    """
+    trusted_git = _resolve_trusted_git(worktree)
+    if not trusted_git:
+        return None
+    try:
+        result = subprocess.run(
+            [trusted_git, "-C", str(worktree), "show", f"{ref}:{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug(
+            "ruff-format git-show failed for %s@%s: %s",
+            path,
+            ref,
+            type(exc).__name__,
+        )
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _file_has_unchanged_ruff_format_signal(
+    worktree: Path, rel_path: str, base_ref: Optional[str]
+) -> bool:
+    """Return True if ``rel_path`` carries the ruff-format signal at
+    BOTH ``base_ref`` and the worktree version. Used by
+    ``_ruff_format_signaled_by_ci`` to distinguish a PR-introduced
+    signal (the PR diff just added ``id: ruff-format``) from an
+    unchanged signal (the file has it, the PR happened to touch
+    some other section). Codex pass-8 finding 2 — pre-fix whole-
+    file exclusion missed the latter case.
+
+    Fail-OPEN behaviour:
+    - If ``base_ref`` is missing or unresolvable, fall back to
+      the conservative pre-pass-8 behaviour (treat as if signal is
+      changed, i.e., do NOT trust it).
+    - If the post-PR version no longer has the signal, return False.
+    """
+    try:
+        post_text = (worktree / rel_path).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return False
+    if not _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(post_text)):
+        return False
+    if not base_ref:
+        return False
+    pre_text = _git_show_text(worktree, base_ref, rel_path)
+    if pre_text is None:
+        return False
+    return bool(
+        _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(pre_text))
+    )
+
+
 def _ruff_format_signaled_by_ci(
-    worktree: Path, *, exclude_paths: Optional[Set[str]] = None
+    worktree: Path,
+    *,
+    exclude_paths: Optional[Set[str]] = None,
+    base_ref: Optional[str] = None,
 ) -> bool:
     """Return True if any CI / pre-commit config in ``worktree`` runs ``ruff format``.
 
@@ -2218,13 +2447,16 @@ def _ruff_format_signaled_by_ci(
 
     Codex pass-7 finding 2: ``exclude_paths`` is a per-FILE
     suppression set (worktree-relative POSIX paths the PR diff
-    touched). Only the touched config files are excluded from the
-    scan — unchanged config files in the SAME PR still contribute
-    their signal, so a PR that touches one workflow does not
-    silently disable the signal from an unchanged
-    ``.pre-commit-config.yaml``. Pre-fix the entire CI-signal branch
-    short-circuited when ANY CI config was in the diff, defeating
-    the gate's CI-parity intent.
+    touched). For these paths the helper REQUIRES the signal to be
+    unchanged between ``base_ref`` and HEAD (codex pass-8 finding 2:
+    pre-fix whole-file exclusion missed unchanged signals in
+    touched-for-unrelated-reasons files). When ``base_ref`` cannot
+    be resolved we conservatively skip the touched file's signal,
+    matching the pre-pass-8 behaviour.
+
+    Codex pass-8 finding 1: YAML ``#``-to-EOL comments are stripped
+    before the regex scan so a ``# TODO: enable ruff format`` or
+    similar mention in a comment does NOT trigger the signal.
 
     Fail-OPEN: any IO error returns ``False`` so the absence of a
     signal never blocks clean verdicts.
@@ -2232,32 +2464,33 @@ def _ruff_format_signaled_by_ci(
     skip = exclude_paths or set()
     candidates: List[Path] = []
     pre_commit = worktree / ".pre-commit-config.yaml"
-    if pre_commit.is_file() and ".pre-commit-config.yaml" not in skip:
+    if pre_commit.is_file():
         candidates.append(pre_commit)
     for cb in sorted(worktree.glob("cloudbuild-*-ci.yaml")):
-        if not cb.is_file():
-            continue
-        try:
-            rel = cb.relative_to(worktree).as_posix()
-        except ValueError:
-            continue
-        if rel in skip:
-            continue
-        candidates.append(cb)
+        if cb.is_file():
+            candidates.append(cb)
     workflows_dir = worktree / ".github" / "workflows"
     if workflows_dir.is_dir():
         for pattern in ("*.yml", "*.yaml"):
             for yml in sorted(workflows_dir.glob(pattern)):
-                if not yml.is_file():
-                    continue
-                try:
-                    rel = yml.relative_to(worktree).as_posix()
-                except ValueError:
-                    continue
-                if rel in skip:
-                    continue
-                candidates.append(yml)
+                if yml.is_file():
+                    candidates.append(yml)
     for path in candidates:
+        try:
+            rel = path.relative_to(worktree).as_posix()
+        except ValueError:
+            continue
+        if rel in skip:
+            # Codex pass-8 finding 2: for a touched file, only count
+            # the signal when it was already present pre-PR. This
+            # blocks a PR from silently adding the signal AND it
+            # honours an unchanged signal even when the PR touched
+            # another part of the same file.
+            if _file_has_unchanged_ruff_format_signal(
+                worktree, rel, base_ref
+            ):
+                return True
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -2267,7 +2500,7 @@ def _ruff_format_signaled_by_ci(
                 type(exc).__name__,
             )
             continue
-        if _RUFF_FORMAT_CI_PATTERN.search(text):
+        if _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(text)):
             return True
     return False
 

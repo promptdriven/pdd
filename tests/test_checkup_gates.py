@@ -523,6 +523,231 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "ruff-format" in names
 
+    def test_skips_ruff_format_when_ci_signal_is_only_in_comment(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-8 finding 1: a YAML ``# TODO: enable ruff
+        format`` comment must NOT trigger the gate. Comments and
+        TODOs are stripped from each line before the regex scan.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text(
+            "jobs:\n"
+            "  lint:\n"
+            "    steps:\n"
+            "      # TODO: enable ruff format --check\n"
+            "      - run: ruff check\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" not in names
+
+    def test_ci_signal_unchanged_in_touched_file_still_counts(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-8 finding 2: when the PR touches a CI config
+        for an unrelated reason while the existing file already
+        carries the ruff-format signal, the gate MUST honour the
+        unchanged signal. Build a real two-commit worktree so
+        ``git show <base>:.pre-commit-config.yaml`` resolves.
+        """
+        import subprocess
+
+        from pdd.checkup_gates import discover_gates
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=tmp_path, check=True, capture_output=True
+            )
+
+        _git_init(tmp_path)
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # BASE: file with the canonical ruff-format hook id.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        # PR: touch the file for an unrelated hook (the ruff-format
+        # signal line is unchanged).
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "      - id: ruff\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "add ruff lint hook")
+        import shutil as _shutil
+        _real_which = _shutil.which
+
+        def _which_ruff_only(name: str, **kw: object) -> object:
+            if name == "ruff":
+                return "/usr/bin/ruff"
+            return _real_which(name, **kw)
+
+        with patch(
+            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".pre-commit-config.yaml"),
+                base_ref="HEAD~1",
+            )
+        names = {g.name for g in gates}
+        # Pre-fix code excluded the whole file when in diff → no
+        # signal → skip. Pass-8 finding 2 fix: the unchanged
+        # ``id: ruff-format`` line counts because it was present
+        # at base AND at HEAD.
+        assert "ruff-format" in names
+
+    def test_skips_ruff_format_when_pr_added_signal_to_touched_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-8 finding 2 defence: the same pre-vs-post
+        comparison must STILL refuse to count a signal the PR
+        introduced. Build a worktree where the base lacks the
+        signal but the PR added it.
+        """
+        import subprocess
+
+        from pdd.checkup_gates import discover_gates
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=tmp_path, check=True, capture_output=True
+            )
+
+        _git_init(tmp_path)
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # BASE: file with NO ruff-format hook.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos: []\n", encoding="utf-8"
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        # PR: introduces the ruff-format hook.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "add ruff-format hook")
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".pre-commit-config.yaml"),
+                base_ref="HEAD~1",
+            )
+        names = {g.name for g in gates}
+        # PR-introduced signal MUST not count.
+        assert "ruff-format" not in names
+
+    def test_ruff_format_respects_pre_commit_hook_files_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-8 finding 3: when the pre-commit ruff-format
+        hook declares ``files: ^src/``, the gate must skip
+        ``tests/...`` paths because the hook would not check them.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        # Files in src/ AND tests/.
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "code.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # Pre-commit hook scoped to src/ only.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        files: ^src/\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("src/code.py", "tests/a.py"),
+            )
+        by_name = {g.name: g for g in gates}
+        assert "ruff-format" in by_name
+        cmd = by_name["ruff-format"].cmd
+        assert "src/code.py" in cmd
+        assert "tests/a.py" not in cmd
+
+    def test_ruff_format_skips_entirely_when_all_changed_py_out_of_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """Pass-8 finding 3 boundary: when the pre-commit hook scope
+        excludes every changed_py file, the gate must be omitted
+        (no argv with empty file list).
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        files: ^src/\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path, changed_files=("tests/a.py",)
+            )
+        names = {g.name for g in gates}
+        assert "ruff-format" not in names
+
     def test_emits_ruff_format_when_ci_signal_present_and_no_tool_ruff_section(
         self, tmp_path: Path
     ) -> None:
