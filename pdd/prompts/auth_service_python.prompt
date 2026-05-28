@@ -22,6 +22,7 @@
      - Check if JWT cache file exists and contains a valid token.
      - Returns Tuple[bool, Optional[float]] - (is_valid, expires_at).
      - Token is valid if expires_at > current_time + 300 (5 minute buffer).
+     - When PDD_ENV is set, also validate the cached JWT audience for the selected environment before treating the cache as valid. PDD_JWT_EXPECTED_AUD is the explicit override. For PDD_ENV=staging, expect STAGING_PROJECT_ID or prompt-driven-development-stg; for PDD_ENV=prod/production, expect prompt-driven-development. A cached token with the wrong audience is invalid.
      - Return (False, None) if file doesn't exist or is invalid.
 
   3. **has_refresh_token**:
@@ -90,6 +91,7 @@
      - Retrieve the cached JWT token if valid and not expired.
      - Read from JWT_CACHE_FILE, parse JSON.
      - Check if token exists and expires_at > current_time + 300 (5 minute buffer).
+     - When PDD_ENV is set, reject cached JWTs whose aud claim (or firebase.aud claim) does not match the expected audience for the selected environment. Use PDD_JWT_EXPECTED_AUD as an explicit override; for PDD_ENV=staging, expect STAGING_PROJECT_ID or prompt-driven-development-stg; for PDD_ENV=prod/production, expect prompt-driven-development.
      - Support both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility.
      - Returns Optional[str] - the JWT token string or None if invalid/expired/missing.
      - Handle file not found, invalid JSON, and missing keys gracefully.
@@ -103,6 +105,7 @@
 % Instructions
   - Use pathlib.Path for file operations.
   - Use json module for reading JWT cache.
+  - Decode JWT payloads without signature verification only to inspect claims needed for cache metadata checks.
   - Use time.time() for timestamp comparisons.
   - Import `_keyring_op_with_timeout` from `._keyring_timeout`.
   - Import keyring inside functions to handle ImportError gracefully.
