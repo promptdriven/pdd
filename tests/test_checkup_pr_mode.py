@@ -1532,6 +1532,10 @@ class TestPrModePushFailureDiagnostics:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
             output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
@@ -1557,6 +1561,9 @@ class TestPrModePushFailureDiagnostics:
                 "head_repo": "r",
                 "head_sha": "deadbeef",
             },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(False, "Failed to push fixes to PR branch: permission denied"),
@@ -1637,6 +1644,10 @@ class TestPrModePushFailureDiagnostics:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
             output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
@@ -1662,6 +1673,9 @@ class TestPrModePushFailureDiagnostics:
                 "head_repo": "r",
                 "head_sha": "deadbeef",
             },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             # Simulate the staging-failed-before-commit path: helper
@@ -1730,6 +1744,10 @@ class TestPrModePushFailureDiagnostics:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             seen_labels.append(_kwargs.get("label", ""))
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
             output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
@@ -1755,6 +1773,9 @@ class TestPrModePushFailureDiagnostics:
                 "head_repo": "r",
                 "head_sha": "deadbeef",
             },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, rebased_msg),
@@ -1808,6 +1829,10 @@ class TestPrModePushFailureDiagnostics:
         def fake_step(step_num, *_args, **kwargs):  # noqa: ANN001
             if kwargs.get("label") == "step7_post_push_reverify":
                 return True, "Verifier did not confirm clean final head.", 0.0, "fake"
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
             output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return True, output, 0.0, "fake"
 
@@ -1833,6 +1858,9 @@ class TestPrModePushFailureDiagnostics:
                 "head_repo": "r",
                 "head_sha": "deadbeef",
             },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, rebased_msg),
