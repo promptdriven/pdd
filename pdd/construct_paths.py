@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Any, Optional, List, Callable
 import fnmatch
 import logging
+import warnings
 
 import click
 import yaml
@@ -125,19 +126,83 @@ def _find_nearest_pddrc_for_file(
             break
     return None, None
 
+# Schema for .pddrc validation — see issue #1198.
+# Unknown keys at any level emit a UserWarning rather than being silently ignored.
+_PDDRC_ROOT_KEYS = {"version", "contexts"}
+_PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
+_PDDRC_DEFAULTS_KEYS = {
+    "generate_output_path",
+    "test_output_path",
+    "example_output_path",
+    "prompts_dir",
+    "default_language",
+    "target_coverage",
+    "strength",
+    "temperature",
+    "budget",
+    "max_attempts",
+    "outputs",
+}
+
+
+def _warn_unknown_pddrc_key(key: str, path: str) -> None:
+    """Emit the standard unknown-key warning for .pddrc (issue #1198)."""
+    warnings.warn(
+        f"WARNING: .pddrc contains unknown key '{key}' at path '{path}', ignored. "
+        f"Run 'pdd setup' to regenerate.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
+    """Validate that .pddrc contains only known keys.
+
+    Emits a UserWarning for each unknown key at the root, context, or
+    defaults levels. Does not raise; unknown keys are ignored but reported
+    so users can catch typos and stale config (issue #1198).
+    """
+    # Root level
+    for key in config.keys():
+        if key not in _PDDRC_ROOT_KEYS:
+            _warn_unknown_pddrc_key(key, key)
+
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return
+
+    for ctx_name, ctx_config in contexts.items():
+        if not isinstance(ctx_config, dict):
+            continue
+
+        # Context level
+        for key in ctx_config.keys():
+            if key not in _PDDRC_CONTEXT_KEYS:
+                _warn_unknown_pddrc_key(key, f"contexts.{ctx_name}.{key}")
+
+        # Defaults level
+        defaults = ctx_config.get("defaults", {})
+        if isinstance(defaults, dict):
+            for key in defaults.keys():
+                if key not in _PDDRC_DEFAULTS_KEYS:
+                    _warn_unknown_pddrc_key(
+                        key, f"contexts.{ctx_name}.defaults.{key}"
+                    )
+
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
     try:
         with open(pddrc_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        
+
         if not isinstance(config, dict):
             raise ValueError(f"Invalid .pddrc format: expected dictionary at root level")
-        
+
         # Validate basic structure
         if 'contexts' not in config:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
-        
+
+        _validate_pddrc_keys(config)
         return config
     except yaml.YAMLError as e:
         raise ValueError(f"YAML syntax error in .pddrc: {e}")
