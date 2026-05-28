@@ -408,6 +408,19 @@ class TestNoFixMode:
         assert "test failure" in msg.lower()
         assert "missing or malformed" in msg.lower()
 
+    def test_nofix_pr_step5_empty_output_returns_failure(self, tmp_path):
+        """--no-fix --pr must fail closed when Step 5 produces empty output.
+
+        Pass-17 Finding 1: a provider returning success with empty Step 5
+        output previously skipped the gate (the `if _s5_raw:` truthiness
+        guard) and returned 'Checkup complete' without any test evidence.
+        Empty output is now parsed as a missing block and fails closed.
+        """
+        success, msg, _cost, _model = self._run_pr_nofix(tmp_path, "")
+        assert success is False
+        assert "test failure" in msg.lower()
+        assert "missing or malformed" in msg.lower()
+
     def test_nofix_pr_step5_skipped_on_resume_returns_failure(self, tmp_path):
         """Resumed --no-fix --pr must still fail when cached Step 5 is skipped.
 

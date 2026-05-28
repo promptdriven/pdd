@@ -2636,85 +2636,90 @@ def _run_agentic_checkup_orchestrator_inner(
         # but output is already in step_outputs from loaded state).
         # Non-PR no-fix runs are unaffected (pr_mode is False).
         if pr_mode:
+            # No truthiness guard on the raw output: an empty/missing Step 5
+            # output is itself a fail-closed condition (no test evidence).
+            # Parsing "" yields a missing block, which routes to the
+            # logical-failure branch (pass-17 Finding 1: a provider that
+            # returns success with empty Step 5 output must not slip past the
+            # gate as a verified result).
             _s5_raw = step_outputs.get("5", "") or context.get("step5_output", "") or ""
-            if _s5_raw:
-                _s5f, _s5m = _parse_failure_signal_block(_s5_raw)
-                _s5v = str(_s5f.get("status", "")).strip().lower()
-                _s5_block_missing = "__block__" in _s5m
-                _s5_skipped = _s5v in _STEP5_SKIPPED_STATUSES
-                _s5_pass = _s5v in {"pass", "ok", "success", "passed", "clean"}
-                _s5_fail = (
-                    _s5v in {"fail", "error", "failed", "failure"}
-                    or _s5_block_missing
-                    or (not _s5_pass and not _s5_skipped)
+            _s5f, _s5m = _parse_failure_signal_block(_s5_raw)
+            _s5v = str(_s5f.get("status", "")).strip().lower()
+            _s5_block_missing = "__block__" in _s5m
+            _s5_skipped = _s5v in _STEP5_SKIPPED_STATUSES
+            _s5_pass = _s5v in {"pass", "ok", "success", "passed", "clean"}
+            _s5_fail = (
+                _s5v in {"fail", "error", "failed", "failure"}
+                or _s5_block_missing
+                or (not _s5_pass and not _s5_skipped)
+            )
+            if _s5_skipped or _s5_fail:
+                _art = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+                _art.mkdir(parents=True, exist_ok=True)
+                if _s5_skipped:
+                    _nofix_refusal = (
+                        "Step 5 reported status: skipped — tests did not "
+                        "run against the PR head. Refusing to report a "
+                        "verified result. Rerun pdd checkup --pr --no-fix "
+                        "once the test environment is healthy."
+                    )
+                    (_art / "nofix-step5-skipped-refusal.txt").write_text(
+                        _nofix_refusal + "\n"
+                    )
+                else:
+                    _s5_sfx = (
+                        " (failure_signal block missing or malformed)"
+                        if _s5_block_missing
+                        else f" (status: {_s5v!r})"
+                    )
+                    _nofix_refusal = (
+                        f"Step 5 reported a test failure{_s5_sfx}. "
+                        "Rerun pdd checkup --pr --no-fix after addressing "
+                        "the failures."
+                    )
+                    (_art / "nofix-step5-failure-refusal.txt").write_text(
+                        _nofix_refusal + "\n"
+                    )
+                _nofix_post_suffix = _post_pr_mode_final_report(_nofix_refusal)
+                # Clear saved state so the next run reruns Step 5 from
+                # scratch rather than replaying the stale cached output.
+                # Without this, resume reuses step_outputs["5"] and fires
+                # the same refusal again even after the user fixes the
+                # environment — and posts a duplicate final-report comment.
+                #
+                # Round-17 follow-up: ``load_workflow_state`` loads the
+                # GitHub state comment with PRIORITY over local state, so
+                # if the remote clear silently fails the next rerun
+                # replays the stale cache anyway. ``clear_workflow_state``
+                # now returns whether the clear (incl. the
+                # neutralise-on-delete-failure fallback) was confirmed;
+                # surface a warning when it was not so the operator knows
+                # the rerun may need a manual state-comment cleanup.
+                _cleared = clear_workflow_state(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    workflow_type="checkup",
+                    state_dir=state_dir,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
                 )
-                if _s5_skipped or _s5_fail:
-                    _art = cwd / ".pdd" / f"checkup-pr-{pr_number}"
-                    _art.mkdir(parents=True, exist_ok=True)
-                    if _s5_skipped:
-                        _nofix_refusal = (
-                            "Step 5 reported status: skipped — tests did not "
-                            "run against the PR head. Refusing to report a "
-                            "verified result. Rerun pdd checkup --pr --no-fix "
-                            "once the test environment is healthy."
-                        )
-                        (_art / "nofix-step5-skipped-refusal.txt").write_text(
-                            _nofix_refusal + "\n"
-                        )
-                    else:
-                        _s5_sfx = (
-                            " (failure_signal block missing or malformed)"
-                            if _s5_block_missing
-                            else f" (status: {_s5v!r})"
-                        )
-                        _nofix_refusal = (
-                            f"Step 5 reported a test failure{_s5_sfx}. "
-                            "Rerun pdd checkup --pr --no-fix after addressing "
-                            "the failures."
-                        )
-                        (_art / "nofix-step5-failure-refusal.txt").write_text(
-                            _nofix_refusal + "\n"
-                        )
-                    _nofix_post_suffix = _post_pr_mode_final_report(_nofix_refusal)
-                    # Clear saved state so the next run reruns Step 5 from
-                    # scratch rather than replaying the stale cached output.
-                    # Without this, resume reuses step_outputs["5"] and fires
-                    # the same refusal again even after the user fixes the
-                    # environment — and posts a duplicate final-report comment.
-                    #
-                    # Round-17 follow-up: ``load_workflow_state`` loads the
-                    # GitHub state comment with PRIORITY over local state, so
-                    # if the remote clear silently fails the next rerun
-                    # replays the stale cache anyway. ``clear_workflow_state``
-                    # now returns whether the clear (incl. the
-                    # neutralise-on-delete-failure fallback) was confirmed;
-                    # surface a warning when it was not so the operator knows
-                    # the rerun may need a manual state-comment cleanup.
-                    _cleared = clear_workflow_state(
-                        cwd=cwd,
-                        issue_number=issue_number,
-                        workflow_type="checkup",
-                        state_dir=state_dir,
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        use_github_state=use_github_state,
+                if not _cleared:
+                    _clear_warn = (
+                        " (warning: could not confirm workflow-state "
+                        "cleanup — a rerun may replay the cached Step 5 "
+                        "result; delete the PDD_WORKFLOW_STATE comment "
+                        "on the issue manually if the refusal repeats)"
                     )
-                    if not _cleared:
-                        _clear_warn = (
-                            " (warning: could not confirm workflow-state "
-                            "cleanup — a rerun may replay the cached Step 5 "
-                            "result; delete the PDD_WORKFLOW_STATE comment "
-                            "on the issue manually if the refusal repeats)"
-                        )
-                        if not quiet:
-                            console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
-                        _nofix_refusal = f"{_nofix_refusal}{_clear_warn}"
-                    return (
-                        False,
-                        f"{_nofix_refusal}{_nofix_post_suffix}",
-                        total_cost,
-                        last_model_used,
-                    )
+                    if not quiet:
+                        console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
+                    _nofix_refusal = f"{_nofix_refusal}{_clear_warn}"
+                return (
+                    False,
+                    f"{_nofix_refusal}{_nofix_post_suffix}",
+                    total_cost,
+                    last_model_used,
+                )
 
         # Skip step 6 sub-steps.
         for sub_step in (6.1, 6.2, 6.3):
