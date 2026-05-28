@@ -14,3 +14,5 @@ OpenAI,deepseek/deepseek-v4-pro,0.435,0.87,1337,https://api.deepseek.com,DEEPSEE
 Fireworks,fireworks_ai/accounts/fireworks/models/deepseek-v4-pro,1.74,3.48,1338,,FIREWORKS_API_KEY,0,False,none
 OpenAI,azure/gpt-5.4-mini,0.75,4.5,1380,,OPENAI_API_KEY,0,True,effort
 OpenAI,openai/mlx-community/qwen3.6-35b-a3b@bf16,0,0,1293,http://localhost:8080,,0,False,none
+NVIDIA NIM,nvidia_nim/deepseek-ai/deepseek-v4-pro,1.74,3.48,1332,,NVIDIA_NIM_API_KEY,0,True,none
+NVIDIA NIM,nvidia_nim/deepseek-ai/deepseek-v4-flash,0.14,0.28,1300,,NVIDIA_NIM_API_KEY,0,True,none
