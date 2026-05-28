@@ -2771,6 +2771,14 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
 
+`pdd checkup simplify` is a local subcommand for candidate cleanup rather than
+a PR review gate. By default it calls Claude Code's bundled `/simplify` skill; use
+`--engine codex|gemini|opencode|auto` to run the same workflow through PDD's
+agentic providers instead. It operates over selected
+changed files. With `--attempts N`, PDD runs independent isolated candidates
+from the same input and copies back the smallest candidate that passes
+`--verify` by changed-file count; see [docs/checkup_simplify.md](docs/checkup_simplify.md).
+
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
@@ -2881,6 +2889,9 @@ pdd checkup \
   --issue https://github.com/myorg/myrepo/issues/42 \
   --review-loop \
   --review-only
+
+# Sample Claude Code /simplify candidates from a branch diff and apply a verified winner
+pdd checkup simplify --since origin/main --apply --attempts 3 --verify --evidence
 ```
 
 ### 18. connect
