@@ -718,12 +718,13 @@ def test_get_auth_status_unauthenticated(mock_refresh_status, mock_get_jwt):
     assert status['expires_at'] is None
 
 
+@patch('pdd.auth_service.clear_refresh_token')
 @patch('pdd.auth_service._get_expected_jwt_audience')
 @patch('pdd.auth_service._has_unexpired_raw_jwt')
 @patch('pdd.auth_service.get_jwt_cache_info')
 @patch('pdd.auth_service._get_refresh_token_status')
 def test_get_auth_status_wrong_audience_with_refresh_token_returns_unauthenticated(
-    mock_refresh_status, mock_get_jwt, mock_has_raw_jwt, mock_expected_aud
+    mock_refresh_status, mock_get_jwt, mock_has_raw_jwt, mock_expected_aud, mock_clear_refresh
 ):
     """Wrong-audience JWT must not fall back to refresh token (split-brain fix).
 
@@ -736,6 +737,7 @@ def test_get_auth_status_wrong_audience_with_refresh_token_returns_unauthenticat
     mock_has_raw_jwt.return_value = True   # JWT file existed before audience check deleted it
     mock_get_jwt.return_value = (False, None)  # Audience-aware check rejected it
     mock_refresh_status.return_value = ("prod_refresh_token", None)  # Refresh token present
+    mock_clear_refresh.return_value = (True, None)
 
     status = auth_service.get_auth_status()
 
@@ -744,6 +746,65 @@ def test_get_auth_status_wrong_audience_with_refresh_token_returns_unauthenticat
     assert status['expires_at'] is None
     # Refresh token must not be consulted when a wrong-audience JWT was detected
     mock_refresh_status.assert_not_called()
+    # Refresh token must be cleared so that repeated calls remain unauthenticated
+    mock_clear_refresh.assert_called_once()
+
+
+def test_get_auth_status_wrong_audience_invalidation_is_durable(monkeypatch, tmp_path):
+    """Wrong-audience detection must stay unauthenticated on repeated calls.
+
+    Regression for the one-shot suppression bug: the first call deletes the JWT
+    cache file and returns unauthenticated.  On the second call had_raw_jwt is
+    False (file is gone), so the guard is bypassed and the refresh token
+    produces authenticated=True — recreating the split-brain state.
+
+    The fix is to also clear the refresh token on the first mismatch detection,
+    making the unauthenticated state durable across repeated status polls.
+    """
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+
+    cache_file = tmp_path / "jwt_cache"
+    now = int(time.time())
+    cache_file.write_text(
+        json.dumps({
+            "id_token": _unsigned_jwt({
+                "aud": "prompt-driven-development",
+                "email": "prod-user@example.com",
+                "exp": now + 3600,
+            }),
+            "expires_at": now + 3600,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    # Simulate a refresh token that exists until clear_refresh_token is called.
+    refresh_token_store = ["prod_refresh_token"]
+
+    def fake_get_refresh_status():
+        if refresh_token_store:
+            return (refresh_token_store[0], None)
+        return (None, None)
+
+    def fake_clear_refresh():
+        refresh_token_store.clear()
+        return (True, None)
+
+    monkeypatch.setattr(auth_service, "_get_refresh_token_status", fake_get_refresh_status)
+    monkeypatch.setattr(auth_service, "clear_refresh_token", fake_clear_refresh)
+
+    # First call: JWT mismatch detected → must clear refresh token and return unauthenticated
+    first = auth_service.get_auth_status()
+    assert first["authenticated"] is False, "First call must be unauthenticated"
+    assert not refresh_token_store, "clear_refresh_token must have been called on first mismatch"
+
+    # Second call: JWT file is gone; refresh token was cleared → must stay unauthenticated
+    second = auth_service.get_auth_status()
+    assert second["authenticated"] is False, (
+        "Second call must remain unauthenticated (durable invalidation)"
+    )
 
 @patch('pdd.auth_service.get_jwt_cache_info')
 def test_get_auth_status_authenticates_with_legacy_server_auth_token(

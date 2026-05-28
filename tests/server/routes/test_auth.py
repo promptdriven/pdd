@@ -357,13 +357,78 @@ class TestAuthStatus:
         monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
 
         # Refresh token exists — this is the previously uncovered split-brain case.
-        with patch("pdd.server.routes.auth._has_refresh_token", return_value=True):
-            result = await get_auth_status()
+        with patch("pdd.server.routes.auth._clear_refresh_token", return_value=(True, None)):
+            with patch("pdd.server.routes.auth._has_refresh_token", return_value=True):
+                result = await get_auth_status()
 
         assert isinstance(result, AuthStatus)
         assert result.authenticated is False
         assert result.cached is False
         assert result.expires_at is None
+
+    @pytest.mark.asyncio
+    async def test_get_auth_status_wrong_audience_invalidation_is_durable(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Repeated /status polls must stay unauthenticated after wrong-audience detection.
+
+        Regression: first call correctly returns unauthenticated (JWT file deleted,
+        had_raw_jwt guard fires).  Second call sees had_raw_jwt=False (file gone) and
+        falls through to the refresh token, producing authenticated=True (split-brain).
+        Fix: clear the refresh token on first mismatch so subsequent calls have no
+        fallback.
+        """
+        from pdd import auth_service
+        from pdd.server.routes.auth import get_auth_status, AuthStatus
+
+        monkeypatch.setenv("PDD_ENV", "staging")
+        monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+        monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+        cache_file = tmp_path / "jwt_cache"
+        now = int(time.time())
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "id_token": _unsigned_jwt(
+                        {
+                            "aud": "prompt-driven-development",
+                            "email": "prod-user@example.com",
+                            "exp": now + 3600,
+                        }
+                    ),
+                    "expires_at": now + 3600,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+        refresh_token_store = ["prod_refresh_token"]
+
+        def fake_has_refresh():
+            return bool(refresh_token_store)
+
+        def fake_clear_refresh():
+            refresh_token_store.clear()
+            return (True, None)
+
+        monkeypatch.setattr(auth_service, "has_refresh_token", fake_has_refresh)
+        with patch("pdd.server.routes.auth._has_refresh_token", side_effect=fake_has_refresh):
+            with patch(
+                "pdd.server.routes.auth._clear_refresh_token", side_effect=fake_clear_refresh
+            ):
+                # First call: mismatch detected, refresh token cleared
+                first = await get_auth_status()
+                assert first.authenticated is False, "First call must be unauthenticated"
+                assert not refresh_token_store, "_clear_refresh_token must be called"
+
+                # Second call: JWT file gone, refresh token cleared → stays unauthenticated
+                second = await get_auth_status()
+                assert second.authenticated is False, (
+                    "Second call must remain unauthenticated (durable invalidation)"
+                )
 
     @pytest.mark.asyncio
     async def test_get_jwt_token_rejects_nested_wrong_environment_cached_jwt(

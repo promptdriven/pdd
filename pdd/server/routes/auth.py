@@ -90,9 +90,13 @@ async def get_auth_status() -> AuthStatus:
 
     # If a JWT existed but had the wrong audience, do NOT fall back to the
     # refresh token — that would cause a split-brain where the UI shows
-    # "authenticated" while all JWT-gated calls fail.
+    # "authenticated" while all JWT-gated calls fail.  Also clear the refresh
+    # token so that repeated /status polls stay unauthenticated: without this,
+    # the second call sees had_raw_jwt=False (file deleted above) and falls
+    # through to the refresh token.
     expected_aud = _get_expected_jwt_audience()
     if expected_aud and had_raw_jwt:
+        _clear_refresh_token()
         return AuthStatus(authenticated=False, cached=False, expires_at=None)
 
     # Check for refresh token in keyring

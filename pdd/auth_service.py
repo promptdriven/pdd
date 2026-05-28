@@ -343,6 +343,11 @@ def get_auth_status() -> Dict[str, Any]:
     # authenticated=True here would create a split-brain frontend state.
     expected_aud = _get_expected_jwt_audience()
     if expected_aud and had_raw_jwt:
+        # Also clear the refresh token so that repeated status checks remain
+        # unauthenticated.  Without this, the second call sees had_raw_jwt=False
+        # (the JWT file was deleted above) and falls through to the refresh
+        # token, recreating the split-brain state.
+        clear_refresh_token()
         return {
             "authenticated": False,
             "cached": False,
