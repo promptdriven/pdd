@@ -114,7 +114,7 @@ def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
-def _find_nearest_pddrc_for_file( 
+def _find_nearest_pddrc_for_file(
     file_path: Path,
     stop_at: Optional[Path] = None,
 ) -> Tuple[Optional[Path], Optional[Path]]:
@@ -140,7 +140,7 @@ def _validate_pddrc_keys(config: Dict[str, Any], pddrc_path: Path) -> None:
     for root_key in config.keys():
         if root_key not in _VALID_PDDRC_ROOT_KEYS:
             logging.warning(f"WARNING: .pddrc contains unknown key '{root_key}' at path '{root_key}', ignored. Run 'pdd setup' to regenerate.")
-            
+
     contexts = config.get('contexts', {})
     if isinstance(contexts, dict):
         for ctx_name, ctx_val in contexts.items():
@@ -148,7 +148,7 @@ def _validate_pddrc_keys(config: Dict[str, Any], pddrc_path: Path) -> None:
                 for ctx_key in ctx_val.keys():
                     if ctx_key not in _VALID_CONTEXT_KEYS:
                         logging.warning(f"WARNING: .pddrc contains unknown key '{ctx_key}' at path 'contexts.{ctx_name}.{ctx_key}', ignored. Run 'pdd setup' to regenerate.")
-                
+
                 defaults = ctx_val.get('defaults', {})
                 if isinstance(defaults, dict):
                     for def_key in defaults.keys():
@@ -159,7 +159,7 @@ def _validate_pddrc_keys(config: Dict[str, Any], pddrc_path: Path) -> None:
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
     try:
-        with open(pddrc_path, 'r', encoding='utf-8') as f: 
+        with open(pddrc_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         
         if not isinstance(config, dict):
@@ -170,11 +170,11 @@ def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
         
         _validate_pddrc_keys(config, pddrc_path)
-        
+
         return config
-    except yaml.YAMLError as e: 
+    except yaml.YAMLError as e:
         raise ValueError(f"YAML syntax error in .pddrc: {e}")
-    except Exception as e: 
+    except Exception as e:
         raise ValueError(f"Error loading .pddrc: {e}")
 
 def list_available_contexts(start_path: Optional[Path] = None) -> list[str]:
@@ -187,14 +187,14 @@ def list_available_contexts(start_path: Optional[Path] = None) -> list[str]:
       helpful errors.
     """
     pddrc = _find_pddrc_file(start_path)
-    if not pddrc: 
+    if not pddrc:
         return ["default"]
     config = _load_pddrc_config(pddrc)
     contexts = config.get("contexts", {})
     names = sorted(contexts.keys()) if isinstance(contexts, dict) else []
     return names or ["default"]
 
-def _match_path_to_contexts( 
+def _match_path_to_contexts(
     path_str: str,
     contexts: Dict[str, Any],
     use_specificity: bool = False,
@@ -223,15 +223,15 @@ def _match_path_to_contexts(
             matched = False
             if is_absolute:
                 # For absolute paths (CWD-based detection), use existing logic
-                if (fnmatch.fnmatch(path_str, f"*/{path_pattern}") or 
-                   fnmatch.fnmatch(path_str, path_pattern) or 
-                   path_str.endswith(f"/{pattern_base}")):
+                if fnmatch.fnmatch(path_str, f"*/{path_pattern}") or \
+                   fnmatch.fnmatch(path_str, path_pattern) or \
+                   path_str.endswith(f"/{pattern_base}"):
                     matched = True
             else:
                 # For relative paths (file-based detection)
-                if (fnmatch.fnmatch(path_str, path_pattern) or 
-                   path_str.startswith(pattern_base + '/') or 
-                   path_str.startswith(pattern_base)):
+                if fnmatch.fnmatch(path_str, path_pattern) or \
+                   path_str.startswith(pattern_base + '/') or \
+                   path_str.startswith(pattern_base):
                     matched = True
 
             if matched:
@@ -239,14 +239,14 @@ def _match_path_to_contexts(
                     return context_name  # First match wins
                 matches.append((context_name, len(pattern_base)))
 
-    if matches: 
+    if matches:
         matches.sort(key=lambda x: x[1], reverse=True)
         return matches[0][0]
 
     return 'default' if 'default' in contexts else None
 
 
-def _detect_context_from_basename( 
+def _detect_context_from_basename(
     basename: str,
     config: Dict[str, Any],
     pddrc_path: Optional[Path] = None,
@@ -265,7 +265,7 @@ def _detect_context_from_basename(
             resolve relative ``prompts_dir`` paths during the filesystem fallback.
             When omitted, falls back to ``_find_pddrc_file()`` (cwd-based search).
     """
-    if not basename: 
+    if not basename:
         return None
 
     contexts = config.get('contexts', {})
@@ -280,7 +280,7 @@ def _detect_context_from_basename(
 
         defaults = context_config.get('defaults', {})
         prompts_dir = defaults.get('prompts_dir', '')
-        if prompts_dir: 
+        if prompts_dir:
             prefix = _extract_prefix_from_prompts_dir(prompts_dir)
 
             if prefix and (basename == prefix or basename.startswith(prefix + '/')):
@@ -289,38 +289,38 @@ def _detect_context_from_basename(
 
             # Empty prefix with a nested prompts_dir (parent segments before
             # "prompts") — defer to filesystem disambiguation below.
-            if not prefix: 
+            if not prefix:
                 parts = prompts_dir.rstrip('/').split('/')
                 if len(parts) > 1 and parts[-1] == 'prompts':
                     nested_candidates.append((context_name, prompts_dir))
 
         for path_pattern in context_config.get('paths', []):
             pattern_base = path_pattern.rstrip('/**').rstrip('/*')
-            if (fnmatch.fnmatch(basename, path_pattern) or 
-               basename.startswith(pattern_base + '/') or 
-               basename == pattern_base):
+            if fnmatch.fnmatch(basename, path_pattern) or \
+               basename.startswith(pattern_base + '/') or \
+               basename == pattern_base:
                 matches.append((context_name, len(pattern_base)))
 
     # Filesystem disambiguation for nested prompts_dir contexts whose basename
     # didn't match syntactically.  Uses a direct glob (not rglob) to avoid
     # walking deep trees.
-    if not matches and nested_candidates: 
+    if not matches and nested_candidates:
         resolved_pddrc = pddrc_path or _find_pddrc_file()
-        if resolved_pddrc: 
+        if resolved_pddrc:
             pddrc_parent = resolved_pddrc.parent
-            if '/' in basename: 
+            if '/' in basename:
                 dir_part, name_part = basename.rsplit('/', 1)
             else:
                 dir_part, name_part = '', basename
-            for context_name, prompts_dir in nested_candidates: 
+            for context_name, prompts_dir in nested_candidates:
                 candidate_dir = pddrc_parent / prompts_dir
-                if dir_part: 
+                if dir_part:
                     candidate_dir = candidate_dir / dir_part
-                if (candidate_dir.is_dir() and 
-                   any(candidate_dir.glob(f"{glob.escape(name_part)}_*.prompt"))):
+                if candidate_dir.is_dir() and \
+                   any(candidate_dir.glob(f"{glob.escape(name_part)}_*.prompt")):
                     matches.append((context_name, len(prompts_dir)))
 
-    if not matches: 
+    if not matches:
         return None
 
     matches.sort(key=lambda item: item[1], reverse=True)
@@ -367,7 +367,7 @@ def _get_relative_basename(input_path: str, pattern: str) -> str:
         if remainder.startswith('/'):
             return remainder[1:]
         return remainder
-    elif input_path == pattern_base: 
+    elif input_path == pattern_base:
         # Exact match - return just the last component
         return input_path.split('/')[-1] if '/' in input_path else input_path
 
@@ -377,10 +377,10 @@ def _get_relative_basename(input_path: str, pattern: str) -> str:
 
 def _detect_context(current_dir: Path, config: Dict[str, Any], context_override: Optional[str] = None) -> Optional[str]:
     """Detect the appropriate context based on current directory path."""
-    if context_override: 
+    if context_override:
         # Validate that the override context exists
         contexts = config.get('contexts', {})
-        if context_override not in contexts: 
+        if context_override not in contexts:
             available = list(contexts.keys())
             raise ValueError(f"Unknown context '{context_override}'. Available contexts: {available}")
         return context_override
@@ -404,9 +404,9 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
         Tuple of (context_name, context_config_defaults) or (None, {}) if no match.
     """
     # Find repo root if not provided
-    if repo_root is None: 
+    if repo_root is None:
         pddrc_path = _find_pddrc_file(Path(file_path).parent)
-        if pddrc_path: 
+        if pddrc_path:
             repo_root = str(pddrc_path.parent)
         else:
             try:
@@ -432,23 +432,23 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     repo_root_pddrc = Path(repo_root) / ".pddrc"
     if repo_root_pddrc.is_file():
         pddrc_path = repo_root_pddrc
-    if not pddrc_path: 
+    if not pddrc_path:
         pddrc_path = _find_pddrc_file(Path(file_path).parent)
 
     # If the .pddrc lives in a directory different from repo_root, recalculate
     # repo_root_abs and relative_path so context matching works correctly
-    if pddrc_path: 
+    if pddrc_path:
         pddrc_root_abs = os.path.abspath(str(pddrc_path.parent))
         if file_path_abs.startswith(pddrc_root_abs + os.sep) or file_path_abs == pddrc_root_abs:
             repo_root_abs = pddrc_root_abs
             relative_path = os.path.relpath(file_path_abs, repo_root_abs)
 
-    if not pddrc_path: 
+    if not pddrc_path:
         return None, {}
 
     try:
         config = _load_pddrc_config(pddrc_path)
-    except ValueError: 
+    except ValueError:
         return None, {}
 
     contexts = config.get('contexts', {})
@@ -460,14 +460,14 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
         if context_name == 'default':
             continue
         prompts_dir = context_config.get('defaults', {}).get('prompts_dir', '')
-        if prompts_dir: 
+        if prompts_dir:
             prompts_dir_normalized = prompts_dir.rstrip('/')
             if relative_path.startswith(prompts_dir_normalized + '/') or relative_path == prompts_dir_normalized:
                 # Track match with specificity (length of prompts_dir)
                 prompts_dir_matches.append((context_name, len(prompts_dir_normalized)))
 
     # Return most specific prompts_dir match if any
-    if prompts_dir_matches: 
+    if prompts_dir_matches:
         prompts_dir_matches.sort(key=lambda x: x[1], reverse=True)
         matched_context = prompts_dir_matches[0][0]
         return matched_context, _get_context_config(config, matched_context)
@@ -479,14 +479,14 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
 
 def _get_context_config(config: Dict[str, Any], context_name: Optional[str]) -> Dict[str, Any]:
     """Get configuration settings for the specified context."""
-    if not context_name: 
+    if not context_name:
         return {}
     
     contexts = config.get('contexts', {})
     context_config = contexts.get(context_name, {})
     return context_config.get('defaults', {})
 
-def _resolve_config_hierarchy( 
+def _resolve_config_hierarchy(
     cli_options: Dict[str, Any],
     context_config: Dict[str, Any],
     env_vars: Dict[str, str]
@@ -510,25 +510,25 @@ def _resolve_config_hierarchy(
 
     for config_key, env_var in config_keys.items():
         # 1. CLI options (highest priority)
-        if config_key in cli_options and cli_options[config_key] is not None: 
+        if config_key in cli_options and cli_options[config_key] is not None:
             resolved[config_key] = cli_options[config_key]
         # 2. Context configuration
-        elif config_key in context_config: 
+        elif config_key in context_config:
             resolved[config_key] = context_config[config_key]
         # 3. Environment variables
-        elif env_var and env_var in env_vars: 
+        elif env_var and env_var in env_vars:
             resolved[config_key] = env_vars[env_var]
         # 4. Defaults are handled elsewhere
 
     # Issue #237: Pass through 'outputs' config for template-based path generation
     # This enables extensible project layouts (Next.js, Vue, Python, Go, etc.)
-    if 'outputs' in context_config: 
+    if 'outputs' in context_config:
         resolved['outputs'] = context_config['outputs']
 
     return resolved
 
 # New helper for reporting effective config/context exactly as construct_paths would
-def resolve_effective_config( 
+def resolve_effective_config(
     *,
     cli_options: Optional[Dict[str, Any]] = None,
     context_override: Optional[str] = None,
@@ -563,7 +563,7 @@ def resolve_effective_config(
 
     # Find and load .pddrc (if any)
     pddrc_path = _find_pddrc_file(cwd)
-    if not pddrc_path: 
+    if not pddrc_path:
         # No .pddrc: context stays None; resolved config is CLI-only (env/defaults handled elsewhere)
         env_vars = dict(os.environ)
         resolved_config = _resolve_config_hierarchy(cli_options, {}, env_vars)
@@ -573,20 +573,20 @@ def resolve_effective_config(
     pddrc_config = _load_pddrc_config(pddrc_path)
 
     # Detect appropriate context
-    if context_override: 
+    if context_override:
         # Delegate validation to _detect_context to avoid duplicate validation logic
         context = _detect_context(cwd, pddrc_config, context_override)
     else:
         # Prefer file-based detection when a prompt file is provided
-        if prompt_file and Path(prompt_file).exists(): 
+        if prompt_file and Path(prompt_file).exists():
             detected_context, _ = detect_context_for_file(prompt_file)
-            if detected_context: 
+            if detected_context:
                 context = detected_context
             else:
                 context = _detect_context(cwd, pddrc_config, None)
-        elif basename_hint: 
+        elif basename_hint:
             detected_context = _detect_context_from_basename(basename_hint, pddrc_config, pddrc_path=pddrc_path)
-            if detected_context: 
+            if detected_context:
                 context = detected_context
             else:
                 context = _detect_context(cwd, pddrc_config, None)
@@ -596,7 +596,7 @@ def resolve_effective_config(
     context_config = _get_context_config(pddrc_config, context)
     original_context_config = context_config.copy()
 
-    if (not quiet) and context: 
+    if (not quiet) and context:
         console.print(f"[info]Using .pddrc context:[/info] {context}")
 
     env_vars = dict(os.environ)
@@ -619,17 +619,17 @@ def get_tests_dir_from_config(start_path: Optional[Path] = None) -> Optional[Pat
     Returns:
         Path to tests directory if configured, None otherwise.
     """
-    if start_path is None: 
+    if start_path is None:
         start_path = Path.cwd()
 
     # Find and load .pddrc
     pddrc_path = _find_pddrc_file(start_path)
-    if not pddrc_path: 
+    if not pddrc_path:
         return None
 
     try:
         config = _load_pddrc_config(pddrc_path)
-    except ValueError: 
+    except ValueError:
         return None
 
     # Detect context and get its config
@@ -638,10 +638,10 @@ def get_tests_dir_from_config(start_path: Optional[Path] = None) -> Optional[Pat
 
     # Check context config first, then env var
     test_output_path = context_config.get('test_output_path')
-    if not test_output_path: 
+    if not test_output_path:
         test_output_path = os.environ.get('PDD_TEST_OUTPUT_PATH')
 
-    if test_output_path: 
+    if test_output_path:
         return Path(test_output_path)
 
     return None
@@ -660,7 +660,7 @@ def _read_file(path: Path) -> str:
 def _ensure_error_file(path: Path, quiet: bool) -> None:
     """Create an empty error log file if it doesn't exist."""
     if not path.exists():
-        if not quiet: 
+        if not quiet:
             # Use console.print from the main module scope
             # Print without Rich tags for easier testing
             console.print(f"Warning: Error file '{path.resolve()}' does not exist. Creating an empty file.", style="warning")
@@ -683,7 +683,7 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
         # Less common / potentially ambiguous keys last
         "change_prompt_file",   # change (specific case handled in _extract_basename)
     ):
-        if key in input_files: 
+        if key in input_files:
             return input_files[key]
 
     # Fallback: first file with a .prompt extension if no specific key matches
@@ -692,7 +692,7 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
             return p
     
     # Final fallback: Return the first file path available (e.g. for pdd update <code_file>)
-    if input_files: 
+    if input_files:
         return next(iter(input_files.values()))
         
     return None
@@ -706,7 +706,7 @@ def _is_known_language(language_name: str) -> bool:
     so basename/language inference does not fail when PDD_PATH is unset.
     """
     language_name_lower = (language_name or "").lower()
-    if not language_name_lower: 
+    if not language_name_lower:
         return False
 
     builtin_languages = {
@@ -731,7 +731,7 @@ def _is_known_language(language_name: str) -> bool:
     }
 
     pdd_path_str = os.getenv('PDD_PATH')
-    if not pdd_path_str: 
+    if not pdd_path_str:
         return language_name_lower in builtin_languages
 
     csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
@@ -739,12 +739,12 @@ def _is_known_language(language_name: str) -> bool:
         return language_name_lower in builtin_languages
 
     try:
-        with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile: 
+        with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
-            for row in reader: 
-                if row.get('language', '').lower() == language_name_lower: 
+            for row in reader:
+                if row.get('language', '').lower() == language_name_lower:
                     return True
-    except csv.Error as e: 
+    except csv.Error as e:
         console.print(f"[error]CSV Error reading {csv_file_path}: {e}", style="error")
         return language_name_lower in builtin_languages
 
@@ -776,29 +776,29 @@ def get_language_outputs(language_name: str) -> set[str]:
     falling back to the built-in ``_CODE_ONLY_LANGUAGES`` set.
     """
     language_lower = (language_name or '').lower()
-    if not language_lower: 
+    if not language_lower:
         return {'code', 'test', 'example'}
 
     # Try CSV first (has an 'outputs' column after Step 2)
     pdd_path_str = os.getenv('PDD_PATH')
-    if pdd_path_str: 
+    if pdd_path_str:
         csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
         if csv_file_path.is_file():
             try:
-                with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile: 
+                with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
                     reader = csv.DictReader(csvfile)
-                    for row in reader: 
-                        if row.get('language', '').lower() == language_lower: 
+                    for row in reader:
+                        if row.get('language', '').lower() == language_lower:
                             outputs_val = row.get('outputs', '').strip()
-                            if outputs_val: 
+                            if outputs_val:
                                 return set(outputs_val.split('|'))
                             # Column exists but empty – fall through to built-in
                             break
-            except csv.Error: 
+            except csv.Error:
                 pass
 
     # Built-in fallback
-    if language_lower in _CODE_ONLY_LANGUAGES: 
+    if language_lower in _CODE_ONLY_LANGUAGES:
         return {'code'}
 
     if _is_known_language(language_lower):
@@ -815,13 +815,13 @@ def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     p = Path(path_like)
     stem = p.stem  # removes last extension (e.g., '.prompt', '.py')
 
-    if "_" not in stem: 
+    if "_" not in stem:
         return stem
 
     parts = stem.split("_")
     candidate_lang = parts[-1]
 
-    if _is_known_language(candidate_lang): 
+    if _is_known_language(candidate_lang):
         # Do not strip '_prompt' from a non-.prompt file (e.g., 'test_prompt.txt')
         if candidate_lang == 'prompt' and p.suffix != '.prompt':
             return stem
@@ -847,7 +847,7 @@ def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
     parts = prompt_path.parts
     try:
         prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
-    except ValueError: 
+    except ValueError:
         # No "prompts" directory in path — check for subdirectory parent
         # that isn't a filesystem root (e.g. "commands/fix_python.prompt")
         parent = prompt_path.parent
@@ -857,12 +857,12 @@ def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
 
     # Everything between prompts/ and the filename is the subdir prefix
     subdir_parts = parts[prompts_idx + 1 : -1]
-    if subdir_parts: 
+    if subdir_parts:
         return str(Path(*subdir_parts) / stripped_name)
     return stripped_name
 
 
-def _extract_basename( 
+def _extract_basename(
     command: str,
     input_file_paths: Dict[str, Path],
 ) -> str:
@@ -870,15 +870,15 @@ def _extract_basename(
     Deduce the project basename according to the rules explained in *Step A*.
     """
     # Handle 'fix' command specifically to create a unique basename per test file
-    if command == "fix": 
+    if command == "fix":
         prompt_path = _candidate_prompt_path(input_file_paths)
-        if not prompt_path: 
+        if not prompt_path:
             raise ValueError("Could not determine prompt file for 'fix' command.")
 
         prompt_basename = _strip_language_suffix(prompt_path)
         
         unit_test_path = input_file_paths.get("unit_test_file")
-        if not unit_test_path: 
+        if not unit_test_path:
             # Fallback to just the prompt basename if no unit test file is provided
             # This might happen in some edge cases, but 'fix' command structure requires it
             return prompt_basename
@@ -888,11 +888,11 @@ def _extract_basename(
         return f"{prompt_basename}_{test_basename}"
         
     # Handle conflicts first due to its unique structure
-    if command == "conflicts": 
+    if command == "conflicts":
         key1 = "prompt1"
         key2 = "prompt2"
         # Ensure keys exist before proceeding
-        if key1 in input_file_paths and key2 in input_file_paths: 
+        if key1 in input_file_paths and key2 in input_file_paths:
             p1 = Path(input_file_paths[key1])
             p2 = Path(input_file_paths[key2])
             base1 = _strip_language_suffix(p1)
@@ -902,21 +902,21 @@ def _extract_basename(
         # else: Fall through might occur if keys missing, handled by general logic/fallback
 
     # Special‑case commands that choose a non‑prompt file for the basename
-    elif command == "detect": 
+    elif command == "detect":
         key = "change_file"
-        if key in input_file_paths: 
+        if key in input_file_paths:
             # Basename is from change_file, no language suffix stripping needed usually
             return Path(input_file_paths[key]).stem
-    elif command == "change": 
+    elif command == "change":
          # If change_prompt_file is given, use its stem (no language strip needed per convention)
-         if "change_prompt_file" in input_file_paths: 
+         if "change_prompt_file" in input_file_paths:
               return Path(input_file_paths["change_prompt_file"]).stem
          # If --csv is used or change_prompt_file is absent, fall through to general logic
          pass
 
     # General case: Use the primary prompt file
     prompt_path = _candidate_prompt_path(input_file_paths)
-    if prompt_path: 
+    if prompt_path:
         return _strip_language_suffix_with_subdir(prompt_path)
 
     # Fallback: If no prompt found (e.g., command only takes code files?),
@@ -927,7 +927,7 @@ def _extract_basename(
     return _strip_language_suffix(first_path)
 
 
-def _determine_language( 
+def _determine_language(
     command_options: Dict[str, Any], # Keep original type hint
     input_file_paths: Dict[str, Path],
     command: str = "",  # New parameter for the command name
@@ -941,7 +941,7 @@ def _determine_language(
     command_options = command_options or {}
     # 1 – explicit option
     explicit_lang = command_options.get("language")
-    if explicit_lang: 
+    if explicit_lang:
         lang_lower = explicit_lang.lower()
         # Optional: Validate known language? Let's assume valid for now.
         return lang_lower
@@ -949,16 +949,16 @@ def _determine_language(
     # 2 – infer from extension of any code/test file (excluding .prompt)
     # Iterate through values, ensuring consistent order if needed (e.g., sort keys)
     # For now, rely on dict order (Python 3.7+)
-    for key, p in input_file_paths.items(): 
+    for key, p in input_file_paths.items():
         path_obj = Path(p)
         ext = path_obj.suffix
         # Prioritize non-prompt code files
-        if ext and ext != ".prompt": 
+        if ext and ext != ".prompt":
             try:
                 language = get_language(ext)
-                if language: 
+                if language:
                     return language.lower()
-            except ValueError: 
+            except ValueError:
                 # Fallback: load language CSV file directly when PDD_PATH is not set
                 try:
                     import csv
@@ -966,51 +966,51 @@ def _determine_language(
                     # Try to find the CSV file relative to this script
                     script_dir = os.path.dirname(os.path.abspath(__file__))
                     csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
-                    if os.path.exists(csv_path): 
-                        with open(csv_path, 'r') as csvfile: 
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
                             reader = csv.DictReader(csvfile)
-                            for row in reader: 
-                                if row['extension'].lower() == ext.lower(): 
+                            for row in reader:
+                                if row['extension'].lower() == ext.lower():
                                     return row['language'].lower()
-                except (FileNotFoundError, csv.Error): 
+                except (FileNotFoundError, csv.Error):
                     pass
         # Handle files without extension like Makefile
         elif not ext and path_obj.is_file(): # Check it's actually a file
             try:
                 language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
-                if language: 
+                if language:
                     return language.lower()
-            except ValueError: 
+            except ValueError:
                 # Fallback: load language CSV file directly for files without extension
                 try:
                     import csv
                     import os
                     script_dir = os.path.dirname(os.path.abspath(__file__))
                     csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
-                    if os.path.exists(csv_path): 
-                        with open(csv_path, 'r') as csvfile: 
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
                             reader = csv.DictReader(csvfile)
-                            for row in reader: 
+                            for row in reader:
                                 # Check if the filename matches (for files without extension)
-                                if not row['extension'] and path_obj.name.lower() == row['language'].lower(): 
+                                if not row['extension'] and path_obj.name.lower() == row['language'].lower():
                                     return row['language'].lower()
-                except (FileNotFoundError, csv.Error): 
+                except (FileNotFoundError, csv.Error):
                     pass
 
     # 3 – parse from prompt filename suffix
     prompt_path = _candidate_prompt_path(input_file_paths)
-    if prompt_path and prompt_path.suffix == ".prompt": 
+    if prompt_path and prompt_path.suffix == ".prompt":
         stem = prompt_path.stem
-        if "_" in stem: 
+        if "_" in stem:
             parts = stem.split("_")
-            if len(parts) >= 2: 
+            if len(parts) >= 2:
                 token = parts[-1]
                 # Check if the token is a known language using the new helper
-                if _is_known_language(token): 
+                if _is_known_language(token):
                     return token.lower()
 
     # 4 - Special handling for detect command - default to prompt for LLM prompts
-    if command == "detect" and "change_file" in input_file_paths: 
+    if command == "detect" and "change_file" in input_file_paths:
         return "prompt"
 
     # 5 - If no language determined, raise error
@@ -1023,7 +1023,7 @@ def _paths_exist(paths: Dict[str, Path]) -> bool: # Value type is Path
     return any(p.is_file() for p in paths.values())
 
 
-def construct_paths( 
+def construct_paths(
     input_file_paths: Dict[str, str],
     force: bool,
     quiet: bool,
@@ -1057,28 +1057,28 @@ def construct_paths(
     try:
         # Find and load .pddrc file
         pddrc_path = _find_pddrc_file()
-        if pddrc_path: 
+        if pddrc_path:
             pddrc_config = _load_pddrc_config(pddrc_path)
             
             # Detect appropriate context
             # Priority: context_override > file-based detection > CWD-based detection
-            if context_override: 
+            if context_override:
                 # Delegate validation to _detect_context to avoid duplicate validation logic
                 context = _detect_context(Path.cwd(), pddrc_config, context_override)
             else:
                 # Try file-based detection when prompt file is provided
                 prompt_file_str = input_file_paths.get('prompt_file') if input_file_paths else None
-                if prompt_file_str and Path(prompt_file_str).exists(): 
+                if prompt_file_str and Path(prompt_file_str).exists():
                     detected_context, _ = detect_context_for_file(prompt_file_str)
-                    if detected_context: 
+                    if detected_context:
                         context = detected_context
                     else:
                         context = _detect_context(Path.cwd(), pddrc_config, None)
                 else:
                     basename_hint = command_options.get("basename")
-                    if basename_hint: 
+                    if basename_hint:
                         detected_context = _detect_context_from_basename(basename_hint, pddrc_config, pddrc_path=pddrc_path)
-                        if detected_context: 
+                        if detected_context:
                             context = detected_context
                         else:
                             context = _detect_context(Path.cwd(), pddrc_config, None)
@@ -1089,7 +1089,7 @@ def construct_paths(
             context_config = _get_context_config(pddrc_config, context)
             original_context_config = context_config.copy()  # Store original before modifications
             
-            if not quiet and context: 
+            if not quiet and context:
                 console.print(f"[info]Using .pddrc context:[/info] {context}")
         
         # Apply configuration hierarchy
@@ -1101,37 +1101,37 @@ def construct_paths(
 
         # Update command_options with resolved configuration for internal use
         # Exclude internal metadata keys (prefixed with _) from command_options
-        for key, value in resolved_config.items(): 
-            if key.startswith('_'): 
+        for key, value in resolved_config.items():
+            if key.startswith('_'):
                 continue  # Skip internal metadata like _matched_context
-            if key not in command_options or command_options[key] is None: 
+            if key not in command_options or command_options[key] is None:
                 command_options[key] = value
         
         # Also update context_config with resolved environment variables for generate_output_paths
         # This ensures environment variables are available when context config doesn't override them
-        for key, value in resolved_config.items(): 
-            if key.endswith('_output_path') and key not in context_config: 
+        for key, value in resolved_config.items():
+            if key.endswith('_output_path') and key not in context_config:
                 context_config[key] = value
                 
-    except Exception as e: 
+    except Exception as e:
         error_msg = f"Configuration error: {e}"
         console.print(f"[error]{error_msg}[/error]", style="error")
-        if not quiet: 
+        if not quiet:
             console.print("[warning]Continuing with default configuration...[/warning]", style="warning")
         # Initialize resolved_config on error to avoid downstream issues
         resolved_config = command_options.copy()
 
 
     # ------------- Handle sync discovery mode ----------------
-    if command == "sync" and not input_file_paths: 
+    if command == "sync" and not input_file_paths:
         basename = command_options.get("basename")
-        if not basename: 
+        if not basename:
             raise ValueError("Basename must be provided in command_options for sync discovery mode.")
         
         # For discovery, we only need directory paths (via .parent) — the language
         # and extension values here are irrelevant and never used for file output.
         try:
-            output_paths_str = generate_output_paths( 
+            output_paths_str = generate_output_paths(
                 command="sync",
                 output_locations={},
                 basename=basename,
@@ -1146,23 +1146,23 @@ def construct_paths(
             gen_path = Path(output_paths_str.get("generate_output_path", "src"))
             
             # Only infer prompts_dir if it wasn't provided via CLI/.pddrc/env
-            if not resolved_config.get("prompts_dir"): 
+            if not resolved_config.get("prompts_dir"):
                 # First, check current working directory for prompt files matching the basename pattern
                 current_dir = Path.cwd()
                 prompt_pattern = f"{glob.escape(basename)}_*.prompt"
-                if list(current_dir.glob(prompt_pattern)): 
+                if list(current_dir.glob(prompt_pattern)):
                     # Found prompt files in current working directory
                     resolved_config["prompts_dir"] = str(current_dir)
                     resolved_config["code_dir"] = str(current_dir)
-                    if not quiet: 
+                    if not quiet:
                         console.print(f"[info]Found prompt files in current directory:[/info] {current_dir}")
                 else:
                     # Fall back to context-aware logic
                     # Use original_context_config to avoid checking augmented config with env vars
-                    if original_context_config and ( 
+                    if original_context_config and (
                         'prompts_dir' in original_context_config or
                         any(key.endswith('_output_path') for key in original_context_config)
-                    ): 
+                    ):
                         # For configured contexts, use prompts_dir from config if provided,
                         # otherwise default to "prompts" at the same level as output dirs
                         resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")
@@ -1174,7 +1174,7 @@ def construct_paths(
                         resolved_config["code_dir"] = str(gen_path.parent)
 
             # Ensure code_dir is always set (even if prompts_dir was already configured via CLI/env)
-            if "code_dir" not in resolved_config: 
+            if "code_dir" not in resolved_config:
                 resolved_config["code_dir"] = str(gen_path.parent)
 
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
@@ -1184,12 +1184,12 @@ def construct_paths(
             # NOT for determining scan scope. Using it caused CSV row deletion issues.
             # Do NOT use output_paths_str since generate_output_paths always returns absolute paths.
             example_path_str = None
-            if original_context_config: 
+            if original_context_config:
                 example_path_str = original_context_config.get("example_output_path")
 
             # Default via the SSOT helper (handles greenfield + legacy context/).
-            if not example_path_str: 
-                example_path_str = _resolve_default_examples_dir( 
+            if not example_path_str:
+                example_path_str = _resolve_default_examples_dir(
                     _default_examples_project_root(pddrc_path)
                 )
 
@@ -1198,14 +1198,14 @@ def construct_paths(
             # Fix for Issue #332: Using full subdirectory path caused CSV truncation
             example_path = Path(example_path_str)
             parts = example_path.parts
-            if parts and parts[0] not in ('/', '.', '..'): 
+            if parts and parts[0] not in ('/', '.', '..'):
                 resolved_config["examples_dir"] = parts[0]
             else:
-                resolved_config["examples_dir"] = _resolve_default_examples_dir( 
+                resolved_config["examples_dir"] = _resolve_default_examples_dir(
                     _default_examples_project_root(pddrc_path)
                 )
 
-        except Exception as e: 
+        except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
             raise
         
@@ -1213,19 +1213,19 @@ def construct_paths(
         return resolved_config, {}, {}, ""
 
 
-    if not input_file_paths: 
+    if not input_file_paths:
         raise ValueError("No input files provided")
 
 
     # ------------- normalise & resolve Paths -----------------
     input_paths: Dict[str, Path] = {}
-    for key, path_str in input_file_paths.items(): 
+    for key, path_str in input_file_paths.items():
         try:
             path = Path(path_str).expanduser()
             # Resolve non-error files strictly first, but be more lenient for sync command
-            if key != "error_file": 
+            if key != "error_file":
                  # For sync command, be more tolerant of non-existent files since we're just determining paths
-                 if command == "sync": 
+                 if command == "sync":
                      input_paths[key] = path.resolve()
                  else:
                      # Let FileNotFoundError propagate naturally if path doesn't exist
@@ -1234,7 +1234,7 @@ def construct_paths(
             else:
                  # Resolve error file non-strictly, existence checked later
                  input_paths[key] = path.resolve()
-        except FileNotFoundError as e: 
+        except FileNotFoundError as e:
              # Re-raise standard FileNotFoundError, tests will check path within it
              raise e
         except Exception as exc: # Catch other potential path errors like permission issues
@@ -1244,24 +1244,24 @@ def construct_paths(
 
     # ------------- Step 1: load input files ------------------
     input_strings: Dict[str, str] = {}
-    for key, path in input_paths.items(): 
-        if key == "error_file": 
-            if create_error_file: 
+    for key, path in input_paths.items():
+        if key == "error_file":
+            if create_error_file:
                 _ensure_error_file(path, quiet) # Pass quiet flag
                 # Ensure path exists before trying to read
-                if not path.exists(): 
+                if not path.exists():
                      # _ensure_error_file should have created it, but check again
                      # If it still doesn't exist, something went wrong
                      raise FileNotFoundError(f"Error file '{path}' could not be created or found.")
             else:
                 # When create_error_file is False, error out if the file doesn't exist
-                if not path.exists(): 
+                if not path.exists():
                     raise FileNotFoundError(f"Error file '{path}' does not exist.")
 
         # Check existence again, especially for error_file which might have been created
-        if not path.exists(): 
+        if not path.exists():
              # For sync command, be more tolerant of non-existent files since we're just determining paths
-             if command == "sync": 
+             if command == "sync":
                  # Skip reading content for non-existent files in sync mode
                  continue
              else:
@@ -1272,12 +1272,12 @@ def construct_paths(
         if path.is_file(): # Read only if it's a file
              try:
                  input_strings[key] = _read_file(path)
-             except Exception as exc: 
+             except Exception as exc:
                  # Re-raise exceptions during reading
                  raise IOError(f"Failed to read input file '{path}' (key='{key}'): {exc}") from exc
-        elif path.is_dir(): 
+        elif path.is_dir():
              # Decide how to handle directories if they are passed unexpectedly
-             if not quiet: 
+             if not quiet:
                  console.print(f"[warning]Warning: Input path '{path}' for key '{key}' is a directory, not reading content.", style="warning")
              # Store the path string or skip? Let's skip for input_strings.
              # input_strings[key] = "" # Or None? Or skip? Skipping seems best.
@@ -1289,11 +1289,11 @@ def construct_paths(
         # For sync, example, and test commands, prefer the basename from command_options if provided.
         # This preserves subdirectory paths like 'core/cloud' which would otherwise
         # be lost when extracting from the prompt file path.
-        if command in ("sync", "example", "test") and command_options.get("basename"): 
+        if command in ("sync", "example", "test") and command_options.get("basename"):
             basename = command_options["basename"]
         else:
             basename = _extract_basename(command, input_paths)
-    except ValueError as exc: 
+    except ValueError as exc:
          # Check if it's the specific error from the initial check (now done at start)
          # This try/except might not be needed if initial check is robust
          # Let's keep it simple for now and let initial check handle empty inputs
@@ -1310,40 +1310,40 @@ def construct_paths(
         language = _determine_language(command_options, input_paths, command)
         
         # Add validation to ensure language is never None
-        if language is None: 
+        if language is None:
             # Try to extract language from the prompt filename suffix before
             # falling back to Python.  This prevents TypeScript/TSX modules
             # (e.g. *_typescriptreact.prompt) from being mis-classified as
             # Python when _determine_language fails to detect the language.
             prompt_path = _candidate_prompt_path(input_paths)
-            if prompt_path and prompt_path.suffix == ".prompt": 
+            if prompt_path and prompt_path.suffix == ".prompt":
                 stem = prompt_path.stem
-                if "_" in stem: 
+                if "_" in stem:
                     suffix_token = stem.rsplit("_", 1)[-1]
-                    if _is_known_language(suffix_token): 
+                    if _is_known_language(suffix_token):
                         language = suffix_token.lower()
 
             # Final default when no prompt suffix could be extracted
-            if language is None: 
+            if language is None:
                 language = 'python'
 
             # Log the issue for debugging
-            if not quiet: 
-                console.print( 
+            if not quiet:
+                console.print(
                     f"[warning]Warning: Could not determine language for '{command}' command. "
                     f"Defaulting to '{language}'. Pass --language explicitly or ensure prompt "
                     f"filename ends with _<language>.prompt[/warning]",
                     style="warning"
                 )
-    except ValueError as e: 
+    except ValueError as e:
         console.print(f"[error]{e}", style="error")
         raise # Re-raise the ValueError from _determine_language
 
     # Final safety check before calling get_extension
-    if not language or not isinstance(language, str): 
+    if not language or not isinstance(language, str):
         language = 'python'  # Absolute fallback
-        if not quiet: 
-            console.print( 
+        if not quiet:
+            console.print(
                 f"[warning]Warning: Invalid language value. Using default: {language}[/warning]",
                 style="warning"
             )
@@ -1352,18 +1352,18 @@ def construct_paths(
     # Try to get extension from CSV; fallback to built-in mapping if PDD_PATH/CSV unavailable
     try:
         file_extension = get_extension(language)  # Pass determined language
-        if not file_extension and (language or '').lower() != 'prompt': 
+        if not file_extension and (language or '').lower() != 'prompt':
             raise ValueError('empty extension')
-    except Exception: 
+    except Exception:
         file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
     
     # Handle --format option for commands that support it (e.g., example)
     format_option = command_options.get("format")
-    if format_option and command == "example": 
+    if format_option and command == "example":
         format_lower = format_option.lower()
-        if format_lower == "md": 
+        if format_lower == "md":
             file_extension = ".md"
-        elif format_lower == "code": 
+        elif format_lower == "code":
             # Keep the language-based extension (file_extension already set above)
             pass
         else:
@@ -1374,7 +1374,7 @@ def construct_paths(
 
     # ------------- Step 3b: build output paths ---------------
     # Filter user‑provided output_* locations from CLI options
-    output_location_opts = { 
+    output_location_opts = {
         k: v for k, v in command_options.items()
         if k.startswith("output") and v is not None # Ensure value is not None
     }
@@ -1385,23 +1385,23 @@ def construct_paths(
     commands_using_input_dir = {'fix', 'crash', 'verify', 'split', 'change', 'update'}
     input_file_dir: Optional[str] = None
     input_file_dirs: Dict[str, Optional[str]] = {}
-    if input_paths and command in commands_using_input_dir: 
+    if input_paths and command in commands_using_input_dir:
         try:
             # For fix/crash/verify commands, use specific file directories for each output
-            if command in {'fix', 'crash', 'verify'}: 
+            if command in {'fix', 'crash', 'verify'}:
                 # Map output keys to their corresponding input file keys
-                input_key_map = { 
+                input_key_map = {
                     'fix': {'output_code': 'code_file', 'output_test': 'unit_test_file', 'output_results': 'code_file'},
                     'crash': {'output': 'code_file', 'output_program': 'program_file'},
                     'verify': {'output_code': 'code_file', 'output_program': 'verification_program', 'output_results': 'code_file'},
                 }
 
-                for output_key, input_key in input_key_map.get(command, {}).items(): 
-                    if input_key in input_paths: 
+                for output_key, input_key in input_key_map.get(command, {}).items():
+                    if input_key in input_paths:
                         input_file_dirs[output_key] = str(input_paths[input_key].parent)
 
                 # Set default input_file_dir to code_file directory as fallback
-                if 'code_file' in input_paths: 
+                if 'code_file' in input_paths:
                     input_file_dir = str(input_paths['code_file'].parent)
                 else:
                     first_input_path = next(iter(input_paths.values()))
@@ -1410,7 +1410,7 @@ def construct_paths(
                 # For other commands, use first input path
                 first_input_path = next(iter(input_paths.values()))
                 input_file_dir = str(first_input_path.parent)
-        except (StopIteration, AttributeError): 
+        except (StopIteration, AttributeError):
             # If no input paths or path doesn't have parent, use None (falls back to CWD)
             pass
 
@@ -1422,10 +1422,10 @@ def construct_paths(
         # - If explicitly provided, use it
         # - Otherwise: sync uses "cwd", other commands use "config_base"
         effective_path_resolution_mode = path_resolution_mode
-        if effective_path_resolution_mode is None: 
+        if effective_path_resolution_mode is None:
             effective_path_resolution_mode = "cwd" if command == "sync" else "config_base"
 
-        output_paths_str: Dict[str, str] = generate_output_paths( 
+        output_paths_str: Dict[str, str] = generate_output_paths(
             command=command,
             output_locations=output_location_opts,
             basename=basename,
@@ -1449,51 +1449,51 @@ def construct_paths(
     # Initialize existing_files before the conditional to avoid UnboundLocalError
     existing_files: Dict[str, Path] = {}
 
-    if command in ["test", "bug"] and not force: 
+    if command in ["test", "bug"] and not force:
         # For test/bug commands without --force, create numbered files instead of overwriting
-        for key, path in output_paths_resolved.items(): 
-            if path.is_file(): 
+        for key, path in output_paths_resolved.items():
+            if path.is_file():
                 base, ext = os.path.splitext(path)
                 i = 1
                 new_path = Path(f"{base}_{i}{ext}")
-                while new_path.exists(): 
+                while new_path.exists():
                     i += 1
                     new_path = Path(f"{base}_{i}{ext}")
                 output_paths_resolved[key] = new_path
     else:
         # Check if any output *file* exists (operate on Path objects)
-        for k, p_obj in output_paths_resolved.items(): 
-            if p_obj.is_file(): 
+        for k, p_obj in output_paths_resolved.items():
+            if p_obj.is_file():
                 existing_files[k] = p_obj # Store the Path object
 
-    if existing_files and not force: 
+    if existing_files and not force:
         paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
-        if not quiet: 
+        if not quiet:
             # Use the Path objects stored in existing_files for resolve()
             # Print without Rich tags for easier testing
-            console.print( 
+            console.print(
                 f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
                 style="warning"
             )
 
         # Use confirm_callback if provided (for TUI environments), otherwise use click.confirm
-        if confirm_callback is not None: 
+        if confirm_callback is not None:
             # Use the provided callback for confirmation (e.g., from Textual TUI)
             confirm_message = f"The following files will be overwritten:\n{paths_list}\n\nOverwrite existing files?"
-            if not confirm_callback(confirm_message, "Overwrite Confirmation"): 
+            if not confirm_callback(confirm_message, "Overwrite Confirmation"):
                 raise click.Abort()
         else:
             # Use click.confirm for CLI interaction
             try:
-                if not click.confirm( 
+                if not click.confirm(
                     click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
-                ): 
+                ):
                     click.secho("Operation cancelled.", fg="red", err=True)
                     raise click.Abort()
-            except click.Abort: 
+            except click.Abort:
                 raise  # Let Abort propagate to be handled by PDDCLI.invoke()
             except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
-                if 'EOF' in str(e) or 'end-of-file' in str(e).lower(): 
+                if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
                     # Non-interactive environment, default to not overwriting
                     click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
                 else:
@@ -1502,14 +1502,14 @@ def construct_paths(
 
 
     # ------------- Final reporting ---------------------------
-    if not quiet: 
+    if not quiet:
         console.print("[info]Input files:[/info]")
         # Print resolved input paths
-        for k, p in input_paths.items(): 
+        for k, p in input_paths.items():
             console.print(f"  [info]{k:<15}[/info] {p.resolve()}") # Use resolve() for consistent absolute paths
         console.print("[info]Output files:[/info]")
         # Print resolved output paths (using the Path objects)
-        for k, p in output_paths_resolved.items(): 
+        for k, p in output_paths_resolved.items():
             console.print(f"  [info]{k:<15}[/info] {p.resolve()}") # Use resolve()
         console.print(f"[info]Detected language:[/info] {language}")
         console.print(f"[info]Basename:[/info] {basename}")
@@ -1523,7 +1523,7 @@ def construct_paths(
     resolved_config.update(output_file_paths_str_return)
     # Only infer prompts_dir if it wasn't provided via CLI/.pddrc/env.
     gen_path = Path(resolved_config.get("generate_output_path", "src"))
-    if not resolved_config.get("prompts_dir"): 
+    if not resolved_config.get("prompts_dir"):
         resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
@@ -1533,12 +1533,12 @@ def construct_paths(
     # NOT for determining scan scope. Using it caused CSV row deletion issues.
     # Do NOT use resolved_config since generate_output_paths sets it to absolute paths.
     example_path_str = None
-    if original_context_config: 
+    if original_context_config:
         example_path_str = original_context_config.get("example_output_path")
 
     # Issue #616: single source of truth via _resolve_default_examples_dir.
-    if not example_path_str: 
-        example_path_str = _resolve_default_examples_dir( 
+    if not example_path_str:
+        example_path_str = _resolve_default_examples_dir(
             _default_examples_project_root(pddrc_path)
         )
 
@@ -1547,10 +1547,10 @@ def construct_paths(
     # Fix for Issue #332: Using full subdirectory path caused CSV truncation
     example_path = Path(example_path_str)
     parts = example_path.parts
-    if parts and parts[0] not in ('/', '.', '..'): 
+    if parts and parts[0] not in ('/', '.', '..'):
         resolved_config["examples_dir"] = parts[0]
     else:
-        resolved_config["examples_dir"] = _resolve_default_examples_dir( 
+        resolved_config["examples_dir"] = _resolve_default_examples_dir(
             _default_examples_project_root(pddrc_path)
         )
 
