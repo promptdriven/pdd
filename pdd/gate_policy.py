@@ -10,24 +10,31 @@ import yaml
 
 @dataclass
 class GateLimits:
+    """Numeric policy limits enforced by the evidence gate."""
+
     max_cost_usd: Optional[float] = None
     max_nondeterministic_context_items: int = 0
 
 
 @dataclass
 class GatePolicy:
+    """Resolved gate policy (built-in defaults plus optional YAML overrides)."""
+
     require: dict[str, bool] = field(default_factory=dict)
     allow: dict[str, bool] = field(default_factory=dict)
     limits: GateLimits = field(default_factory=GateLimits)
     path: Optional[Path] = None
 
     def requires(self, key: str) -> bool:
+        """Return whether ``key`` is required by the policy."""
         return bool(self.require.get(key, False))
 
     def allows(self, key: str) -> bool:
+        """Return whether ``key`` is allowed (defaults to True when unset)."""
         return bool(self.allow.get(key, True))
 
     def as_dict(self) -> dict[str, Any]:
+        """Serialize the policy for JSON gate output."""
         return {
             "require": dict(self.require),
             "allow": dict(self.allow),
@@ -58,6 +65,7 @@ _DEFAULT_ALLOW = {
 
 
 def default_policy() -> GatePolicy:
+    """Return the repository default gate policy."""
     return GatePolicy(
         require=dict(_DEFAULT_REQUIRE),
         allow=dict(_DEFAULT_ALLOW),
@@ -66,6 +74,7 @@ def default_policy() -> GatePolicy:
 
 
 def load_policy(path: Optional[Path]) -> GatePolicy:
+    """Load policy YAML from ``path``, falling back to defaults for missing keys."""
     policy = default_policy()
     if path is None:
         return policy

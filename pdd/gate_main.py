@@ -21,11 +21,14 @@ from .gate_policy import GatePolicy, default_policy, load_policy
 
 @dataclass
 class GateFailure:
+    """One policy violation reported by the evidence gate."""
+
     code: str
     message: str
     fix_command: str = ""
 
     def as_dict(self) -> dict[str, str]:
+        """Serialize this failure for JSON output."""
         return {
             "code": self.code,
             "message": self.message,
@@ -35,6 +38,8 @@ class GateFailure:
 
 @dataclass
 class GateResult:
+    """Aggregated outcome of a gate run over one or more manifests."""
+
     passed: bool
     failures: list[GateFailure] = field(default_factory=list)
     policy: GatePolicy = field(default_factory=default_policy)
@@ -42,9 +47,11 @@ class GateResult:
 
     @property
     def exit_code(self) -> int:
+        """CLI exit code: 0 when passed, 1 when any failure was recorded."""
         return 0 if self.passed else 1
 
     def as_dict(self) -> dict[str, Any]:
+        """Serialize the full gate result for JSON output."""
         return {
             "passed": self.passed,
             "exit_code": self.exit_code,
@@ -196,7 +203,7 @@ def _check_output_freshness(
         return []
     failures: list[GateFailure] = []
     if manifest.rule_manifest:
-        if not prompt_freshness(manifest, project_root):
+        if not prompt_freshness(manifest):
             failures.append(
                 GateFailure(
                     code="stale_prompt",
@@ -354,6 +361,7 @@ def evaluate_manifest(
     stories_dir: Optional[Path],
     tests_dir: Optional[Path],
 ) -> list[GateFailure]:
+    """Run all gate checks for a single evidence manifest."""
     failures: list[GateFailure] = []
     failures.extend(_check_validation_flags(manifest, policy))
     failures.extend(_check_output_freshness(manifest, project_root, policy))
@@ -386,6 +394,7 @@ def run_gate_policy(
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
 ) -> GateResult:
+    """Evaluate gate policy for one target dev unit or all latest manifests."""
     policy = load_policy(policy_path) if policy_path else default_policy()
     failures: list[GateFailure] = []
     manifests: list[ManifestView] = []
