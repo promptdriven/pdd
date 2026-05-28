@@ -1175,6 +1175,84 @@ def test_single_provider_no_selection_prompt(tmp_path, monkeypatch):
     assert "claude-sonnet" in user_csv.read_text()
 
 
+def test_live_test_prefers_selected_provider(tmp_path, monkeypatch):
+    """Review finding 1: the Step-3 live test must use a model from the
+    SELECTED provider, not a preserved row from a provider the user curated
+    away. Here a custom OpenAI proxy is preserved, but selecting Anthropic must
+    make the live test run the Anthropic model."""
+    user_rows = [
+        {"provider": "OpenAI", "model": "my-proxy", "api_key": "OPENAI_API_KEY",
+         "base_url": "https://proxy.example/v1", "input": "5", "output": "15",
+         "coding_arena_elo": "1234", "max_reasoning_tokens": "",
+         "structured_output": "", "reasoning_type": "", "location": ""},
+    ]
+    _, mocks = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        user_csv_rows=user_rows,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "1", "", ""],  # select Anthropic
+    )
+    tested = mocks["run_test"].call_args[0][0]
+    assert tested["provider"] == "Anthropic"
+    assert tested["model"] == "claude-sonnet"
+
+
+def test_rerun_with_full_saved_selection_does_not_reprompt(tmp_path, monkeypatch):
+    """Review finding 2: once the user's selection covers every curatable
+    provider, re-running setup must NOT re-prompt (and must not re-add dropped
+    providers). `_select_providers_to_keep` returns the coverage without asking."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["Anthropic", "OpenAI"]})
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: pdd_dir / "llm_model.csv"
+    )
+
+    def _boom(*a, **k):
+        raise AssertionError("must not prompt when the saved selection covers all providers")
+
+    monkeypatch.setattr("builtins.input", _boom)
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+    rows = [
+        {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY"},
+        {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY"},
+    ]
+    result = setup_tool._select_providers_to_keep(rows, ["Anthropic", "OpenAI"])
+    assert set(result) == {"Anthropic", "OpenAI"}  # no prompt, selection preserved
+
+
+def test_rerun_does_not_readd_dropped_provider(tmp_path, monkeypatch):
+    """Review finding 2: with a saved selection of only Google Gemini, a re-run
+    must not re-add the dropped device-login Copilot rows the reference CSV would
+    otherwise contribute, and must not re-prompt. Simulate the prior run by
+    stubbing the saved selection."""
+    gemini_ref = [
+        {"provider": "Google Gemini", "model": "gemini/flash", "api_key": "GEMINI_API_KEY",
+         "base_url": "", "input": "0.5", "output": "3", "coding_arena_elo": "1437",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
+         "location": ""},
+    ]
+    combined_ref = gemini_ref + DEVICE_FLOW_CSV  # Gemini + Copilot in the reference
+    # Stub a prior selection so this single run behaves like a re-run.
+    monkeypatch.setattr(setup_tool, "_load_selected_providers", lambda: ["Google Gemini"])
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=combined_ref,
+        env_keys={"GEMINI_API_KEY": "sk-gem"},
+        create_pddrc=True,
+        input_sequence=["", "", "", ""],
+        user_csv_rows=gemini_ref,  # prior curated state (only Gemini)
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "gemini/flash" in content
+    assert "copilot" not in content.lower()  # dropped provider not re-added
+    assert "pdd --local" not in output       # no re-prompt on the quiet re-run
+
+
 # ===========================================================================
 # VII. .pddrc Handling (via run_setup)
 # ===========================================================================

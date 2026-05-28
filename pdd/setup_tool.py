@@ -220,6 +220,15 @@ def _select_providers_to_keep(
     if len(providers) < 2:
         return None
 
+    # Idempotent re-run: if a previous selection already covers every curatable
+    # provider, there is nothing new to decide — return it without re-prompting
+    # (and without re-saving, so a provider whose key is temporarily unset isn't
+    # dropped from the policy). This keeps re-running `pdd setup` quiet instead
+    # of asking the same question every time.
+    _saved = _load_selected_providers()
+    if _saved is not None and set(providers) <= set(_saved):
+        return list(providers)
+
     # A provider is "device-login" (e.g. GitHub Copilot) when none of its rows
     # carry an api_key. Those are excluded from the default selection so a free
     # login does not silently outrank a key the user deliberately configured.
@@ -852,6 +861,20 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
                         _normalize_row_for_configured_keys(r, found_key_names)
                     )
 
+    # Re-run idempotency (#1202): once the user has chosen their local
+    # provider(s), don't re-add the providers they dropped (e.g. device-login
+    # Copilot) on every subsequent `pdd setup`. Restrict the rows we add to the
+    # saved selection so re-runs stay quiet — no re-add-then-re-remove churn and
+    # no repeated prompt. (Delete ~/.pdd/setup_preferences.json to start fresh,
+    # or use the menu's "Add a provider" to add one explicitly.)
+    _saved_selection = _load_selected_providers()
+    if _saved_selection:
+        _saved_set = set(_saved_selection)
+        configured_models = [
+            r for r in configured_models
+            if (r.get("provider") or "").strip() in _saved_set
+        ]
+
     user_csv = _get_user_csv_path()
     existing: List[Dict[str, str]] = []
     if user_csv.exists():
@@ -952,18 +975,26 @@ def _step3_test_and_summary(found_key_names: List[str],
     user_csv = _get_user_csv_path()
     test_row: Optional[Dict[str, str]] = None
     if user_csv.exists():
-        for r in _read_csv(user_csv):
+        rows = _read_csv(user_csv)
+
+        def _eligible(r: Dict[str, str]) -> bool:
             api_key = (r.get("api_key") or "").strip()
             provider = (r.get("provider") or "").strip()
             base_url = (r.get("base_url") or "").strip()
             if provider in ("lm_studio", "ollama"):
-                continue
+                return False
             if "127.0.0.1" in base_url or "localhost" in base_url:
-                continue
-            if not api_key:
-                test_row = r
-                break
-            if api_key_requirements_satisfied(api_key, found_key_names):
+                return False
+            return not api_key or api_key_requirements_satisfied(api_key, found_key_names)
+
+        # Test a model from the user's SELECTED provider(s) first, so the live
+        # test reflects their choice rather than a preserved row from a provider
+        # they curated away. Fall back to any eligible row when no selection
+        # exists or none of its rows are eligible.
+        selected = set(_load_selected_providers() or [])
+        preferred = [r for r in rows if (r.get("provider") or "").strip() in selected]
+        for r in preferred + rows:
+            if _eligible(r):
                 test_row = r
                 break
 

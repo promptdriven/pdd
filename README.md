@@ -247,9 +247,9 @@ The setup wizard runs these steps:
   1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config.
   2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
-  4. If you have credentials for **more than one** provider, asks which provider(s) `pdd --local` should use, and writes only those to `~/.pdd/llm_model.csv` (see below)
+  4. If you have credentials for **more than one** provider, asks which provider(s) `pdd --local` should use, then removes the unselected providers' PDD-managed rows from `~/.pdd/llm_model.csv` (rows you hand-edited or added yourself are preserved — see below)
   5. Optionally creates a `.pddrc` project config
-  6. Tests the first available model with a real LLM call
+  6. Tests a model from your selected provider with a real LLM call
   7. Prints a structured summary (CLIs, keys, models, test result)
 
 The wizard can be re-run at any time to update keys, add providers, or reconfigure settings.
@@ -273,12 +273,15 @@ pick which provider(s) to keep and writes only those rows:
 - Before removing any rows, setup **lists exactly what will be removed and asks
   you to confirm**, and snapshots the previous file to
   `~/.pdd/llm_model.csv.backup.<timestamp>` so the change is always reversible.
-- Your choice is saved to `~/.pdd/setup_preferences.json`, so re-running setup
-  (or a package upgrade) defaults to the same selection and won't silently
-  re-add providers you dropped. Delete that file to be asked fresh.
+- Your choice is saved to `~/.pdd/setup_preferences.json`. Re-running setup
+  re-uses it without re-asking and without re-adding the providers you dropped
+  (so a later run stays quiet — no repeated prompt, no Copilot churn). It only
+  adds new models for the providers you already chose.
 
-To use a different provider later, re-run `pdd setup` and pick a new selection,
-or edit `~/.pdd/llm_model.csv` directly.
+To use a different provider later, delete `~/.pdd/setup_preferences.json` and
+re-run `pdd setup` to pick a new selection (or edit `~/.pdd/llm_model.csv`
+directly). Adding a provider through the setup options menu also updates your
+saved selection.
 
 > **Important:** After setup completes, source the API environment file so your keys take effect in the current terminal session:
 > ```bash
