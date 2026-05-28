@@ -6299,3 +6299,55 @@ class TestExternalReviewPR1215StaleSignalAndCleanup:
             "Step 5 provider-success/logical-failure detail must be printed "
             "even in quiet mode so automation sees the failing-test context."
         )
+
+
+class TestNumstatRenameParsing:
+    """Issue #1212 follow-up: the diff-size probe must resolve git's
+    ``git diff --numstat`` rename rows (``old => new`` and the brace form
+    ``dir/{old => new}/f.py``) to the post-rename path. The earlier code
+    only stripped ``" -> "`` — a shape numstat never emits — so renamed
+    files were keyed by the raw ``old => new`` string and could never be
+    matched to a justified EXPANSION_ITEMS entry by the diff-size gate.
+    """
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("old.py => new.py", "new.py"),
+            ("sub/deep.py => deep2.py", "deep2.py"),
+            ("dir/{old => new}/f.py", "dir/new/f.py"),
+            ("{old => new}", "new"),
+            ("pkg/{a/b => c}/x.py", "pkg/c/x.py"),
+            ("plain.py", "plain.py"),
+            ("old.py -> new.py", "new.py"),
+        ],
+    )
+    def test_numstat_rename_dest_forms(self, raw: str, expected: str) -> None:
+        from pdd.agentic_checkup_orchestrator import _numstat_rename_dest
+
+        assert _numstat_rename_dest(raw) == expected
+
+    def test_diff_size_probe_keys_rename_by_post_rename_path(self, tmp_path: Path) -> None:
+        """End-to-end against a real git repo: a renamed-and-edited file is
+        recorded under its destination path (not ``old => new``)."""
+        from pdd.agentic_checkup_orchestrator import _diff_size_added_lines_by_path
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                args, cwd=tmp_path, check=True, capture_output=True
+            )
+
+        run("git", "init", "-q")
+        run("git", "config", "user.email", "t@t.com")
+        run("git", "config", "user.name", "t")
+        (tmp_path / "to_rename.py").write_text("orig\nline\nhere\n")
+        run("git", "add", "-A")
+        run("git", "commit", "-qm", "init")
+        run("git", "mv", "to_rename.py", "renamed.py")
+        (tmp_path / "renamed.py").write_text("orig\nline\nhere\nADDED\n")
+
+        per_path = _diff_size_added_lines_by_path(tmp_path)
+        assert per_path is not None
+        assert "renamed.py" in per_path, per_path
+        assert per_path["renamed.py"] == 1, per_path
+        assert not any("=>" in key for key in per_path), per_path

@@ -603,6 +603,26 @@ DIFF_SIZE_ADDED_LOC_LIMIT = 800
 OVERSIZED_PATH_ADDED_LOC_FLOOR = 50
 
 
+def _numstat_rename_dest(path_field: str) -> str:
+    """Resolve a ``git diff --numstat`` rename path to its destination.
+
+    git emits renames either as a plain ``old => new`` or a brace form that
+    factors the shared prefix/suffix, e.g. ``a/{b => c}/d.py`` -> ``a/c/d.py``
+    (and ``{b => c}`` -> ``c``). Some tools use ``old -> new`` instead.
+    Returns the post-rename (working-tree) path.
+    """
+    pf = path_field.strip()
+    if "{" in pf and "}" in pf and "=>" in pf:
+        pre, _, rest = pf.partition("{")
+        inside, _, post = rest.partition("}")
+        new_seg = inside.split("=>", 1)[1].strip()
+        return (pre + new_seg + post).replace("//", "/").strip()
+    for sep in ("=>", "->"):
+        if sep in pf:
+            return pf.split(sep, 1)[1].strip()
+    return pf
+
+
 def _diff_size_added_lines_by_path(worktree: Path) -> Optional[Dict[str, int]]:
     """Return per-path added line counts for uncommitted + untracked files.
 
@@ -643,11 +663,14 @@ def _diff_size_added_lines_by_path(worktree: Path) -> Optional[Dict[str, int]]:
             path_field = parts[-1].strip()
             if not path_field:
                 continue
-            # Rename rows look like ``10\t5\told -> new``; the destination
-            # is what's in the working tree, so prefer the post-rename
-            # path for matching against ``guard_changed_files``.
-            if " -> " in path_field:
-                path_field = path_field.split(" -> ", 1)[1].strip()
+            # Rename rows from ``git diff --numstat`` use ``=>``: either a
+            # plain ``old => new`` or a brace form that factors the shared
+            # prefix/suffix (e.g. ``dir/{old => new}/f.py``). The
+            # destination is what's in the working tree, so resolve to the
+            # post-rename path for matching against ``guard_changed_files``.
+            # (Also tolerate the ``old -> new`` shape some tools emit.)
+            if "=>" in path_field or " -> " in path_field:
+                path_field = _numstat_rename_dest(path_field)
             if added_field in ("", "-"):
                 # Binary files contribute zero; still record so the gate
                 # sees the path.
