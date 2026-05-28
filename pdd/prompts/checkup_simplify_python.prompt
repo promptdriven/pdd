@@ -2,6 +2,8 @@
 
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>checkup_file_selection_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_simplify_engines_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_simplify_claude_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
 <pdd-reason>Uses Claude Code's bundled simplify skill to sample conservative cleanup candidates and select a verified result without exposing unrelated local edits.</pdd-reason>
