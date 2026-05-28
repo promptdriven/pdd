@@ -383,7 +383,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
             mapfile -t CHUNK_TESTS < "${ASSIGN_OUTPUT}"
         else
             echo "=== balance-chunks.py failed, falling back to alphabetical split ==="
-            mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/one_session_eval/*' | sort)
+            mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/*' | sort)
             TOTAL=${#ALL_TESTS[@]}
             CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
             START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
@@ -393,7 +393,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     else
         # Fallback: alphabetical split
         echo "=== No durations file, using alphabetical split ==="
-        mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/one_session_eval/*' | sort)
+        mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/*' | sort)
         TOTAL=${#ALL_TESTS[@]}
         CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
         START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
@@ -407,7 +407,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
         exit 0
     fi
 
-    TOTAL_FILES=$(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/one_session_eval/*' | wc -l)
+    TOTAL_FILES=$(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/*' | wc -l)
     echo "=== Pytest chunk ${CHUNK_INDEX}: ${#CHUNK_TESTS[@]} files (of ${TOTAL_FILES} total) ==="
     printf '  %s\n' "${CHUNK_TESTS[@]}"
 
