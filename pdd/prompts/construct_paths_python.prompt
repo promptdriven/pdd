@@ -108,10 +108,12 @@
    - Command-specific rules: 'detect' uses change_file, 'conflicts' combines prompt1/prompt2 (sorted),
      'fix' combines prompt+test basenames, 'change' uses change_prompt_file stem if present.
    - For sync/example/test, prefer basename from command_options to preserve subdirectory paths.
-   - .pddrc discovery (issue #1211): when the caller passes `input_file_paths['prompt_file']`,
-     `construct_paths` first runs `_find_pddrc_file(start=<prompt parent>)` so a subproject's
-     `.pddrc` is discovered even when CWD is outside the subproject. It falls back to the
-     cwd-based `_find_pddrc_file()` when no upward `.pddrc` exists above the prompt file.
+   - .pddrc discovery (issue #1211): `construct_paths` runs `_find_pddrc_file()` from CWD and,
+     when `input_file_paths['prompt_file']` is supplied, also runs `_find_pddrc_file(start=<prompt
+     parent>)`. It uses the prompt-file result only when its directory is a descendant of the
+     CWD result's directory (i.e., the prompt is inside a subproject). Otherwise it uses the
+     CWD result. This avoids accidentally loading a repo-root `.pddrc` when the prompt file
+     lives in an unrelated tree (e.g. a test fixture directory).
 
 6. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
    - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.

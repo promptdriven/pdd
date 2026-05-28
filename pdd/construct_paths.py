@@ -1041,19 +1041,29 @@ def construct_paths(
     
     try:
         # Issue #1211: when invoked from a parent directory, prefer the .pddrc
-        # nearest the input prompt file. Without this, the CWD-based search
-        # walks past a subproject's .pddrc (it only goes upward), and the
-        # subproject's context/prompts_dir is silently never loaded.
-        pddrc_path = None
+        # nearest the input prompt file — but only when that .pddrc is a
+        # descendant of the CWD-based one (i.e., a subproject within the same
+        # project tree). When the prompt comes from an unrelated tree (e.g. a
+        # fixture file), use the CWD-based .pddrc.
+        cwd_pddrc = _find_pddrc_file()
+        prompt_pddrc = None
         if input_file_paths:
             prompt_file_hint = input_file_paths.get("prompt_file")
             if prompt_file_hint:
                 hint_path = Path(prompt_file_hint).resolve()
                 if hint_path.exists():
                     start = hint_path.parent if hint_path.is_file() else hint_path
-                    pddrc_path = _find_pddrc_file(start)
-        if pddrc_path is None:
-            pddrc_path = _find_pddrc_file()
+                    prompt_pddrc = _find_pddrc_file(start)
+        if prompt_pddrc is None:
+            pddrc_path = cwd_pddrc
+        elif cwd_pddrc is None:
+            pddrc_path = prompt_pddrc
+        else:
+            try:
+                prompt_pddrc.parent.resolve().relative_to(cwd_pddrc.parent.resolve())
+                pddrc_path = prompt_pddrc  # descendant — more specific subproject
+            except ValueError:
+                pddrc_path = cwd_pddrc    # unrelated tree — keep local .pddrc
         if pddrc_path:
             pddrc_config = _load_pddrc_config(pddrc_path)
             
