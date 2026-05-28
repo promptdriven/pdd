@@ -3697,11 +3697,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # Iteration 1: head=A at entry, head=B at checkpoint A -> restart.
         # Iteration 2: head=B at entry, head=B at checkpoint A, head=B at
@@ -3741,6 +3743,9 @@ class TestPrHeadAdvanceAutoRerun:
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
         ) as metadata_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
+        ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "Pushed fixes to PR branch."),
         ) as push_mock, patch(
@@ -3774,11 +3779,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # iter 1: entry=A, checkpoint A=A (no restart), push prefetch=A,
         #         push rebase-conflict, checkpoint B refetch=B -> RESTART.
@@ -3822,6 +3829,9 @@ class TestPrHeadAdvanceAutoRerun:
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             side_effect=push_responses,
@@ -3989,11 +3999,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # Only one inner attempt expected. Three calls per the inner's
         # existing fetch sites (entry + checkpoint A + push prefetch).
@@ -4022,6 +4034,9 @@ class TestPrHeadAdvanceAutoRerun:
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(
@@ -4262,11 +4277,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # iter 1: entry=A, checkpoint A=A, push prefetch=A, push fails
         #         with generic non-fast-forward error, ckpt B refetch=B
@@ -4314,6 +4331,9 @@ class TestPrHeadAdvanceAutoRerun:
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             side_effect=push_responses,
@@ -4365,11 +4385,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # iter 1: entry=A, ckptA=A, push prefetch=A, push=(True, no-change),
         #         CheckpointD: local=A (no commits), fresh=B -> RESTART.
@@ -4414,6 +4436,9 @@ class TestPrHeadAdvanceAutoRerun:
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             side_effect=push_responses,
@@ -4470,11 +4495,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # iter 1: entry=A, ckptA=A, push prefetch=A, push OK,
         #         Checkpoint D: local=X (our pushed commit) vs fresh=Y
@@ -4513,6 +4540,9 @@ class TestPrHeadAdvanceAutoRerun:
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "Pushed fixes to PR branch."),
@@ -4644,11 +4674,11 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (True, _step5_pass_output(), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # Entry SHA = A; post-Step-7 refetch returns B -> stale.
         metadata_sequence = [
@@ -4715,11 +4745,11 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (True, _step5_pass_output(), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # Entry SHA = A; post-Step-7 refetch returns A again -> clean.
         metadata_sequence = [
@@ -4781,11 +4811,11 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (True, _step5_pass_output(), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # Entry metadata returns normally; freshness-check call raises.
         def _side_effect_metadata(owner, repo, number):  # noqa: ANN001
@@ -4856,11 +4886,11 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (True, _step5_pass_output(), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         metadata_sequence = [
             _pr_metadata("aaaaaaaa11111111"),  # entry
@@ -5064,11 +5094,13 @@ class TestPrHeadAdvanceAutoRerun:
         }
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # iter 1: entry=A, ckptA=B -> restart.
         # iter 2: entry=A (flake — old SHA returned by the next
@@ -5117,6 +5149,9 @@ class TestPrHeadAdvanceAutoRerun:
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "Pushed fixes to PR branch."),
@@ -5170,11 +5205,13 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # iter 1: entry=A, Checkpoint A=A (no restart), push-block
         #          fetch=B (Checkpoint A2 -> RESTART).
@@ -5209,7 +5246,7 @@ class TestPrHeadAdvanceAutoRerun:
             side_effect=metadata_sequence,
         ) as metadata_mock, patch(
             "pdd.agentic_checkup_orchestrator._git_changed_files",
-            return_value=[],
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
             return_value=None,
@@ -5271,11 +5308,11 @@ class TestPrHeadAdvanceAutoRerun:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                _step7_clean_output() if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                return (True, _step5_pass_output(), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         # Entry call returns empty payload (simulates gh hiccup);
         # post-Step-7 freshness call returns a real SHA.
