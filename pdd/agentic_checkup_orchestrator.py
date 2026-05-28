@@ -2676,6 +2676,20 @@ def _run_agentic_checkup_orchestrator_inner(
                             _nofix_refusal + "\n"
                         )
                     _nofix_post_suffix = _post_pr_mode_final_report(_nofix_refusal)
+                    # Clear saved state so the next run reruns Step 5 from
+                    # scratch rather than replaying the stale cached output.
+                    # Without this, resume reuses step_outputs["5"] and fires
+                    # the same refusal again even after the user fixes the
+                    # environment — and posts a duplicate final-report comment.
+                    clear_workflow_state(
+                        cwd=cwd,
+                        issue_number=issue_number,
+                        workflow_type="checkup",
+                        state_dir=state_dir,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        use_github_state=use_github_state,
+                    )
                     return (
                         False,
                         f"{_nofix_refusal}{_nofix_post_suffix}",

@@ -513,6 +513,76 @@ class TestNoFixMode:
             "Refusal artifact file was not written"
         )
 
+    def test_nofix_pr_step5_refusal_clears_workflow_state(self, tmp_path):
+        """Early refusal must call clear_workflow_state so the next run reruns Step 5.
+
+        Round-17 Fix: without clear_workflow_state the next pdd checkup --pr
+        --no-fix reuses cached step_outputs["5"] and fires the same refusal
+        again even after the user fixes the test environment.
+        """
+        from unittest.mock import patch as _patch, MagicMock
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+        step5_out = (
+            "No test suite found.\n"
+            "```failure_signal\n"
+            "status: skipped\n"
+            "exit_code: skipped\n"
+            "failing_ids: none\n"
+            "artifact_path: none\n"
+            "output: No tests found.\n"
+            "```\n"
+        )
+
+        def run_step(step_num, _name, _ctx, **_kw):
+            if step_num == 5:
+                return (True, step5_out, 0.0, "fake")
+            return (True, f"out-{step_num}", 0.0, "fake")
+
+        mock_clear = MagicMock()
+        with (
+            _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+            _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+            _patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)),
+            _patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
+            _patch("pdd.agentic_checkup_orchestrator.clear_workflow_state", mock_clear),
+            _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=run_step),
+        ):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert mock_clear.called, (
+            "clear_workflow_state must be called on early no-fix refusal to "
+            "prevent stale-cache replay on the next run"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Worktree Handling
