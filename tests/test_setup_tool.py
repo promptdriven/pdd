@@ -1062,7 +1062,8 @@ def test_curate_after_menu_curates_when_no_prior_selection(tmp_path, monkeypatch
     monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers, ""))
     monkeypatch.setattr("builtins.print", lambda *a, **k: None)
 
-    setup_tool._curate_after_menu()
+    # Menu added both providers this session (nothing usable before).
+    setup_tool._curate_after_menu(before_usable=set())
 
     content = csv_path.read_text()
     assert "claude-x" in content
@@ -1092,7 +1093,12 @@ def test_curate_after_menu_noop_when_selection_exists(tmp_path, monkeypatch):
         raise AssertionError("should not prompt when a selection already exists")
 
     monkeypatch.setattr("builtins.input", _boom)
-    setup_tool._curate_after_menu()  # must not raise / prompt
+    monkeypatch.setattr(
+        setup_tool, "_scan_for_api_keys_quiet",
+        lambda: [("ANTHROPIC_API_KEY", "env"), ("OPENAI_API_KEY", "env")],
+    )
+    # Both providers were already usable BEFORE the menu (nothing added) → no-op.
+    setup_tool._curate_after_menu(before_usable={"Anthropic", "OpenAI"})
     assert "gpt-4o" in csv_path.read_text()  # unchanged
 
 

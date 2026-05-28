@@ -4463,7 +4463,7 @@
   },
   {
     "reason": "Orchestrates pdd setup with OpenCode- and Antigravity-aware CLI bootstrap and deterministic model configuration.",
-    "description": "Runs the interactive pdd setup flow with agentic CLI bootstrapping, API-key discovery, model configuration, .pddrc initialization, and summary output.",
+    "description": "Runs the interactive pdd setup flow with agentic CLI bootstrapping, API-key discovery, model configuration, multi-provider curation for local routing (prompts which provider(s) pdd --local should use when several are configured, persists the choice to ~/.pdd/setup_preferences.json, backs up before removing rows), .pddrc initialization, and summary output.",
     "dependencies": [
       "cli_detector_python.prompt",
       "cli_branding_python.prompt"

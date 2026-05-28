@@ -79,6 +79,19 @@ def _ref_csv_path() -> Path:
     return Path(__file__).resolve().parent / "data" / "llm_model.csv"
 
 
+def _is_local_row(row: Dict[str, str]) -> bool:
+    """A locally-served model (Ollama / LM Studio / localhost endpoint). These
+    are never curated — they don't compete in cloud `--local` provider routing
+    and must not be offered for removal (mirrors Step 2's local-model skip)."""
+    provider = (row.get("provider") or "").strip().lower()
+    base_url = (row.get("base_url") or "").strip().lower()
+    return (
+        provider in ("lm_studio", "ollama")
+        or "127.0.0.1" in base_url
+        or "localhost" in base_url
+    )
+
+
 def _provider_pref_path() -> Path:
     """Sidecar storing the user's primary-provider selection, next to the user
     CSV. Used so re-running `pdd setup` doesn't silently re-add providers the
@@ -335,7 +348,19 @@ def _apply_provider_curation(
                     ref_by_model[m] = r
         except Exception:
             ref_by_model = {}
-    _compare_fields = [f for f in CSV_FIELDNAMES if f != "api_key"]
+    # Compare every field. api_key is compared with alias-awareness so the
+    # GEMINI_API_KEY→GOOGLE_API_KEY normalization setup performs does not make a
+    # genuinely untouched row look edited — but a user who changed api_key to any
+    # OTHER value IS detected as hand-edited and preserved.
+    _gemini_aliases = {"GEMINI_API_KEY", "GOOGLE_API_KEY"}
+    _other_fields = [f for f in CSV_FIELDNAMES if f != "api_key"]
+
+    def _api_key_pristine(row_key: str, ref_key: str) -> bool:
+        row_key, ref_key = (row_key or "").strip(), (ref_key or "").strip()
+        if row_key == ref_key:
+            return True
+        return bool(row_key) and bool(ref_key) \
+            and {row_key, ref_key} <= _gemini_aliases
 
     def _unselected_curatable(row: Dict[str, str]) -> bool:
         prov = (row.get("provider") or "").strip()
@@ -345,9 +370,11 @@ def _apply_provider_curation(
         ref = ref_by_model.get((row.get("model") or "").strip())
         if ref is None:
             return False
+        if not _api_key_pristine(row.get("api_key", ""), ref.get("api_key", "")):
+            return False
         return all(
             (row.get(f) or "").strip() == (ref.get(f) or "").strip()
-            for f in _compare_fields
+            for f in _other_fields
         )
 
     to_remove, kept_custom = [], []
@@ -409,41 +436,61 @@ def _apply_provider_curation(
     return [r for r in rows if id(r) not in remove_ids]
 
 
-def _curate_after_menu() -> None:
-    """Close the gap where `pdd setup` finished with a single provider (so no
-    selection prompt ran and no `setup_preferences.json` exists), and the
-    options menu then ADDED a second keyed provider — leaving the CSV with
-    multiple providers and no curation, which `pdd --local` would cost/ELO-route
-    across. Run curation once on the current CSV. No-op if a saved selection
-    already exists (the union path handles that) or fewer than 2 providers are
-    usable."""
-    if _load_selected_providers() is not None:
-        return
+def _usable_providers_in_csv() -> set:
+    """Providers `pdd --local` could actually use from the user CSV: credential-
+    satisfied or device-login. Local models (Ollama / LM Studio / localhost) are
+    excluded — they don't compete in cloud routing."""
     from pdd.provider_manager import (
-        _read_csv, _write_csv_atomic, _get_user_csv_path,
-        api_key_requirements_satisfied,
+        _read_csv, _get_user_csv_path, api_key_requirements_satisfied,
     )
     user_csv = _get_user_csv_path()
     if not user_csv.exists():
+        return set()
+    try:
+        rows = _read_csv(user_csv)
+    except Exception:
+        return set()
+    found = [name for name, _ in _scan_for_api_keys_quiet()]
+    return {
+        (r.get("provider") or "").strip()
+        for r in rows
+        if (r.get("provider") or "").strip() and not _is_local_row(r) and (
+            not (r.get("api_key") or "").strip()
+            or api_key_requirements_satisfied(r.get("api_key") or "", found)
+        )
+    }
+
+
+def _curate_after_menu(before_usable: set) -> None:
+    """Re-curate the user CSV after the options menu added a usable provider the
+    keyed-only union path doesn't cover. ``before_usable`` is the set of usable
+    providers (from `_usable_providers_in_csv`) captured BEFORE the menu ran;
+    only providers the menu actually ADDED (``after - before``) trigger this.
+
+    Two gaps it closes (both gated on a real menu addition, so it never
+    re-prompts when nothing changed — e.g. the user only tested a model):
+      * setup finished with one provider (no prompt, no `setup_preferences.json`)
+        and the menu added a second; and
+      * a curated user authenticated a DEVICE-login provider (e.g. Copilot) via
+        the menu — which the keyed-only union deliberately ignores, so it would
+        otherwise re-enter `--local` routing uncurated.
+    No-op when nothing usable was added, fewer than 2 usable providers remain,
+    or everything added is already in the saved selection (keyed adds the union
+    path already folded in)."""
+    after_usable = _usable_providers_in_csv()
+    added = after_usable - set(before_usable)
+    if not added or len(after_usable) < 2:
         return
+    saved = _load_selected_providers()
+    if saved is not None and added <= set(saved):
+        return
+    from pdd.provider_manager import _read_csv, _write_csv_atomic, _get_user_csv_path
+    user_csv = _get_user_csv_path()
     try:
         rows = _read_csv(user_csv)
     except Exception:
         return
-    found = [name for name, _ in _scan_for_api_keys_quiet()]
-    # Curatable = providers `pdd --local` could actually use: device-login or
-    # credential-satisfied.
-    curatable = sorted({
-        (r.get("provider") or "").strip()
-        for r in rows
-        if (r.get("provider") or "").strip() and (
-            not (r.get("api_key") or "").strip()
-            or api_key_requirements_satisfied(r.get("api_key") or "", found)
-        )
-    })
-    if len(curatable) < 2:
-        return
-    curated = _apply_provider_curation(rows, curatable, user_csv)
+    curated = _apply_provider_curation(rows, sorted(after_usable), user_csv)
     if curated is not rows:
         try:
             _write_csv_atomic(user_csv, curated)
@@ -1246,24 +1293,26 @@ def run_setup() -> None:
             msg = "Setup incomplete. Use the menu to configure manually."
             _console.print(f"[yellow]{msg}[/yellow]")
             print(f"{YELLOW}{msg}{RESET}")
-            _before = _keyed_providers_in_csv()
+            _before_keyed = _keyed_providers_in_csv()
+            _before_usable = _usable_providers_in_csv()
             _run_options_menu()
             # Keep a curated selection in sync with providers ADDED via the menu
             # (delta only), so a later run won't drop them — without re-absorbing
             # providers the user curated away.
-            _union_providers_into_pref(_keyed_providers_in_csv() - _before)
-            # If no selection was ever made and the menu left multiple providers,
-            # curate now so the user doesn't exit with cross-provider routing.
-            _curate_after_menu()
+            _union_providers_into_pref(_keyed_providers_in_csv() - _before_keyed)
+            # Re-curate only if the menu actually added a usable provider that
+            # would otherwise reopen cross-provider routing.
+            _curate_after_menu(_before_usable)
             found_keys = _scan_for_api_keys_quiet()
         else:
             found_keys = context.get("found_keys", [])
             ans = input("Press Enter to finish, or 'm' for more options: ").strip()
             if ans:
-                _before = _keyed_providers_in_csv()
+                _before_keyed = _keyed_providers_in_csv()
+                _before_usable = _usable_providers_in_csv()
                 _run_options_menu()
-                _union_providers_into_pref(_keyed_providers_in_csv() - _before)
-                _curate_after_menu()
+                _union_providers_into_pref(_keyed_providers_in_csv() - _before_keyed)
+                _curate_after_menu(_before_usable)
                 # Refresh: menu may have added a key
                 found_keys = _scan_for_api_keys_quiet()
 
