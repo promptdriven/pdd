@@ -3,10 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.vsix
-
-# setuptools-scm generated version file
-pdd/_version.py
-
 .tmp/
 .agentic_prompt*
 .agentic_output_*.txt
@@ -238,15 +234,25 @@ yarn.lock
 # PDD internal directory (backups, locks, worktrees, etc.)
 .pdd/*
 !.pdd/
-# Issue #1006 follow-up: these two modules' tests pass quickly but
-# `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal
-# 1200s timeout. Committing run-reports satisfies the released drift
-# detector's workflow-complete gate (no run_report → forced crash op)
-# until either the detector tolerates a "fix" fingerprint with no
-# run_report or the sync time on these orchestrators improves.
-!.pdd/meta/ci_drift_heal_python_run.json
-!.pdd/meta/agentic_change_orchestrator_python_run.json
-!.pdd/meta/metadata_sync_python_run.json
+!.pdd/meta/
+!.pdd/meta/agentic_bug_orchestrator_python.json
+!.pdd/meta/agentic_bug_python.json
+!.pdd/meta/agentic_checkup_python.json
+!.pdd/meta/agentic_common_python.json
+!.pdd/meta/agentic_crash_python.json
+!.pdd/meta/agentic_e2e_fix_orchestrator_python.json
+!.pdd/meta/agentic_fix_python.json
+!.pdd/meta/agentic_update_python.json
+!.pdd/meta/agentic_verify_python.json
+!.pdd/meta/checkup_review_loop_python.json
+!.pdd/meta/commands_checkup_python.json
+!.pdd/meta/core_cloud_python.json
+!.pdd/meta/fix_code_loop_python.json
+!.pdd/meta/get_comment_python.json
+!.pdd/meta/get_test_command_python.json
+!.pdd/meta/git_update_python.json
+!.pdd/meta/summarize_directory_python.json
+.pdd/meta/*_run.json
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)
@@ -276,4 +282,7 @@ fake_test_output.py
 github_token
 diff_base.txt
 modules.txt
-.loop/
+
+# Local PDD venv and debug artifacts
+pdd-env/
+error_log.txt
