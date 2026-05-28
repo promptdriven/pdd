@@ -120,7 +120,8 @@ def mock_load_models():
             mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
 
             mock_load_data.return_value = mock_df
-            yield mock_load_data # Yield the mock object itself
+            with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gpt-5-nano'):
+                yield mock_load_data # Yield the mock object itself
 
 @pytest.fixture
 def mock_set_llm_cache():
@@ -681,7 +682,8 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
         mock_response.model = model_name
         return mock_response
 
-    with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()):
+    with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()), \
+         patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gpt-5.1-codex-mini'):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "fake", "PDD_FORCE_LOCAL": "1"}, clear=False):
             with patch("pdd.llm_invoke.litellm.completion", return_value=_mock_litellm_response()):
                 with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0, "input_tokens": 5, "output_tokens": 5}):
@@ -1623,6 +1625,7 @@ def test_llm_invoke_accumulates_attempted_models_across_calls_in_ctx_obj(
     ctx = click.Context(cmd, obj={})
 
     with patch('pdd.llm_invoke._load_model_data', return_value=mock_df), \
+         patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'claude-3'), \
          patch.dict(os.environ, all_keys), \
          ctx:
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
@@ -2141,7 +2144,8 @@ def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
             'VERTEXAI_LOCATION': 'us-east4',
         }
 
-        with patch.dict(os.environ, env_vars):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'vertex_ai/gemini-3-flash-preview'), \
+             patch.dict(os.environ, env_vars):
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 mock_completion.return_value = create_mock_litellm_response("test")
                 llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
@@ -2179,7 +2183,8 @@ def test_vertex_location_passed_from_csv(mock_set_llm_cache):
             'VERTEXAI_LOCATION': 'us-east4',
         }
 
-        with patch.dict(os.environ, env_vars):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'vertex_ai/gemini-3-flash-preview'), \
+             patch.dict(os.environ, env_vars):
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 mock_completion.return_value = create_mock_litellm_response("test")
                 llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
@@ -2213,7 +2218,8 @@ def test_vertex_adc_without_credentials_file(mock_set_llm_cache):
             'VERTEXAI_LOCATION': 'global',
         }
 
-        with patch.dict(os.environ, env_vars, clear=False):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'vertex_ai/gemini-3-flash-preview'), \
+             patch.dict(os.environ, env_vars, clear=False):
             os.environ.pop('GOOGLE_APPLICATION_CREDENTIALS', None)
             with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                 mock_completion.return_value = create_mock_litellm_response("test")
@@ -2603,50 +2609,51 @@ def test_vertex_ai_maas_passes_response_format_for_structured_output(mock_set_ll
     assert len(maas_data) == 1, f"MaaS model {maas_model} not found in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=maas_data):
-        # Set the actual env vars that the CSV api_key column requires for Vertex AI models
-        vertex_env = {
-            'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
-            'VERTEXAI_PROJECT': 'fake-project',
-            'VERTEXAI_LOCATION': 'us-central1',
-        }
-        with patch.dict(os.environ, vertex_env):
-            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-                # Return valid JSON that matches SampleOutputModel
-                json_response = '{"field1": "test_value", "field2": 42}'
-                mock_response = create_mock_litellm_response(
-                    json_response,
-                    model_name=maas_model
-                )
-                mock_completion.return_value = mock_response
-
-                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
-                          {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
-                    response = llm_invoke(
-                        prompt="Return a sample output.",
-                        input_json={"query": "test"},
-                        strength=0.5,
-                        temperature=0.7,
-                        output_pydantic=SampleOutputModel,
-                        verbose=True
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', maas_model):
+            # Set the actual env vars that the CSV api_key column requires for Vertex AI models
+            vertex_env = {
+                'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
+                'VERTEXAI_PROJECT': 'fake-project',
+                'VERTEXAI_LOCATION': 'us-central1',
+            }
+            with patch.dict(os.environ, vertex_env):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    # Return valid JSON that matches SampleOutputModel
+                    json_response = '{"field1": "test_value", "field2": 42}'
+                    mock_response = create_mock_litellm_response(
+                        json_response,
+                        model_name=maas_model
                     )
+                    mock_completion.return_value = mock_response
 
-                # Verify the MaaS model was called
-                mock_completion.assert_called_once()
-                call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == maas_model, \
-                    f"Expected MaaS model, got {call_kwargs['model']}"
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                              {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                        response = llm_invoke(
+                            prompt="Return a sample output.",
+                            input_json={"query": "test"},
+                            strength=0.5,
+                            temperature=0.7,
+                            output_pydantic=SampleOutputModel,
+                            verbose=True
+                        )
 
-                # EXPECTED: MaaS model should have response_format passed
-                # because it supports structured output (per Google Cloud docs)
-                assert 'response_format' in call_kwargs, \
-                    "Vertex AI MaaS model should have response_format passed - check that structured_output=True in CSV"
+                    # Verify the MaaS model was called
+                    mock_completion.assert_called_once()
+                    call_args, call_kwargs = mock_completion.call_args
+                    assert call_kwargs['model'] == maas_model, \
+                        f"Expected MaaS model, got {call_kwargs['model']}"
 
-                response_format = call_kwargs['response_format']
-                assert response_format['type'] == 'json_schema', \
-                    f"Expected type 'json_schema' for strict enforcement, got '{response_format.get('type')}'"
-                json_schema = response_format.get('json_schema', {})
-                assert json_schema.get('strict') == True, \
-                    "strict should be True to enforce all required fields"
+                    # EXPECTED: MaaS model should have response_format passed
+                    # because it supports structured output (per Google Cloud docs)
+                    assert 'response_format' in call_kwargs, \
+                        "Vertex AI MaaS model should have response_format passed - check that structured_output=True in CSV"
+
+                    response_format = call_kwargs['response_format']
+                    assert response_format['type'] == 'json_schema', \
+                        f"Expected type 'json_schema' for strict enforcement, got '{response_format.get('type')}'"
+                    json_schema = response_format.get('json_schema', {})
+                    assert json_schema.get('strict') == True, \
+                        "strict should be True to enforce all required fields"
 
 
 def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock_set_llm_cache):
@@ -2680,7 +2687,8 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
     assert opus_data.iloc[0]['structured_output'] == True, \
         f"{opus_model} should have structured_output=True in CSV"
 
-    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
+    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data), \
+         patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', opus_model):
         # Set the actual env vars that the CSV api_key column requires for Vertex AI models
         vertex_env = {
             'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
@@ -2747,7 +2755,8 @@ def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
     assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
     opus_model = opus_data.iloc[0]['model']
 
-    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
+    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data), \
+         patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', opus_model):
         # Set the actual env vars that the CSV api_key column requires for Vertex AI models
         vertex_env = {
             'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path/creds.json',
@@ -3026,13 +3035,14 @@ def test_llm_invoke_force_local_env_var():
                     mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
                     mock_load.return_value = mock_df
 
-                    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
-                            llm_invoke(
-                                prompt="Test {topic}",
-                                input_json={"topic": "test"},
-                                use_cloud=None,  # Auto-detect should respect PDD_FORCE_LOCAL
-                            )
+                    with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'test-model'):
+                        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                            with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                                llm_invoke(
+                                    prompt="Test {topic}",
+                                    input_json={"topic": "test"},
+                                    use_cloud=None,  # Auto-detect should respect PDD_FORCE_LOCAL
+                                )
 
                 # Cloud should NOT have been called
                 mock_cloud.assert_not_called()
@@ -3067,13 +3077,14 @@ def test_llm_invoke_use_cloud_false():
                 mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
                 mock_load.return_value = mock_df
 
-                with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
-                        llm_invoke(
-                            prompt="Test {topic}",
-                            input_json={"topic": "test"},
-                            use_cloud=False,
-                        )
+                with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'test-model'):
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                            llm_invoke(
+                                prompt="Test {topic}",
+                                input_json={"topic": "test"},
+                                use_cloud=False,
+                            )
 
             # Cloud should NOT have been called
             mock_cloud.assert_not_called()
@@ -3134,15 +3145,16 @@ def test_llm_invoke_cloud_fallback_on_error():
                 mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
                 mock_load.return_value = mock_df
 
-                with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
-                        # Mock the console to avoid output during test
-                        with patch("rich.console.Console"):
-                            result = llm_invoke(
-                                prompt="Test {topic}",
-                                input_json={"topic": "test"},
-                                use_cloud=True,
-                            )
+                with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'test-model'):
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                            # Mock the console to avoid output during test
+                            with patch("rich.console.Console"):
+                                result = llm_invoke(
+                                    prompt="Test {topic}",
+                                    input_json={"topic": "test"},
+                                    use_cloud=True,
+                                )
 
         # Should have used local fallback
         assert result["result"] == "local fallback response"
@@ -3197,14 +3209,15 @@ def test_llm_invoke_cloud_invocation_error_fallback():
                 mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
                 mock_load.return_value = mock_df
 
-                with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
-                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
-                        with patch("rich.console.Console"):
-                            result = llm_invoke(
-                                prompt="Test {topic}",
-                                input_json={"topic": "test"},
-                                use_cloud=True,
-                            )
+                with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'test-model'):
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                            with patch("rich.console.Console"):
+                                result = llm_invoke(
+                                    prompt="Test {topic}",
+                                    input_json={"topic": "test"},
+                                    use_cloud=True,
+                                )
 
         assert result["result"] == "local fallback response"
 
@@ -3538,7 +3551,8 @@ def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
 
         mock_load_data.return_value = mock_df
 
-        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gemini/gemini-2.0-flash-exp'), \
+             patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
@@ -3563,7 +3577,10 @@ def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
 
 
 def test_first_available_model_selected_when_base_missing(mock_set_llm_cache, caplog):
-    """Issue #296: Verify first available model is deterministically selected when base model missing."""
+    """Issue #296 / #1254: Verify ValueError is raised when configured base model is not in the
+    mock CSV. The old behavior (silently selecting the first available model as surrogate) caused
+    ANTHROPIC_API_KEY errors when a Gemini model was configured — issue #1254 fix raises ValueError
+    explicitly instead of crossing provider boundaries."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
         # Create CSV with multiple models but no hardcoded base model
         mock_data = [
@@ -3602,25 +3619,20 @@ def test_first_available_model_selected_when_base_missing(mock_set_llm_cache, ca
 
         mock_load_data.return_value = mock_df
 
-        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'vertex_ai/gemini-3.5-flash'), \
+             patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
-                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-                    mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
-                    mock_completion.return_value = mock_response
-
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
-                        response = llm_invoke(
-                            prompt="Test prompt",
-                            input_json={"test": "data"},
-                            strength=0.5,
-                            temperature=0.7,
-                            verbose=False
-                        )
-
-                        # Verify first available model (gemini) is selected deterministically
-                        assert response is not None
-                        assert response['model_name'] == 'gemini/gemini-2.0-flash-exp', \
-                            "First available model should be selected when base model is missing"
+                # Issue #1254 fix: when the configured base model is not in the CSV and no
+                # same-provider alternative exists, llm_invoke raises ValueError instead
+                # of silently falling back to a cross-provider surrogate model.
+                with pytest.raises(ValueError, match="vertex_ai/gemini-3.5-flash"):
+                    llm_invoke(
+                        prompt="Test prompt",
+                        input_json={"test": "data"},
+                        strength=0.5,
+                        temperature=0.7,
+                        verbose=False
+                    )
 
 
 def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
@@ -3658,7 +3670,8 @@ def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
 
         mock_load_data.return_value = mock_df
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gemini/gemini-2.0-flash-exp'), \
+             patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     mock_response = create_mock_litellm_response("Test", model_name='gpt-4o-mini')
@@ -3729,7 +3742,8 @@ def test_fallback_works_across_different_strength_values(mock_set_llm_cache, cap
         mock_load_data.return_value = mock_df
 
         # Test with strength < 0.5 (should use cheaper model)
-        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gemini/gemini-2.0-flash-exp'), \
+             patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
@@ -3752,7 +3766,8 @@ def test_fallback_works_across_different_strength_values(mock_set_llm_cache, cap
 
         # Test with strength > 0.5 (should use more powerful model)
         caplog.clear()
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gemini/gemini-2.0-flash-exp'), \
+             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     mock_response = create_mock_litellm_response("Test", model_name='claude-3-opus')
@@ -3815,7 +3830,8 @@ def test_user_csv_removes_unwanted_model_family(mock_set_llm_cache, caplog):
 
         mock_load_data.return_value = mock_df
 
-        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke.DEFAULT_BASE_MODEL', 'gemini/gemini-2.0-flash-exp'), \
+             patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
@@ -4797,11 +4813,14 @@ class TestSelectModelCandidates:
         # Highest ELO is gpt-4 (1300)
         assert candidates[0]["model"] == "gpt-4"
 
-    def test_missing_base_model_uses_surrogate(self, llm_mod, tmp_path):
+    def test_missing_base_model_raises_value_error(self, llm_mod, tmp_path):
+        """Issue #1254: when base model is not in CSV and no same-provider alternative
+        exists, raises ValueError instead of silently falling back to a cross-provider
+        surrogate (which caused ANTHROPIC_API_KEY errors when a Gemini model was configured)."""
         df = self._make_df(llm_mod, tmp_path)
-        # "nonexistent" is not in CSV, should use first available as surrogate
-        candidates = llm_mod._select_model_candidates(0.5, "nonexistent", df)
-        assert len(candidates) > 0
+        # "nonexistent" is not in CSV — raises ValueError instead of silently using surrogate
+        with pytest.raises(ValueError, match="nonexistent"):
+            llm_mod._select_model_candidates(0.5, "nonexistent", df)
 
     def test_empty_dataframe_raises(self, llm_mod):
         import pandas as pd
@@ -4919,50 +4938,34 @@ class TestSelectModelCandidates:
         )
         assert candidates[0]["model"] == "vertex_ai/gemini-3-flash-preview"
 
-    def test_unrelated_unknown_base_still_uses_surrogate(self, llm_mod, tmp_path):
-        """Names that don't have a known provider prefix and don't have a
-        prefixed alias in the CSV still fall through to the surrogate-base
-        path — the existing soft-fallback behavior is preserved."""
+    def test_unresolved_model_raises_value_error(self, llm_mod, tmp_path):
+        """Issue #1254: a model name with no known provider prefix that cannot be resolved
+        in the CSV raises ValueError instead of silently returning a cross-provider surrogate.
+        This prevents misleading ANTHROPIC_API_KEY errors when a Gemini model was configured."""
         df = self._make_vertex_inconsistent_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "totally-fake-model-xyz", df
-        )
-        # Fell back to surrogate (first available row)
-        assert candidates[0]["model"] == "vertex_ai/claude-opus-4-6"
+        with pytest.raises(ValueError, match="totally-fake-model-xyz"):
+            llm_mod._select_model_candidates(0.5, "totally-fake-model-xyz", df)
 
     def test_vertex_prefix_does_not_match_direct_anthropic_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/claude-opus-4-6 must NOT
-        silently resolve to a direct Anthropic row that happens to share
-        the bare name. Cross-provider matching would change credentials
-        (GOOGLE_APPLICATION_CREDENTIALS → ANTHROPIC_API_KEY) and the API
-        endpoint, defeating the deployment's intent."""
+        silently resolve to a direct Anthropic row that happens to share the bare
+        name. Issue #1254 fix: instead of silently returning a cross-provider surrogate,
+        ValueError is raised when no Vertex AI row matches the configured model."""
         df = self._make_cross_provider_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/claude-opus-4-6", df
-        )
-        # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
-        # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to surrogate-base = first row (AWS Bedrock).
-        assert candidates[0]["model"] != "claude-opus-4-6", (
-            "vertex_ai/ prefix must not silently match direct Anthropic row"
-        )
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+        # No Google Vertex AI row named "claude-opus-4-6" → ValueError instead of
+        # silently crossing provider boundaries to the Anthropic row.
+        with pytest.raises(ValueError, match="vertex_ai/claude-opus-4-6"):
+            llm_mod._select_model_candidates(0.5, "vertex_ai/claude-opus-4-6", df)
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
-        """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
-        must NOT silently resolve to a `gemini/`-prefixed Direct Gemini API
-        row. Different provider, different credentials, different endpoint."""
+        """Provider-boundary regression: vertex_ai/gemini-3-flash-preview must NOT
+        silently resolve to a `gemini/`-prefixed Direct Gemini API row. Issue #1254
+        fix: ValueError is raised instead of silently crossing provider boundaries."""
         df = self._make_cross_provider_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/gemini-3-flash-preview", df
-        )
-        # CSV has no `Google Vertex AI,gemini-3-flash-preview` (bare) row.
-        # The `Google Gemini,gemini/gemini-3-flash-preview` row exists but
-        # is from a different provider. Provider-aware alias should NOT
-        # match it. Surrogate-base fires.
-        assert candidates[0]["model"] != "gemini/gemini-3-flash-preview", (
-            "vertex_ai/ prefix must not silently match direct Gemini row"
-        )
+        # No Google Vertex AI row named "gemini-3-flash-preview" → ValueError instead of
+        # silently returning a surrogate from a different provider.
+        with pytest.raises(ValueError, match="vertex_ai/gemini-3-flash-preview"):
+            llm_mod._select_model_candidates(0.5, "vertex_ai/gemini-3-flash-preview", df)
 
     def test_vertex_prefix_resolves_correctly_when_vertex_row_exists(self, llm_mod, tmp_path):
         """Positive companion to the negative tests: when the configured

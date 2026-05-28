@@ -2471,20 +2471,17 @@ def _select_model_candidates(
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
-            # Option A': Soft fallback – choose a reasonable surrogate base and continue
-            # Strategy (simplified and deterministic): pick the first available model
-            # from the CSV as the surrogate base. This mirrors typical CSV ordering
-            # expectations and keeps behavior predictable across environments.
-            # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
-            try:
-                base_model = available_df.iloc[0]
-                # Silently use the first available model from user's CSV without warning
-                # Users who intentionally customize their CSV shouldn't see warnings about removed models
-            except Exception:
-                # If any unexpected error occurs during fallback, raise a clear error
-                raise ValueError(
-                    f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
-                )
+            # Fix for issue #1254: Raise an explicit error instead of silently
+            # falling back to a model from a different provider. When the configured
+            # model cannot be found and no same-provider alternative exists, crossing
+            # provider boundaries silently causes misleading credential errors (e.g.,
+            # ANTHROPIC_API_KEY not set when the user configured a Gemini model).
+            raise ValueError(
+                f"Model '{base_model_name}' not found in CSV and no same-provider "
+                f"alternative is available. Check that your LLM model CSV contains "
+                f"a model with this name or a compatible provider-prefixed variant, "
+                f"or update PDD_MODEL_DEFAULT to a model that exists in the CSV."
+            )
     else:
         base_model = base_model_row.iloc[0]
 
