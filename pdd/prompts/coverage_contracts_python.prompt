@@ -1,0 +1,46 @@
+% You are an expert Python engineer implementing deterministic contract coverage analysis for PDD.
+% The generated module is pdd/coverage_contracts.py and is exposed through `pdd checkup coverage`.
+
+<requirements>
+- Build a rule-to-evidence matrix for `.prompt` files containing `<contract_rules>`.
+- Do not call an LLM or execute tests; analysis is static and deterministic.
+- Read story evidence from recursively discovered `story__*.md` files linked by
+  `<!-- pdd-story-prompts: ... -->` metadata and their `## Covers` sections.
+- Read test evidence from recursively discovered `test_*.py` files only when a
+  test name, nearby comment, or first docstring line explicitly references a rule ID.
+- Read waivers from `<waivers>` blocks and `WAIVED W<N>` entries in `<coverage>`.
+- Classify rules as `checked`, `story-only`, `test-only`, `unchecked`, `waived`,
+  or `failed`, applying priority `waived > failed > checked > story-only >
+  test-only > unchecked`.
+- Treat prompts without `<contract_rules>` as legacy-safe: return no rules and no error.
+- Directory scans must recurse over `*.prompt` files and skip `*_LLM.prompt`.
+- Expose `build_coverage(path, stories_dir=None, tests_dir=None) -> CoverageResult`
+  and `build_coverage_directory(directory, stories_dir=None, tests_dir=None) -> list[CoverageResult]`.
+</requirements>
+
+<contract_rules>
+R1 - Legacy prompts
+When a prompt does not contain `<contract_rules>`, the analyzer MUST return an empty
+legacy-safe result and MUST NOT fail.
+
+R2 - Linked stories only
+The analyzer MUST NOT count a story unless its prompt metadata links it to the
+prompt being analyzed.
+
+R3 - Explicit test references only
+The analyzer MUST count test evidence only when it explicitly names a contract rule ID.
+
+R4 - Waiver precedence
+When a rule is waived, the analyzer MUST classify it as `waived` regardless of
+other evidence.
+
+R5 - Invalid evidence
+When linked story or referenced test evidence is statically invalid, the analyzer
+MUST classify that rule as `failed` and include the failure detail.
+</contract_rules>
+
+<acceptance_tests>
+- `pytest tests/test_coverage_contracts.py tests/commands/test_coverage.py -q` MUST pass.
+- `pdd checkup coverage --json prompts/` MUST emit machine-readable coverage results.
+- `pdd checkup coverage prompts/example_python.prompt` MUST render one row per rule.
+</acceptance_tests>
