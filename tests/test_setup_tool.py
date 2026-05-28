@@ -1225,6 +1225,56 @@ def test_rerun_with_full_saved_selection_does_not_reprompt(tmp_path, monkeypatch
     assert set(result) == {"Anthropic", "OpenAI"}  # no prompt, selection preserved
 
 
+def test_stale_saved_selection_does_not_empty_csv(tmp_path, monkeypatch):
+    """Review finding 1: a stale/foreign saved selection that matches none of the
+    currently-available providers must NOT empty the CSV. Setup should ignore it,
+    configure the available providers, and (re-)prompt. Here the sidecar names a
+    provider that doesn't exist while only GEMINI_API_KEY is set."""
+    gemini_ref = [
+        {"provider": "Google Gemini", "model": "gemini/flash", "api_key": "GEMINI_API_KEY",
+         "base_url": "", "input": "0.5", "output": "3", "coding_arena_elo": "1437",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
+         "location": ""},
+    ]
+    combined_ref = gemini_ref + DEVICE_FLOW_CSV
+    monkeypatch.setattr(setup_tool, "_load_selected_providers", lambda: ["No Such Provider"])
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=combined_ref,
+        env_keys={"GEMINI_API_KEY": "sk-gem"},
+        create_pddrc=True,
+        # Stale selection ignored, 2 curatable → prompt fires; accept the default
+        # (highest-ELO non-device = Google Gemini), then confirm removal of Copilot.
+        input_sequence=["", "", "", ""],
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "gemini/flash" in content       # available provider configured, not emptied
+    # And there must be at least one real model row written.
+    assert content.strip().count("\n") >= 1
+
+
+def test_env_switch_recovered_despite_stale_selection(tmp_path, monkeypatch):
+    """Review finding 2: with a saved selection of Anthropic but only
+    GEMINI_API_KEY now set, the saved selection matches nothing available, so it
+    is ignored and the user's Gemini key is honoured (not silently dropped)."""
+    gemini_ref = [
+        {"provider": "Google Gemini", "model": "gemini/flash", "api_key": "GEMINI_API_KEY",
+         "base_url": "", "input": "0.5", "output": "3", "coding_arena_elo": "1437",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
+         "location": ""},
+    ]
+    monkeypatch.setattr(setup_tool, "_load_selected_providers", lambda: ["Anthropic"])
+    _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=gemini_ref,
+        env_keys={"GEMINI_API_KEY": "sk-gem"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],  # single available provider → no prompt
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "gemini/flash" in content  # Gemini honoured despite stale Anthropic selection
+
+
 def test_rerun_does_not_readd_dropped_provider(tmp_path, monkeypatch):
     """Review finding 2: with a saved selection of only Google Gemini, a re-run
     must not re-add the dropped device-login Copilot rows the reference CSV would

@@ -867,13 +867,23 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
     # saved selection so re-runs stay quiet — no re-add-then-re-remove churn and
     # no repeated prompt. (Delete ~/.pdd/setup_preferences.json to start fresh,
     # or use the menu's "Add a provider" to add one explicitly.)
+    #
+    # CRITICAL: only honour the saved selection when it still matches at least
+    # one currently-available provider. A stale/foreign selection (or one the
+    # user moved away from by changing which API keys are set) that intersects
+    # nothing must be IGNORED here — otherwise the filter empties the configured
+    # set and we'd write an empty CSV / silently ignore the user's new key. When
+    # ignored, setup configures the available providers and re-prompts (the
+    # selection prompt's own stale-selection fallback then applies).
     _saved_selection = _load_selected_providers()
     if _saved_selection:
         _saved_set = set(_saved_selection)
-        configured_models = [
+        _filtered = [
             r for r in configured_models
             if (r.get("provider") or "").strip() in _saved_set
         ]
+        if _filtered:
+            configured_models = _filtered
 
     user_csv = _get_user_csv_path()
     existing: List[Dict[str, str]] = []
