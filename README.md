@@ -784,7 +784,7 @@ When running in local mode, PDD uses LiteLLM to select and interact with languag
 - ELO ratings for coding ability
 - Required API key environment variables
 - Structured output capability flags
-- Reasoning capabilities (budget-based or effort-based)
+- Reasoning capabilities (budget-based, effort-based, or adaptive)
 
 ## Output Cost Tracking
 

@@ -110,6 +110,7 @@ if _AnthropicConfigOpus47 is not None:
     # which it now controls). Dot-aliases mirror LiteLLM's own naming
     # support so we don't miss `claude-opus-4.7` style identifiers.
     _OPUS_ADDITIONAL_ALIASES = (
+        "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
         "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
         "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
     )

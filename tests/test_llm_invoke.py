@@ -7402,6 +7402,25 @@ def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
     assert output_config == {"effort": "medium"}, output_config
 
 
+def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
+    """claude-opus-4-8 (released 2026-05-28) uses the same adaptive-only
+    contract as 4.7: the legacy thinking.type="enabled" shape 400s on it.
+    The opus patch must extend to 4.8 across hyphen/dot/relay-prefixed naming
+    so map_openai_params emits thinking.type=adaptive + output_config.effort
+    instead of the legacy enabled shape (regression net for the catalog row)."""
+    for model in (
+        "claude-opus-4-8",
+        "claude-opus-4.8",
+        "vertex_ai/claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+    ):
+        thinking, output_config = _map_thinking_kwargs(
+            {"reasoning_effort": "medium"}, model
+        )
+        assert thinking == {"type": "adaptive"}, (model, thinking)
+        assert output_config == {"effort": "medium"}, (model, output_config)
+
+
 def test_map_openai_params_unrelated_model_unchanged():
     """The patch is gated on opus-4-7 substring (and pre-existing predicates).
     GPT-5 must not be affected by any patch layer — LiteLLM drops Anthropic-

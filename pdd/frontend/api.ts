@@ -172,7 +172,7 @@ export interface ModelInfo {
   elo: number;             // Coding arena ELO rating
   context_limit: number;   // Maximum context window size in tokens
   max_thinking_tokens: number;  // Maximum thinking/reasoning tokens (0 if not supported)
-  reasoning_type: string;  // "none", "effort", or "budget"
+  reasoning_type: string;  // "none", "effort", "budget", or "adaptive"
   structured_output: boolean;  // Whether the model supports structured output
 }
 
