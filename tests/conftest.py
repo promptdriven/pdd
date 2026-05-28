@@ -122,6 +122,26 @@ def _enforce_isolated_home(monkeypatch):
     monkeypatch.setenv("CODEX_HOME", os.path.join(_PYTEST_FAKE_HOME, ".codex"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_pdd_quiet():
+    """Restore PDD_QUIET after each test so ``--quiet`` CLI runs don't leak.
+
+    The CLI group callback writes ``os.environ["PDD_QUIET"] = "1"`` directly
+    when ``--quiet`` is passed (pdd/core/cli.py). In-process ``CliRunner``
+    tests therefore mutate the global environment and never undo it. Without
+    cleanup the flag leaks into later tests in the same process and silences
+    the Rich console output they assert on (e.g. test_preprocess.py's
+    unresolved-include warnings), producing order-dependent failures once
+    cloud-batch packs the leaking test into the same chunk.
+    """
+    saved = os.environ.get("PDD_QUIET")
+    yield
+    if saved is None:
+        os.environ.pop("PDD_QUIET", None)
+    else:
+        os.environ["PDD_QUIET"] = saved
+
+
 @pytest.fixture(scope="session")
 def sandbox_home() -> Path:
     """Expose the session-scoped fake HOME pinned at conftest import time.
