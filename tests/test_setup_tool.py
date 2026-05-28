@@ -889,11 +889,13 @@ def test_local_and_custom_rows_preserved_through_curation(tmp_path, monkeypatch)
     assert "copilot" not in content.lower()    # device-login dropped
 
 
-def test_curation_backs_up_previous_csv_before_dropping_rows(tmp_path, monkeypatch):
-    """Curation removes the rows of an unselected provider (provider-level, by
-    explicit user choice) but first snapshots the previous CSV to a timestamped
-    backup so the change is always recoverable. Here a custom OpenAI row is
-    dropped when the user selects Anthropic, but survives in the backup."""
+def test_curation_preserves_hand_edited_removes_bundled(tmp_path, monkeypatch):
+    """Curation auto-removes only PDD-managed rows (bundled reference models and
+    device-login rows) of an unselected provider, with an explicit confirm +
+    timestamped backup. A hand-edited KEYED custom row under that provider is
+    PRESERVED (never silently deleted) and the user is warned it may still be
+    used. Here, selecting Anthropic drops the bundled `gpt-4o` but keeps the
+    user's custom `my-finetune-v9`."""
     user_rows = [
         {"provider": "OpenAI", "model": "my-finetune-v9", "api_key": "OPENAI_API_KEY",
          "base_url": "", "input": "5", "output": "15", "coding_arena_elo": "1234",
@@ -906,17 +908,74 @@ def test_curation_backs_up_previous_csv_before_dropping_rows(tmp_path, monkeypat
         user_csv_rows=user_rows,
         env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
         create_pddrc=True,
-        input_sequence=["", "1", "", ""],  # select Anthropic only
+        input_sequence=["", "1", "", ""],  # select Anthropic only, confirm removal
     )
     pdd_dir = tmp_path / "home" / ".pdd"
     content = (pdd_dir / "llm_model.csv").read_text()
     assert "claude-sonnet" in content       # selected provider kept
-    assert "my-finetune-v9" not in content    # unselected provider dropped
+    assert "my-finetune-v9" in content        # hand-edited custom row PRESERVED
     assert "gpt-4o" not in content            # bundled OpenAI row dropped
-    # The dropped rows must be recoverable from a timestamped backup.
+    assert "hand-edited" in output.lower()    # user warned about the kept custom row
+    # A timestamped backup of the prior on-disk CSV is taken before any removal.
     backups = list(pdd_dir.glob("llm_model.csv.backup.*"))
     assert backups, "expected a backup before curation removed rows"
     assert any("my-finetune-v9" in b.read_text() for b in backups)
+
+
+def test_removal_declined_keeps_all_rows(tmp_path, monkeypatch):
+    """Codex full-review finding: row removal must not be silent. After choosing
+    a provider, the user is shown what will be removed and can decline ('n'),
+    leaving every row in place."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        # press-enter, select Anthropic (1), DECLINE removal (n), press-enter
+        input_sequence=["", "1", "n", "", ""],
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "claude-sonnet" in content
+    assert "gpt-4o" in content  # declined → OpenAI row kept
+    assert "will be removed" in output  # the removal was shown explicitly
+
+
+def test_menu_add_provider_syncs_saved_selection(tmp_path, monkeypatch):
+    """Codex full-review finding: the options-menu 'Add a provider' path writes
+    rows directly to the CSV. `_sync_provider_pref_to_csv` must update an
+    existing saved selection to include the newly added provider, so a later
+    setup run does not drop it."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["Anthropic"]})
+    )
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_path.write_text(
+        "provider,model,api_key\n"
+        "Anthropic,claude,ANTHROPIC_API_KEY\n"
+        "OpenAI,gpt-4o,OPENAI_API_KEY\n"  # simulate menu having added OpenAI
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    setup_tool._sync_provider_pref_to_csv()
+    data = json.loads((pdd_dir / "setup_preferences.json").read_text())
+    assert data["selected_providers"] == ["Anthropic", "OpenAI"]
+
+
+def test_sync_does_not_create_sidecar_when_none_exists(tmp_path, monkeypatch):
+    """`_sync_provider_pref_to_csv` must not impose a curation policy on users
+    who never curated — it only updates an existing sidecar."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_path.write_text("provider,model,api_key\nAnthropic,claude,ANTHROPIC_API_KEY\n")
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    setup_tool._sync_provider_pref_to_csv()
+    assert not (pdd_dir / "setup_preferences.json").exists()
 
 
 def test_invalid_selection_reprompts_instead_of_defaulting(tmp_path, monkeypatch):

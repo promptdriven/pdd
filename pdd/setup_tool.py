@@ -120,6 +120,31 @@ def _save_selected_providers(providers: List[str]) -> None:
         print(f"  {DIM}(could not save provider preference: {exc}){RESET}")
 
 
+def _sync_provider_pref_to_csv() -> None:
+    """Re-align the saved provider selection with the providers currently in the
+    user CSV. Called after the options menu, whose "Add a provider" path writes
+    rows directly to `llm_model.csv`. Without this, a later `pdd setup` run would
+    default to the stale saved selection and could drop the provider the user
+    just added through the menu (#1202 review). Only updates an EXISTING sidecar
+    — it never creates a curation policy the user didn't opt into."""
+    if _load_selected_providers() is None:
+        return
+    from pdd.provider_manager import _read_csv, _get_user_csv_path
+    user_csv = _get_user_csv_path()
+    if not user_csv.exists():
+        return
+    try:
+        providers = sorted({
+            (r.get("provider") or "").strip()
+            for r in _read_csv(user_csv)
+            if (r.get("provider") or "").strip()
+        })
+    except Exception:
+        return
+    if providers:
+        _save_selected_providers(providers)
+
+
 def _select_providers_to_keep(
     rows: List[Dict[str, str]],
     curatable: List[str],
@@ -130,15 +155,15 @@ def _select_providers_to_keep(
     leaving the row set untouched.
 
     Only ``curatable`` providers (those derived from the bundled reference CSV
-    for which the user has credentials) are offered and curated. Rows for any
-    NON-curatable provider — local models (ollama/lm_studio) and foreign /
-    hand-edited providers the user has no reference row or credential for — are
-    not listed here and are preserved by the caller. Note the curation is
-    provider-level: ALL rows of a curatable provider the user does not select
-    are removed (including hand-edited fine-tunes or custom base_urls under that
-    provider name), because the user is explicitly choosing which providers
-    `pdd --local` may use. The caller snapshots the prior CSV to a timestamped
-    backup before removing rows so the choice is recoverable.
+    for which the user has credentials) are offered. Rows for any NON-curatable
+    provider — local models (ollama/lm_studio) and foreign providers the user
+    has no reference row or credential for — are not listed and preserved by the
+    caller. Of an unselected curatable provider's rows, the caller auto-removes
+    only PDD-managed ones (bundled reference models + device-login rows with no
+    api_key, the free-login case #1202 targets) after an explicit confirmation +
+    backup; hand-edited KEYED custom rows under that provider are preserved (and
+    the user is warned they may still be used), so curation never deletes a
+    user's own additions.
 
     Rationale (issue #1202): `pdd --local` auto-selects across every provider in
     the CSV by cost/ELO, so leaving several providers in the file silently
@@ -595,34 +620,79 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
     if selected is not None:
         selected_set = set(selected)
         curatable_set = set(curatable)
-        # Drop rows for curatable providers the user did not select. Local
-        # models and foreign providers (not curatable) are always kept. This is
-        # provider-level on purpose: the user explicitly chose which providers
-        # `pdd --local` should use, so an unselected provider's rows — bundled
-        # or hand-edited — should not remain and silently get auto-selected.
-        kept = [
-            r for r in combined
-            if (r.get("provider") or "").strip() in selected_set
-            or (r.get("provider") or "").strip() not in curatable_set
-        ]
-        # Safety net for the explicit-removal: if curation actually drops rows,
-        # snapshot the previous CSV to a timestamped backup (mirrors the
-        # existing ~/.pdd/llm_model.csv.backup.<ts> convention) so a mistaken
-        # selection is always recoverable.
-        if len(kept) != len(combined) and user_csv.exists():
+        ref_models = {(r.get("model") or "").strip() for r in configured_models}
+
+        def _unselected_curatable(row: Dict[str, str]) -> bool:
+            prov = (row.get("provider") or "").strip()
+            return prov in curatable_set and prov not in selected_set
+
+        # Of the unselected curatable providers' rows, only PDD-managed ones are
+        # auto-removed: bundled reference rows (model present in the reference
+        # CSV) and device-login rows (no api_key, e.g. GitHub Copilot — the
+        # free-login case #1202 is really about). Hand-edited KEYED custom rows
+        # (a model the user added themselves under that provider) are NEVER
+        # deleted — they are preserved and the user is warned they may still be
+        # used, so we neither lose user data nor silently re-open cross-routing.
+        to_remove, kept_custom = [], []
+        for r in combined:
+            if not _unselected_curatable(r):
+                continue
+            is_device = not (r.get("api_key") or "").strip()
+            if (r.get("model") or "").strip() in ref_models or is_device:
+                to_remove.append(r)
+            else:
+                kept_custom.append(r)
+
+        if kept_custom:
+            print()
+            print(f"  {YELLOW}Keeping {len(kept_custom)} hand-edited row(s) under "
+                  f"providers you didn't select:{RESET}")
+            for r in kept_custom:
+                print(f"    - {(r.get('provider') or '').strip()} / "
+                      f"{(r.get('model') or '').strip()}")
+            print(f"  {DIM}(these are your own custom entries; `pdd --local` may "
+                  f"still use them. Remove them by editing {user_csv.name}.){RESET}")
+
+        removed = False
+        if to_remove:
+            print()
+            print(f"  {YELLOW}The following {len(to_remove)} model row(s) for "
+                  f"unselected provider(s) will be removed from {user_csv}:{RESET}")
+            for r in to_remove:
+                print(f"    - {(r.get('provider') or '').strip()} / "
+                      f"{(r.get('model') or '').strip()}")
+            print(f"  {DIM}(a timestamped backup is saved first, so this is "
+                  f"reversible){RESET}")
             try:
-                base = f"{user_csv.name}.backup.{int(time.time())}"
-                backup = user_csv.with_name(base)
-                # Avoid clobbering an existing backup written in the same second.
-                suffix = 1
-                while backup.exists():
-                    backup = user_csv.with_name(f"{base}-{suffix}")
-                    suffix += 1
-                backup.write_bytes(user_csv.read_bytes())
-                print(f"  {DIM}(previous model list backed up to {backup.name}){RESET}")
-            except OSError:
-                pass  # backup is best-effort; never block the curation write
-        combined = kept
+                ans = input("Remove these rows? [Y/n]: ").strip().lower()
+            except EOFError:
+                ans = ""
+            if ans in ("n", "no"):
+                print(f"  {DIM}Keeping all rows. Note: `pdd --local` may still "
+                      f"auto-select across providers by cost/ranking.{RESET}")
+            else:
+                if user_csv.exists():
+                    try:
+                        base = f"{user_csv.name}.backup.{int(time.time())}"
+                        backup = user_csv.with_name(base)
+                        # Avoid clobbering a backup written in the same second.
+                        suffix = 1
+                        while backup.exists():
+                            backup = user_csv.with_name(f"{base}-{suffix}")
+                            suffix += 1
+                        backup.write_bytes(user_csv.read_bytes())
+                        print(f"  {DIM}(previous model list backed up to "
+                              f"{backup.name}){RESET}")
+                    except OSError:
+                        pass  # backup is best-effort; never block the write
+                removed = True
+        if removed:
+            remove_models = {(r.get("model") or "").strip() for r in to_remove}
+            combined = [
+                r for r in combined
+                if not (_unselected_curatable(r)
+                        and (r.get("model") or "").strip() in remove_models)
+            ]
     try:
         _write_csv_atomic(user_csv, combined)
     except Exception as e:
@@ -1065,12 +1135,16 @@ def run_setup() -> None:
             _console.print(f"[yellow]{msg}[/yellow]")
             print(f"{YELLOW}{msg}{RESET}")
             _run_options_menu()
+            # The menu's "Add a provider" path writes rows directly; keep the
+            # saved provider selection in sync so a later run won't drop them.
+            _sync_provider_pref_to_csv()
             found_keys = _scan_for_api_keys_quiet()
         else:
             found_keys = context.get("found_keys", [])
             ans = input("Press Enter to finish, or 'm' for more options: ").strip()
             if ans:
                 _run_options_menu()
+                _sync_provider_pref_to_csv()
                 # Refresh: menu may have added a key
                 found_keys = _scan_for_api_keys_quiet()
 
