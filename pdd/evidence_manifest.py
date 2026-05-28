@@ -291,7 +291,7 @@ def resolve_generate_output_paths(
     return [str(resolved)] if resolved else []
 
 
-def resolve_test_output_paths(
+def resolve_test_output_paths(  # pylint: disable=too-many-arguments
     prompt_file: str | Path,
     code_file: str | Path,
     *,
