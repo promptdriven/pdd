@@ -1359,9 +1359,41 @@ litellm.success_callback = [_litellm_success_callback]
 # --- Cost Mapping Support (CSV Rates) ---
 # Populate from CSV inside llm_invoke; used by callback fallback
 _MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+_MODEL_PROVIDER_MAP: Dict[str, str] = {}
+
+# CSV provider column -> litellm provider token, for models whose id is BARE
+# (no "provider/" prefix). Prefixed ids ("vertex_ai/...") already encode the
+# provider; bare ids from direct-API rows (e.g. Anthropic's "claude-opus-4-8")
+# previously fell through to a hardcoded "openai" default in registration,
+# which silently misrouted any litellm-unknown bare non-OpenAI model to OpenAI
+# (wrong provider + wrong key -> auth failure -> silent fallback). Unmapped
+# providers keep the historical "openai" fallback so existing registrations
+# are unchanged.
+_CSV_PROVIDER_TO_LITELLM_PROVIDER: Dict[str, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+}
+
+
+def _litellm_provider_for_csv_model(
+    model_name: str, csv_provider: Optional[str]
+) -> str:
+    """Resolve the litellm provider token a CSV model should register under.
+
+    Prefixed model ids carry the provider in the prefix; bare ids are mapped
+    from the CSV ``provider`` column. Falls back to ``"openai"`` for unmapped
+    providers to preserve prior behavior.
+    """
+    if "/" in model_name:
+        return model_name.split("/", 1)[0]
+    token = _CSV_PROVIDER_TO_LITELLM_PROVIDER.get(
+        str(csv_provider or "").strip().lower()
+    )
+    return token or "openai"
+
 
 def _set_model_rate_map(df: pd.DataFrame) -> None:
-    global _MODEL_RATE_MAP
+    global _MODEL_RATE_MAP, _MODEL_PROVIDER_MAP
     try:
         _MODEL_RATE_MAP = {
             str(row['model']): (
@@ -1370,8 +1402,14 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
             )
             for _, row in df.iterrows()
         }
+        _MODEL_PROVIDER_MAP = {
+            str(row['model']): str(row['provider'])
+            for _, row in df.iterrows()
+            if pd.notna(row.get('provider'))
+        }
     except Exception:
         _MODEL_RATE_MAP = {}
+        _MODEL_PROVIDER_MAP = {}
     _register_csv_models_with_litellm()
 
 
@@ -1387,7 +1425,9 @@ def _register_csv_models_with_litellm() -> None:
         for model_name, (in_rate, out_rate) in _MODEL_RATE_MAP.items():
             if not model_name or model_name in existing:
                 continue
-            provider = model_name.split("/", 1)[0] if "/" in model_name else "openai"
+            provider = _litellm_provider_for_csv_model(
+                model_name, _MODEL_PROVIDER_MAP.get(model_name)
+            )
             registrations[model_name] = {
                 "input_cost_per_token": in_rate / 1_000_000.0,
                 "output_cost_per_token": out_rate / 1_000_000.0,

@@ -310,6 +310,7 @@
     - Register a success callback with litellm.success_callback.
     - Extract token usage and finish reason.
     - Calculate cost using litellm.completion_cost(); fall back to CSV rates (_MODEL_RATE_MAP) if LiteLLM fails.
+    - When registering CSV-only models with LiteLLM (litellm.register_model) so completion_cost works, derive litellm_provider from the model id prefix when present (e.g. 'vertex_ai/...'), otherwise from the CSV 'provider' column mapped to the litellm provider token (e.g. Anthropic -> 'anthropic'). Never hardcode a single default provider for bare ids: that misroutes any litellm-unknown bare-named non-OpenAI model (e.g. a new direct-Anthropic Opus) to OpenAI, causing auth failure and silent fallback.
     - Store in module-level _LAST_CALLBACK_DATA and include finish_reason in the returned dictionary.
 
 % WSL Diagnostics:

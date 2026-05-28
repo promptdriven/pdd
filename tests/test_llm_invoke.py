@@ -5603,6 +5603,61 @@ class TestSetModelRateMap:
         assert llm_mod._MODEL_RATE_MAP["gpt-4"] == (30.0, 60.0)
         assert llm_mod._MODEL_RATE_MAP["claude-3"] == (15.0, 75.0)
 
+    # ------------------------------------------------------------------
+    # Regression: litellm provider derivation for CSV-only model registration.
+    # A litellm-unknown BARE-named non-OpenAI model (e.g. a new direct-Anthropic
+    # Opus) must register under its real provider, not the historical "openai"
+    # default — otherwise litellm resolves the wrong provider, the call fails
+    # auth against the wrong key, and PDD silently falls back to another model.
+    # ------------------------------------------------------------------
+
+    def test_provider_for_bare_anthropic_model_maps_to_anthropic(self, llm_mod):
+        assert llm_mod._litellm_provider_for_csv_model(
+            "claude-opus-4-8", "Anthropic"
+        ) == "anthropic"
+
+    def test_provider_for_prefixed_model_uses_prefix(self, llm_mod):
+        # Prefixed ids already encode the provider; CSV column is ignored.
+        assert llm_mod._litellm_provider_for_csv_model(
+            "vertex_ai/claude-opus-4-7", "Google Vertex AI"
+        ) == "vertex_ai"
+
+    def test_provider_for_bare_openai_and_unknown_fallback(self, llm_mod):
+        assert llm_mod._litellm_provider_for_csv_model("gpt-5", "OpenAI") == "openai"
+        # Unmapped provider preserves the historical "openai" fallback.
+        assert llm_mod._litellm_provider_for_csv_model(
+            "some-future-bare-model", "Brand New Co"
+        ) == "openai"
+        assert llm_mod._litellm_provider_for_csv_model("bare", None) == "openai"
+
+    def test_set_model_rate_map_populates_provider_map(self, llm_mod):
+        import pandas as pd
+        df = pd.DataFrame({
+            "model": ["claude-opus-4-8", "vertex_ai/claude-opus-4-7"],
+            "provider": ["Anthropic", "Google Vertex AI"],
+            "input": [5.0, 5.0],
+            "output": [25.0, 25.0],
+        })
+        llm_mod._set_model_rate_map(df)
+        assert llm_mod._MODEL_PROVIDER_MAP.get("claude-opus-4-8") == "Anthropic"
+
+    def test_registers_bare_anthropic_model_under_anthropic_provider(self, llm_mod):
+        import pandas as pd
+        import litellm
+        # Unique fake id guaranteed absent from litellm.model_cost so the
+        # registration path (not the skip-if-known branch) is exercised.
+        fake = "claude-pdd-regtest-bare-zzz"
+        assert fake not in (getattr(litellm, "model_cost", {}) or {})
+        df = pd.DataFrame({
+            "model": [fake],
+            "provider": ["Anthropic"],
+            "input": [5.0],
+            "output": [25.0],
+        })
+        llm_mod._set_model_rate_map(df)
+        _model, provider, *_ = litellm.get_llm_provider(fake)
+        assert provider == "anthropic"
+
 
 # ============================================================================
 # Z3 FORMAL VERIFICATION TESTS
