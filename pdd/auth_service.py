@@ -8,7 +8,9 @@ By centralizing auth logic here, we ensure consistent behavior across interfaces
 """
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
@@ -31,6 +33,69 @@ def _refresh_token_service_names() -> Tuple[str, ...]:
     return (KEYRING_SERVICE_NAME, *LEGACY_KEYRING_SERVICE_NAMES)
 
 
+def _get_expected_jwt_audience() -> Optional[str]:
+    """Return the Firebase project audience expected for the active PDD env."""
+    explicit_aud = os.environ.get("PDD_JWT_EXPECTED_AUD")
+    if explicit_aud:
+        return explicit_aud
+
+    env = (os.environ.get("PDD_ENV") or "").strip().lower()
+    if not env or env == "local":
+        return None
+    if env in ("prod", "production"):
+        return "prompt-driven-development"
+    if env == "staging":
+        return os.environ.get("STAGING_PROJECT_ID") or "prompt-driven-development-stg"
+
+    return os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+
+
+def _get_jwt_audience(jwt: str) -> Optional[str]:
+    """Extract the Firebase audience claim without verifying the JWT signature."""
+    try:
+        parts = jwt.split(".")
+        if len(parts) < 2:
+            return None
+
+        # Add proper base64 padding
+        payload_part = parts[1]
+        padding = 4 - (len(payload_part) % 4)
+        if padding and padding != 4:
+            payload_part += "=" * padding
+
+        payload_bytes = base64.urlsafe_b64decode(payload_part)
+        payload = json.loads(payload_bytes.decode("utf-8"))
+
+        # Check nested firebase aud first, then root aud
+        firebase_claim = payload.get("firebase")
+        if isinstance(firebase_claim, dict) and "aud" in firebase_claim:
+            return firebase_claim["aud"]
+
+        return payload.get("aud")
+    except Exception:
+        return None
+
+
+def _cached_jwt_matches_expected_audience(jwt: Optional[str]) -> bool:
+    """Return whether a cached JWT belongs to the current configured environment."""
+    expected_aud = _get_expected_jwt_audience()
+    if not expected_aud:
+        return True
+    if not jwt:
+        return False
+
+    actual_aud = _get_jwt_audience(jwt)
+    if actual_aud == expected_aud:
+        return True
+
+    # If it's a mismatch, clear the file
+    try:
+        JWT_CACHE_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False
+
+
 def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
     """
     Check JWT cache file for valid token.
@@ -49,9 +114,12 @@ def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
         # Handle null/None expires_at defensively (Issue #379)
         if not isinstance(expires_at, (int, float)):
             return False, None
+
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
-            return True, expires_at
+            jwt = cache.get("id_token") or cache.get("jwt")
+            if _cached_jwt_matches_expected_audience(jwt):
+                return True, float(expires_at)
     except (json.JSONDecodeError, IOError, KeyError, TypeError, AttributeError):
         pass
 
@@ -75,10 +143,13 @@ def get_cached_jwt() -> Optional[str]:
         # Handle null/None expires_at defensively (Issue #379)
         if not isinstance(expires_at, (int, float)):
             return None
+
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
             # Check both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility
-            return cache.get("id_token") or cache.get("jwt")
+            jwt = cache.get("id_token") or cache.get("jwt")
+            if _cached_jwt_matches_expected_audience(jwt):
+                return jwt
     except (json.JSONDecodeError, IOError, KeyError, TypeError, AttributeError):
         pass
 
@@ -290,7 +361,6 @@ async def verify_auth() -> Dict[str, Any]:
         username = None
         if JWT_CACHE_FILE.exists():
             try:
-                import base64
                 data = json.load(open(JWT_CACHE_FILE, "r"))
                 token = data.get("id_token")
                 if token:
@@ -332,7 +402,6 @@ async def verify_auth() -> Dict[str, Any]:
             TokenError,
             RateLimitError,
         )
-        import os
 
         # Load Firebase API key
         api_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
@@ -369,7 +438,6 @@ async def verify_auth() -> Dict[str, Any]:
             # Extract username from new token
             username = None
             try:
-                import base64
                 parts = id_token.split(".")
                 if len(parts) == 3:
                     payload = parts[1]

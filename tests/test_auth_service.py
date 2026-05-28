@@ -509,6 +509,34 @@ def test_issue_1274_expected_audience_override_allows_custom_project(
     assert expires_at is not None
     assert auth_service.get_cached_jwt() == token
 
+
+def test_issue_1274_production_rejects_staging_audience(monkeypatch, tmp_path):
+    """Production mode must reject a cached staging-audience JWT."""
+    monkeypatch.setenv("PDD_ENV", "production")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: (None, None),
+    )
+    cache_file = tmp_path / "jwt_cache"
+    _write_cached_jwt(
+        cache_file,
+        {
+            "aud": "prompt-driven-development-stg",
+            "email": "staging-user@example.com",
+        },
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    assert auth_service.get_jwt_cache_info() == (False, None)
+    assert auth_service.get_cached_jwt() is None
+    assert auth_service.get_auth_status() == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+    }
+
 # --- has_refresh_token Tests ---
 
 def test_has_refresh_token_exists(mock_keyring):
