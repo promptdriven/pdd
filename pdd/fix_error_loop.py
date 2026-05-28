@@ -699,12 +699,36 @@ def fix_error_loop(unit_test_file: str,
             # Format the log for the LLM - includes local test results
             formatted_log = format_log_for_output(log_structure)
 
+            # Focused repair for large dev units (Issue #888).
+            # Attempt to identify and pass only the relevant function slices to
+            # the LLM rather than the full files.  Any failure is silent and
+            # falls back to the full-file path.
+            _focused = None
+            try:
+                from .fix_focus import prepare_focused_inputs, reconstruct_code, is_large
+                if is_large(code_contents, unit_test_contents):
+                    _focused = prepare_focused_inputs(
+                        code=code_contents,
+                        unit_test=unit_test_contents,
+                        error=formatted_log,
+                        strength=strength,
+                        temperature=temperature,
+                        time=time if time is not None else 0.25,
+                        verbose=verbose,
+                        language=get_language(os.path.splitext(code_file)[1]),
+                    )
+            except Exception:
+                _focused = None
+
+            _code_for_llm = _focused.focused_code if _focused else code_contents
+            _tests_for_llm = _focused.focused_tests if _focused else unit_test_contents
+
             if use_cloud:
                 # Use cloud LLM for fix - local test results passed via formatted_log
                 try:
                     updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
-                        unit_test=unit_test_contents,
-                        code=code_contents,
+                        unit_test=_tests_for_llm,
+                        code=_code_for_llm,
                         prompt=prompt,
                         error=formatted_log,  # Pass local test results to cloud
                         error_file=error_log_file,
@@ -725,8 +749,8 @@ def fix_error_loop(unit_test_file: str,
                     # Recoverable errors - fall back to local
                     rprint(f"[yellow]Cloud fix failed, falling back to local:[/yellow] {cloud_err}")
                     updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                        unit_test_contents,
-                        code_contents,
+                        _tests_for_llm,
+                        _code_for_llm,
                         prompt,
                         formatted_log,
                         error_log_file,
@@ -741,8 +765,8 @@ def fix_error_loop(unit_test_file: str,
             else:
                 # Use local LLM for fix
                 updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                    unit_test_contents,
-                    code_contents,
+                    _tests_for_llm,
+                    _code_for_llm,
                     prompt,
                     formatted_log,  # Use formatted log instead of reading the file
                     error_log_file,
@@ -754,6 +778,15 @@ def fix_error_loop(unit_test_file: str,
                     language=get_language(os.path.splitext(code_file)[1]),
                     failure_classification=failure_hint,
                 )
+
+            # If focused repair was used, splice the returned function slices
+            # back into the full original file before writing.
+            if _focused and fixed_code and updated_code:
+                try:
+                    from .fix_focus import reconstruct_code
+                    fixed_code = reconstruct_code(code_contents, fixed_code, _focused.slices)
+                except Exception:
+                    pass  # silent fallback: use whatever fixed_code we already have
 
             # Update the fix attempt in the structured log
             log_structure["iterations"][-1]["fix_attempt"] = analysis

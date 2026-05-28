@@ -161,10 +161,37 @@ def fix_main(
 
             if jwt_token and not current_execution_is_local:
                 cloud_execution_attempted = True
+                # Focused repair for large dev units (Issue #888): reduce payload
+                # size by sending only the relevant function slices when the code or
+                # test file is large.  Any failure falls back silently to full files.
+                _fix_focused = None
+                _fix_focused_slices = None
+                _code_for_cloud = input_strings["code_file"]
+                _tests_for_cloud = input_strings["unit_test_file"]
+                try:
+                    from .fix_focus import prepare_focused_inputs, reconstruct_code, is_large
+                    if is_large(_code_for_cloud, _tests_for_cloud):
+                        _fix_focused = prepare_focused_inputs(
+                            code=_code_for_cloud,
+                            unit_test=_tests_for_cloud,
+                            error=input_strings.get("error_file", ""),
+                            strength=strength if strength is not None else DEFAULT_STRENGTH,
+                            temperature=temperature if temperature is not None else 0.0,
+                            time=time if time is not None else 0.25,
+                            verbose=verbose,
+                            language=get_language(os.path.splitext(code_file)[1]),
+                        )
+                        if _fix_focused:
+                            _code_for_cloud = _fix_focused.focused_code
+                            _tests_for_cloud = _fix_focused.focused_tests
+                            _fix_focused_slices = _fix_focused.slices
+                except Exception:
+                    _fix_focused = None
+
                 # Build cloud payload
                 payload = {
-                    "unitTest": input_strings["unit_test_file"],
-                    "code": input_strings["code_file"],
+                    "unitTest": _tests_for_cloud,
+                    "code": _code_for_cloud,
                     "prompt": input_strings["prompt_file"],
                     "errors": input_strings.get("error_file", ""),
                     "language": get_language(os.path.splitext(code_file)[1]),
@@ -208,6 +235,15 @@ def fix_main(
                     else:
                         cloud_execution_succeeded = True
                         attempts = 1
+                        # Reconstruct full file when focused repair was used.
+                        if _fix_focused_slices and fixed_code and update_code:
+                            try:
+                                from .fix_focus import reconstruct_code
+                                fixed_code = reconstruct_code(
+                                    input_strings["code_file"], fixed_code, _fix_focused_slices
+                                )
+                            except Exception:
+                                pass  # silent fallback
 
                         # Validate the fix by running tests (same as local)
                         if update_unit_test or update_code:
@@ -338,9 +374,35 @@ def fix_main(
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)
             if verbose:
                 console.print(Panel("Performing local fix...", title="[blue]Mode[/blue]", expand=False))
+            # Focused repair for large dev units (Issue #888): reduce the payload
+            # sent to the local LLM by extracting only the relevant function slices.
+            _local_focused = None
+            _local_focused_slices = None
+            _local_code = input_strings["code_file"]
+            _local_tests = input_strings["unit_test_file"]
+            try:
+                from .fix_focus import prepare_focused_inputs, reconstruct_code, is_large
+                if is_large(_local_code, _local_tests):
+                    _local_focused = prepare_focused_inputs(
+                        code=_local_code,
+                        unit_test=_local_tests,
+                        error=input_strings.get("error_file", ""),
+                        strength=strength if strength is not None else DEFAULT_STRENGTH,
+                        temperature=temperature if temperature is not None else 0.0,
+                        time=time if time is not None else 0.25,
+                        verbose=verbose,
+                        language=get_language(os.path.splitext(code_file)[1]),
+                    )
+                    if _local_focused:
+                        _local_code = _local_focused.focused_code
+                        _local_tests = _local_focused.focused_tests
+                        _local_focused_slices = _local_focused.slices
+            except Exception:
+                _local_focused = None
+
             update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name = fix_errors_from_unit_tests(
-                unit_test=input_strings["unit_test_file"],
-                code=input_strings["code_file"],
+                unit_test=_local_tests,
+                code=_local_code,
                 prompt=input_strings["prompt_file"],
                 error=input_strings["error_file"],
                 error_file=output_file_paths.get("output_results"),
@@ -350,6 +412,15 @@ def fix_main(
                 verbose=verbose,
                 protect_tests=protect_tests
             )
+            # Reconstruct full file when focused repair was used.
+            if _local_focused_slices and fixed_code and update_code:
+                try:
+                    from .fix_focus import reconstruct_code
+                    fixed_code = reconstruct_code(
+                        input_strings["code_file"], fixed_code, _local_focused_slices
+                    )
+                except Exception:
+                    pass  # silent fallback
             attempts = 1
 
             # Issue #158 fix: Validate the fix by running tests instead of
