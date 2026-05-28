@@ -1105,6 +1105,43 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+_STEP5_SKIPPED_STATUSES = frozenset({"skipped", "skip", "no_tests", "n/a"})
+
+
+def _step5_failure_signal_status(step_output_value: str) -> str:
+    """Return the lowercase ``failure_signal.status`` from a Step 5 output.
+
+    Strips a leading ``"FAILED: "`` prefix that ``_handle_step_result``
+    prepends for failed steps, then delegates to
+    :func:`_parse_failure_signal_block`. Returns ``""`` when no status
+    is present.
+
+    Codex round-10 Finding 3: the orchestrator must be able to derive
+    Step 5's logical outcome at any point in the run — including on
+    resume — from the persisted ``step_outputs["5"]`` value alone,
+    without depending on the in-memory ``context`` cache that is not
+    part of the saved workflow state.
+    """
+    if not step_output_value:
+        return ""
+    body = step_output_value
+    if body.startswith("FAILED: "):
+        body = body[len("FAILED: "):]
+    fields, _ = _parse_failure_signal_block(body)
+    return str(fields.get("status", "")).strip().lower()
+
+
+def _step5_was_skipped(step_output_value: str) -> bool:
+    """Return True when Step 5 reported a ``skipped``-family status.
+
+    Independent of provider success (round-10 Finding 1) — an agent
+    that emitted a coherent ``status: skipped`` block even on a failed
+    provider call still means "tests did not run", and the pre-push
+    gate must refuse the push regardless.
+    """
+    return _step5_failure_signal_status(step_output_value) in _STEP5_SKIPPED_STATUSES
+
+
 _EXPANSION_CAUSAL_KEYWORDS = (
     "because",
     "broken by",
@@ -2954,7 +2991,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     # (no failure to act on) but record an "unverified"
                     # flag that the pre-push gate consumes to refuse the
                     # push regardless of other guards.
-                    skipped_statuses = {"skipped", "skip", "no_tests", "n/a"}
+                    skipped_statuses = _STEP5_SKIPPED_STATUSES
                     status_value = (
                         str(signal_fields.get("status", "")).strip().lower()
                     )
@@ -2979,13 +3016,24 @@ def _run_agentic_checkup_orchestrator_inner(
                     # For loop-control purposes treat a "skipped" result
                     # like a clean Step 5 so the fixer is NOT triggered.
                     # The unverified flag below blocks the eventual push.
+                    # Round-10 Finding 1: a "skipped" status from the
+                    # agent means tests did not run REGARDLESS of the
+                    # provider success flag — an agent can emit a
+                    # coherent block even when its provider call timed
+                    # out or otherwise reported failure. Set the
+                    # in-memory hint based on the status alone; the
+                    # pre-push gate also re-derives the truth from the
+                    # persisted ``step_outputs["5"]`` so the hint is a
+                    # cache, not the source of truth.
                     step5_clean = success and not logical_failure
-                    if success and status_skipped:
-                        # Persist the unverified flag in context so the
-                        # pre-push gate (which sees ``context``) can
-                        # refuse the push without having to re-parse the
-                        # failure_signal block.
+                    if status_skipped:
                         context["step5_verification_skipped"] = "1"
+                        # When provider returned failure but status is
+                        # skipped, treat the loop like a clean Step 5
+                        # too so the fixer doesn't run against a
+                        # non-failure.
+                        if not success:
+                            step5_clean = True
                     else:
                         context.pop("step5_verification_skipped", None)
 
@@ -3312,30 +3360,55 @@ def _run_agentic_checkup_orchestrator_inner(
                 # outer finalization (clear_workflow_state) gets called.
                 no_changes_clean_run = not guard_changed_files
 
-                # Codex round-9 Finding 1: when Step 5 reported
-                # ``status: skipped`` the test suite never executed, so
-                # we have no verification of whatever the fixer (or
-                # tooling) produced. Refuse the push regardless of
-                # scope/causal/diff-size — those guards check what was
-                # changed, but only Step 5 can prove the changes don't
-                # break anything. Skip the refusal when the worktree is
-                # already clean (nothing to push anyway) so a clean PR
-                # whose tests legitimately were skipped still flows
-                # through the no-op path without a confusing artifact.
-                if (
+                # Codex round-9 Finding 1 / round-10 Findings 2+3: when
+                # Step 5 reported ``status: skipped`` the test suite
+                # never executed, so we have no verification of whatever
+                # the fixer (or tooling) produced AND no evidence that
+                # the PR itself is healthy. Refuse the push regardless
+                # of scope/causal/diff-size — and regardless of whether
+                # the worktree happens to be clean. Returning success on
+                # a clean worktree would tell the user "checkup
+                # complete" even though no tests ran (round-10 #2).
+                #
+                # Derive the skipped state from the PERSISTED
+                # ``step_outputs["5"]`` value rather than relying on the
+                # in-memory ``context['step5_verification_skipped']``
+                # cache — context isn't part of the saved state, so a
+                # mid-loop interruption could resume with the
+                # ``step_outputs["5"]`` skipped block but an empty
+                # context cache (round-10 #3). The helper handles a
+                # leading ``"FAILED: "`` prefix that ``_handle_step_result``
+                # may have prepended.
+                verification_skipped = (
                     context.get("step5_verification_skipped") == "1"
-                    and not no_changes_clean_run
-                ):
-                    unverified_refusal = (
-                        "Step 5 verification skipped: the failure_signal "
-                        "block reported a 'skipped' status, so the test "
-                        "suite did not execute against the PR head. "
-                        "Refusing to push fixer/tooling changes "
-                        f"({sorted(guard_changed_files)}) because there is "
-                        "no test evidence that they don't break the PR. "
-                        "Rerun pdd checkup --pr once the test environment "
-                        "is healthy."
-                    )
+                    or _step5_was_skipped(step_outputs.get("5", ""))
+                )
+                if verification_skipped:
+                    # Keep the context cache in sync so downstream code
+                    # / state save reflects the gate decision.
+                    context["step5_verification_skipped"] = "1"
+                    if no_changes_clean_run:
+                        unverified_refusal = (
+                            "Step 5 verification skipped: the failure_signal "
+                            "block reported a 'skipped' status, so the test "
+                            "suite did not execute against the PR head. The "
+                            "worktree is clean (no fixer changes to push) "
+                            "but the checkup did NOT verify that the PR's "
+                            "tests pass — refusing to report success. Rerun "
+                            "pdd checkup --pr once the test environment is "
+                            "healthy."
+                        )
+                    else:
+                        unverified_refusal = (
+                            "Step 5 verification skipped: the failure_signal "
+                            "block reported a 'skipped' status, so the test "
+                            "suite did not execute against the PR head. "
+                            "Refusing to push fixer/tooling changes "
+                            f"({sorted(guard_changed_files)}) because there "
+                            "is no test evidence that they don't break the "
+                            "PR. Rerun pdd checkup --pr once the test "
+                            "environment is healthy."
+                        )
                     pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
                     (
                         pr_artifacts_dir / "verification-skipped-refusal.txt"

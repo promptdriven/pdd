@@ -5259,3 +5259,211 @@ class TestIssue1215Round9DiffSizeOversizedPathOnly:
         push_mock.assert_not_called()
         assert success is False
         assert "diff size guard" in (msg or "").lower(), msg
+
+
+class TestIssue1215Round10Step5SkippedEdgeCases:
+    """Round-10: edge cases around the Step 5 verification-skipped gate.
+
+    Finding 1 — provider returns success=False but the agent embedded
+    ``status: skipped`` in its output. Fixer must NOT run; push must
+    NOT happen.
+
+    Finding 2 — ``status: skipped`` + clean worktree must NOT report
+    success. Tests didn't run, so the checkup did not verify anything.
+
+    Finding 3 — resume with persisted Step 5 skipped output but NO
+    in-memory ``context['step5_verification_skipped']`` cache must
+    still refuse push (the gate must re-derive from step_outputs).
+    """
+
+    def test_provider_failure_with_skipped_status_does_not_invoke_fixer(self, tmp_path):
+        invoked = []
+
+        # Note success=False on the provider call but the agent still
+        # emitted a coherent ``status: skipped`` block.
+        skipped_block = STEP5_SKIPPED_OUTPUT
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (False, skipped_block, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        fixer_steps = [s for s in invoked if s in (6.1, 6.2, 6.3)]
+        assert not fixer_steps, (
+            "Provider success=False + status:skipped must not run fixer — "
+            f"invoked={invoked}"
+        )
+        push_mock.assert_not_called()
+        assert success is False
+        assert "verification skipped" in (msg or "").lower()
+
+    def test_skipped_status_with_clean_worktree_does_not_report_success(self, tmp_path):
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_SKIPPED_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        # Clean worktree (no fixer-produced changes).
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            commit_push_return=(True, "No changes to push."),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False, (
+            "Clean worktree + status:skipped must NOT report success — "
+            f"msg={msg!r}"
+        )
+        assert "verification skipped" in (msg or "").lower()
+
+    def test_resume_with_skipped_step5_refuses_push_without_context_flag(self, tmp_path):
+        """Cached step_outputs['5'] contains a skipped block, but
+        ``context['step5_verification_skipped']`` was never persisted
+        (mid-loop interruption). The gate must re-derive the truth from
+        step_outputs and refuse the push."""
+        wt = tmp_path / "wt"
+        wt.mkdir(exist_ok=True)
+
+        persisted_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "abc123deadbeef",
+            "last_completed_step": 6.3,
+            "current_step": 7,
+            "step_outputs": {
+                # Steps 1 and 2 must be present so the state-validation
+                # loop doesn't truncate ``actual_last_success`` to 0 and
+                # discard the cache (see the
+                # state-correction-on-missing-keys path in
+                # ``_run_agentic_checkup_orchestrator_inner``).
+                "1": "out-1",
+                "2": "out-2",
+                "3": "clean",
+                "4": "clean",
+                "5": STEP5_SKIPPED_OUTPUT,
+                # Persisted fixer outputs so fixer_invoked is True on
+                # resume — without those the side-effect guard would
+                # fire first and we'd never reach the skipped-gate.
+                "6_1": "FILES_MODIFIED: pdd/main.py\n",
+                "6_2": "verify-ok",
+                "6_3": "review-ok",
+            },
+            # Crucially: no step5_verification_skipped key here.
+            "context": {
+                "files_to_stage": "pdd/main.py",
+                "step5_output": STEP5_SKIPPED_OUTPUT,
+                "step6_1_output": "FILES_MODIFIED: pdd/main.py\n",
+            },
+            "total_cost": 0.0,
+            "last_model_used": "model",
+            "fix_verify_iteration": 1,
+            "previous_fixes": "",
+            "posted_step_comments": [],
+            "changed_files": ["pdd/main.py"],
+        }
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        meta = dict(_PR_META_REAL_API)
+        patches = (
+            patch(
+                "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+                return_value=(wt, None),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value=meta,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._run_single_step",
+                side_effect=step_side_effect,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_changed_files",
+                return_value=["pdd/main.py"],
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+                return_value=(True, "Pushed 1 file"),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.load_workflow_state",
+                return_value=(persisted_state, "state.json"),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.save_workflow_state",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.console"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path, "use_github_state": True}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "verification skipped" in (msg or "").lower(), msg
+
+
+class TestIssue1215Round10Step5StatusHelper:
+    """Round-10: ``_step5_was_skipped`` re-derives state from a
+    persisted Step 5 output, transparently handling the ``FAILED:``
+    prefix that ``_handle_step_result`` prepends on failed steps."""
+
+    def test_helper_recognises_skipped_in_failed_prefixed_output(self):
+        from pdd.agentic_checkup_orchestrator import _step5_was_skipped
+
+        prefixed = "FAILED: " + STEP5_SKIPPED_OUTPUT
+        assert _step5_was_skipped(prefixed) is True
+
+    def test_helper_returns_false_for_pass_status(self):
+        from pdd.agentic_checkup_orchestrator import _step5_was_skipped
+
+        assert _step5_was_skipped(STEP5_CLEAN_OUTPUT) is False
+
+    def test_helper_returns_false_for_empty_output(self):
+        from pdd.agentic_checkup_orchestrator import _step5_was_skipped
+
+        assert _step5_was_skipped("") is False
+        assert _step5_was_skipped("No structured block here at all.") is False
