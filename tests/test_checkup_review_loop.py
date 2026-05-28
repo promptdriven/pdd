@@ -4376,6 +4376,37 @@ class TestScrubSecretsPatterns:
 
 
 class TestParseHelpers:
+    def test_codex_reviewer_and_fixer_aliases_can_share_openai_provider(self) -> None:
+        from pdd.checkup_review_loop import (
+            ROLE_TO_PROVIDER,
+            ReviewLoopConfig,
+            _resolve_roles,
+            parse_reviewers,
+        )
+
+        reviewers = parse_reviewers("codex,codex-fixer")
+
+        assert reviewers == ("codex", "codex-fixer")
+        assert _resolve_roles(ReviewLoopConfig(reviewers=reviewers)) == (
+            "codex",
+            "codex-fixer",
+            "",
+        )
+        assert ROLE_TO_PROVIDER["codex"] == "openai"
+        assert ROLE_TO_PROVIDER["codex-fixer"] == "openai"
+
+    def test_default_roles_prefer_claude_fixer_with_codex_fallback(self) -> None:
+        from pdd.checkup_review_loop import (
+            DEFAULT_FIXER_FALLBACK,
+            ReviewLoopConfig,
+            _resolve_roles,
+        )
+
+        config = ReviewLoopConfig()
+
+        assert _resolve_roles(config) == ("codex", "claude", "")
+        assert DEFAULT_FIXER_FALLBACK == "codex-fixer"
+
     def test_parse_severity_list_drops_unknowns_and_dedupes(self) -> None:
         from pdd.checkup_review_loop import parse_severity_list
 

@@ -154,7 +154,7 @@ from .prompt import prompt_lint
 @click.option(
     "--fixer-fallback",
     type=str,
-    default=None,
+    default="codex-fixer",
     show_default=False,
     help=(
         "Optional secondary fixer role to invoke once if the primary fixer "

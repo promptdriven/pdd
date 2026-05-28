@@ -58,6 +58,8 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
     "claude": "anthropic",
     "anthropic": "anthropic",
     "codex": "openai",
+    "codex-reviewer": "openai",
+    "codex-fixer": "openai",
     "openai": "openai",
     "chatgpt": "openai",
     "gemini": "google",
@@ -82,6 +84,7 @@ _IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyw", ".pyc", ".pyo", ".so", "
 ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
+DEFAULT_FIXER_FALLBACK = "codex-fixer"
 DEFAULT_REVIEWERS = ("codex", "claude")
 EXTERNAL_STATUS_FINDING_MARKERS: Tuple[str, ...] = (
     "action required",
@@ -1748,7 +1751,12 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
         item = str(reviewer or "").strip().lower()
         if not item:
             continue
-        if item == "chatgpt":
+        item = item.replace("_", "-")
+        if item in {"chatgpt-fixer", "openai-fixer"}:
+            item = "codex-fixer"
+        elif item in {"chatgpt-reviewer", "openai-reviewer"}:
+            item = "codex-reviewer"
+        elif item == "chatgpt":
             item = "codex"
         if item not in ROLE_TO_PROVIDER:
             continue

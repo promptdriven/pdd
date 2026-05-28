@@ -17,6 +17,7 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _extract_json_from_output,
     _find_cli_binary,
+    _has_codex_auth_file,
     _is_permanent_error,
     _run_with_provider,
     _log_agentic_interaction,
@@ -272,6 +273,25 @@ def test_get_available_agents_includes_openai_with_codex_auth_file(
     # No OPENAI_API_KEY, no PDD_CODEX_AUTH_AVAILABLE.
     with patch("pdd.agentic_common._has_codex_auth_file", return_value=True):
         agents = get_available_agents()
+    assert "openai" in agents
+
+
+def test_get_available_agents_includes_openai_with_codex_home_auth_file(
+    mock_env, mock_load_model_data, mock_shutil_which, tmp_path
+):
+    """Cloud jobs stage Codex auth under CODEX_HOME, not the real HOME."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(
+        json.dumps({"tokens": {"refresh_token": "redacted"}}),
+        encoding="utf-8",
+    )
+    mock_env["CODEX_HOME"] = str(codex_home)
+    mock_shutil_which.side_effect = lambda cmd: "/bin/codex" if cmd == "codex" else None
+
+    with patch("pdd.agentic_common._has_codex_auth_file", _has_codex_auth_file):
+        agents = get_available_agents()
+
     assert "openai" in agents
 
 

@@ -531,12 +531,36 @@ def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
     return (
         "Codex CLI authentication failed: the stored ChatGPT/Codex login token "
         "could not be refreshed. Run `codex login` (or `codex login --device-auth`; "
-        "use `codex login --with-api-key` for API-key auth) and retry. "
+        "use `codex login --with-api-key` or set `CODEX_API_KEY` for API-key auth) "
+        "and retry. "
         "To avoid Codex for this run, set `PDD_AGENTIC_PROVIDER=anthropic,google`. "
         "Other ways to disable Codex auto-detection: unset `PDD_CODEX_AUTH_AVAILABLE` "
         "(if set in env), or run `codex logout` / remove `~/.codex/auth.json` "
         "(picked up by `_has_codex_auth_file` since Issue #813 round-6)."
     )
+
+
+def _codex_api_key_available(env: Optional[Dict[str, str]] = None) -> bool:
+    """Return True when env has a Codex exec API-key credential."""
+    if env is None:
+        env = os.environ
+    return bool(
+        (env.get("CODEX_API_KEY") or "").strip()
+        or (env.get("OPENAI_API_KEY") or "").strip()
+    )
+
+
+def _prepare_codex_subprocess_auth(env: Dict[str, str]) -> None:
+    """Bridge PDD's OpenAI API-key env to Codex exec only when needed."""
+    if (env.get("CODEX_API_KEY") or "").strip():
+        return
+    if (env.get("PDD_CODEX_AUTH_AVAILABLE") or "").strip():
+        return
+    if _has_codex_auth_file():
+        return
+    openai_key = (env.get("OPENAI_API_KEY") or "").strip()
+    if openai_key:
+        env["CODEX_API_KEY"] = openai_key
 
 
 # Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
@@ -1100,16 +1124,18 @@ def get_available_agents() -> List[str]:
 
     # 3. OpenAI (Codex)
     # Available if 'codex' CLI exists AND any supported auth path is present:
-    #   - OPENAI_API_KEY env (direct API auth)
+    #   - CODEX_API_KEY env (documented codex exec API-key auth)
+    #   - OPENAI_API_KEY env (PDD's broader OpenAI key, bridged at runtime to
+    #     CODEX_API_KEY only when no cached Codex login is present)
     #   - PDD_CODEX_AUTH_AVAILABLE (cloud waterfall signal)
-    #   - ~/.codex/auth.json with a token (local `codex login` ChatGPT auth).
+    #   - $CODEX_HOME/auth.json or ~/.codex/auth.json with a token.
     # Issue #813 round-6 follow-up: keep the runtime check aligned with
     # `pdd setup`'s detection (`_has_provider_oauth("openai")`) so a user
     # with only the file-based login isn't told Codex is configured during
     # setup but then silently dropped from the runtime preference list.
     has_codex_oauth = _has_codex_auth_file()
     if _find_cli_binary("codex") and (
-        os.environ.get("OPENAI_API_KEY")
+        _codex_api_key_available()
         or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
         or has_codex_oauth
     ):
@@ -1160,18 +1186,22 @@ def _has_codex_auth_file() -> bool:
     ``get_available_agents()`` then drops it from the runtime preference
     list.
     """
-    auth_path = Path.home() / ".codex" / "auth.json"
-    try:
-        data = json.loads(auth_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    return bool(
-        data.get("token")
-        or data.get("tokens")
-        or data.get("OPENAI_API_KEY")
-    )
+    auth_paths: List[Path] = []
+    codex_home = (os.environ.get("CODEX_HOME") or "").strip()
+    if codex_home:
+        auth_paths.append(Path(codex_home) / "auth.json")
+    auth_paths.append(Path.home() / ".codex" / "auth.json")
+
+    for auth_path in auth_paths:
+        try:
+            data = json.loads(auth_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("token") or data.get("tokens") or data.get("OPENAI_API_KEY"):
+            return True
+    return False
 
 # ---------------------------------------------------------------------------
 # OpenCode helpers (auth detection, model resolution, JSONL parsing)
@@ -2960,6 +2990,7 @@ def _run_with_provider(
                 "not this subprocess.[/dim]"
             )
     elif provider == "openai":
+        _prepare_codex_subprocess_auth(env)
         # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
         # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
         # container IS the sandbox boundary, use danger-full-access instead.
