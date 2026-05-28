@@ -8,6 +8,7 @@ from .fix import fix
 from .modify import split, change, update
 from .maintenance import sync, sync_architecture, auto_deps, setup
 from .checkup import checkup
+from .contracts import contracts_cli
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .connect import connect
 from .auth import auth_group
@@ -32,6 +33,7 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(sync)
     cli.add_command(sync_architecture)
     cli.add_command(checkup)
+    cli.add_command(contracts_cli)
     cli.add_command(auto_deps)
     cli.add_command(setup)
     cli.add_command(detect_change)
