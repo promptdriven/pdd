@@ -10,15 +10,17 @@ pdd checkup drift <devunit> --runs 3
 pdd checkup drift <devunit> --model <model>
 pdd checkup drift <devunit> --from-evidence .pdd/evidence/devunits/<devunit>.latest.json
 pdd checkup drift <devunit> --json
+pdd checkup drift <devunit> --max-cost 5.0
 ```
 
 ## What It Checks
 
-- Regenerates code for each run unless `--dry-run` is set.
-- Compares public API and implementation hash across runs.
-- Runs discovered local pytest tests for the generated module.
-- Honors configured story/verify validation statuses from evidence manifests.
+- Regenerates each trial into an isolated temp path (does not overwrite the worktree code file).
+- Compares each candidate's public API and hash against the pre-run baseline artifact.
+- Runs discovered local pytest tests against sandboxed candidate copies.
+- Re-runs configured story and verify checks per candidate when evidence marks them as required.
 - Runs policy checks when policy/evidence is configured.
+- Stops regeneration when `--max-cost` is exceeded.
 
 ## Exit Semantics
 

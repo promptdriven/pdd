@@ -33,6 +33,13 @@ from ..drift_main import run_drift
     help="Do not regenerate; compare current artifact stability only.",
 )
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
+@click.option(
+    "--max-cost",
+    "max_cost_usd",
+    type=float,
+    default=None,
+    help="Maximum USD budget for regeneration and behavioral checks.",
+)
 def drift_cmd(
     devunit: str,
     runs: int,
@@ -41,6 +48,7 @@ def drift_cmd(
     code_file: Optional[str],
     dry_run: bool,
     as_json: bool,
+    max_cost_usd: Optional[float],
 ) -> None:
     """Check regeneration stability for a PDD dev unit.
 
@@ -60,6 +68,7 @@ def drift_cmd(
             from_evidence=Path(from_evidence) if from_evidence else None,
             code_file=Path(code_file) if code_file else None,
             dry_run=dry_run,
+            max_cost_usd=max_cost_usd,
         )
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -74,6 +83,7 @@ def drift_cmd(
         click.echo(f"Stories: {payload['stories']}")
         click.echo(f"Verify: {payload['verify']}")
         click.echo(f"Policy: {payload['policy']}")
+        click.echo(f"Total cost: ${payload['total_cost_usd']:.4f}")
         click.echo("\nOutput drift:")
         api_status = "unchanged" if report.public_api_unchanged else "changed"
         impl_status = "changed" if report.implementation_changed else "unchanged"

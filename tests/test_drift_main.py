@@ -6,7 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from pdd.drift_main import run_drift
+import pytest
+
+from pdd.drift_main import RunSnapshot, _public_api, run_drift
 from pdd.evidence_store import sha256_file
 
 
@@ -23,12 +25,71 @@ def _write_fixture(project: Path) -> tuple[Path, Path]:
     return prompt, code
 
 
-def test_drift_regenerates_even_with_one_run(tmp_path: Path) -> None:
+def test_drift_does_not_mutate_baseline_code_file(tmp_path: Path) -> None:
+    _prompt, code = _write_fixture(tmp_path)
+    original = code.read_bytes()
+
+    def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("def mutated(amount: int) -> int:\n    return amount\n", encoding="utf-8")
+        return 0.01
+
+    with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
+        with patch("pdd.drift_main._evaluate_candidate") as mock_eval:
+            mock_eval.return_value = (
+                RunSnapshot(1, "x", ["def mutated"], True, True, True, True),
+                0.0,
+            )
+            run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
+
+    assert code.read_bytes() == original
+
+
+def test_drift_public_api_change_fails_against_baseline(tmp_path: Path) -> None:
     _write_fixture(tmp_path)
-    with patch("pdd.drift_main._regenerate_code") as mock_regenerate:
-        report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
-    assert report.status == "stable"
-    mock_regenerate.assert_called_once()
+
+    def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("class RefundService:\n    pass\n", encoding="utf-8")
+        return 0.0
+
+    with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
+        with patch("pdd.drift_main._evaluate_candidate") as mock_eval:
+            mock_eval.return_value = (
+                RunSnapshot(1, "b", ["class RefundService"], True, True, True, True),
+                0.0,
+            )
+            report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
+
+    assert report.baseline_public_api == ["def refund_payment"]
+    assert not report.public_api_unchanged
+    assert report.status == "unstable"
+
+
+def test_drift_regenerates_into_isolated_paths(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+    seen_outputs: list[Path] = []
+
+    def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
+        seen_outputs.append(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            "def refund_payment(amount: int) -> int:\n    return amount\n",
+            encoding="utf-8",
+        )
+        return 0.0
+
+    with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
+        with patch("pdd.drift_main._evaluate_candidate") as mock_eval:
+            mock_eval.return_value = (
+                RunSnapshot(1, "a", ["def refund_payment"], True, True, True, True),
+                0.0,
+            )
+            run_drift("refund_payment", tmp_path, runs=2, dry_run=False)
+
+    assert len(seen_outputs) == 2
+    assert all("candidates" in path.as_posix() for path in seen_outputs)
+    assert all(path.name == "refund_payment.py" for path in seen_outputs)
 
 
 def test_drift_uses_best_output_from_manifest(tmp_path: Path) -> None:
@@ -47,7 +108,7 @@ def test_drift_uses_best_output_from_manifest(tmp_path: Path) -> None:
                     {"path": str(extra.relative_to(tmp_path)), "sha256": sha256_file(extra)},
                     {"path": str(code.relative_to(tmp_path)), "sha256": sha256_file(code)},
                 ],
-                "validation": {"unit_tests": "pass", "detect_stories": "pass", "verify": "pass"},
+                "validation": {"unit_tests": "pass"},
             },
             indent=2,
         )
@@ -64,15 +125,23 @@ def test_drift_uses_best_output_from_manifest(tmp_path: Path) -> None:
     assert report.code_path.endswith("refund_payment.py")
 
 
-def test_drift_behavior_unstable_when_any_run_fails(tmp_path: Path) -> None:
+def test_drift_behavior_unstable_when_tests_fail(tmp_path: Path) -> None:
     _write_fixture(tmp_path)
-    with patch("pdd.drift_main._run_pytest", side_effect=[True, False]):
-        report = run_drift("refund_payment", tmp_path, runs=2, dry_run=True)
+
+    def _failing_eval(*_args, **_kwargs):
+        return (
+            RunSnapshot(1, "a", ["def refund_payment"], False, True, True, True),
+            0.0,
+        )
+
+    with patch("pdd.drift_main._evaluate_candidate", side_effect=_failing_eval):
+        report = run_drift("refund_payment", tmp_path, runs=1, dry_run=True)
+
     assert report.status == "unstable"
     assert not report.behavior_unchanged
 
 
-def test_drift_fails_when_configured_story_verify_policy_fail(tmp_path: Path) -> None:
+def test_drift_reruns_stories_when_configured(tmp_path: Path) -> None:
     prompt, code = _write_fixture(tmp_path)
     manifest = tmp_path / ".pdd" / "evidence" / "devunits" / "refund_payment.latest.json"
     manifest.parent.mkdir(parents=True)
@@ -82,23 +151,54 @@ def test_drift_fails_when_configured_story_verify_policy_fail(tmp_path: Path) ->
                 "schema_version": 1,
                 "prompt": {"path": str(prompt.relative_to(tmp_path))},
                 "outputs": [{"path": str(code.relative_to(tmp_path)), "sha256": sha256_file(code)}],
-                "validation": {"unit_tests": "pass", "detect_stories": "failed", "verify": "failed"},
+                "validation": {"detect_stories": "pass"},
             },
             indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
-    with patch("pdd.drift_main.run_gate_policy", return_value=SimpleNamespace(passed=False)):
-        report = run_drift(
-            "refund_payment",
-            tmp_path,
-            runs=1,
-            dry_run=True,
-            from_evidence=manifest,
-        )
+
+    with patch("pdd.drift_main._run_stories_check", return_value=(False, 0.5)) as mock_stories:
+        with patch("pdd.drift_main._run_pytest_for_candidate", return_value=True):
+            report = run_drift(
+                "refund_payment",
+                tmp_path,
+                runs=1,
+                dry_run=True,
+                from_evidence=manifest,
+            )
+
+    mock_stories.assert_called_once()
     assert report.status == "unstable"
-    snap = report.snapshots[0]
-    assert not snap.stories_passed
-    assert not snap.verify_passed
-    assert not snap.policy_passed
+    assert not report.snapshots[0].stories_passed
+
+
+def test_drift_max_cost_stops_regeneration(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+
+    with patch("pdd.drift_main._regenerate_code", return_value=2.0):
+        with patch("pdd.drift_main._evaluate_candidate") as mock_eval:
+            mock_eval.return_value = (
+                RunSnapshot(1, "a", ["def refund_payment"], True, True, True, True),
+                0.0,
+            )
+            report = run_drift(
+                "refund_payment",
+                tmp_path,
+                runs=3,
+                dry_run=False,
+                max_cost_usd=1.0,
+            )
+
+    assert report.cost_budget_exceeded
+    assert report.status == "unstable"
+    assert len(report.snapshots) == 0
+
+
+def test_public_api_detects_renamed_symbol(tmp_path: Path) -> None:
+    path = tmp_path / "mod.py"
+    path.write_text("def refund_payment() -> None:\n    pass\n", encoding="utf-8")
+    assert _public_api(path) == ["def refund_payment"]
+    path.write_text("class RefundService:\n    pass\n", encoding="utf-8")
+    assert _public_api(path) == ["class RefundService"]
