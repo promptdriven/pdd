@@ -156,7 +156,7 @@ def run_claude_simplify_command(
     verbose: bool,
     quiet: bool,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> Tuple[bool, str, float, str]:
+) -> Tuple[bool, str, float, str]:  # pylint: disable=too-many-arguments
     """Invoke Claude Code ``/simplify`` directly (not via ``run_agentic_task``)."""
     env = os.environ.copy()
     env["TERM"] = "dumb"
@@ -617,7 +617,7 @@ def _write_evidence(
     checks: Dict[str, str],
     attempts: Sequence[SimplifyCandidate],
     selected_attempt: Optional[int],
-) -> Path:
+) -> Path:  # pylint: disable=too-many-arguments
     evidence_dir = repo_root / ".pdd" / "evidence" / "checkups"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     out_path = evidence_dir / f"simplify-{run_id}.json"
@@ -685,7 +685,7 @@ def _render_summary(
     preview_only: bool,
     attempts: int,
     selected_attempt: Optional[int],
-) -> List[str]:
+) -> List[str]:  # pylint: disable=too-many-arguments
     lines = ["PDD Checkup: simplify (Claude Code /simplify)", ""]
     if preview_only:
         lines.append("Preview only - pass --apply to run Claude Code /simplify.")
@@ -743,7 +743,7 @@ def run_checkup_simplify(
     no_format: bool,
     quiet: bool,
     verbose: bool,
-) -> SimplifyRunResult:
+) -> SimplifyRunResult:  # pylint: disable=too-many-arguments
     """Preview targets or apply the best acceptable isolated `/simplify` candidate."""
     cwd = Path.cwd()
     repo_root = resolve_simplify_repo_root(path or cwd)

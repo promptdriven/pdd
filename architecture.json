@@ -9377,6 +9377,122 @@
     }
   },
   {
+    "reason": "Parses prompt contract sections into a deterministic IR.",
+    "description": "Extracts contract_rules, coverage, waivers, vocabulary, capabilities, and related metadata from .prompt files and stories for downstream deterministic checks.",
+    "dependencies": [],
+    "priority": 239,
+    "filename": "contract_ir_python.prompt",
+    "filepath": "pdd/contract_ir.py",
+    "tags": [
+      "module",
+      "python",
+      "contracts"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_prompt_contracts",
+            "signature": "(path: Path) -> PromptContractIR",
+            "returns": "PromptContractIR"
+          },
+          {
+            "name": "extract_sections",
+            "signature": "(text: str) -> dict",
+            "returns": "dict"
+          },
+          {
+            "name": "extract_rules",
+            "signature": "(text: str) -> list[Rule]",
+            "returns": "list[Rule]"
+          },
+          {
+            "name": "extract_waivers",
+            "signature": "(text: str) -> list[Waiver]",
+            "returns": "list[Waiver]"
+          },
+          {
+            "name": "iter_covers_refs",
+            "signature": "(story_text: str) -> \"Iterator[str]\"",
+            "returns": "Iterator[str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Deterministic contract authoring checks for prompt and story artifacts.",
+    "description": "Implements structural lint for contract sections (modal verbs, IDs, coverage refs, waivers) and validates MUST-NOT coverage using leading coverage entries only.",
+    "dependencies": [
+      "contract_ir_python.prompt"
+    ],
+    "priority": 240,
+    "filename": "contract_check_python.prompt",
+    "filepath": "pdd/contract_check.py",
+    "tags": [
+      "module",
+      "python",
+      "contracts"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "check_prompt",
+            "signature": "(path, *, strict: bool = False) -> ContractResult",
+            "returns": "ContractResult"
+          },
+          {
+            "name": "check_directory",
+            "signature": "(directory, *, strict: bool = False) -> list[ContractResult]",
+            "returns": "list[ContractResult]"
+          },
+          {
+            "name": "check_stories",
+            "signature": "(stories_dir, prompts_dir, *, strict: bool = False) -> list[ContractResult]",
+            "returns": "list[ContractResult]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Exposes deterministic contract checks via Click CLI.",
+    "description": "Implements `pdd contracts check` for running contract_check over files/directories with optional JSON output.",
+    "dependencies": [
+      "contract_check_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "commands/contracts_python.prompt",
+    "filepath": "pdd/commands/contracts.py",
+    "tags": [
+      "module",
+      "python",
+      "commands",
+      "contracts"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
     "reason": "Selects bounded source-code targets for the Claude Code simplify candidate workflow while excluding generated and ignored artifacts.",
     "description": "Discovers source files eligible for pdd checkup simplify from a path, staged changes, or a git baseline diff.",
     "dependencies": [],

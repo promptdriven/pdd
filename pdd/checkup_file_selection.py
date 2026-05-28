@@ -79,8 +79,22 @@ def _repo_root(start: Path) -> Path:
     current = start.resolve()
     if current.is_file():
         current = current.parent
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(current), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        result = None
+    if result is not None and result.returncode == 0:
+        root_text = (result.stdout or "").strip()
+        if root_text:
+            return Path(root_text).resolve()
     while True:
-        if (current / ".git").is_dir():
+        git_marker = current / ".git"
+        if git_marker.is_dir() or git_marker.is_file():
             return current
         parent = current.parent
         if parent == current:

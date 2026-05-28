@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from pdd.checkup_file_selection import discover_simplify_targets
+from pdd.checkup_file_selection import discover_simplify_targets, resolve_simplify_repo_root
 from pdd.checkup_simplify import (
     SimplifyVerifyCommands,
     _build_simplify_slash_message,
@@ -684,6 +684,33 @@ def test_discover_respects_pyproject_defaults_from_subdirectory(
     )
 
     assert len(result.files_analyzed) == 2
+
+
+def test_resolve_repo_root_from_worktree_subdirectory(tmp_path: Path) -> None:
+    _init_git_repo(tmp_path)
+    module = tmp_path / "pkg" / "sample.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree_path), "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    nested = worktree_path / "pkg"
+
+    resolved = resolve_simplify_repo_root(nested)
+
+    assert resolved == worktree_path.resolve()
 
 
 def test_apply_multiple_attempts_requires_verify(tmp_path: Path, monkeypatch) -> None:
