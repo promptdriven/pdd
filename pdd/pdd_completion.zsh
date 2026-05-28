@@ -446,9 +446,31 @@ _pdd_pytest_output() {
     '*:filename:_files'
 }
 
+# checkup simplify
+# Usage: pdd [GLOBAL OPTIONS] checkup simplify [OPTIONS]
+_pdd_checkup_simplify() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--apply[Run simplify and apply a selected candidate]' \
+    '--engine[Simplify engine]:engine:(claude codex gemini opencode auto)' \
+    '--since[Use a Git ref as the selected diff baseline]:ref:' \
+    '--staged[Limit candidates to staged paths]' \
+    '--max-files[Maximum selected source files]:count:' \
+    '--attempts[Independent simplify candidates to sample]:count:' \
+    '--evidence[Write candidate evidence report]' \
+    '--verify[Verify candidates before selection]' \
+    '--no-format[Skip formatting during candidate verification]' \
+    '*:path:_files'
+}
+
 # checkup
 # Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
 _pdd_checkup() {
+  if [[ $words[3] == simplify ]]; then
+    _pdd_checkup_simplify
+    return
+  fi
+
   _arguments -s \
     $_pdd_global_opts \
     '--validate-arch-includes[Validate architecture includes]' \

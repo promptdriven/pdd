@@ -55,6 +55,9 @@ Also see the Prompt‑Driven Development Doctrine for core principles and practi
 
 For pre-merge prompt and user-story quality (vague terms, vocabulary, optional LLM review), see [docs/prompt_lint.md](docs/prompt_lint.md).
 
+For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
+
+For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
 ## Installation
 
 ### Prerequisites for macOS
@@ -2795,6 +2798,14 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
 
+`pdd checkup simplify` is a local subcommand for candidate cleanup rather than
+a PR review gate. By default it calls Claude Code's bundled `/simplify` skill; use
+`--engine codex|gemini|opencode|auto` to run the same workflow through PDD's
+agentic providers instead. It operates over selected
+changed files. With `--attempts N`, PDD runs independent isolated candidates
+from the same input and copies back the smallest candidate that passes
+`--verify` by changed-file count; see [docs/checkup_simplify.md](docs/checkup_simplify.md).
+
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
@@ -2822,7 +2833,7 @@ Options:
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
 - `--continue-on-reviewer-limit`: Report provider, rate, context-window, timeout, auth, network, sandbox, permission, and non-zero-exit reviewer failures as `degraded` instead of `failed`. Degraded reviewers are still not clean unless a configured fallback reviewer completes successfully and takes over as the active reviewer.
 - `--fallback-reviewer-on-failure`: When the primary reviewer ends in `failed` or `missing` (not `degraded`), run a second review pass using the fixer's identity as a fallback reviewer. On a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, while the primary's original failure detail is preserved in the `### Reviewer Diagnostics` subsection of the final report with a `superseded_by_fallback` marker. Off by default to preserve existing CI expectations.
-- `--no-gates`: Disable the deterministic local gates (`git diff --check` against the PR range, `prettier --check`, `npx --no-install tsc --noEmit`, a non-mutating Python syntax check via the builtin `compile()`, `ruff check`/`black --check`/`mypy`) that otherwise run before any `clean` verdict in `--review-loop`. The Python syntax gate routes through `compile()` rather than `python -m py_compile` so it never writes `__pycache__/*.pyc` into the worktree; the TypeScript gate uses `--no-install` so it never hits the npm registry. Gate subprocesses resolve `git` and tool binaries through a sanitized PATH so a PR cannot provide worktree-local shims via `PATH=.:$PATH`. Default: gates are enabled. The flag exists only as a diagnostic/emergency escape hatch — under normal operation a failing gate must block the PR from being declared clean even when the LLM reviewer says clean. Issue #1092.
+- `--no-gates`: Disable the deterministic local gates (`git diff --check` against the PR range, `prettier --check`, `npx --no-install tsc --noEmit`, a non-mutating Python syntax check via the builtin `compile()`, `ruff check`/`ruff format --check`/`black --check`/`mypy`) that otherwise run before any `clean` verdict in `--review-loop`. **`ruff format --check`** is opt-in: it fires only when **either** `[tool.ruff.format]` is declared in `pyproject.toml`, **or** a literal `ruff format` / `ruff-format` reference appears in `.pre-commit-config.yaml`, `cloudbuild-*-ci.yaml`, or `.github/workflows/*.{yml,yaml}` (canonical pre-commit hook id matches the hyphenated form). Touched CI files are excluded from the signal scan to defend against PR-poisoned opt-in. The Python syntax gate routes through `compile()` rather than `python -m py_compile` so it never writes `__pycache__/*.pyc` into the worktree; the TypeScript gate uses `--no-install` so it never hits the npm registry. Gate subprocesses resolve `git` and tool binaries through a sanitized PATH so a PR cannot provide worktree-local shims via `PATH=.:$PATH`. Default: gates are enabled. The flag exists only as a diagnostic/emergency escape hatch — under normal operation a failing gate must block the PR from being declared clean even when the LLM reviewer says clean. Issue #1092.
 - `--gate-timeout FLOAT`: Per-gate timeout in seconds (default: 60). Applies to every discovered gate; the runner kills the subprocess and surfaces the gate as a `runner-error` blocker finding when the timeout fires.
 - `--gate-allow GATE`: Repeatable allowlist token forwarded to `discover_gates` as `extra_allow`. Reserved for future versions to opt extra gate names into the discovery set; the current default discovery is allowlist-only and the argument is accepted but does not widen it. Useful primarily as a forward-compat plumbing hook for CI configurations.
 
@@ -2905,6 +2916,9 @@ pdd checkup \
   --issue https://github.com/myorg/myrepo/issues/42 \
   --review-loop \
   --review-only
+
+# Sample Claude Code /simplify candidates from a branch diff and apply a verified winner
+pdd checkup simplify --since origin/main --apply --attempts 3 --verify --evidence
 ```
 
 ### 18. connect
