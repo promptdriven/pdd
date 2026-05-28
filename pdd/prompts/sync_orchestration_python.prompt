@@ -398,7 +398,7 @@ Handle command results in multiple formats:
 - For test operation failure: if `result[4]` (error_message) is non-empty, append it to the errors list so it reaches the sync log
 - For crash/fix operations returning tuples: extract error message from `result[1]` on failure and append to errors list
 - For `ArchitectureConformanceError` exception paths, extract `total_cost` and `model_name` from the exception into a result-shaped dict before logging so failed conformance attempts do not report `$0.00`.
-- Save fingerprint after successful operations regardless of format
+- Save fingerprint after successful operations regardless of format, **except** for no-op fix operations. A no-op fix is detected when `operation == 'fix'` and `actual_cost == 0.0` and `model_name` is empty/`'none'`/`'unknown'`/`'n/a'`. This check **must run before** `_save_fingerprint_atomic` so that a logical failure (consecutive no-op breaker) does not persist stale "fix completed" state. Do not call `_save_fingerprint_atomic` for no-op fixes.
 
 ### Non-Python Language Handling and Agentic Mode
 

@@ -142,6 +142,7 @@ _PDDRC_DEFAULTS_KEYS = {
     "budget",
     "max_attempts",
     "outputs",
+    "auto_deps_csv_path",
 }
 
 
@@ -539,6 +540,7 @@ def _resolve_config_hierarchy(
         'temperature': None,
         'budget': None,
         'max_attempts': None,
+        'auto_deps_csv_path': None,
     }
 
     for config_key, env_var in config_keys.items():

@@ -5,6 +5,7 @@ import click
 from pathlib import Path
 from unittest.mock import patch, ANY
 import os
+import warnings
 
 # Mock generate_output_paths before importing construct_paths if it's needed globally
 # Or mock within each test as currently done.
@@ -726,14 +727,12 @@ def test_load_pddrc_warning_message_format(tmp_path):
     assert "pdd setup" in msg.lower()
 
 
-def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
-    """Issue #1198 + PR #1217 review feedback: auto_deps_csv_path is prescribed
-    by pdd/templates/generic/generate_pddrc_YAML.prompt but never consumed by
-    _resolve_config_hierarchy. Validator should surface it as unknown until the
-    wiring is added (separate issue). If this test starts failing, either the
-    wiring landed and the key should move into _PDDRC_DEFAULTS_KEYS with
-    regression coverage proving .pddrc affects the auto-deps CSV path, or the
-    template re-introduced the prescription and needs to be cleaned up."""
+def test_load_pddrc_accepts_auto_deps_csv_path(tmp_path):
+    """Issue #1198 + PR #1238 fix: auto_deps_csv_path is prescribed by
+    pdd/templates/generic/generate_pddrc_YAML.prompt and is now wired into
+    _resolve_config_hierarchy and _PDDRC_DEFAULTS_KEYS. The validator must
+    accept it without warning so that PDD-generated configs don't immediately
+    tell users to regenerate their config."""
     pddrc = tmp_path / ".pddrc"
     pddrc.write_text(
         'version: "1.0"\n'
@@ -743,8 +742,9 @@ def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
         '      default_language: python\n'
         '      auto_deps_csv_path: "project_dependencies.csv"\n'
     )
-    with pytest.warns(UserWarning, match="auto_deps_csv_path"):
-        _load_pddrc_config(pddrc)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _load_pddrc_config(pddrc)  # must not raise
 
 
 def test_load_pddrc_warns_on_prompt_path(tmp_path):
