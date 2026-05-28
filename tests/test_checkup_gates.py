@@ -912,6 +912,158 @@ class TestDiscoverGates:
         assert "src/code.py" in cmd
         assert "scripts/run.py" in cmd
 
+    def test_workflow_signal_ignores_pre_commit_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-11 finding 1: when a GitHub Actions workflow runs
+        ``ruff format --check``, the pre-commit hook's ``files: ^src/``
+        scope must NOT filter the gate — the workflow may check files
+        outside that scope (e.g. ``tests/``). Pre-fix applied the
+        pre-commit scope unconditionally for all CI-signal opt-ins.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "code.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # Pre-commit hook scoped to src/ only.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        files: ^src/\n",
+            encoding="utf-8",
+        )
+        # GitHub Actions workflow also runs ruff format (covers all Python).
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text(
+            "jobs:\n  lint:\n    steps:\n      - run: ruff format --check .\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("src/code.py", "tests/a.py"),
+            )
+        by_name = {g.name: g for g in gates}
+        assert "ruff-format" in by_name
+        cmd = by_name["ruff-format"].cmd
+        # Workflow signal → no pre-commit scope filtering → both files present.
+        assert "src/code.py" in cmd
+        assert "tests/a.py" in cmd
+
+    def test_skips_workflow_yaml_job_name_false_positive(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-11 finding 2: a workflow YAML key like
+        ``name: ruff-format migration`` must NOT trigger the
+        ruff-format gate — only actual ``ruff format`` command
+        invocations in ``run:`` steps count. Pre-fix used
+        _RUFF_FORMAT_CI_PATTERN (allows hyphens) for workflow files
+        too, causing false positives on job or step names.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # Workflow has a step named "ruff-format migration" but does NOT
+        # actually run ruff format.
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text(
+            "jobs:\n"
+            "  migrate:\n"
+            "    steps:\n"
+            "      - name: ruff-format migration\n"
+            "        run: echo done\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        # Job name match must NOT trigger the gate.
+        assert "ruff-format" not in names
+
+    def test_skips_ruff_format_when_hook_stages_made_manual(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-11 finding 3: a PR that adds ``stages: [manual]``
+        to the ``id: ruff-format`` hook changes its semantics (it no
+        longer runs on normal pre-commit) without touching
+        ``files:``/``exclude:``. The full-hook-config comparison must
+        detect this and treat the signal as PR-modified (gate suppressed).
+        """
+        import subprocess
+
+        from pdd.checkup_gates import discover_gates
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=tmp_path, check=True, capture_output=True
+            )
+
+        _git_init(tmp_path)
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # BASE: hook runs on every pre-commit invocation.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        # PR: adds stages: [manual] — hook no longer runs automatically.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n"
+            "        stages: [manual]\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "make ruff-format manual-only")
+        import shutil as _shutil
+        _real_which = _shutil.which
+
+        def _which_ruff_only(name: str, **kw: object) -> object:
+            if name == "ruff":
+                return "/usr/bin/ruff"
+            return _real_which(name, **kw)
+
+        with patch(
+            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".pre-commit-config.yaml"),
+                base_ref="HEAD~1",
+            )
+        names = {g.name for g in gates}
+        # Hook config changed (stages added) → treat as PR-modified → no gate.
+        assert "ruff-format" not in names
+
     def test_emits_ruff_format_when_ci_signal_present_and_no_tool_ruff_section(
         self, tmp_path: Path
     ) -> None:

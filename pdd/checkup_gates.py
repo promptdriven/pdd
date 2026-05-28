@@ -1464,25 +1464,27 @@ def _discover_python_gates(
                 or path.startswith(".github/workflows/")
             ):
                 ci_touched_paths.add(path)
-        ci_signaled = _ruff_format_signaled_by_ci(
+        pre_commit_signaled, workflow_signaled = _ruff_format_signaled_by_ci(
             worktree,
             exclude_paths=ci_touched_paths,
             base_ref=base_ref,
         )
+        ci_signaled = pre_commit_signaled or workflow_signaled
         if _tool_section_present("ruff.format") or ci_signaled:
-            if _tool_section_present("ruff.format"):
-                # Codex pass-9 finding 1: pyproject.toml ``[tool.ruff.format]``
-                # opts in all Python files. The pre-commit hook's
-                # ``files:``/``exclude:`` scope belongs to CI's pre-commit
-                # step, NOT to the pyproject setting. Applying it here would
-                # silently skip files that ``ruff format`` (invoked directly)
-                # would check, re-opening the CI-parity gap (#1433 Bug #2).
+            if _tool_section_present("ruff.format") or workflow_signaled:
+                # Codex pass-9 finding 1 + pass-11 finding 1:
+                # - pyproject.toml ``[tool.ruff.format]`` opts in ALL Python
+                #   files; the pre-commit hook scope is irrelevant.
+                # - A workflow/CloudBuild signal also means no pre-commit
+                #   scope filter: the workflow runs ``ruff format`` on its own
+                #   file set, which may differ from the pre-commit hook's
+                #   ``files:``/``exclude:`` pattern. Applying the hook scope
+                #   here would silently skip files the workflow checks.
                 ruff_format_py = list(changed_py)
             else:
-                # CI-signal opt-in: filter by the pre-commit hook scope so
-                # the gate only checks files the configured hook would see
-                # (codex pass-8 finding 3). A file is kept when it falls
-                # within ANY declared hook's scope (pass-9 finding 3 union).
+                # Pre-commit-only signal: filter by the hook scope so the
+                # gate only checks files the configured hook would see
+                # (codex pass-8 finding 3, union across all hooks pass-9/10).
                 ruff_format_py = _filter_changed_py_for_ruff_format(
                     worktree, changed_py
                 )
@@ -2229,20 +2231,28 @@ def _sanitized_path(worktree: Path) -> str:
 # while ``\b`` word boundaries keep ``ruff_format`` / ``ruff.format``
 # substrings (file paths, attribute names) from triggering false
 # positives.
+# Used ONLY for .pre-commit-config.yaml where the hook id form is canonical.
 _RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
 
+# Codex pass-11 finding 2: workflow/CloudBuild YAML can contain
+# non-executable text like ``name: ruff-format migration`` that
+# matches _RUFF_FORMAT_CI_PATTERN (which allows hyphens). For
+# workflow files we require the space-separated command form
+# ``ruff format`` — actual shell invocations in ``run:`` steps
+# use spaces, not hyphens, so this eliminates the job-name
+# false positive without missing real CI invocations.
+_RUFF_FORMAT_CMD_PATTERN = re.compile(r"\bruff\s+format\b")
 
-def _parse_ruff_format_scopes_from_text(
-    text: str,
-) -> List[Tuple[Optional[str], Optional[str]]]:
-    """Return raw ``(files_pat, exclude_pat)`` string pairs for ALL
-    ``id: ruff-format`` hooks found in YAML text.
 
-    Shared by ``_ruff_format_pre_commit_scope`` (scope filtering) and
-    ``_file_has_unchanged_ruff_format_signal`` (scope-change comparison).
+def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
+    """Return the full hook-dict for every ``id: ruff-format`` hook in
+    YAML text, with top-level ``files:``/``exclude:`` defaults merged in.
+
+    Shared by ``_parse_ruff_format_scopes_from_text`` (scope filtering)
+    and ``_file_has_unchanged_ruff_format_signal`` (full-config comparison
+    for codex pass-11 finding 3 — stages/args changes now detected).
+
     Returns an empty list on parse error or when no such hook exists.
-    Hook-level ``files:``/``exclude:`` override the top-level defaults
-    for that hook.
     """
     import yaml  # local import to keep top-of-module imports tight
 
@@ -2259,7 +2269,7 @@ def _parse_ruff_format_scopes_from_text(
     repos = data.get("repos")
     if not isinstance(repos, list):
         return []
-    scopes: List[Tuple[Optional[str], Optional[str]]] = []
+    hooks_out: List[Dict[str, object]] = []
     for repo in repos:
         if not isinstance(repo, dict):
             continue
@@ -2269,19 +2279,34 @@ def _parse_ruff_format_scopes_from_text(
         for hook in hooks:
             if not isinstance(hook, dict) or hook.get("id") != "ruff-format":
                 continue
-            hook_files = (
-                hook.get("files") if isinstance(hook.get("files"), str) else None
-            )
-            hook_exclude = (
-                hook.get("exclude")
-                if isinstance(hook.get("exclude"), str)
-                else None
-            )
-            scopes.append((
-                hook_files if hook_files is not None else top_files,
-                hook_exclude if hook_exclude is not None else top_exclude,
-            ))
-    return scopes
+            merged: Dict[str, object] = dict(hook)
+            if "files" not in merged and top_files is not None:
+                merged["files"] = top_files
+            if "exclude" not in merged and top_exclude is not None:
+                merged["exclude"] = top_exclude
+            hooks_out.append(merged)
+    return hooks_out
+
+
+def _parse_ruff_format_scopes_from_text(
+    text: str,
+) -> List[Tuple[Optional[str], Optional[str]]]:
+    """Return raw ``(files_pat, exclude_pat)`` string pairs for ALL
+    ``id: ruff-format`` hooks found in YAML text.
+
+    Delegates to ``_parse_ruff_format_hooks_from_text`` and extracts
+    only the scope fields. Returns an empty list on parse error or when
+    no such hook exists.
+    """
+    result: List[Tuple[Optional[str], Optional[str]]] = []
+    for hook in _parse_ruff_format_hooks_from_text(text):
+        files_pat = hook.get("files")
+        exclude_pat = hook.get("exclude")
+        result.append((
+            files_pat if isinstance(files_pat, str) else None,
+            exclude_pat if isinstance(exclude_pat, str) else None,
+        ))
+    return result
 
 
 def _ruff_format_pre_commit_scope(
@@ -2428,8 +2453,9 @@ def _file_has_unchanged_ruff_format_signal(
     worktree: Path, rel_path: str, base_ref: Optional[str]
 ) -> bool:
     """Return True if ``rel_path`` carries the ruff-format signal at
-    BOTH ``base_ref`` and the worktree version, AND the pre-commit hook
-    scope (``files:``/``exclude:``) is unchanged between those versions.
+    BOTH ``base_ref`` and the worktree version, AND (for pre-commit
+    configs) the full hook configuration is unchanged between those
+    versions.
 
     Codex pass-8 finding 2: distinguishes a PR-introduced signal from an
     unchanged one. Pre-fix whole-file exclusion missed unchanged signals in
@@ -2437,34 +2463,53 @@ def _file_has_unchanged_ruff_format_signal(
 
     Codex pass-9 finding 2: pre-fix only compared the regex presence; a PR
     could narrow ``files:``/``exclude:`` to suppress the gate against its
-    own files even when ``id: ruff-format`` was already present. Now also
-    requires the set of ``(files_pat, exclude_pat)`` pairs to be identical
-    between base and HEAD. If the scope set changed the function returns
-    False (fail-open: no gate from a file where the PR touched the scope).
+    own files. Added scope-set comparison.
+
+    Codex pass-11 finding 2 + 3:
+    - Workflow files use ``_RUFF_FORMAT_CMD_PATTERN`` (space only) so a
+      YAML key like ``name: ruff-format migration`` does not trigger a
+      false signal.
+    - For ``.pre-commit-config.yaml``, compare the full hook dicts (not
+      just files/exclude) so a PR that adds ``stages: [manual]`` to the
+      hook is also detected as a change and the signal is not counted.
 
     Fail-open: missing ``base_ref``, unresolvable git read, or missing
     signal at either version all return False.
     """
+    is_pre_commit = (rel_path == ".pre-commit-config.yaml")
+    signal_pat = (
+        _RUFF_FORMAT_CI_PATTERN if is_pre_commit else _RUFF_FORMAT_CMD_PATTERN
+    )
     try:
         post_text = (worktree / rel_path).read_text(
             encoding="utf-8", errors="replace"
         )
     except OSError:
         return False
-    if not _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(post_text)):
+    if not signal_pat.search(_strip_yaml_comments(post_text)):
         return False
     if not base_ref:
         return False
     pre_text = _git_show_text(worktree, base_ref, rel_path)
     if pre_text is None:
         return False
-    if not _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(pre_text)):
+    if not signal_pat.search(_strip_yaml_comments(pre_text)):
         return False
-    # Codex pass-9 finding 2: also require scope unchanged.
-    pre_scopes = set(_parse_ruff_format_scopes_from_text(pre_text))
-    post_scopes = set(_parse_ruff_format_scopes_from_text(post_text))
-    if pre_scopes != post_scopes:
-        return False
+    # Codex pass-11 finding 3: for pre-commit configs, compare full hook
+    # configs (including stages/args/always_run) so behavioural changes
+    # beyond files/exclude are detected. Serialise each hook dict to a
+    # stable JSON string for hashing.
+    if is_pre_commit:
+        pre_hooks = {
+            json.dumps(h, sort_keys=True, default=str)
+            for h in _parse_ruff_format_hooks_from_text(pre_text)
+        }
+        post_hooks = {
+            json.dumps(h, sort_keys=True, default=str)
+            for h in _parse_ruff_format_hooks_from_text(post_text)
+        }
+        if pre_hooks != post_hooks:
+            return False
     return True
 
 
@@ -2473,8 +2518,15 @@ def _ruff_format_signaled_by_ci(
     *,
     exclude_paths: Optional[Set[str]] = None,
     base_ref: Optional[str] = None,
-) -> bool:
-    """Return True if any CI / pre-commit config in ``worktree`` runs ``ruff format``.
+) -> Tuple[bool, bool]:
+    """Return ``(pre_commit_signaled, workflow_signaled)`` for ruff format.
+
+    Splitting the signal type lets the gate decide whether to apply the
+    pre-commit hook's ``files:``/``exclude:`` scope (codex pass-11
+    finding 1): the scope belongs to the pre-commit step, not to a
+    GitHub Actions / CloudBuild workflow invocation. When a workflow also
+    signals ``ruff format``, the scope filter must be skipped because the
+    workflow may check files outside the pre-commit hook's declared scope.
 
     Codex review pass-6 finding 3: a project may run ``ruff format
     --check`` in CI using Ruff's default formatter config (no
@@ -2500,8 +2552,15 @@ def _ruff_format_signaled_by_ci(
     before the regex scan so a ``# TODO: enable ruff format`` or
     similar mention in a comment does NOT trigger the signal.
 
-    Fail-OPEN: any IO error returns ``False`` so the absence of a
-    signal never blocks clean verdicts.
+    Codex pass-11 finding 2: workflow/CloudBuild files use
+    ``_RUFF_FORMAT_CMD_PATTERN`` (space only) rather than
+    ``_RUFF_FORMAT_CI_PATTERN`` (hyphen + space). Job names like
+    ``name: ruff-format migration`` would match the hyphen form
+    without executing any ``ruff format`` command; the space-only
+    form requires an actual command-style invocation.
+
+    Fail-OPEN: any IO error returns ``(False, False)`` so the absence
+    of a signal never blocks clean verdicts.
     """
     skip = exclude_paths or set()
     candidates: List[Path] = []
@@ -2517,11 +2576,17 @@ def _ruff_format_signaled_by_ci(
             for yml in sorted(workflows_dir.glob(pattern)):
                 if yml.is_file():
                     candidates.append(yml)
+    pre_commit_signaled = False
+    workflow_signaled = False
     for path in candidates:
         try:
             rel = path.relative_to(worktree).as_posix()
         except ValueError:
             continue
+        is_pre_commit = rel == ".pre-commit-config.yaml"
+        signal_pat = (
+            _RUFF_FORMAT_CI_PATTERN if is_pre_commit else _RUFF_FORMAT_CMD_PATTERN
+        )
         if rel in skip:
             # Codex pass-8 finding 2: for a touched file, only count
             # the signal when it was already present pre-PR. This
@@ -2531,7 +2596,10 @@ def _ruff_format_signaled_by_ci(
             if _file_has_unchanged_ruff_format_signal(
                 worktree, rel, base_ref
             ):
-                return True
+                if is_pre_commit:
+                    pre_commit_signaled = True
+                else:
+                    workflow_signaled = True
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -2542,9 +2610,12 @@ def _ruff_format_signaled_by_ci(
                 type(exc).__name__,
             )
             continue
-        if _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(text)):
-            return True
-    return False
+        if signal_pat.search(_strip_yaml_comments(text)):
+            if is_pre_commit:
+                pre_commit_signaled = True
+            else:
+                workflow_signaled = True
+    return (pre_commit_signaled, workflow_signaled)
 
 
 def _resolve_tool(tool: str, worktree: Path) -> Optional[str]:
