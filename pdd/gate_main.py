@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .contract_gate_service import run_gate
+from .contract_check import check_prompt
 from .coverage_contracts import STATUS_UNCHECKED, STATUS_WAIVED, build_coverage
 from .evidence_store import (
     ManifestView,
@@ -268,23 +268,21 @@ def _check_contracts_pipeline(
     stories_dir: Optional[Path],
     tests_dir: Optional[Path],
 ) -> list[GateFailure]:
+    del stories_dir, tests_dir  # coverage is enforced separately via _check_critical_rules
     if manifest.prompt_path is None:
         return []
-    gate_run = run_gate(
-        manifest.prompt_path,
-        stories_dir=stories_dir,
-        tests_dir=tests_dir,
-        strict=policy.requires("no_unchecked_critical_rules"),
-    )
-    if gate_run.exit_code < 2:
+    strict = policy.requires("no_unchecked_critical_rules")
+    result = check_prompt(manifest.prompt_path, strict=strict)
+    errors = result.error_count
+    warnings = result.warn_count
+    if errors == 0 and not (strict and warnings):
         return []
-    failing = [stage for stage in gate_run.stages if stage.exit_code >= 2 and not stage.skipped]
-    detail = failing[0].detail if failing else "contracts gate failed"
+    detail = result.issues[0].message if result.issues else "contract check failed"
     return [
         GateFailure(
             code="contracts_gate",
             message=f"{manifest.basename}: {detail}",
-            fix_command="pdd contracts gate --strict <prompt>",
+            fix_command="pdd checkup contract check --strict <prompt>",
         )
     ]
 
