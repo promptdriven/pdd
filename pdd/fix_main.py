@@ -467,14 +467,17 @@ def fix_main(
                 success = False
 
         # Save fixed files
-        if fixed_unit_test and not protect_tests:
+        # Skip test write when focused repair was used: the LLM only saw a
+        # slice of the test file, so writing fixed_unit_test would truncate
+        # the full file to just the failing subset.
+        if fixed_unit_test and not protect_tests and not _local_focused_slices:
             output_test_path = Path(output_file_paths["output_test"])
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
-        elif fixed_unit_test and protect_tests:
+        elif fixed_unit_test and (protect_tests or _local_focused_slices):
             if verbose:
-                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
+                rprint("[yellow]Unit test update skipped (protect_tests=True or focused repair active).[/yellow]")
 
         if fixed_code:
             output_code_path = Path(output_file_paths["output_code"])
