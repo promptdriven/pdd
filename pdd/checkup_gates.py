@@ -2213,16 +2213,16 @@ _RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
 # Codex pass-11 finding 2: workflow/CloudBuild YAML can contain
 # non-executable text like ``name: ruff format migration`` that
 # still matches a bare ``\bruff\s+format\b`` regex (the step *name*
-# field, not a run command). Require ``ruff format`` to appear on a
-# line that is NOT a non-exec YAML key-value (e.g. ``name:``,
-# ``id:``, ``uses:``) but IS either a plain continuation line (inside
-# a multi-line run block) or the value of an exec-intent key
-# (``run:``, ``script:``, ``command:``, ``entrypoint:``).
+# field, not a run command). The workflow scan parses the YAML and
+# only inspects the values of exec-intent keys (see ``_RUFF_FORMAT_
+# EXEC_KEYS``), so non-exec fields never contribute a signal.
 _RUFF_FORMAT_CMD_PATTERN = re.compile(r"\bruff\s+format\b")
-# Matches the start of a YAML key-value line (``key: value``).
-_YAML_KV_PREFIX = re.compile(r"^[A-Za-z_][\w-]*:\s")
-# Keys whose value is a shell command / exec intent.
-_YAML_EXEC_KEY = re.compile(r"^(?:run|script|command|entrypoint):\s")
+# YAML mapping keys whose value carries a shell command / exec intent.
+# Codex pass-13 finding 3: ``args`` is included so CloudBuild steps that
+# invoke ruff via ``args: ["-c", "ruff format --check ."]`` are detected;
+# the previous line scan only honoured ``run``/``script``/``command``/
+# ``entrypoint`` and missed the inline-args form.
+_RUFF_FORMAT_EXEC_KEYS = frozenset({"run", "script", "command", "entrypoint", "args"})
 
 
 def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
@@ -2405,34 +2405,66 @@ def _strip_yaml_comments(text: str) -> str:
     return "\n".join(out_lines)
 
 
+def _exec_value_has_ruff_format(value: object) -> bool:
+    """Return True if an exec-key's value invokes ``ruff format``.
+
+    The value of a ``run``/``script``/``command``/``entrypoint`` key is a
+    string (possibly a multi-line block scalar resolved by the YAML
+    loader); ``args`` is a list of argv tokens. Block scalars preserve
+    their ``#`` lines verbatim, so strip shell comments per line before
+    matching — a ``# TODO: enable ruff format`` line inside a ``run:``
+    block is a comment, not an executed command.
+    """
+    if isinstance(value, str):
+        return bool(_RUFF_FORMAT_CMD_PATTERN.search(_strip_yaml_comments(value)))
+    if isinstance(value, list):
+        joined = " ".join(
+            str(item) for item in value if isinstance(item, (str, int, float, bool))
+        )
+        return bool(_RUFF_FORMAT_CMD_PATTERN.search(_strip_yaml_comments(joined)))
+    return False
+
+
+def _node_has_ruff_format(node: object) -> bool:
+    """Recursively walk a parsed YAML node for a ``ruff format`` invocation
+    in an executable position (the value of an exec-intent mapping key)."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() in _RUFF_FORMAT_EXEC_KEYS:
+                if _exec_value_has_ruff_format(value):
+                    return True
+            if _node_has_ruff_format(value):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(_node_has_ruff_format(item) for item in node)
+    return False
+
+
 def _workflow_text_has_ruff_format(text: str) -> bool:
-    """Return True if ``text`` (a workflow/CloudBuild YAML) contains
+    """Return True if ``text`` (a workflow/CloudBuild YAML) invokes
     ``ruff format`` in an executable position.
 
-    Codex pass-11 finding 2: a bare ``\\bruff\\s+format\\b`` scan matches
-    non-executable YAML fields such as ``name: ruff format migration``.
-    This helper checks each matching line: if the line (after stripping
-    any YAML list-item marker ``- ``) starts with a YAML key-value prefix
-    (``key: value``) and the key is NOT an execution-intent key
-    (``run``, ``script``, ``command``, ``entrypoint``), the match is
-    ignored. Lines without a key-value prefix are assumed to be multi-line
-    block-scalar continuations of an earlier ``run:`` and are counted.
+    Codex pass-11 finding 2 + pass-13 findings 2/3: the previous
+    line-based scan was in tension between two failure modes — it
+    false-positived on non-executable multi-line block scalars (e.g. an
+    ``env: NOTE: |`` note mentioning ``ruff format``) yet missed the
+    inline ``args: ["-c", "ruff format --check ."]`` CloudBuild form.
+    Parsing the YAML and walking only the values of exec-intent keys
+    (``run``/``script``/``command``/``entrypoint``/``args``) resolves
+    both: non-exec keys are never inspected, and ``args`` lists are
+    joined and matched.
+
+    Fail-open: any parse error returns False (a missed signal never
+    blocks a clean verdict), consistent with the rest of this module.
     """
-    _list_item = re.compile(r"^-\s+")
-    for line in _strip_yaml_comments(text).splitlines():
-        stripped = line.strip()
-        if not _RUFF_FORMAT_CMD_PATTERN.search(stripped):
-            continue
-        # Strip a leading list-item marker (``- ``) so ``- name: ruff format``
-        # is normalised to ``name: ruff format`` before the key check.
-        kv_candidate = _list_item.sub("", stripped)
-        if _YAML_KV_PREFIX.match(kv_candidate) and not _YAML_EXEC_KEY.match(
-            kv_candidate
-        ):
-            # Non-exec key-value line (e.g. ``name: ruff format migration``).
-            continue
-        return True
-    return False
+    import yaml  # local import to keep top-of-module imports tight
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return False
+    return _node_has_ruff_format(data)
 
 
 def _git_show_text(worktree: Path, ref: str, path: str) -> Optional[str]:
@@ -2610,9 +2642,6 @@ def _ruff_format_signaled_by_ci(
         except ValueError:
             continue
         is_pre_commit = rel == ".pre-commit-config.yaml"
-        signal_pat = (
-            _RUFF_FORMAT_CI_PATTERN if is_pre_commit else _RUFF_FORMAT_CMD_PATTERN
-        )
         if rel in skip:
             # Codex pass-8 finding 2: for a touched file, only count
             # the signal when it was already present pre-PR. This

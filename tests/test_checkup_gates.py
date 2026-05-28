@@ -978,6 +978,69 @@ class TestDiscoverGates:
         # Step name matches must NOT trigger the gate (only run: values count).
         assert "ruff-format" not in names
 
+    def test_skips_workflow_non_exec_multiline_block_false_positive(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-13 finding 2: a non-executable multi-line block
+        scalar (e.g. an ``env: NOTE: |`` note) that merely mentions
+        ``ruff format`` must NOT trigger the gate. The pre-fix line scan
+        treated continuation lines as ``run:`` block continuations and
+        counted them.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        # The ``NOTE`` env value is a block scalar mentioning ruff format,
+        # but nothing in an exec position actually runs it.
+        (wf / "ci.yml").write_text(
+            "jobs:\n"
+            "  build:\n"
+            "    env:\n"
+            "      NOTE: |\n"
+            "        We plan to add ruff format --check here later.\n"
+            "        Tracking issue: #123.\n"
+            "    steps:\n"
+            "      - run: echo building\n",
+            encoding="utf-8",
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" not in names
+
+    def test_emits_ruff_format_when_cloudbuild_args_invoke_it(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-13 finding 3: a CloudBuild step that invokes ruff via
+        ``args: ["-c", "ruff format --check ."]`` must trigger the gate.
+        The pre-fix scan only honoured ``run``/``script``/``command``/
+        ``entrypoint`` keys and missed the inline-args form.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        (tmp_path / "cloudbuild-prod-ci.yaml").write_text(
+            "steps:\n"
+            "  - name: python:3.12\n"
+            "    entrypoint: bash\n"
+            '    args: ["-c", "ruff format --check ."]\n',
+            encoding="utf-8",
+        )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" in names
+
     def test_skips_ruff_format_when_hook_stages_made_manual(
         self, tmp_path: Path
     ) -> None:
