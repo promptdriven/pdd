@@ -1948,8 +1948,18 @@ class TestPrModeGuardsBeforePush:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                # Real Step-5 failure so the fixer runs and produces the
+                # in-scope edit (pdd/some_module.py) the guards inspect — a
+                # clean Step 5 with dirty files would (correctly) trip the
+                # clean-run side-effect guard before the prompt/registry
+                # guards under test here.
+                return (False, _step5_fail_output("pdd/some_module.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/some_module.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         with patch(
             "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
