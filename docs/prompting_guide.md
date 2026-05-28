@@ -1163,7 +1163,7 @@ When generating tests from a PDD prompt:
    Example: `test_R2_rejects_over_refund`.
 4. Include negative tests for MUST NOT rules.
 5. Prefer observable behavior over private implementation details.
-6. Do not assert private helper names, internal class structure, or irrelevant error-message wording.
+6. Do not assert private helper names, internal class structure, or exact error-message wording. For exception message assertions, prefer `pytest.raises(ExcType, match=r"keyword1|keyword2")` with semantic keyword patterns over exact strings — exact strings fail when regeneration rewords a message.
 7. Preserve existing tests; never overwrite accumulated regression tests.
 8. If a rule cannot be tested with the available fixtures, add a comment explaining the missing fixture or dependency.
 ```
