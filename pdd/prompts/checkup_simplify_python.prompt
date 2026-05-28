@@ -32,5 +32,10 @@
 - Read optional verification commands under `[tool.pdd.checkup.simplify.commands]`.
 - Pass `CLAUDE_MODEL` through to Claude Code when configured.
 
+% Provider expansion (reference only; runtime still uses Claude Code `/simplify`)
+- Shared workflow: `checkup_simplify_workflow_LLM.prompt`
+- Provider invoke profiles: `checkup_simplify_invoke_claude_code_LLM.prompt`, `checkup_simplify_invoke_codex_LLM.prompt`, `checkup_simplify_invoke_gemini_LLM.prompt`, `checkup_simplify_invoke_opencode_LLM.prompt`
+- Do not wire alternate CLIs into `run_checkup_simplify` until product explicitly expands scope.
+
 % Code output
 - Code: `pdd/checkup_simplify.py`

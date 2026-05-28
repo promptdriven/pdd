@@ -105,3 +105,10 @@ python examples/checkup_simplify_example.py
 ```
 
 Reference: [Claude Code command documentation](https://code.claude.com/docs/en/commands).
+
+## Multi-provider profiles (reference)
+
+The shipped command still uses Claude Code `/simplify` only. For Codex, Gemini, OpenCode, or IDE
+agents that should follow the same conservative workflow, see
+[checkup_simplify_providers.md](checkup_simplify_providers.md) and
+`pdd/prompts/checkup_simplify_workflow_LLM.prompt`.

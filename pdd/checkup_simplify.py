@@ -94,6 +94,41 @@ class SimplifyCandidate:
     rejection: str = ""
 
 
+@dataclass(frozen=True)
+class SimplifyEvidenceInput:
+    """Inputs for writing a simplify evidence JSON report."""
+
+    repo_root: Path
+    run_id: str
+    path_arg: Optional[str]
+    since: Optional[str]
+    staged: bool
+    files_analyzed: List[str]
+    files_modified: List[str]
+    slash_command: str
+    claude_code_version: str
+    agent_summary: str
+    checks: Dict[str, str]
+    attempts: Sequence[SimplifyCandidate]
+    selected_attempt: Optional[int]
+
+
+@dataclass(frozen=True)
+class SimplifySummaryInput:
+    """Inputs for rendering a human-readable simplify summary."""
+
+    files_analyzed: List[str]
+    files_modified: List[str]
+    agent_summary: str
+    slash_command: str
+    claude_code_version: str
+    checks: Dict[str, str]
+    evidence_path: Optional[Path]
+    preview_only: bool
+    attempts: int
+    selected_attempt: Optional[int]
+
+
 def _parse_claude_code_version(version_output: str) -> Optional[Tuple[int, int, int]]:
     match = re.search(r"(\d+)\.(\d+)\.(\d+)", version_output)
     if not match:
@@ -148,7 +183,7 @@ def _build_simplify_slash_message(
     return " ".join(parts)
 
 
-def run_claude_simplify_command(
+def run_claude_simplify_command(  # pylint: disable=too-many-arguments
     slash_message: str,
     repo_root: Path,
     *,
@@ -156,7 +191,7 @@ def run_claude_simplify_command(
     verbose: bool,
     quiet: bool,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> Tuple[bool, str, float, str]:  # pylint: disable=too-many-arguments
+) -> Tuple[bool, str, float, str]:
     """Invoke Claude Code ``/simplify`` directly (not via ``run_agentic_task``)."""
     env = os.environ.copy()
     env["TERM"] = "dumb"
@@ -602,28 +637,13 @@ def _run_verification(
     return checks
 
 
-def _write_evidence(
-    *,
-    repo_root: Path,
-    run_id: str,
-    path_arg: Optional[str],
-    since: Optional[str],
-    staged: bool,
-    files_analyzed: List[str],
-    files_modified: List[str],
-    slash_command: str,
-    claude_code_version: str,
-    agent_summary: str,
-    checks: Dict[str, str],
-    attempts: Sequence[SimplifyCandidate],
-    selected_attempt: Optional[int],
-) -> Path:  # pylint: disable=too-many-arguments
-    evidence_dir = repo_root / ".pdd" / "evidence" / "checkups"
+def _write_evidence(evidence: SimplifyEvidenceInput) -> Path:
+    evidence_dir = evidence.repo_root / ".pdd" / "evidence" / "checkups"
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    out_path = evidence_dir / f"simplify-{run_id}.json"
+    out_path = evidence_dir / f"simplify-{evidence.run_id}.json"
     claims: List[Dict[str, str]] = []
     unchecked: List[Dict[str, str]] = []
-    if checks.get("tests") == "passed":
+    if evidence.checks.get("tests") == "passed":
         claims.append(
             {
                 "claim": "Simplification preserves behavior",
@@ -641,18 +661,18 @@ def _write_evidence(
     payload: Dict[str, Any] = {
         "kind": "pdd.checkup.simplify",
         "engine": "claude-code/simplify",
-        "run_id": run_id,
-        "claude_code_version": claude_code_version,
-        "slash_command": slash_command,
+        "run_id": evidence.run_id,
+        "claude_code_version": evidence.claude_code_version,
+        "slash_command": evidence.slash_command,
         "target": {
-            "path": path_arg,
-            "since": since,
-            "staged_only": staged,
+            "path": evidence.path_arg,
+            "since": evidence.since,
+            "staged_only": evidence.staged,
         },
-        "files_analyzed": files_analyzed,
-        "files_modified": files_modified,
-        "agent_summary": agent_summary,
-        "selected_attempt": selected_attempt,
+        "files_analyzed": evidence.files_analyzed,
+        "files_modified": evidence.files_modified,
+        "agent_summary": evidence.agent_summary,
+        "selected_attempt": evidence.selected_attempt,
         "attempts": [
             {
                 "attempt": candidate.attempt,
@@ -661,11 +681,13 @@ def _write_evidence(
                 "files_modified": candidate.files_modified,
                 "checks": candidate.checks,
                 "rejection": candidate.rejection or None,
-                "artifact_dir": str(candidate.artifact_dir.relative_to(repo_root)),
+                "artifact_dir": str(
+                    candidate.artifact_dir.relative_to(evidence.repo_root)
+                ),
             }
-            for candidate in attempts
+            for candidate in evidence.attempts
         ],
-        "checks": checks,
+        "checks": evidence.checks,
         "claims": claims,
         "unchecked_claims": unchecked,
     }
@@ -673,64 +695,52 @@ def _write_evidence(
     return out_path
 
 
-def _render_summary(
-    *,
-    files_analyzed: List[str],
-    files_modified: List[str],
-    agent_summary: str,
-    slash_command: str,
-    claude_code_version: str,
-    checks: Dict[str, str],
-    evidence_path: Optional[Path],
-    preview_only: bool,
-    attempts: int,
-    selected_attempt: Optional[int],
-) -> List[str]:  # pylint: disable=too-many-arguments
+def _render_summary(summary: SimplifySummaryInput) -> List[str]:
     lines = ["PDD Checkup: simplify (Claude Code /simplify)", ""]
-    if preview_only:
+    if summary.preview_only:
         lines.append("Preview only - pass --apply to run Claude Code /simplify.")
         lines.append("")
-    lines.append(f"Claude Code: {claude_code_version or 'unknown'}")
-    lines.append(f"Command: {slash_command or '(not run)'}")
-    lines.append(f"Files in scope: {len(files_analyzed)}")
-    lines.append(f"Files changed: {len(files_modified)}")
-    if not preview_only:
-        lines.append(f"Attempts run: {attempts}")
-        lines.append(f"Selected attempt: {selected_attempt or '(none)'}")
+    lines.append(f"Claude Code: {summary.claude_code_version or 'unknown'}")
+    lines.append(f"Command: {summary.slash_command or '(not run)'}")
+    lines.append(f"Files in scope: {len(summary.files_analyzed)}")
+    lines.append(f"Files changed: {len(summary.files_modified)}")
+    if not summary.preview_only:
+        lines.append(f"Attempts run: {summary.attempts}")
+        lines.append(f"Selected attempt: {summary.selected_attempt or '(none)'}")
     lines.append("")
-    if files_analyzed and preview_only:
+    if summary.files_analyzed and summary.preview_only:
         lines.append("Targets:")
-        for path in files_analyzed:
+        for path in summary.files_analyzed:
             lines.append(f"  - {path}")
         lines.append("")
-    if files_modified:
+    if summary.files_modified:
         lines.append("Modified:")
-        for path in files_modified:
+        for path in summary.files_modified:
             lines.append(f"  + {path}")
-    elif not preview_only:
+    elif not summary.preview_only:
         lines.append("Modified:")
         lines.append("  (none)")
-    if agent_summary.strip() and not preview_only:
+    if summary.agent_summary.strip() and not summary.preview_only:
         lines.append("")
         lines.append("Summary:")
-        for line in agent_summary.strip().splitlines()[:12]:
+        for line in summary.agent_summary.strip().splitlines()[:12]:
             lines.append(f"  {line}")
-        if agent_summary.count("\n") > 12:
+        if summary.agent_summary.count("\n") > 12:
             lines.append("  ...")
-    if checks:
+    if summary.checks:
         lines.append("")
         lines.append("Verification:")
-        for name, status in checks.items():
+        for name, status in summary.checks.items():
             symbol = "PASS" if status == "passed" else "FAIL"
             lines.append(f"  {symbol} {name} {status}")
-    if evidence_path is not None:
+    if summary.evidence_path is not None:
         lines.append("")
         lines.append("Evidence written:")
-        lines.append(f"  {evidence_path}")
+        lines.append(f"  {summary.evidence_path}")
     return lines
 
 
-def run_checkup_simplify(
+def run_checkup_simplify(  # pylint: disable=too-many-arguments
     *,
     path: Optional[Path],
     apply: bool,
@@ -743,7 +753,7 @@ def run_checkup_simplify(
     no_format: bool,
     quiet: bool,
     verbose: bool,
-) -> SimplifyRunResult:  # pylint: disable=too-many-arguments
+) -> SimplifyRunResult:
     """Preview targets or apply the best acceptable isolated `/simplify` candidate."""
     cwd = Path.cwd()
     repo_root = resolve_simplify_repo_root(path or cwd)
@@ -787,31 +797,35 @@ def run_checkup_simplify(
             selected_attempt=None,
             evidence_path=None,
             summary_lines=_render_summary(
-                files_analyzed=[],
+                SimplifySummaryInput(
+                    files_analyzed=[],
+                    files_modified=[],
+                    agent_summary="",
+                    slash_command=slash_command,
+                    claude_code_version=version_str,
+                    checks={},
+                    evidence_path=None,
+                    preview_only=not apply,
+                    attempts=0,
+                    selected_attempt=None,
+                )
+            ),
+        )
+
+    if not apply:
+        summary_lines = _render_summary(
+            SimplifySummaryInput(
+                files_analyzed=rel_files,
                 files_modified=[],
                 agent_summary="",
                 slash_command=slash_command,
                 claude_code_version=version_str,
                 checks={},
                 evidence_path=None,
-                preview_only=not apply,
+                preview_only=True,
                 attempts=0,
                 selected_attempt=None,
-            ),
-        )
-
-    if not apply:
-        summary_lines = _render_summary(
-            files_analyzed=rel_files,
-            files_modified=[],
-            agent_summary="",
-            slash_command=slash_command,
-            claude_code_version=version_str,
-            checks={},
-            evidence_path=None,
-            preview_only=True,
-            attempts=0,
-            selected_attempt=None,
+            )
         )
         return SimplifyRunResult(
             success=True,
@@ -981,32 +995,36 @@ def run_checkup_simplify(
     evidence_path: Optional[Path] = None
     if evidence:
         evidence_path = _write_evidence(
-            repo_root=repo_root,
-            run_id=run_id,
-            path_arg=str(path) if path else None,
-            since=since,
-            staged=staged,
-            files_analyzed=rel_files,
-            files_modified=files_modified,
-            slash_command=slash_command,
-            claude_code_version=version_str,
-            agent_summary=agent_summary,
-            checks=selected_checks,
-            attempts=candidates,
-            selected_attempt=selected_attempt,
+            SimplifyEvidenceInput(
+                repo_root=repo_root,
+                run_id=run_id,
+                path_arg=str(path) if path else None,
+                since=since,
+                staged=staged,
+                files_analyzed=rel_files,
+                files_modified=files_modified,
+                slash_command=slash_command,
+                claude_code_version=version_str,
+                agent_summary=agent_summary,
+                checks=selected_checks,
+                attempts=candidates,
+                selected_attempt=selected_attempt,
+            )
         )
 
     summary_lines = _render_summary(
-        files_analyzed=rel_files,
-        files_modified=files_modified,
-        agent_summary=agent_summary,
-        slash_command=slash_command,
-        claude_code_version=version_str,
-        checks=selected_checks,
-        evidence_path=evidence_path,
-        preview_only=False,
-        attempts=len(candidates),
-        selected_attempt=selected_attempt,
+        SimplifySummaryInput(
+            files_analyzed=rel_files,
+            files_modified=files_modified,
+            agent_summary=agent_summary,
+            slash_command=slash_command,
+            claude_code_version=version_str,
+            checks=selected_checks,
+            evidence_path=evidence_path,
+            preview_only=False,
+            attempts=len(candidates),
+            selected_attempt=selected_attempt,
+        )
     )
 
     success = selected is not None
