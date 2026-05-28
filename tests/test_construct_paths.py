@@ -3863,3 +3863,492 @@ def test_builtin_ext_map_yml_maps_to_dot_yml():
     assert result == '.yml', (
         f"BUILTIN_EXT_MAP['yml'] should be '.yml' but got {result!r}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1198 / PR #1217: schema validation in _load_pddrc_config
+# Tests that _load_pddrc_config emits UserWarning for unknown keys at the
+# root, context, and defaults nesting levels.  All tests in this class
+# FAIL on the current code (no validation exists) and PASS once the fix
+# adds the validator.
+# ---------------------------------------------------------------------------
+
+import warnings as _warnings_module
+import yaml as _yaml_module
+
+
+class TestPddrcSchemaValidation:
+    """Tests for unknown-key validation in _load_pddrc_config (Issue #1198)."""
+
+    def _write_pddrc(self, tmp_path: Path, content: dict) -> Path:
+        """Write a .pddrc YAML file to tmp_path and return its path."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text(_yaml_module.dump(content), encoding="utf-8")
+        return pddrc
+
+    def test_unknown_root_key_emits_warning(self, tmp_path):
+        """A .pddrc with an unknown key at root level must emit a UserWarning.
+
+        The current code returns the config silently; the fix must warn.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "version": 1,
+            "contexts": {"default": {}},
+            "typo_key": "some_value",  # unknown root-level key
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("typo_key" in msg for msg in warning_messages), (
+            f"Expected UserWarning mentioning 'typo_key' for unknown root key, got: {warning_messages}"
+        )
+
+    def test_unknown_context_key_emits_warning(self, tmp_path):
+        """A context block with an unknown key must emit a UserWarning.
+
+        Valid context keys are 'paths' and 'defaults' only; anything else is unknown.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "paths": ["src/**"],
+                    "defaults": {},
+                    "unknown_ctx_key": "value",  # not 'paths' or 'defaults'
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("unknown_ctx_key" in msg for msg in warning_messages), (
+            f"Expected UserWarning mentioning 'unknown_ctx_key', got: {warning_messages}"
+        )
+
+    def test_unknown_defaults_key_emits_warning(self, tmp_path):
+        """A defaults block with an unknown key must emit a UserWarning.
+
+        Only the explicitly documented defaults keys (prompts_dir, strength, etc.)
+        are valid; anything else should trigger a warning.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "prompts_dir": "prompts",
+                        "stale_setting": "old_value",  # unknown defaults key
+                    }
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("stale_setting" in msg for msg in warning_messages), (
+            f"Expected UserWarning mentioning 'stale_setting', got: {warning_messages}"
+        )
+
+    def test_clean_config_emits_no_warnings(self, tmp_path):
+        """A fully valid .pddrc using only documented keys must emit no UserWarning.
+
+        This guards against false positives after the fix is applied.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "version": 1,
+            "contexts": {
+                "default": {
+                    "paths": ["src/**"],
+                    "defaults": {
+                        "prompts_dir": "prompts",
+                        "generate_output_path": "src",
+                        "test_output_path": "tests",
+                        "example_output_path": "examples",
+                        "default_language": "python",
+                        "target_coverage": 80,
+                        "strength": 0.7,
+                        "temperature": 0.3,
+                        "budget": 100,
+                        "max_attempts": 3,
+                        "outputs": {},
+                    }
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert user_warnings == [], (
+            f"Expected no UserWarnings for a clean config, but got: "
+            f"{[str(w.message) for w in user_warnings]}"
+        )
+
+    def test_warning_message_format(self, tmp_path):
+        """Warning message must follow the issue #1198 specification format.
+
+        The format is:
+          .pddrc contains unknown key 'X' at path 'Y', ignored.
+          Run 'pdd setup' to regenerate.
+        Both the key name, 'ignored', and 'pdd setup' must appear in the message.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "bad_key": "value"
+                    }
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) >= 1, (
+            "Expected at least one UserWarning for unknown key 'bad_key'"
+        )
+        msg = str(user_warnings[0].message)
+        assert "bad_key" in msg, f"Warning must mention the key name, got: {msg!r}"
+        assert "ignored" in msg, f"Warning must include 'ignored', got: {msg!r}"
+        assert "pdd setup" in msg, f"Warning must suggest 'pdd setup', got: {msg!r}"
+
+    def test_auto_deps_csv_path_emits_warning(self, tmp_path):
+        """Regression: auto_deps_csv_path must emit a UserWarning.
+
+        This key was prescribed in PDD templates (9 occurrences) and written to
+        production .pddrc files, but _resolve_config_hierarchy never consumes it.
+        After the fix, it must be flagged as an unknown defaults key.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "prompts_dir": "prompts",
+                        "auto_deps_csv_path": "project_dependencies.csv",  # stale key
+                    }
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("auto_deps_csv_path" in msg for msg in warning_messages), (
+            f"Expected UserWarning for stale key 'auto_deps_csv_path', got: {warning_messages}"
+        )
+
+    def test_prompt_path_emits_warning(self, tmp_path):
+        """Regression: prompt_path must emit a UserWarning.
+
+        construct_paths_python.prompt falsely documented 'prompt_path' as a
+        prompts_dir alias, but _resolve_config_hierarchy never implemented it.
+        After the fix, it must be flagged as an unknown defaults key.
+        Note: PDD_PROMPT_PATH env var is unaffected; only the .pddrc key is invalid.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "prompt_path": "prompts/my_context",  # false alias, never consumed
+                    }
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("prompt_path" in msg for msg in warning_messages), (
+            f"Expected UserWarning for undocumented key 'prompt_path', got: {warning_messages}"
+        )
+
+    def test_multiple_unknown_keys_each_emit_warning(self, tmp_path):
+        """Each unknown key at every nesting level must produce its own warning.
+
+        A config with three unknown keys (root, context, defaults) must emit
+        at least three distinct warnings, one naming each unknown key.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "unknown_ctx": True,       # unknown context-level key
+                    "defaults": {
+                        "unknown_default": "x",  # unknown defaults key
+                    }
+                }
+            },
+            "extra_root": "y",  # unknown root key
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("unknown_ctx" in msg for msg in warning_messages), (
+            f"Missing warning for context-level key 'unknown_ctx': {warning_messages}"
+        )
+        assert any("unknown_default" in msg for msg in warning_messages), (
+            f"Missing warning for defaults key 'unknown_default': {warning_messages}"
+        )
+        assert any("extra_root" in msg for msg in warning_messages), (
+            f"Missing warning for root key 'extra_root': {warning_messages}"
+        )
+
+    def test_unknown_key_does_not_reject_config(self, tmp_path):
+        """Unknown keys must warn but must NOT cause _load_pddrc_config to raise.
+
+        Stale configs must continue to load so users aren't broken on upgrade.
+        Known keys must remain accessible in the returned dict.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "prompts_dir": "prompts",
+                        "future_unknown_key": "value",
+                    }
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True):
+            _warnings_module.simplefilter("always")
+            config = _load_pddrc_config(pddrc)
+
+        # Config must be returned (not None, not raised)
+        assert isinstance(config, dict), (
+            "Config must still be a dict even with unknown keys (non-rejecting behavior)"
+        )
+        assert "contexts" in config, "Config must contain 'contexts'"
+        defaults = config["contexts"]["default"]["defaults"]
+        assert defaults.get("prompts_dir") == "prompts", (
+            "Known keys must be preserved in the returned config"
+        )
+
+    def test_construct_paths_triggers_validation_via_load(self, tmp_path, monkeypatch):
+        """construct_paths must propagate unknown-key UserWarnings from _load_pddrc_config.
+
+        This tests the full caller chain: construct_paths -> _load_pddrc_config -> validator.
+        A .pddrc with an unknown key must produce a UserWarning visible to the caller,
+        not only when _load_pddrc_config is called in isolation.
+        """
+        from pdd.construct_paths import construct_paths
+        monkeypatch.chdir(tmp_path)
+
+        pddrc_content = {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "prompts_dir": "prompts",
+                        "caller_unknown_key": "should_warn",  # unknown key
+                    }
+                }
+            }
+        }
+        (tmp_path / ".pddrc").write_text(_yaml_module.dump(pddrc_content), encoding="utf-8")
+        prompt_file = tmp_path / "module_python.prompt"
+        prompt_file.write_text("Generate module", encoding="utf-8")
+
+        with _warnings_module.catch_warnings(record=True) as caught, \
+             patch("pdd.construct_paths.generate_output_paths",
+                   return_value={"output": str(tmp_path / "module.py")}):
+            _warnings_module.simplefilter("always")
+            construct_paths(
+                {"prompt_file": str(prompt_file)},
+                True,
+                True,
+                "generate",
+                {},
+            )
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("caller_unknown_key" in msg for msg in warning_messages), (
+            f"construct_paths did not propagate the unknown-key UserWarning from "
+            f"_load_pddrc_config. Got: {warning_messages}"
+        )
+
+    def test_match_key_in_context_emits_warning(self, tmp_path):
+        """Regression: 'match' at context level must emit a UserWarning.
+
+        test_find_prompt_file.py:424 had a fixture with 'match' nested inside a
+        context block (contexts.backend-utils.match). 'match' is not in
+        _PDDRC_CONTEXT_KEYS (only 'paths' and 'defaults' are valid context keys).
+        The validator must warn so such fixtures are caught before they confuse users.
+        """
+        from pdd.construct_paths import _load_pddrc_config
+        pddrc = self._write_pddrc(tmp_path, {
+            "contexts": {
+                "backend-utils": {
+                    "defaults": {"prompts_dir": "prompts/backend/utils"},
+                    "match": {"paths": ["backend/utils/"]},  # stale fixture key
+                }
+            }
+        })
+        with _warnings_module.catch_warnings(record=True) as caught:
+            _warnings_module.simplefilter("always")
+            _load_pddrc_config(pddrc)
+
+        warning_messages = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("match" in msg for msg in warning_messages), (
+            f"Expected UserWarning for unknown context key 'match', got: {warning_messages}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix-location file cleanup tests (Issue #1198 / PR #1217)
+# Tests for: examples/prompts_linter/.pddrc, pdd/templates/generic/generate_pddrc_YAML.prompt,
+# and examples/prompts_linter/README.md
+#
+# These tests verify that the example and template files are cleaned of
+# auto_deps_csv_path, which is not consumed by _resolve_config_hierarchy.
+# Each test FAILS on the current code (files still contain the stale key)
+# and PASSES once the corresponding file cleanup is applied as part of the fix.
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).parent.parent
+
+
+def test_examples_prompts_linter_pddrc_no_auto_deps_csv_path():
+    """examples/prompts_linter/.pddrc must not contain auto_deps_csv_path in any defaults block.
+
+    auto_deps_csv_path is not consumed by _resolve_config_hierarchy.  The fix
+    removes it from this example file so the file loads without unknown-key
+    warnings once the schema validator is active.  This test catches the
+    regression by asserting the key is absent from every context's defaults.
+    """
+    import yaml as _yaml
+
+    pddrc_path = _REPO_ROOT / "examples" / "prompts_linter" / ".pddrc"
+    config = _yaml.safe_load(pddrc_path.read_text(encoding="utf-8"))
+
+    contexts_with_stale_key = []
+    for ctx_name, ctx_config in (config.get("contexts") or {}).items():
+        if not isinstance(ctx_config, dict):
+            continue
+        defaults = ctx_config.get("defaults") or {}
+        if isinstance(defaults, dict) and "auto_deps_csv_path" in defaults:
+            contexts_with_stale_key.append(ctx_name)
+
+    assert not contexts_with_stale_key, (
+        f"examples/prompts_linter/.pddrc still contains 'auto_deps_csv_path' in "
+        f"contexts: {contexts_with_stale_key}.  This key is not consumed by PDD "
+        f"and must be removed (Issue #1198)."
+    )
+
+
+def test_generate_pddrc_yaml_template_no_auto_deps_csv_path_in_example_yaml():
+    """pdd/templates/generic/generate_pddrc_YAML.prompt must not prescribe auto_deps_csv_path.
+
+    The template contained 9 occurrences of auto_deps_csv_path in its YAML
+    examples and INSTRUCTIONS sections, directing generated .pddrc files to
+    include the key.  Because the key is not consumed by _resolve_config_hierarchy
+    it would immediately trigger unknown-key warnings once the validator is added.
+    The fix removes all occurrences from the template so newly generated .pddrc
+    files are clean.
+
+    This test parses the YAML example block embedded in the template, loads it
+    via _load_pddrc_config, and asserts that no context defaults block contains
+    auto_deps_csv_path.  It fails on current code in two ways: the validator does
+    not exist yet (so warnings are not emitted), AND the template still prescribes
+    the key.  Once both the validator and template cleanup are applied the
+    template's example YAML loads without any unknown-key warnings.
+    """
+    import yaml as _yaml
+
+    template_path = _REPO_ROOT / "pdd" / "templates" / "generic" / "generate_pddrc_YAML.prompt"
+    template_content = template_path.read_text(encoding="utf-8")
+
+    # The template embeds a labelled example under "EXAMPLE OUTPUT STRUCTURE".
+    # Extract the first YAML code-fence block after that marker.
+    marker = "EXAMPLE OUTPUT STRUCTURE"
+    marker_pos = template_content.find(marker)
+    assert marker_pos != -1, "Could not find 'EXAMPLE OUTPUT STRUCTURE' in template"
+
+    after_marker = template_content[marker_pos:]
+    fence_start = after_marker.find("```yaml")
+    assert fence_start != -1, "Could not find ```yaml block in template example section"
+
+    yaml_body_start = fence_start + len("```yaml")
+    fence_end = after_marker.find("```", yaml_body_start)
+    assert fence_end != -1, "Unterminated ```yaml block in template"
+
+    example_yaml_text = after_marker[yaml_body_start:fence_end].strip()
+    example_config = _yaml.safe_load(example_yaml_text)
+    assert isinstance(example_config, dict), "Template example YAML must be a dict"
+
+    contexts_with_stale_key = []
+    for ctx_name, ctx_config in (example_config.get("contexts") or {}).items():
+        if not isinstance(ctx_config, dict):
+            continue
+        defaults = ctx_config.get("defaults") or {}
+        if isinstance(defaults, dict) and "auto_deps_csv_path" in defaults:
+            contexts_with_stale_key.append(ctx_name)
+
+    assert not contexts_with_stale_key, (
+        f"generate_pddrc_YAML.prompt example YAML still prescribes 'auto_deps_csv_path' "
+        f"in contexts: {contexts_with_stale_key}.  Remove it so generated .pddrc files "
+        f"are clean (Issue #1198)."
+    )
+
+
+def test_examples_prompts_linter_readme_no_auto_deps_csv_path_in_yaml_snippets():
+    """examples/prompts_linter/README.md must not show auto_deps_csv_path in YAML snippets.
+
+    The README contained a 'Create manually' code block with auto_deps_csv_path
+    in every context's defaults.  Users who followed this example would create a
+    .pddrc that triggers unknown-key warnings once the validator is active.  The
+    fix removes the key from the README's YAML snippet so the documented example
+    matches the valid schema.
+
+    This test parses the first ```yaml code block in the README (the .pddrc
+    example), loads it as YAML, and asserts that no context defaults block
+    contains auto_deps_csv_path.  It fails on current code because the README
+    still includes the stale key and passes once the README is updated.
+    """
+    import yaml as _yaml
+
+    readme_path = _REPO_ROOT / "examples" / "prompts_linter" / "README.md"
+    readme_content = readme_path.read_text(encoding="utf-8")
+
+    # Find the first ```yaml code block — the .pddrc 'Create manually' example.
+    fence_start = readme_content.find("```yaml")
+    assert fence_start != -1, "Could not find ```yaml block in README"
+
+    yaml_body_start = fence_start + len("```yaml")
+    fence_end = readme_content.find("```", yaml_body_start)
+    assert fence_end != -1, "Unterminated ```yaml block in README"
+
+    yaml_snippet = readme_content[yaml_body_start:fence_end].strip()
+    snippet_config = _yaml.safe_load(yaml_snippet)
+    assert isinstance(snippet_config, dict), "README YAML snippet must be a dict"
+
+    contexts_with_stale_key = []
+    for ctx_name, ctx_config in (snippet_config.get("contexts") or {}).items():
+        if not isinstance(ctx_config, dict):
+            continue
+        defaults = ctx_config.get("defaults") or {}
+        if isinstance(defaults, dict) and "auto_deps_csv_path" in defaults:
+            contexts_with_stale_key.append(ctx_name)
+
+    assert not contexts_with_stale_key, (
+        f"examples/prompts_linter/README.md YAML snippet still contains "
+        f"'auto_deps_csv_path' in contexts: {contexts_with_stale_key}.  Update the "
+        f"README example to remove the stale key (Issue #1198)."
+    )

@@ -34,8 +34,6 @@
 
 1. Configuration Hierarchy: CLI options > .pddrc context > environment variables > defaults.
    - Environment variables: PDD_PROMPT_PATH takes precedence over PDD_PROMPTS_DIR.
-   - .pddrc supports 'prompt_path' as an alias for the prompt directory.
-   - CLI 'prompts_dir' overrides CLI 'prompt_path' if both are provided.
    - Implement helpers: _find_pddrc_file, _load_pddrc_config, _detect_context, _get_context_config.
    - Provide utilities: list_available_contexts, detect_context_for_file, get_tests_dir_from_config.
    - Pass 'outputs' config through for template-based path generation.
@@ -44,6 +42,15 @@
      default_language, target_coverage, strength, temperature, budget, max_attempts.
      Also passes through 'outputs' dict from context_config if present.
    - Track matched context in resolved_config['_matched_context'] for debugging.
+   - `_load_pddrc_config` MUST emit a `UserWarning` for every unknown key at the root,
+     context, or defaults nesting levels using the format:
+     `WARNING: .pddrc contains unknown key 'X' at path 'Y', ignored. Run 'pdd setup' to regenerate.`
+     Unknown keys are warned but not rejected; the config loads normally.
+     Known root keys: `version`, `contexts`.
+     Known context keys: `paths`, `defaults`.
+     Known defaults keys: `generate_output_path`, `test_output_path`, `example_output_path`,
+     `prompts_dir`, `default_language`, `target_coverage`, `strength`, `temperature`,
+     `budget`, `max_attempts`, `outputs`.
 
 2. Context Detection and Pattern Matching:
    - `_match_path_to_contexts(path_str, contexts, use_specificity, is_absolute)`:
