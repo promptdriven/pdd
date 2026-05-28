@@ -1036,6 +1036,66 @@ def test_union_does_not_create_sidecar_when_none_exists(tmp_path, monkeypatch):
     assert not (pdd_dir / "setup_preferences.json").exists()
 
 
+def test_curate_after_menu_curates_when_no_prior_selection(tmp_path, monkeypatch):
+    """Codex round-6 finding: if setup finished with one provider (no prompt, no
+    sidecar) and the menu then added a second usable provider, `_curate_after_menu`
+    must curate the now-multi-provider CSV so the user doesn't exit with
+    cross-provider `--local` routing. CSV has Anthropic (keyed) + device-login
+    Copilot; selecting Anthropic removes Copilot and saves the selection."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)  # no setup_preferences.json
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_path.write_text(
+        "provider,model,input,output,coding_arena_elo,base_url,api_key,"
+        "max_reasoning_tokens,structured_output,reasoning_type,location\n"
+        "Anthropic,claude-x,3,15,1500,,ANTHROPIC_API_KEY,,True,none,\n"
+        "Github Copilot,github_copilot/gpt-5,0,0,1400,,,0,True,none,\n"
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    monkeypatch.setattr(
+        setup_tool, "_scan_for_api_keys_quiet",
+        lambda: [("ANTHROPIC_API_KEY", "env")],
+    )
+    answers = iter(["1", ""])  # select Anthropic (#1), then confirm removal
+    monkeypatch.setattr("builtins.input", lambda *a, **k: next(answers, ""))
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+
+    setup_tool._curate_after_menu()
+
+    content = csv_path.read_text()
+    assert "claude-x" in content
+    assert "copilot" not in content.lower()  # device-login provider curated out
+    pref = json.loads((pdd_dir / "setup_preferences.json").read_text())
+    assert pref["selected_providers"] == ["Anthropic"]
+
+
+def test_curate_after_menu_noop_when_selection_exists(tmp_path, monkeypatch):
+    """`_curate_after_menu` is a no-op when a saved selection already exists
+    (the union path owns that case) — it must not re-prompt or change the CSV."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["Anthropic"]})
+    )
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_path.write_text(
+        "provider,model,api_key\nAnthropic,claude,ANTHROPIC_API_KEY\n"
+        "OpenAI,gpt-4o,OPENAI_API_KEY\n"
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+
+    def _boom(*a, **k):
+        raise AssertionError("should not prompt when a selection already exists")
+
+    monkeypatch.setattr("builtins.input", _boom)
+    setup_tool._curate_after_menu()  # must not raise / prompt
+    assert "gpt-4o" in csv_path.read_text()  # unchanged
+
+
 def test_keyed_providers_in_csv_excludes_device_login(tmp_path, monkeypatch):
     """`_keyed_providers_in_csv` (source of the menu-add delta) excludes
     device-login providers, so a device login never enters the saved

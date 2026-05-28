@@ -302,6 +302,155 @@ def _select_providers_to_keep(
     return chosen
 
 
+def _apply_provider_curation(
+    rows: List[Dict[str, str]],
+    curatable: List[str],
+    user_csv: Path,
+) -> List[Dict[str, str]]:
+    """Prompt for provider selection (when >1 curatable) and return ``rows`` with
+    the unselected providers' PDD-managed rows removed. Device-login rows and
+    PRISTINE bundled rows (matching the shipped reference, ignoring the
+    normalization-only ``api_key`` field) are auto-removed after an explicit
+    confirmation + timestamped backup; hand-edited or user-added rows are
+    preserved and the user is warned they may still be used. Returns ``rows``
+    unchanged when there is no choice to make (<2 curatable providers) or the
+    user declines removal. Reused by both `_step2_configure_models_and_pddrc`
+    and the post-menu curation pass."""
+    from pdd.provider_manager import CSV_FIELDNAMES, _read_csv
+    selected = _select_providers_to_keep(rows, curatable)
+    if selected is None:
+        return rows
+    selected_set = set(selected)
+    curatable_set = set(curatable)
+
+    # Pristine = matches the shipped reference row for that model on every field
+    # except api_key (which setup normalizes, e.g. GEMINI_API_KEY→GOOGLE_API_KEY).
+    ref_by_model: Dict[str, Dict[str, str]] = {}
+    ref_csv = _ref_csv_path()
+    if ref_csv.exists():
+        try:
+            for r in _read_csv(ref_csv):
+                m = (r.get("model") or "").strip()
+                if m:
+                    ref_by_model[m] = r
+        except Exception:
+            ref_by_model = {}
+    _compare_fields = [f for f in CSV_FIELDNAMES if f != "api_key"]
+
+    def _unselected_curatable(row: Dict[str, str]) -> bool:
+        prov = (row.get("provider") or "").strip()
+        return prov in curatable_set and prov not in selected_set
+
+    def _is_pristine_bundled(row: Dict[str, str]) -> bool:
+        ref = ref_by_model.get((row.get("model") or "").strip())
+        if ref is None:
+            return False
+        return all(
+            (row.get(f) or "").strip() == (ref.get(f) or "").strip()
+            for f in _compare_fields
+        )
+
+    to_remove, kept_custom = [], []
+    for r in rows:
+        if not _unselected_curatable(r):
+            continue
+        is_device = not (r.get("api_key") or "").strip()
+        if is_device or _is_pristine_bundled(r):
+            to_remove.append(r)
+        else:
+            kept_custom.append(r)
+
+    if kept_custom:
+        print()
+        print(f"  {YELLOW}Keeping {len(kept_custom)} hand-edited row(s) under "
+              f"providers you didn't select:{RESET}")
+        for r in kept_custom:
+            print(f"    - {(r.get('provider') or '').strip()} / "
+                  f"{(r.get('model') or '').strip()}")
+        print(f"  {DIM}(these are your own custom entries; `pdd --local` may "
+              f"still use them. Remove them by editing {user_csv.name}.){RESET}")
+
+    if not to_remove:
+        return rows
+
+    print()
+    print(f"  {YELLOW}The following {len(to_remove)} model row(s) for "
+          f"unselected provider(s) will be removed from {user_csv}:{RESET}")
+    for r in to_remove:
+        print(f"    - {(r.get('provider') or '').strip()} / "
+              f"{(r.get('model') or '').strip()}")
+    print(f"  {DIM}(a timestamped backup is saved first, so this is "
+          f"reversible){RESET}")
+    try:
+        ans = input("Remove these rows? [Y/n]: ").strip().lower()
+    except EOFError:
+        ans = ""
+    if ans in ("n", "no"):
+        print(f"  {DIM}Keeping all rows. Note: `pdd --local` may still "
+              f"auto-select across providers by cost/ranking.{RESET}")
+        return rows
+
+    if user_csv.exists():
+        try:
+            base = f"{user_csv.name}.backup.{int(time.time())}"
+            backup = user_csv.with_name(base)
+            # Avoid clobbering a backup written in the same second.
+            suffix = 1
+            while backup.exists():
+                backup = user_csv.with_name(f"{base}-{suffix}")
+                suffix += 1
+            backup.write_bytes(user_csv.read_bytes())
+            print(f"  {DIM}(previous model list backed up to {backup.name}){RESET}")
+        except OSError:
+            pass  # backup is best-effort; never block the write
+    # Remove by identity so a preserved hand-edited row that happens to share a
+    # model name with a removed row is never dropped.
+    remove_ids = {id(r) for r in to_remove}
+    return [r for r in rows if id(r) not in remove_ids]
+
+
+def _curate_after_menu() -> None:
+    """Close the gap where `pdd setup` finished with a single provider (so no
+    selection prompt ran and no `setup_preferences.json` exists), and the
+    options menu then ADDED a second keyed provider — leaving the CSV with
+    multiple providers and no curation, which `pdd --local` would cost/ELO-route
+    across. Run curation once on the current CSV. No-op if a saved selection
+    already exists (the union path handles that) or fewer than 2 providers are
+    usable."""
+    if _load_selected_providers() is not None:
+        return
+    from pdd.provider_manager import (
+        _read_csv, _write_csv_atomic, _get_user_csv_path,
+        api_key_requirements_satisfied,
+    )
+    user_csv = _get_user_csv_path()
+    if not user_csv.exists():
+        return
+    try:
+        rows = _read_csv(user_csv)
+    except Exception:
+        return
+    found = [name for name, _ in _scan_for_api_keys_quiet()]
+    # Curatable = providers `pdd --local` could actually use: device-login or
+    # credential-satisfied.
+    curatable = sorted({
+        (r.get("provider") or "").strip()
+        for r in rows
+        if (r.get("provider") or "").strip() and (
+            not (r.get("api_key") or "").strip()
+            or api_key_requirements_satisfied(r.get("api_key") or "", found)
+        )
+    })
+    if len(curatable) < 2:
+        return
+    curated = _apply_provider_curation(rows, curatable, user_csv)
+    if curated is not rows:
+        try:
+            _write_csv_atomic(user_csv, curated)
+        except Exception as e:
+            print(f"Warning: failed to write user CSV: {e}")
+
+
 def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
     """Silently rescan for API keys after the menu may have added some.
 
@@ -655,99 +804,7 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
         for r in configured_models
         if (r.get("provider") or "").strip()
     })
-    selected = _select_providers_to_keep(combined, curatable)
-    if selected is not None:
-        from pdd.provider_manager import CSV_FIELDNAMES
-        selected_set = set(selected)
-        curatable_set = set(curatable)
-        # Map model -> the pristine bundled reference row, to distinguish
-        # untouched PDD-managed rows from rows the user hand-edited in place.
-        ref_by_model: Dict[str, Dict[str, str]] = {}
-        for r in configured_models:
-            m = (r.get("model") or "").strip()
-            if m:
-                ref_by_model[m] = r
-
-        def _unselected_curatable(row: Dict[str, str]) -> bool:
-            prov = (row.get("provider") or "").strip()
-            return prov in curatable_set and prov not in selected_set
-
-        def _is_pristine_bundled(row: Dict[str, str]) -> bool:
-            ref = ref_by_model.get((row.get("model") or "").strip())
-            if ref is None:
-                return False
-            return all(
-                (row.get(f) or "").strip() == (ref.get(f) or "").strip()
-                for f in CSV_FIELDNAMES
-            )
-
-        # Of the unselected curatable providers' rows, only PDD-managed ones are
-        # auto-removed: device-login rows (no api_key, e.g. GitHub Copilot — the
-        # free-login case #1202 is really about) and PRISTINE bundled rows
-        # (byte-identical to the shipped reference). Any row the user hand-edited
-        # in place (changed base_url/costs/api_key/etc.) or added themselves is
-        # NEVER deleted — it is preserved and the user is warned it may still be
-        # used, so we neither lose user data nor silently re-open cross-routing.
-        to_remove, kept_custom = [], []
-        for r in combined:
-            if not _unselected_curatable(r):
-                continue
-            is_device = not (r.get("api_key") or "").strip()
-            if is_device or _is_pristine_bundled(r):
-                to_remove.append(r)
-            else:
-                kept_custom.append(r)
-
-        if kept_custom:
-            print()
-            print(f"  {YELLOW}Keeping {len(kept_custom)} hand-edited row(s) under "
-                  f"providers you didn't select:{RESET}")
-            for r in kept_custom:
-                print(f"    - {(r.get('provider') or '').strip()} / "
-                      f"{(r.get('model') or '').strip()}")
-            print(f"  {DIM}(these are your own custom entries; `pdd --local` may "
-                  f"still use them. Remove them by editing {user_csv.name}.){RESET}")
-
-        removed = False
-        if to_remove:
-            print()
-            print(f"  {YELLOW}The following {len(to_remove)} model row(s) for "
-                  f"unselected provider(s) will be removed from {user_csv}:{RESET}")
-            for r in to_remove:
-                print(f"    - {(r.get('provider') or '').strip()} / "
-                      f"{(r.get('model') or '').strip()}")
-            print(f"  {DIM}(a timestamped backup is saved first, so this is "
-                  f"reversible){RESET}")
-            try:
-                ans = input("Remove these rows? [Y/n]: ").strip().lower()
-            except EOFError:
-                ans = ""
-            if ans in ("n", "no"):
-                print(f"  {DIM}Keeping all rows. Note: `pdd --local` may still "
-                      f"auto-select across providers by cost/ranking.{RESET}")
-            else:
-                if user_csv.exists():
-                    try:
-                        base = f"{user_csv.name}.backup.{int(time.time())}"
-                        backup = user_csv.with_name(base)
-                        # Avoid clobbering a backup written in the same second.
-                        suffix = 1
-                        while backup.exists():
-                            backup = user_csv.with_name(f"{base}-{suffix}")
-                            suffix += 1
-                        backup.write_bytes(user_csv.read_bytes())
-                        print(f"  {DIM}(previous model list backed up to "
-                              f"{backup.name}){RESET}")
-                    except OSError:
-                        pass  # backup is best-effort; never block the write
-                removed = True
-        if removed:
-            remove_models = {(r.get("model") or "").strip() for r in to_remove}
-            combined = [
-                r for r in combined
-                if not (_unselected_curatable(r)
-                        and (r.get("model") or "").strip() in remove_models)
-            ]
+    combined = _apply_provider_curation(combined, curatable, user_csv)
     try:
         _write_csv_atomic(user_csv, combined)
     except Exception as e:
@@ -1195,6 +1252,9 @@ def run_setup() -> None:
             # (delta only), so a later run won't drop them — without re-absorbing
             # providers the user curated away.
             _union_providers_into_pref(_keyed_providers_in_csv() - _before)
+            # If no selection was ever made and the menu left multiple providers,
+            # curate now so the user doesn't exit with cross-provider routing.
+            _curate_after_menu()
             found_keys = _scan_for_api_keys_quiet()
         else:
             found_keys = context.get("found_keys", [])
@@ -1203,6 +1263,7 @@ def run_setup() -> None:
                 _before = _keyed_providers_in_csv()
                 _run_options_menu()
                 _union_providers_into_pref(_keyed_providers_in_csv() - _before)
+                _curate_after_menu()
                 # Refresh: menu may have added a key
                 found_keys = _scan_for_api_keys_quiet()
 
