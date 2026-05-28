@@ -2501,10 +2501,14 @@ class TestRunDryRunValidation:
         assert errors == []
         assert cost == 0.0
 
-    def test_dry_run_success_rejects_changed_no_self_include_prompt_contract(
+    def test_dry_run_success_changed_no_self_include_prompt_contract_passes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Changed prompt-local self-contracts must include existing source context."""
+        """Changed prompts without a self-include remain valid (issue #1237).
+
+        The validator must only reject *partial* self-includes that omit
+        declared symbols, not prompts that have no self-include at all.
+        """
         prompts = tmp_path / "prompts"
         prompts.mkdir()
         (tmp_path / "changed.py").write_text(
@@ -2547,12 +2551,10 @@ class TestRunDryRunValidation:
             ["changed"], tmp_path, quiet=True
         )
 
-        assert all_valid is False
-        assert cwds == {}
+        assert all_valid is True
+        assert cwds == {"changed": tmp_path}
+        assert errors == []
         assert cost == 0.0
-        assert len(errors) == 1
-        assert "changed: prompt contract preflight failed" in errors[0]
-        assert "includes no existing module source context" in errors[0]
 
 
 # ---------------------------------------------------------------------------
