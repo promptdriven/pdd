@@ -4,7 +4,7 @@ import os
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, call, ANY
 import pytest
 import click
 
@@ -794,7 +794,7 @@ def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
 
     # Identity is inferred from the *output* path, not the input prompt.
     mock_infer_identity.assert_called_once_with(Path(output_path))
-    mock_clear_run_report.assert_called_once_with("child_python_with", "deps")
+    mock_clear_run_report.assert_called_once_with("child_python_with", "deps", paths=ANY)
 
     mock_save_fingerprint.assert_called_once()
     fp_kwargs = mock_save_fingerprint.call_args.kwargs
@@ -852,7 +852,7 @@ def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
     mock_infer_identity.assert_called_once_with(Path(output_path))
 
     # Stale per-module run report cleared with the canonical identity.
-    mock_clear_run_report.assert_called_once_with("child", "python")
+    mock_clear_run_report.assert_called_once_with("child", "python", paths=ANY)
 
     # Fingerprint persisted with the canonical identity and the cleaned
     # output prompt path (which equals the original prompt in this case).
@@ -963,7 +963,7 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
         force_scan=False,
     )
 
-    mock_clear_run_report.assert_called_once_with("child", "python")
+    mock_clear_run_report.assert_called_once_with("child", "python", paths=ANY)
     mock_save_fingerprint.assert_called_once()
     fp_kwargs = mock_save_fingerprint.call_args.kwargs
     assert fp_kwargs["basename"] == "child"

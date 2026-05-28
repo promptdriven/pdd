@@ -740,7 +740,9 @@ def _run_metadata_sync_safe(
             # `sync_determine_operation._is_workflow_complete` (which only
             # accepts verify/test/fix/update as complete) keeps recognizing
             # the workflow as synced after this internal refresh.
-            prev_fp_for_cmd = read_fingerprint(basename, language)
+            # Issue #1211: thread `paths` so both reads and the save anchor
+            # at the same subproject `.pdd/meta`.
+            prev_fp_for_cmd = read_fingerprint(basename, language, paths=paths)
             prev_cmd = getattr(prev_fp_for_cmd, "command", None) if prev_fp_for_cmd else None
             preserved_command = (
                 prev_cmd
@@ -755,7 +757,7 @@ def _run_metadata_sync_safe(
                 cost=0.0,
                 model="metadata_sync",
             )
-            fingerprint = read_fingerprint(basename, language)
+            fingerprint = read_fingerprint(basename, language, paths=paths)
             if (
                 fingerprint is None
                 or not fingerprint.prompt_hash

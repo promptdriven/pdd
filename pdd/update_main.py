@@ -659,7 +659,11 @@ def is_code_changed(
     if basename is None or language is None:
         return False, "unknown extension"
 
-    fingerprint = read_fingerprint(basename, language)
+    # Issue #1211: pass code_file_path so the fingerprint read hits the
+    # subproject's .pdd/meta when this is invoked from above the subproject.
+    fingerprint = read_fingerprint(
+        basename, language, paths={"code": Path(code_file_path)}
+    )
 
     if fingerprint is not None:
         stored_hash = fingerprint.code_hash
@@ -1159,8 +1163,16 @@ def _finalize_single_file_fingerprint(
     # state still describes the pre-mutation files even when --quiet
     # suppresses other chatter (why: informational about a real metadata
     # problem, not status fluff).
+    # Issue #1211: pass the same `paths` hint we use for save_fingerprint so
+    # the clear targets the subproject's .pdd/meta (matched on the prompt's
+    # nearest .pddrc), not a parent CWD orphan. Without this we cleared
+    # parent metadata while writing the fresh fingerprint to the subproject,
+    # leaving stale subproject _run.json beside it.
+    update_paths = {"prompt": Path(prompt_path), "code": Path(code_path)}
     try:
-        fingerprint_allowed = _clear_run_report_before_fingerprint(basename, language)
+        fingerprint_allowed = _clear_run_report_before_fingerprint(
+            basename, language, paths=update_paths
+        )
     except Exception as exc:
         # Defensive: surrounding pattern in this function treats metadata
         # cleanup as best-effort; an unexpected raise must not break the
@@ -1179,7 +1191,7 @@ def _finalize_single_file_fingerprint(
             basename,
             language,
             operation="update",
-            paths={"prompt": Path(prompt_path), "code": Path(code_path)},
+            paths=update_paths,
             cost=cost,
             model=model,
         )
@@ -1378,6 +1390,16 @@ def update_main(
                         )
                         basename, language = infer_module_identity(prompt_path)
                         if basename and language:
+                            # Issue #1211: route all three metadata calls
+                            # (get_run_report_path / clear_run_report /
+                            # save_fingerprint) through the same `paths` hint
+                            # so they hit the subproject .pdd/meta — not a
+                            # parent CWD orphan — when the user invokes
+                            # update from above the subproject root.
+                            _update_paths = {
+                                "prompt": Path(prompt_path),
+                                "code": Path(code_path),
+                            }
                             # Clear stale run report first so it can't outlive
                             # the prompt/code pair it described. Best-effort:
                             # never fail the update because of metadata I/O,
@@ -1385,7 +1407,9 @@ def update_main(
                             # the user knows runtime verification state may
                             # still describe the pre-mutation files.
                             try:
-                                _stale_report_path = get_run_report_path(basename, language)
+                                _stale_report_path = get_run_report_path(
+                                    basename, language, paths=_update_paths
+                                )
                             except Exception:
                                 _stale_report_path = None
                             _pre_existed = bool(
@@ -1393,7 +1417,7 @@ def update_main(
                                 and _stale_report_path.exists()
                             )
                             try:
-                                clear_run_report(basename, language)
+                                clear_run_report(basename, language, paths=_update_paths)
                             except Exception as exc:
                                 if not quiet:
                                     rprint(
@@ -1428,14 +1452,10 @@ def update_main(
                                         )
                             if not _stale_remains:
                                 try:
-                                    paths = {
-                                        "prompt": Path(prompt_path),
-                                        "code": Path(code_path),
-                                    }
                                     save_fingerprint(
                                         basename, language,
                                         operation="update",
-                                        paths=paths,
+                                        paths=_update_paths,
                                         cost=result.get("cost", 0.0),
                                         model=result.get("model", "unknown"),
                                     )
