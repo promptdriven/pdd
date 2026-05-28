@@ -64,7 +64,7 @@ from ..track_cost import track_cost
 )
 @click.pass_context
 @track_cost
-def checkup_simplify(
+def checkup_simplify(  # pylint: disable=too-many-arguments
     ctx: click.Context,
     path: Optional[str],
     apply: bool,

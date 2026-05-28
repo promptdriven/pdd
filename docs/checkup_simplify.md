@@ -54,9 +54,20 @@ Without `--since`, selected files must have a local diff against `HEAD`.
 `--apply --staged` refuses selected files that also have unstaged edits, so a
 candidate never replaces work outside the staged snapshot.
 `--attempts` greater than 1 requires `--verify` so PDD can reject unproven
-candidates. Verification commands (format, lint, typecheck, tests) are scoped
-to the selected in-scope files only, so repo-wide tools like `ruff format` do
-not rewrite unrelated paths in the candidate worktree.
+candidates. Verification scoping is command-type aware:
+
+- **format / lint** (for example `ruff format`, `ruff check`): append only the
+  in-scope paths (`ruff format -- pdd/foo.py`).
+- **typecheck** (`mypy`): run against the explicit changed files with
+  `--follow-imports=skip` instead of `mypy pdd -- pdd/foo.py`.
+- **test** (`pytest`): run colocated tests when discoverable (for example
+  `pdd/checkup_simplify.py` → `tests/commands/test_checkup_simplify.py`);
+  otherwise the configured pytest command is left unchanged for explicit user
+  control.
+
+`[tool.pdd.checkup.simplify]` defaults are loaded from the repository root, not
+the current working directory, so invocations from subdirectories still honor
+`max_files`, `attempts`, and `commands`.
 
 ## Evidence
 

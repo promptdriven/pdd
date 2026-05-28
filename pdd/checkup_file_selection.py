@@ -70,6 +70,11 @@ _HARD_EXCLUDE_BASENAMES = {
 }
 
 
+def resolve_simplify_repo_root(start: Path) -> Path:
+    """Return the git repository root containing ``start``."""
+    return _repo_root(start)
+
+
 def _repo_root(start: Path) -> Path:
     current = start.resolve()
     if current.is_file():
@@ -164,7 +169,7 @@ def _is_hard_excluded(rel_posix: str) -> bool:
     return False
 
 
-def _is_simplify_candidate(
+def _is_simplify_candidate(  # pylint: disable=too-many-return-statements
     abs_path: str,
     repo_root: Path,
     pddignore_patterns: List[str],

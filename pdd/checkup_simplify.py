@@ -1,4 +1,5 @@
 """Core logic for ``pdd checkup simplify`` via Claude Code ``/simplify``."""
+# pylint: disable=too-many-instance-attributes,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,too-many-lines
 from __future__ import annotations
 
 import hashlib
@@ -25,7 +26,7 @@ from .agentic_common import (
     _strip_anthropic_creds_for_claude_subprocess,
     _subprocess_run,
 )
-from .checkup_file_selection import discover_simplify_targets
+from .checkup_file_selection import discover_simplify_targets, resolve_simplify_repo_root
 from .get_lint_commands import get_lint_commands
 from .git_porcelain import iter_changed_paths, run_porcelain_z
 
@@ -427,13 +428,93 @@ def _rel_paths(files: Sequence[Path], repo_root: Path) -> List[str]:
     )
 
 
-def _scoped_verify_command(command: str, rel_paths: Sequence[str]) -> str:
-    """Append in-scope paths so repo-wide format/lint does not touch other files."""
+def _command_executable(command: str) -> str:
+    parts = shlex.split(command.strip())
+    if not parts:
+        return ""
+    return Path(parts[0]).name.lower()
+
+
+def _scoped_paths_with_separator(command: str, rel_paths: Sequence[str]) -> str:
+    quoted = " ".join(shlex.quote(path) for path in rel_paths)
+    return f"{command} -- {quoted}"
+
+
+def _guess_pytest_targets(repo_root: Path, rel_paths: Sequence[str]) -> List[str]:
+    """Map changed source files to pytest paths when a colocated test module exists."""
+    tests_root = repo_root / "tests"
+    discovered: List[str] = []
+    seen: set[str] = set()
+    for rel in rel_paths:
+        if not rel.endswith(".py"):
+            continue
+        stem = Path(rel).stem
+        candidates = [
+            tests_root / f"test_{stem}.py",
+            tests_root / "commands" / f"test_{stem}.py",
+        ]
+        if tests_root.is_dir():
+            candidates.extend(tests_root.rglob(f"test_{stem}.py"))
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            rel_test = candidate.resolve().relative_to(repo_root.resolve()).as_posix()
+            if rel_test in seen:
+                continue
+            seen.add(rel_test)
+            discovered.append(rel_test)
+            break
+    return discovered
+
+
+def _mypy_scoped_command(command: str, rel_paths: Sequence[str]) -> str:
+    """Run mypy against explicit files instead of ``mypy <package> -- <file>``."""
+    parts = shlex.split(command.strip())
+    if not parts or parts[0] != "mypy":
+        path_text = " ".join(shlex.quote(path) for path in rel_paths)
+        return f"{command} {path_text}".strip()
+
+    flags = [token for token in parts[1:] if token.startswith("-")]
+    if "--follow-imports=skip" not in flags:
+        flags.append("--follow-imports=skip")
+    flag_text = " ".join(shlex.quote(flag) for flag in flags)
+    path_text = " ".join(shlex.quote(path) for path in rel_paths)
+    return f"mypy {flag_text} {path_text}".strip()
+
+
+def _pytest_scoped_command(
+    command: str,
+    rel_paths: Sequence[str],
+    *,
+    repo_root: Path,
+) -> str:
+    """Prefer colocated pytest modules; otherwise keep the configured command unchanged."""
+    test_paths = _guess_pytest_targets(repo_root, rel_paths)
+    if not test_paths:
+        return command.strip()
+    return _scoped_paths_with_separator(command.strip(), test_paths)
+
+
+def _build_verify_command(
+    step: str,
+    command: str,
+    rel_paths: Sequence[str],
+    *,
+    repo_root: Path,
+) -> str:
+    """Build a verification command appropriate for formatters, mypy, or pytest."""
     command = command.strip()
     if not command or not rel_paths:
         return command
-    quoted = " ".join(shlex.quote(path) for path in rel_paths)
-    return f"{command} -- {quoted}"
+
+    executable = _command_executable(command)
+    if step in ("format", "lint") or executable in {"ruff", "black", "prettier", "eslint"}:
+        return _scoped_paths_with_separator(command, rel_paths)
+    if step == "typecheck" or executable in {"mypy", "pyright"}:
+        return _mypy_scoped_command(command, rel_paths)
+    if step == "test" or executable in {"pytest"}:
+        return _pytest_scoped_command(command, rel_paths, repo_root=repo_root)
+    return command
 
 
 def _run_shell_step(
@@ -477,7 +558,9 @@ def _run_verification(
     has_python = any(path.suffix == ".py" for path in touched_files)
 
     if not no_format and commands.format.strip():
-        format_cmd = _scoped_verify_command(commands.format, rel_paths)
+        format_cmd = _build_verify_command(
+            "format", commands.format, rel_paths, repo_root=repo_root
+        )
         passed, _ = _run_shell_step(format_cmd, repo_root, quiet=quiet)
         checks["format"] = "passed" if passed else "failed"
 
@@ -496,17 +579,23 @@ def _run_verification(
                     lint_ok = lint_ok and passed
             checks["lint"] = "passed" if lint_ok else "failed"
         elif commands.lint.strip():
-            lint_cmd = _scoped_verify_command(commands.lint, rel_paths)
+            lint_cmd = _build_verify_command(
+                "lint", commands.lint, rel_paths, repo_root=repo_root
+            )
             passed, _ = _run_shell_step(lint_cmd, repo_root, quiet=quiet)
             checks["lint"] = "passed" if passed else "failed"
 
     if has_python and commands.typecheck.strip():
-        typecheck_cmd = _scoped_verify_command(commands.typecheck, rel_paths)
+        typecheck_cmd = _build_verify_command(
+            "typecheck", commands.typecheck, rel_paths, repo_root=repo_root
+        )
         passed, _ = _run_shell_step(typecheck_cmd, repo_root, quiet=quiet)
         checks["typecheck"] = "passed" if passed else "failed"
 
     if commands.test.strip():
-        test_cmd = _scoped_verify_command(commands.test, rel_paths)
+        test_cmd = _build_verify_command(
+            "test", commands.test, rel_paths, repo_root=repo_root
+        )
         passed, _ = _run_shell_step(test_cmd, repo_root, quiet=quiet)
         checks["tests"] = "passed" if passed else "failed"
 
@@ -656,7 +745,9 @@ def run_checkup_simplify(
     verbose: bool,
 ) -> SimplifyRunResult:
     """Preview targets or apply the best acceptable isolated `/simplify` candidate."""
-    settings = _load_settings(Path.cwd())
+    cwd = Path.cwd()
+    repo_root = resolve_simplify_repo_root(path or cwd)
+    settings = _load_settings(repo_root)
     effective_max = max_files if max_files is not None else settings.max_files
     effective_attempts = attempts if attempts is not None else settings.attempts
     if effective_attempts < 1:
@@ -671,9 +762,8 @@ def run_checkup_simplify(
         since=since,
         staged=staged,
         max_files=effective_max,
-        cwd=Path.cwd(),
+        cwd=cwd,
     )
-    settings = _load_settings(repo_root)
 
     rel_files = _rel_paths(targets, repo_root)
     slash_command = _build_simplify_slash_message(rel_files, focus=settings.focus)
@@ -873,7 +963,7 @@ def run_checkup_simplify(
     selected = _choose_candidate(candidates, verify=verify)
     selected_attempt = selected.attempt if selected else None
     files_modified: List[str] = []
-    checks: Dict[str, str] = selected.checks if selected else {}
+    selected_checks: Dict[str, str] = selected.checks if selected else {}
     agent_summary = selected.agent_summary if selected else "No acceptable candidate was produced."
     if selected is not None:
         for target in targets:
@@ -901,7 +991,7 @@ def run_checkup_simplify(
             slash_command=slash_command,
             claude_code_version=version_str,
             agent_summary=agent_summary,
-            checks=checks,
+            checks=selected_checks,
             attempts=candidates,
             selected_attempt=selected_attempt,
         )
@@ -912,7 +1002,7 @@ def run_checkup_simplify(
         agent_summary=agent_summary,
         slash_command=slash_command,
         claude_code_version=version_str,
-        checks=checks,
+        checks=selected_checks,
         evidence_path=evidence_path,
         preview_only=False,
         attempts=len(candidates),
@@ -936,5 +1026,5 @@ def run_checkup_simplify(
         selected_attempt=selected_attempt,
         evidence_path=evidence_path,
         summary_lines=summary_lines,
-        checks=checks,
+        checks=selected_checks,
     )

@@ -14,9 +14,10 @@ from pdd.checkup_file_selection import discover_simplify_targets
 from pdd.checkup_simplify import (
     SimplifyVerifyCommands,
     _build_simplify_slash_message,
+    _build_verify_command,
+    _guess_pytest_targets,
     _parse_claude_code_version,
     _run_verification,
-    _scoped_verify_command,
     check_claude_code_simplify_available,
     run_checkup_simplify,
 )
@@ -508,11 +509,52 @@ def test_staged_candidate_reads_staged_snapshot(tmp_path: Path, monkeypatch) -> 
     assert module.read_text(encoding="utf-8") == "value = 3\n"
 
 
-def test_scoped_verify_command_appends_paths() -> None:
-    assert _scoped_verify_command("ruff format", ["a.py", "b.py"]) == (
-        "ruff format -- a.py b.py"
+def test_build_verify_command_scopes_format_and_lint() -> None:
+    repo_root = Path("/repo")
+    assert _build_verify_command(
+        "format", "ruff format", ["a.py", "b.py"], repo_root=repo_root
+    ) == "ruff format -- a.py b.py"
+    assert _build_verify_command("format", "ruff format", [], repo_root=repo_root) == (
+        "ruff format"
     )
-    assert _scoped_verify_command("ruff format", []) == "ruff format"
+
+
+def test_build_verify_command_scopes_mypy_to_explicit_files() -> None:
+    repo_root = Path("/repo")
+    assert _build_verify_command(
+        "typecheck",
+        "mypy pdd",
+        ["pdd/checkup_simplify.py"],
+        repo_root=repo_root,
+    ) == "mypy --follow-imports=skip pdd/checkup_simplify.py"
+
+
+def test_build_verify_command_scopes_pytest_to_colocated_tests(tmp_path: Path) -> None:
+    tests_dir = tmp_path / "tests" / "commands"
+    tests_dir.mkdir(parents=True)
+    test_file = tests_dir / "test_widget.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    rel_source = "pdd/widget.py"
+    assert _guess_pytest_targets(tmp_path, [rel_source]) == [
+        "tests/commands/test_widget.py"
+    ]
+    assert _build_verify_command(
+        "test",
+        "pytest -q",
+        [rel_source],
+        repo_root=tmp_path,
+    ) == "pytest -q -- tests/commands/test_widget.py"
+
+
+def test_build_verify_command_leaves_pytest_unscoped_without_colocated_test(
+    tmp_path: Path,
+) -> None:
+    assert _build_verify_command(
+        "test",
+        "pytest -q",
+        ["pdd/orphan.py"],
+        repo_root=tmp_path,
+    ) == "pytest -q"
 
 
 @pytest.mark.skipif(shutil.which("ruff") is None, reason="ruff required")
@@ -546,6 +588,102 @@ def test_run_verification_scopes_format_to_touched_files(tmp_path: Path) -> None
 
     assert checks["format"] == "passed"
     assert out_scope.read_text(encoding="utf-8") == before_out_scope
+
+
+@pytest.mark.skipif(shutil.which("mypy") is None, reason="mypy required")
+def test_default_mypy_verify_command_runs_for_scoped_file() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    rel_source = "pdd/checkup_simplify.py"
+    source = repo_root / rel_source
+    if not source.is_file():
+        pytest.skip("pdd checkout layout required")
+
+    command = _build_verify_command(
+        "typecheck", "mypy pdd", [rel_source], repo_root=repo_root
+    )
+    result = subprocess.run(
+        command,
+        shell=True,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+@pytest.mark.skipif(shutil.which("pytest") is None, reason="pytest required")
+def test_default_pytest_verify_command_runs_colocated_tests() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    rel_source = "pdd/checkup_simplify.py"
+    test_file = repo_root / "tests" / "commands" / "test_checkup_simplify.py"
+    if not (repo_root / rel_source).is_file() or not test_file.is_file():
+        pytest.skip("pdd checkout layout required")
+
+    command = _build_verify_command(
+        "test", "pytest -q", [rel_source], repo_root=repo_root
+    )
+    assert command == "pytest -q -- tests/commands/test_checkup_simplify.py"
+
+    # Run one fast test from the colocated module to prove the scoped command works.
+    smoke_command = (
+        "pytest -q tests/commands/test_checkup_simplify.py::test_parse_claude_code_version"
+    )
+    result = subprocess.run(
+        smoke_command,
+        shell=True,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_discover_respects_pyproject_defaults_from_subdirectory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _init_git_repo(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pdd.checkup.simplify]\nmax_files = 2\n",
+        encoding="utf-8",
+    )
+    for index in range(3):
+        module = tmp_path / f"mod_{index}.py"
+        module.write_text(f"x{index} = {index}\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    for index in range(3):
+        (tmp_path / f"mod_{index}.py").write_text(
+            f"x{index} = {index + 1}\n",
+            encoding="utf-8",
+        )
+    subdir = tmp_path / "nested" / "deep"
+    subdir.mkdir(parents=True)
+    monkeypatch.chdir(subdir)
+
+    result = run_checkup_simplify(
+        path=None,
+        apply=False,
+        since=None,
+        staged=False,
+        max_files=None,
+        attempts=None,
+        evidence=False,
+        verify=False,
+        no_format=True,
+        quiet=True,
+        verbose=False,
+    )
+
+    assert len(result.files_analyzed) == 2
 
 
 def test_apply_multiple_attempts_requires_verify(tmp_path: Path, monkeypatch) -> None:
