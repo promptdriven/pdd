@@ -19,9 +19,10 @@
 % Requirements
   1. **GET /auth/status**:
      - Returns: AuthStatus with authentication state
-     - Use get_jwt_cache_info() from pdd.auth_service to check JWT cache
-     - Use has_refresh_token() from pdd.auth_service to check keyring
-     - Return authenticated=true if either exists and valid
+     - Before calling get_jwt_cache_info(), peek at the raw JWT file to record whether an unexpired JWT exists (without audience validation) — use a module-level helper that reads the file directly.
+     - Call get_jwt_cache_info() (audience-aware). If valid, return authenticated=True with cached=True and the expires_at timestamp.
+     - If a JWT existed (had_raw_jwt=True) but get_jwt_cache_info() returned invalid AND PDD_ENV/PDD_JWT_EXPECTED_AUD configures an expected audience: the JWT had the wrong audience. Call clear_refresh_token() to durably invalidate the credential set and return authenticated=False immediately — do NOT fall back to has_refresh_token(). This prevents a split-brain state (UI shows "signed in" while all JWT-gated API calls fail) that would reappear on every repeated /status poll.
+     - Only if no JWT existed at all: use has_refresh_token() and return authenticated=True if one is present.
      - Include expires_at timestamp if JWT is cached
 
   2. **POST /auth/logout**:

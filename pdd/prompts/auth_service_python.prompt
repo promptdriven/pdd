@@ -52,7 +52,10 @@
 
   6. **get_auth_status**:
      - Get current authentication status.
-     - Check JWT cache first, then check for refresh token.
+     - Before calling get_jwt_cache_info(), peek at the raw JWT file to record whether an unexpired JWT exists (via an internal helper that reads the file without audience validation).
+     - Call get_jwt_cache_info() (audience-aware). If valid, return authenticated=True with cached=True.
+     - If a JWT existed (had_raw_jwt=True) but get_jwt_cache_info() returned invalid AND PDD_ENV/PDD_JWT_EXPECTED_AUD configures an expected audience: the cached JWT had the wrong audience. In this case call clear_refresh_token() to durably invalidate the credential set and return authenticated=False, cached=False without checking the refresh token. This prevents split-brain states on repeated status calls after the JWT file is deleted.
+     - Only if no JWT existed at all: check for a refresh token and return authenticated=True if one is present.
      - Returns Dict with keys:
        - authenticated: bool
        - cached: bool (True if using cached JWT)
