@@ -895,8 +895,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         resolved_context_name = _resolve_context_name_for_basename(basename, context_override)
         construct_paths_basename = _relative_basename_for_context(basename, resolved_context_name)
 
+        # Anchor configuration lookups (architecture.json, .pddrc) at the resolved
+        # prompts root so nested subprojects (e.g. extensions/<name>/prompts/) find
+        # their own architecture.json/.pddrc rather than falling back to the
+        # caller's CWD, which would honor configured output paths inconsistently.
+        prompts_root_anchor = prompts_root if prompts_root.is_absolute() else prompts_root.resolve()
+
         # Issue #225: Check architecture.json for filepath FIRST
-        arch_path = _find_architecture_json()
+        arch_path = _find_architecture_json(prompts_root_anchor)
 
         # Issue #1169: Use _find_prompt_file for authoritative prompt resolution.
         # This handles case-insensitive matching, nested subdirectories, and
@@ -910,7 +916,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # correct subdirectory (e.g., prompts/backend/utils/ not prompts/).
             prompt_filename = f"{name}_{language}.prompt"
             prompt_path = str(prompts_root / prompt_filename)
-            pddrc_path = _find_pddrc_file()
+            pddrc_path = _find_pddrc_file(prompts_root_anchor)
             if pddrc_path:
                 try:
                     config = _load_pddrc_config(pddrc_path)
@@ -957,7 +963,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_stem = code_path.stem
 
                 # Get configured directories from .pddrc if available
-                pddrc_path = _find_pddrc_file()
+                pddrc_path = _find_pddrc_file(prompts_root_anchor)
                 example_dir = "examples/"
                 test_dir = "tests/"
                 generate_dir = ""
@@ -988,9 +994,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Apply generate_output_path only when arch_filepath is a bare filename
                 # at the project root (no directory component). When arch_filepath already
                 # contains a subdirectory structure, that structure takes precedence.
+                # Preserve the explicit filename (including extension) from architecture.json;
+                # only the parent directory is overridden by .pddrc generate_output_path.
                 arch_filepath_path = Path(arch_filepath)
                 if generate_dir and str(arch_filepath_path.parent) in (".", ""):
-                    code_path = project_root / f"{generate_dir}{code_stem}.{extension}"
+                    code_path = project_root / f"{generate_dir}{arch_filepath_path.name}"
                     logger.debug(f"Path source: generate={code_path} (from pddrc generate_output_path)")
                 else:
                     logger.debug(f"Path source: generate={code_path} (from architecture.json)")
