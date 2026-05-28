@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 import click
 
-from pdd import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME, get_version
+from pdd import __version__, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
 from pdd.cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 # Import necessary components from pdd.core.cli for testing
 from pdd.core.cli import _strip_ansi_codes, OutputCapture, PDDCLI, cli as cli_command, process_commands
@@ -173,7 +173,7 @@ def test_cli_version(runner):
     """Test `pdd --version`."""
     result = runner.invoke(cli_command, ["--version"])
     assert result.exit_code == 0
-    assert get_version() in result.output
+    assert __version__ in result.output
 
 def test_cli_help(runner):
     """Test `pdd --help`."""

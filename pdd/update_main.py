@@ -1616,6 +1616,12 @@ def update_main(
                 models_used.add(res["model"])
 
         console.print("\n[bold]Repository Update Summary[/bold]")
+        # Keep these labels visible even when Rich truncates narrow table columns.
+        # Some CI/PTY environments render abbreviated headers/cells (e.g. "M…"),
+        # so emit the metadata header and statuses as plain text too.
+        metadata_states = sorted({_metadata_column_value(r["prompt_file"]) for r in results})
+        console.print(f"Columns: Prompt File | Status | Cost | Model | Error | Metadata")
+        console.print(f"Metadata states: {', '.join(metadata_states)}")
         console.print(table)
         if budget_reached:
             console.print(f"[info]Budget cap reached: ${budget:.2f}[/info]")
