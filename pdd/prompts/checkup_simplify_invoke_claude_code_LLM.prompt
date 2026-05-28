@@ -1,0 +1,14 @@
+% Claude Code invocation profile for checkup simplify (current production path).
+% `pdd checkup simplify --apply` builds a slash message like:
+%   /simplify [optional focus text] path/to/a.py path/to/b.py
+% and runs `claude -p "<message>" --dangerously-skip-permissions --output-format json`
+% inside each detached candidate worktree.
+
+<include>checkup_simplify_workflow_LLM.prompt</include>
+
+<claude_code>
+- Requires the Claude Code CLI (`claude`) with the bundled `/simplify` skill installed.
+- Optional focus text comes from `[tool.pdd.checkup.simplify].focus` or CLI configuration.
+- Optional model override: `CLAUDE_MODEL` is forwarded to `claude --model`.
+- PDD selects the verified candidate with fewest in-scope file changes; see `checkup_simplify_python.prompt`.
+</claude_code>

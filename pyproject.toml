@@ -117,6 +117,19 @@ dev = [
     "twine"
 ]
 
+# Optional defaults for `pdd checkup simplify` (multi-provider harness).
+# [tool.pdd.checkup.simplify]
+# max_files = 20
+# attempts = 3
+# focus = "focus on error handling"
+# engine = "claude"  # claude | codex | gemini | opencode | auto
+#
+# [tool.pdd.checkup.simplify.commands]
+# format = "ruff format"
+# lint = "ruff check"
+# typecheck = "mypy pdd"
+# test = "pytest -q"
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
