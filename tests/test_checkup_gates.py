@@ -27,8 +27,18 @@ def _git_init(worktree: Path) -> None:
     """Initialize a minimal git repo so ``git diff --check`` has something to scan."""
     subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
     subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
-         "--allow-empty", "-m", "init", "-q"],
+        [
+            "git",
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@x",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+            "-q",
+        ],
         cwd=worktree,
         check=True,
     )
@@ -199,7 +209,11 @@ class TestDiscoverGates:
         # check.
         assert "--no-install" in hint, f"hint must steer at --no-install: {hint!r}"
         # Explicit "do NOT use bare npx" guidance also recommended.
-        assert "bare" in hint.lower() or "do not use" in hint.lower() or "no-install" in hint.lower()
+        assert (
+            "bare" in hint.lower()
+            or "do not use" in hint.lower()
+            or "no-install" in hint.lower()
+        )
 
     def test_py_compile_accepts_non_utf8_pep263_python_file(
         self, tmp_path: Path
@@ -217,12 +231,10 @@ class TestDiscoverGates:
         # A latin-1 source file: declare the encoding then include
         # bytes that are valid latin-1 but invalid UTF-8 (0xE9 = é).
         path = tmp_path / "latin.py"
-        path.write_bytes(
-            b"# -*- coding: latin-1 -*-\n"
-            b"GREETING = 'caf\xe9'\n"
-        )
+        path.write_bytes(b"# -*- coding: latin-1 -*-\nGREETING = 'caf\xe9'\n")
         gates = [
-            g for g in discover_gates(tmp_path, changed_files=("latin.py",))
+            g
+            for g in discover_gates(tmp_path, changed_files=("latin.py",))
             if g.name == "py-compile:latin.py"
         ]
         assert gates, "discovery should emit py-compile for latin.py"
@@ -254,7 +266,8 @@ class TestDiscoverGates:
         _git_init(tmp_path)
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         gates = [
-            g for g in discover_gates(tmp_path, changed_files=("a.py",))
+            g
+            for g in discover_gates(tmp_path, changed_files=("a.py",))
             if g.name == "py-compile:a.py"
         ]
         assert gates, "discovery should emit py-compile for a.py"
@@ -270,7 +283,9 @@ class TestDiscoverGates:
         assert not (tmp_path / "__pycache__").exists()
         assert not list(tmp_path.glob("**/__pycache__"))
 
-    def test_skips_py_compile_when_no_python_files_changed(self, tmp_path: Path) -> None:
+    def test_skips_py_compile_when_no_python_files_changed(
+        self, tmp_path: Path
+    ) -> None:
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
@@ -287,7 +302,9 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "ruff" not in names
 
-    def test_emits_ruff_when_configured_and_binary_present(self, tmp_path: Path) -> None:
+    def test_emits_ruff_when_configured_and_binary_present(
+        self, tmp_path: Path
+    ) -> None:
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
@@ -300,7 +317,9 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "ruff" in names
 
-    def test_skips_ruff_when_configured_but_binary_missing(self, tmp_path: Path) -> None:
+    def test_skips_ruff_when_configured_but_binary_missing(
+        self, tmp_path: Path
+    ) -> None:
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
@@ -330,7 +349,7 @@ class TestDiscoverGates:
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "pyproject.toml").write_text(
             "[tool.ruff]\nline-length = 100\n"
-            "[tool.ruff.format]\nquote-style = \"double\"\n",
+            '[tool.ruff.format]\nquote-style = "double"\n',
             encoding="utf-8",
         )
         with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
@@ -346,9 +365,7 @@ class TestDiscoverGates:
         assert "--" in cmd
         dash_idx = cmd.index("--")
         path_idx = cmd.index("a.py")
-        assert dash_idx < path_idx, (
-            f"ruff-format `--` must precede file path: {cmd}"
-        )
+        assert dash_idx < path_idx, f"ruff-format `--` must precede file path: {cmd}"
 
     def test_skips_ruff_format_when_only_ruff_lint_declared(
         self, tmp_path: Path
@@ -368,9 +385,7 @@ class TestDiscoverGates:
         (tmp_path / "pyproject.toml").write_text(
             "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         # Lint gate fires (ruff is configured + binary present).
@@ -396,20 +411,16 @@ class TestDiscoverGates:
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "pyproject.toml").write_text(
             "[tool.ruff]\nline-length = 100\n"
-            "[tool.ruff.format]\nquote-style = \"double\"\n",
+            '[tool.ruff.format]\nquote-style = "double"\n',
             encoding="utf-8",
         )
         with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
-            gates = discover_gates(
-                tmp_path, changed_files=("a.py", "pyproject.toml")
-            )
+            gates = discover_gates(tmp_path, changed_files=("a.py", "pyproject.toml"))
         names = {g.name for g in gates}
         assert "ruff" not in names
         assert "ruff-format" not in names
 
-    def test_skips_ruff_format_when_ruff_unconfigured(
-        self, tmp_path: Path
-    ) -> None:
+    def test_skips_ruff_format_when_ruff_unconfigured(self, tmp_path: Path) -> None:
         """The ``ruff-format`` gate must share ``[tool.ruff]`` presence
         with the lint gate so a project that does not use ruff at all
         does not see spurious format failures from ruff's defaults.
@@ -447,9 +458,7 @@ class TestDiscoverGates:
             "[tool.ruff]\nline-length = 100\n[tool.black]\nline-length = 100\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/tool"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/tool"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         # Lint gate still fires (ruff configured + binary present).
@@ -482,9 +491,7 @@ class TestDiscoverGates:
             "        # invokes: ruff format --check\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         assert "ruff-format" in names
@@ -516,9 +523,7 @@ class TestDiscoverGates:
             "      - run: ruff format --check\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         assert "ruff-format" in names
@@ -547,9 +552,7 @@ class TestDiscoverGates:
             "      - run: ruff check\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         assert "ruff-format" not in names
@@ -602,6 +605,7 @@ class TestDiscoverGates:
         run("add", ".")
         run("commit", "-q", "-m", "add ruff lint hook")
         import shutil as _shutil
+
         _real_which = _shutil.which
 
         def _which_ruff_only(name: str, **kw: object) -> object:
@@ -609,9 +613,7 @@ class TestDiscoverGates:
                 return "/usr/bin/ruff"
             return _real_which(name, **kw)
 
-        with patch(
-            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
-        ):
+        with patch("pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".pre-commit-config.yaml"),
@@ -665,6 +667,7 @@ class TestDiscoverGates:
         run("add", ".")
         run("commit", "-q", "-m", "add ruff-format hook")
         import shutil as _shutil
+
         _real_which = _shutil.which
 
         def _which_ruff_only(name: str, **kw: object) -> object:
@@ -672,9 +675,7 @@ class TestDiscoverGates:
                 return "/usr/bin/ruff"
             return _real_which(name, **kw)
 
-        with patch(
-            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
-        ):
+        with patch("pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".pre-commit-config.yaml"),
@@ -713,9 +714,7 @@ class TestDiscoverGates:
             "        files: ^src/\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("src/code.py", "tests/a.py"),
@@ -749,18 +748,12 @@ class TestDiscoverGates:
             "        files: ^src/\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
-            gates = discover_gates(
-                tmp_path, changed_files=("tests/a.py",)
-            )
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
+            gates = discover_gates(tmp_path, changed_files=("tests/a.py",))
         names = {g.name for g in gates}
         assert "ruff-format" not in names
 
-    def test_pyproject_opt_in_ignores_pre_commit_scope(
-        self, tmp_path: Path
-    ) -> None:
+    def test_pyproject_opt_in_ignores_pre_commit_scope(self, tmp_path: Path) -> None:
         """Codex pass-10 finding 1: ``[tool.ruff.format]`` opts in all
         Python files. A pre-commit hook with ``files: ^src/`` must NOT
         filter the gate's file list — that scope belongs to the pre-commit
@@ -788,9 +781,7 @@ class TestDiscoverGates:
             "        files: ^src/\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("src/code.py", "tests/a.py"),
@@ -848,6 +839,7 @@ class TestDiscoverGates:
         run("add", ".")
         run("commit", "-q", "-m", "narrow ruff-format scope")
         import shutil as _shutil
+
         _real_which = _shutil.which
 
         def _which_ruff_only(name: str, **kw: object) -> object:
@@ -855,9 +847,7 @@ class TestDiscoverGates:
                 return "/usr/bin/ruff"
             return _real_which(name, **kw)
 
-        with patch(
-            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
-        ):
+        with patch("pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".pre-commit-config.yaml"),
@@ -868,9 +858,7 @@ class TestDiscoverGates:
         # from the CI-signal branch. (No pyproject opt-in either.)
         assert "ruff-format" not in names
 
-    def test_multi_hook_union_covers_all_scopes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_multi_hook_union_covers_all_scopes(self, tmp_path: Path) -> None:
         """Codex pass-10 finding 3: when ``.pre-commit-config.yaml``
         declares multiple ``id: ruff-format`` hooks with different
         ``files:`` scopes, a file covered by ANY hook must appear in
@@ -898,9 +886,7 @@ class TestDiscoverGates:
             "        files: ^scripts/\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("src/code.py", "scripts/run.py"),
@@ -912,9 +898,7 @@ class TestDiscoverGates:
         assert "src/code.py" in cmd
         assert "scripts/run.py" in cmd
 
-    def test_workflow_signal_ignores_pre_commit_scope(
-        self, tmp_path: Path
-    ) -> None:
+    def test_workflow_signal_ignores_pre_commit_scope(self, tmp_path: Path) -> None:
         """Codex pass-11 finding 1: when a GitHub Actions workflow runs
         ``ruff format --check``, the pre-commit hook's ``files: ^src/``
         scope must NOT filter the gate — the workflow may check files
@@ -947,9 +931,7 @@ class TestDiscoverGates:
             "jobs:\n  lint:\n    steps:\n      - run: ruff format --check .\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("src/code.py", "tests/a.py"),
@@ -961,9 +943,7 @@ class TestDiscoverGates:
         assert "src/code.py" in cmd
         assert "tests/a.py" in cmd
 
-    def test_skips_workflow_yaml_job_name_false_positive(
-        self, tmp_path: Path
-    ) -> None:
+    def test_skips_workflow_yaml_job_name_false_positive(self, tmp_path: Path) -> None:
         """Codex pass-11 finding 2: a workflow YAML key like
         ``name: ruff-format migration`` must NOT trigger the
         ruff-format gate — only actual ``ruff format`` command
@@ -992,9 +972,7 @@ class TestDiscoverGates:
             "        run: echo also done\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         # Step name matches must NOT trigger the gate (only run: values count).
@@ -1047,6 +1025,7 @@ class TestDiscoverGates:
         run("add", ".")
         run("commit", "-q", "-m", "make ruff-format manual-only")
         import shutil as _shutil
+
         _real_which = _shutil.which
 
         def _which_ruff_only(name: str, **kw: object) -> object:
@@ -1054,9 +1033,7 @@ class TestDiscoverGates:
                 return "/usr/bin/ruff"
             return _real_which(name, **kw)
 
-        with patch(
-            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
-        ):
+        with patch("pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".pre-commit-config.yaml"),
@@ -1116,6 +1093,7 @@ class TestDiscoverGates:
         run("add", ".")
         run("commit", "-q", "-m", "make all hooks manual-only via default_stages")
         import shutil as _shutil
+
         _real_which = _shutil.which
 
         def _which_ruff_only(name: str, **kw: object) -> object:
@@ -1123,9 +1101,7 @@ class TestDiscoverGates:
                 return "/usr/bin/ruff"
             return _real_which(name, **kw)
 
-        with patch(
-            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
-        ):
+        with patch("pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".pre-commit-config.yaml"),
@@ -1162,9 +1138,7 @@ class TestDiscoverGates:
             "      - id: ruff-format\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         # Lint gate stays absent (no [tool.ruff]) but format gate
@@ -1198,9 +1172,7 @@ class TestDiscoverGates:
             "      - id: ruff-format\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         assert "ruff-format" in names
@@ -1238,9 +1210,7 @@ class TestDiscoverGates:
             "jobs:\n  release:\n    steps:\n      - run: echo release\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".github/workflows/release.yml"),
@@ -1272,9 +1242,7 @@ class TestDiscoverGates:
             "jobs:\n  lint:\n    steps:\n      - run: ruff format --check\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"):
             gates = discover_gates(
                 tmp_path,
                 changed_files=("a.py", ".github/workflows/ci.yml"),
@@ -1300,13 +1268,11 @@ class TestDiscoverGates:
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         (tmp_path / "pyproject.toml").write_text(
             "[tool.ruff]\nline-length = 100\n"
-            "[tool.ruff.format]\nquote-style = \"double\"\n"
+            '[tool.ruff.format]\nquote-style = "double"\n'
             "[tool.black]\nline-length = 100\n",
             encoding="utf-8",
         )
-        with patch(
-            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/tool"
-        ):
+        with patch("pdd.checkup_gates.shutil.which", return_value="/usr/bin/tool"):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
         assert "ruff" in names
@@ -1385,20 +1351,18 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            _make_pkg_json({
-                "lint:check": "eslint --no-fix --config config/lint.json src",
-                "format:check": "prettier --check --config tools/p.json .",
-            }),
+            _make_pkg_json(
+                {
+                    "lint:check": "eslint --no-fix --config config/lint.json src",
+                    "format:check": "prettier --check --config tools/p.json .",
+                }
+            ),
             encoding="utf-8",
         )
         # PR modifies the custom config path — corresponding gate skips.
-        gates = discover_gates(
-            tmp_path, changed_files=("config/lint.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("config/lint.json",))
         assert "npm:lint:check" not in {g.name for g in gates}
-        gates = discover_gates(
-            tmp_path, changed_files=("tools/p.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("tools/p.json",))
         assert "npm:format:check" not in {g.name for g in gates}
         # Sanity: a non-config / non-JS PR touch still lets the
         # gates fire (subject to other iter-29/30 skips — use a
@@ -1439,12 +1403,15 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {
-                    "typecheck": "tsc -p config/build.json --noEmit",
-                },
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {
+                        "typecheck": "tsc -p config/build.json --noEmit",
+                    },
+                }
+            ),
             encoding="utf-8",
         )
         cfg_dir = tmp_path / "config"
@@ -1459,9 +1426,7 @@ class TestDiscoverGates:
         )
         # No top-level tsconfig.json — iter-36's root-only walk
         # would emit the gate. iter-37 walks from the -p target.
-        gates = discover_gates(
-            tmp_path, changed_files=("config/base.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("config/base.json",))
         assert "npm:typecheck" not in {g.name for g in gates}
 
     def test_npm_tsc_script_gate_skipped_when_p_dir_extends_base_pr_modified(
@@ -1475,10 +1440,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc -p config --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc -p config --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         cfg_dir = tmp_path / "config"
@@ -1491,9 +1459,7 @@ class TestDiscoverGates:
             '{"extends": "./base.json"}\n',
             encoding="utf-8",
         )
-        gates = discover_gates(
-            tmp_path, changed_files=("config/base.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("config/base.json",))
         assert "npm:typecheck" not in {g.name for g in gates}
 
     def test_script_gate_detects_hidden_dir_config(self) -> None:
@@ -1548,10 +1514,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc -p tsconfig.json --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc -p tsconfig.json --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "base.json").write_text(
@@ -1562,9 +1531,7 @@ class TestDiscoverGates:
             '{"extends": "./base.json"}\n',
             encoding="utf-8",
         )
-        gates = discover_gates(
-            tmp_path, changed_files=("base.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("base.json",))
         assert "npm:typecheck" not in {g.name for g in gates}
 
     def test_script_gate_handles_equals_and_short_config_forms(self) -> None:
@@ -1622,9 +1589,7 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
-        (tmp_path / "pyproject.toml").write_text(
-            "[tool.mypy]\n", encoding="utf-8"
-        )
+        (tmp_path / "pyproject.toml").write_text("[tool.mypy]\n", encoding="utf-8")
         # mypy.ini variant.
         (tmp_path / "mypy.ini").write_text(
             "[mypy]\nplugins = ./evil_plugin.py\n",
@@ -1674,12 +1639,8 @@ class TestDiscoverGates:
             )
         # Sanity: explicit disables of the only-with-value flags
         # are accepted.
-        assert _script_is_acceptable(
-            "tsc --noEmit --incremental false"
-        ) is True
-        assert _script_is_acceptable(
-            "tsc --noEmit --incremental=false"
-        ) is True
+        assert _script_is_acceptable("tsc --noEmit --incremental false") is True
+        assert _script_is_acceptable("tsc --noEmit --incremental=false") is True
 
     def test_script_rejects_nested_package_manager_run_prefix(self) -> None:
         """Iter-31 Finding 1: ``npm run X`` / ``yarn run X`` / ``pnpm
@@ -1771,13 +1732,9 @@ class TestDiscoverGates:
             gates = discover_gates(tmp_path, changed_files=changed)
             names = {g.name for g in gates}
             for tool in ("ruff", "black", "mypy"):
-                assert tool not in names, (
-                    f"{tool} must skip when PR touched {changed}"
-                )
+                assert tool not in names, f"{tool} must skip when PR touched {changed}"
 
-    def test_mypy_gate_skipped_when_local_plugin_declared(
-        self, tmp_path: Path
-    ) -> None:
+    def test_mypy_gate_skipped_when_local_plugin_declared(self, tmp_path: Path) -> None:
         """Iter-32 Finding 1: even when the PR does NOT modify
         pyproject.toml, mypy will import and execute any
         worktree-local plugin path the config already references.
@@ -1834,9 +1791,7 @@ class TestDiscoverGates:
         if _shutil.which("mypy"):
             assert "mypy" in {g.name for g in gates}
 
-    def test_mypy_gate_skipped_when_pr_modifies_config(
-        self, tmp_path: Path
-    ) -> None:
+    def test_mypy_gate_skipped_when_pr_modifies_config(self, tmp_path: Path) -> None:
         """Iter-31 Finding 2: mypy supports ``plugins = ["evil.py"]``
         under ``[tool.mypy]`` and imports/executes the plugin during
         type-checking. A fork PR that ships both a plugin file and
@@ -1862,9 +1817,7 @@ class TestDiscoverGates:
         ):
             gates = discover_gates(tmp_path, changed_files=changed)
             names = {g.name for g in gates}
-            assert "mypy" not in names, (
-                f"mypy must skip when PR touched {changed}"
-            )
+            assert "mypy" not in names, f"mypy must skip when PR touched {changed}"
             # ruff/black still fire (they don't have plugin RCE).
             # Skipped if those tools aren't on PATH in the sandbox.
 
@@ -1882,11 +1835,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            _make_pkg_json({
-                "format:check": "prettier --check .",
-                "lint:check": "eslint --no-fix .",
-                "typecheck": "tsc --noEmit",
-            }),
+            _make_pkg_json(
+                {
+                    "format:check": "prettier --check .",
+                    "lint:check": "eslint --no-fix .",
+                    "typecheck": "tsc --noEmit",
+                }
+            ),
             encoding="utf-8",
         )
         # Each target hits a different attack surface but all live
@@ -1903,12 +1858,8 @@ class TestDiscoverGates:
             assert "npm:format:check" not in names, (
                 f"format:check must skip on {changed}"
             )
-            assert "npm:lint:check" not in names, (
-                f"lint:check must skip on {changed}"
-            )
-            assert "npm:typecheck" not in names, (
-                f"typecheck must skip on {changed}"
-            )
+            assert "npm:lint:check" not in names, f"lint:check must skip on {changed}"
+            assert "npm:typecheck" not in names, f"typecheck must skip on {changed}"
 
     def test_tsconfig_chain_signals_emit_on_package_extends(
         self, tmp_path: Path
@@ -1924,10 +1875,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         # Package-name extends — the gate must skip because we
@@ -1953,10 +1907,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.base.json").write_text(
@@ -1985,10 +1942,14 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0", "scripts": {},
-                "devDependencies": {"typescript": "^5.0.0"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text("{}\n", encoding="utf-8")
@@ -2019,10 +1980,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text(
@@ -2042,10 +2006,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text(
@@ -2056,9 +2023,7 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "npm:typecheck" not in names
 
-    def test_tsc_direct_gate_passes_composite_false(
-        self, tmp_path: Path
-    ) -> None:
+    def test_tsc_direct_gate_passes_composite_false(self, tmp_path: Path) -> None:
         """Iter-28 Finding 2: ``composite: true`` set via the
         tsconfig extends chain only surfaces at compile time. The
         argv MUST pass ``--composite false`` to override regardless
@@ -2068,10 +2033,14 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0", "scripts": {},
-                "devDependencies": {"typescript": "^5.0.0"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
             encoding="utf-8",
         )
         # tsconfig itself does NOT enable composite — the extends
@@ -2109,21 +2078,15 @@ class TestDiscoverGates:
             encoding="utf-8",
         )
         # PR ONLY touched a plugin module loaded transitively.
-        gates = discover_gates(
-            tmp_path, changed_files=("local-plugin.cjs",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("local-plugin.cjs",))
         names = [g.name for g in gates]
         assert "npm:format:check" not in names
         # ``.mjs`` plugin module same.
-        gates = discover_gates(
-            tmp_path, changed_files=("plugins/foo.mjs",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("plugins/foo.mjs",))
         assert "npm:format:check" not in [g.name for g in gates]
         # ``.js`` at the repo root (common for ``prettier.config.js``
         # plugin imports) same.
-        gates = discover_gates(
-            tmp_path, changed_files=("plugin.js",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("plugin.js",))
         assert "npm:format:check" not in [g.name for g in gates]
 
     def test_prettier_script_gate_skipped_on_any_js_change(
@@ -2215,10 +2178,14 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0", "scripts": {},
-                "devDependencies": {"typescript": "^5.0.0"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text(
@@ -2255,10 +2222,14 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0", "scripts": {},
-                "devDependencies": {"typescript": "^5.0.0"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text(
@@ -2295,9 +2266,7 @@ class TestDiscoverGates:
             encoding="utf-8",
         )
         # PR-modified prettier config in the changed-file inventory.
-        gates = discover_gates(
-            tmp_path, changed_files=("prettier.config.cjs",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("prettier.config.cjs",))
         names = [g.name for g in gates]
         assert "npm:format:check" not in names
         # Sanity: when the PR did NOT touch the config the gate
@@ -2316,19 +2285,21 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0", "scripts": {},
-                "devDependencies": {"typescript": "^5.0.0"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text("{}\n", encoding="utf-8")
         tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
         tsc_dir.mkdir(parents=True)
         (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
-        gates = discover_gates(
-            tmp_path, changed_files=("tsconfig.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("tsconfig.json",))
         assert "tsc-noemit" not in {g.name for g in gates}
 
     def test_script_rejects_tsc_p_without_noemit(self) -> None:
@@ -2443,9 +2414,7 @@ class TestDiscoverGates:
 
         assert _script_is_acceptable("prettier --check src/**/*.ts") is True
         assert _script_is_acceptable("prettier --check '.'") is True
-        assert _script_is_acceptable(
-            "prettier --check src/foo.ts src/bar.ts"
-        ) is True
+        assert _script_is_acceptable("prettier --check src/foo.ts src/bar.ts") is True
         assert _script_is_acceptable("tsc --noEmit") is True
 
     def test_discover_skips_npm_script_with_shell_metachars(
@@ -2521,16 +2490,38 @@ class TestDiscoverGates:
 
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
-             "--allow-empty", "-m", "init", "-q"],
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+                "-q",
+            ],
             cwd=tmp_path,
             check=True,
         )
         # Synthetic "PR" branch with a clean working tree.
-        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
-             "--allow-empty", "-m", "feat", "-q"],
+            ["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "feat",
+                "-q",
+            ],
             cwd=tmp_path,
             check=True,
         )
@@ -2552,8 +2543,18 @@ class TestDiscoverGates:
             ["git", "init", "-q", "-b", "feature-only"], cwd=tmp_path, check=True
         )
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
-             "--allow-empty", "-m", "init", "-q"],
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+                "-q",
+            ],
             cwd=tmp_path,
             check=True,
         )
@@ -2601,8 +2602,18 @@ class TestDiscoverGates:
 
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
-             "--allow-empty", "-m", "init", "-q"],
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+                "-q",
+            ],
             cwd=tmp_path,
             check=True,
         )
@@ -2615,10 +2626,22 @@ class TestDiscoverGates:
             check=True,
         )
         # Synthetic "PR" branch with a clean working tree.
-        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
-             "--allow-empty", "-m", "feat", "-q"],
+            ["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "feat",
+                "-q",
+            ],
             cwd=tmp_path,
             check=True,
         )
@@ -2642,9 +2665,7 @@ class TestDiscoverGates:
         shim = tmp_path / "git"
         marker = tmp_path / "marker"
         shim.write_text(
-            "#!/bin/sh\n"
-            f"echo shim >> {marker}\n"
-            "exit 1\n",
+            f"#!/bin/sh\necho shim >> {marker}\nexit 1\n",
             encoding="utf-8",
         )
         shim.chmod(0o755)
@@ -2731,9 +2752,7 @@ class TestDiscoverGates:
     # execution to a PR-controlled binary.
     # ------------------------------------------------------------------
 
-    def test_npm_gates_skip_when_npmrc_sets_script_shell(
-        self, tmp_path: Path
-    ) -> None:
+    def test_npm_gates_skip_when_npmrc_sets_script_shell(self, tmp_path: Path) -> None:
         """Iter-38 Finding 1: ``.npmrc``'s ``script-shell`` key lets a PR
         redirect ``npm run`` (and ``npx``) to a PR-controlled shell
         binary. Confirmed against npm 10.x: writing
@@ -2749,36 +2768,30 @@ class TestDiscoverGates:
             _make_pkg_json({"format:check": "prettier --check ."}),
             encoding="utf-8",
         )
-        (tmp_path / ".npmrc").write_text(
-            "script-shell=./evil-sh\n", encoding="utf-8"
-        )
+        (tmp_path / ".npmrc").write_text("script-shell=./evil-sh\n", encoding="utf-8")
         gates = discover_gates(tmp_path, changed_files=())
         names = {g.name for g in gates}
         assert "npm:format:check" not in names
 
-    def test_npm_gates_skip_when_pnpmrc_sets_script_shell(
-        self, tmp_path: Path
-    ) -> None:
+    def test_npm_gates_skip_when_pnpmrc_sets_script_shell(self, tmp_path: Path) -> None:
         """Iter-38 Finding 1: pnpm reads ``.pnpmrc`` (in addition to
         ``.npmrc``) and honours ``script-shell``."""
         from pdd.checkup_gates import discover_gates
 
         _git_init(tmp_path)
-        (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '6.0'\n", encoding="utf-8")
+        (tmp_path / "pnpm-lock.yaml").write_text(
+            "lockfileVersion: '6.0'\n", encoding="utf-8"
+        )
         (tmp_path / "package.json").write_text(
             _make_pkg_json({"format:check": "prettier --check ."}),
             encoding="utf-8",
         )
-        (tmp_path / ".pnpmrc").write_text(
-            "script-shell=./evil-sh\n", encoding="utf-8"
-        )
+        (tmp_path / ".pnpmrc").write_text("script-shell=./evil-sh\n", encoding="utf-8")
         gates = discover_gates(tmp_path, changed_files=())
         names = {g.name for g in gates}
         assert "npm:format:check" not in names
 
-    def test_npm_gates_skip_when_yarnrc_sets_script_shell(
-        self, tmp_path: Path
-    ) -> None:
+    def test_npm_gates_skip_when_yarnrc_sets_script_shell(self, tmp_path: Path) -> None:
         """Iter-38 Finding 1: yarn 1's ``.yarnrc`` honours
         ``script-shell``."""
         from pdd.checkup_gates import discover_gates
@@ -2796,9 +2809,7 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "npm:format:check" not in names
 
-    def test_npm_gates_skip_when_yarnrc_sets_yarn_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_npm_gates_skip_when_yarnrc_sets_yarn_path(self, tmp_path: Path) -> None:
         """Iter-38 Finding 1: yarn 1's ``yarn-path`` redirects the yarn
         binary itself to a PR-controlled JavaScript file."""
         from pdd.checkup_gates import discover_gates
@@ -2905,19 +2916,21 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0", "scripts": {},
-                "devDependencies": {"typescript": "^5.0.0"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text("{}", encoding="utf-8")
         tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
         tsc_dir.mkdir(parents=True)
         (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
-        (tmp_path / ".npmrc").write_text(
-            "script-shell=./evil-sh\n", encoding="utf-8"
-        )
+        (tmp_path / ".npmrc").write_text("script-shell=./evil-sh\n", encoding="utf-8")
         gates = discover_gates(tmp_path, changed_files=())
         names = {g.name for g in gates}
         assert "tsc-noemit" not in names
@@ -2961,10 +2974,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc -p config/build.json --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc -p config/build.json --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         # Root tsconfig is benign — no incremental — so iter-29's
@@ -2990,10 +3006,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc -p config/build.json --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc -p config/build.json --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text(
@@ -3022,10 +3041,13 @@ class TestDiscoverGates:
 
         _git_init(tmp_path)
         (tmp_path / "package.json").write_text(
-            json.dumps({
-                "name": "fake", "version": "0.0.0",
-                "scripts": {"typecheck": "tsc -p config/build --noEmit"},
-            }),
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {"typecheck": "tsc -p config/build --noEmit"},
+                }
+            ),
             encoding="utf-8",
         )
         (tmp_path / "tsconfig.json").write_text(
@@ -3057,6 +3079,7 @@ class TestDiscoverGates:
         site-packages copy. Skip the gate when the plugin's top-level
         name maps to a worktree package directory."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3086,6 +3109,7 @@ class TestDiscoverGates:
         worktree root) are also editable-importable, so the skip must
         catch ``plugins = ["my_plugin"]`` against ``./my_plugin.py``."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3110,6 +3134,7 @@ class TestDiscoverGates:
         """Iter-38 Finding 3 also fires from ``mypy.ini`` / ``.mypy.ini``
         / ``setup.cfg``'s ``[mypy] plugins =`` line."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3118,9 +3143,7 @@ class TestDiscoverGates:
         (tmp_path / "a.py").write_text("x: int = 5\n", encoding="utf-8")
         # pyproject.toml needs the [tool.mypy] section to even get the
         # mypy gate considered for discovery.
-        (tmp_path / "pyproject.toml").write_text(
-            "[tool.mypy]\n", encoding="utf-8"
-        )
+        (tmp_path / "pyproject.toml").write_text("[tool.mypy]\n", encoding="utf-8")
         (tmp_path / "mypy.ini").write_text(
             "[mypy]\nplugins = my_project.mypy_plugin\n",
             encoding="utf-8",
@@ -3139,6 +3162,7 @@ class TestDiscoverGates:
         NOT exist in the worktree still produce a mypy gate. We do not
         want to drop legitimate third-party plugin use."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3279,6 +3303,7 @@ class TestDiscoverGates:
         iter-38 root-only worktree check missed this — extend the
         check to ``worktree/src/<top_level>``."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3307,6 +3332,7 @@ class TestDiscoverGates:
         whose top-level (``evil_plugin``) sits under src/ still
         resolves under an editable install."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3332,6 +3358,7 @@ class TestDiscoverGates:
         package discovery. Conservative treatment: same-named
         directory under src/ disables the gate."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3358,6 +3385,7 @@ class TestDiscoverGates:
         mypy gate. We do not want the broadened check to disable
         legitimate third-party plugin use."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3390,6 +3418,7 @@ class TestDiscoverGates:
         PATH so ``subprocess.run`` cannot re-consult PATH at execution
         time."""
         import shutil as _shutil
+
         if not _shutil.which("mypy"):  # pragma: no cover
             return
         from pdd.checkup_gates import discover_gates
@@ -3420,9 +3449,7 @@ class TestDiscoverGates:
                 f"PATH sanitization failed"
             )
 
-    def test_npm_gate_cmd_uses_absolute_runner_path(
-        self, tmp_path: Path
-    ) -> None:
+    def test_npm_gate_cmd_uses_absolute_runner_path(self, tmp_path: Path) -> None:
         """Iter-40 Finding 1: same as the mypy case but for the
         npm-family runner."""
         from pdd.checkup_gates import discover_gates
@@ -3463,12 +3490,12 @@ class TestDiscoverGates:
         risky_subdir = tmp_path / "bin"
         risky_subdir.mkdir()
         path_entries = [
-            "/usr/bin",          # safe absolute
-            ".",                 # cwd — risky
-            "",                  # empty — equivalent to cwd
-            "relative/path",     # relative — risky
-            str(risky_subdir),   # inside worktree — risky
-            "/usr/local/bin",    # safe absolute
+            "/usr/bin",  # safe absolute
+            ".",  # cwd — risky
+            "",  # empty — equivalent to cwd
+            "relative/path",  # relative — risky
+            str(risky_subdir),  # inside worktree — risky
+            "/usr/local/bin",  # safe absolute
         ]
         monkeypatch.setenv("PATH", os.pathsep.join(path_entries))
         sanitized = _sanitized_path(tmp_path)
@@ -3507,9 +3534,7 @@ class TestDiscoverGates:
     # version. Skip all npm-family gates on any package.json change.
     # ------------------------------------------------------------------
 
-    def test_npm_gates_skip_when_pr_modifies_package_json(
-        self, tmp_path: Path
-    ) -> None:
+    def test_npm_gates_skip_when_pr_modifies_package_json(self, tmp_path: Path) -> None:
         """Iter-40 Finding 2: ``packageManager: pnpm@X.Y.Z+sha512:EVIL``
         in PR-modified ``package.json`` makes corepack fetch and run
         the PR-selected version on first invocation. The gate cannot
@@ -3542,9 +3567,7 @@ class TestDiscoverGates:
             _make_pkg_json({"format:check": "prettier --check ."}),
             encoding="utf-8",
         )
-        gates = discover_gates(
-            tmp_path, changed_files=("packages/foo/package.json",)
-        )
+        gates = discover_gates(tmp_path, changed_files=("packages/foo/package.json",))
         names = {g.name for g in gates}
         assert "npm:format:check" not in names
 
@@ -3565,9 +3588,7 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "npm:format:check" in names
 
-    def test_extract_tsc_project_paths_preserves_case(
-        self, tmp_path: Path
-    ) -> None:
+    def test_extract_tsc_project_paths_preserves_case(self, tmp_path: Path) -> None:
         """``_extract_tsc_project_paths``
         previously lowercased the whole script command before
         tokenizing. On a case-sensitive filesystem (Linux/CI), a
@@ -3598,9 +3619,7 @@ class TestDiscoverGates:
         assert len(result2) == 1
         assert result2[0].name == "Build.json"
         # Quoted form keeps case.
-        result3 = _extract_tsc_project_paths(
-            'tsc -p "Config/Build.json"', tmp_path
-        )
+        result3 = _extract_tsc_project_paths('tsc -p "Config/Build.json"', tmp_path)
         assert len(result3) == 1
         assert result3[0].name == "Build.json"
 
@@ -3624,9 +3643,7 @@ class TestDiscoverGates:
             '{"compilerOptions": {"incremental": true}}', encoding="utf-8"
         )
         (tmp_path / "package.json").write_text(
-            _make_pkg_json(
-                {"typecheck": "tsc -p Config/Build.json --noEmit"}
-            ),
+            _make_pkg_json({"typecheck": "tsc -p Config/Build.json --noEmit"}),
             encoding="utf-8",
         )
         # No PR diff touches tsconfig — the only thing keeping the
@@ -3684,9 +3701,7 @@ class TestRunGates:
         from pdd.checkup_gates import Gate, run_gates
 
         # Emit ~200KB of stdout; the runner truncates to ~10KB.
-        script = (
-            "import sys; sys.stdout.write('A' * 200000); sys.exit(1)"
-        )
+        script = "import sys; sys.stdout.write('A' * 200000); sys.exit(1)"
         gates = [
             Gate(
                 name="bigout",
@@ -3799,12 +3814,18 @@ class TestRunGates:
         (pkg / f"{token_path_part}.py").write_text(
             "this is not python(\n", encoding="utf-8"
         )
-        gates = [g for g in discover_gates(tmp_path, changed_files=(rel,))
-                 if g.name.startswith("py-compile:")]
+        gates = [
+            g
+            for g in discover_gates(tmp_path, changed_files=(rel,))
+            if g.name.startswith("py-compile:")
+        ]
         assert gates, "py-compile gate must be discovered"
         artifacts_dir = tmp_path / "artifacts"
         results = run_gates(
-            tmp_path, gates, artifacts_dir=artifacts_dir, round_number=1,
+            tmp_path,
+            gates,
+            artifacts_dir=artifacts_dir,
+            round_number=1,
             mode="review",
         )
         # On-disk per-gate artifact filename: token must not appear.
@@ -3823,9 +3844,7 @@ class TestRunGates:
             assert token_path_part not in (f.evidence or "")
             assert token_path_part not in (f.required_fix or "")
 
-    def test_ruff_black_mypy_use_double_dash_separator(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ruff_black_mypy_use_double_dash_separator(self, tmp_path: Path) -> None:
         """Iter-25 Finding 2: a PR file named ``--config=evil.py`` (or
         any path starting with ``-``) would be parsed as a flag by
         ruff/black/mypy. Every per-file gate argv MUST include the
@@ -3850,9 +3869,7 @@ class TestRunGates:
             if not matching:  # tool may not be on PATH in the sandbox
                 continue
             cmd = matching[0].cmd
-            assert "--" in cmd, (
-                f"{name} argv missing -- separator: {cmd}"
-            )
+            assert "--" in cmd, f"{name} argv missing -- separator: {cmd}"
             # The `--` must precede the file path.
             dash_idx = cmd.index("--")
             path_idx = cmd.index("foo.py")
@@ -3904,9 +3921,9 @@ class TestRunGates:
         assert secret not in d["gate"]["source"]
         assert secret not in d["gate"]["required_fix_hint"]
         # The on-disk JSON manifest must also be clean.
-        manifest = (
-            artifacts_dir / "round-1-review-gates.json"
-        ).read_text(encoding="utf-8")
+        manifest = (artifacts_dir / "round-1-review-gates.json").read_text(
+            encoding="utf-8"
+        )
         assert secret not in manifest
 
     def test_persistence_failure_scrubs_error_field(
@@ -3953,9 +3970,9 @@ class TestRunGates:
         # ReviewFinding.evidence; must be scrubbed.
         assert secret not in (results[0].error or "")
         # The manifest itself reads the (now scrubbed) error.
-        manifest_text = (
-            artifacts_dir / "round-1-review-gates.json"
-        ).read_text(encoding="utf-8")
+        manifest_text = (artifacts_dir / "round-1-review-gates.json").read_text(
+            encoding="utf-8"
+        )
         assert secret not in manifest_text
 
     def test_runner_error_scrubs_secrets_in_synthetic_finding_evidence(
@@ -4033,12 +4050,9 @@ class TestRunGates:
         # artifact also dumps the cmd line; we want this test focused
         # on the output-excerpt scrub-before-truncate contract, not on
         # operator-supplied argv leakage).
-        secret_expr = (
-            "chr(103)+chr(104)+chr(112)+chr(95)+'A'*40"  # 'ghp_' + 40*A
-        )
+        secret_expr = "chr(103)+chr(104)+chr(112)+chr(95)+'A'*40"  # 'ghp_' + 40*A
         script = (
-            f"import sys; sys.stdout.write({padding!r} + ({secret_expr})); "
-            "sys.exit(0)"
+            f"import sys; sys.stdout.write({padding!r} + ({secret_expr})); sys.exit(0)"
         )
         gates = [
             Gate(
@@ -4060,9 +4074,9 @@ class TestRunGates:
         assert "ghp_" not in excerpt
         # The on-disk artifact MUST also be clean (it's written from
         # the same scrubbed/truncated string).
-        artifact_text = (artifacts_dir / "round-1-review-gate-boundary-leak.txt").read_text(
-            encoding="utf-8"
-        )
+        artifact_text = (
+            artifacts_dir / "round-1-review-gate-boundary-leak.txt"
+        ).read_text(encoding="utf-8")
         assert "ghp_" not in artifact_text
 
     def test_runs_with_ci_env_and_no_color(self, tmp_path: Path) -> None:
@@ -4180,7 +4194,8 @@ class TestRunGates:
         first = results[0]
         assert first.exit_code is None
         assert first.error and (
-            "permissionerror" in first.error.lower() or "disk full" in first.error.lower()
+            "permissionerror" in first.error.lower()
+            or "disk full" in first.error.lower()
         )
         # The second gate still records its successful run.
         second = results[1]

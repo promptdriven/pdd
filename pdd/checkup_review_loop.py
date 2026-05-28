@@ -26,6 +26,7 @@ the final report is posted to the source issue / PR. Read-side calls
 always run; this module never parses stdout-supplied issue or PR content.
 Issue/PR context is supplied through ``ReviewLoopContext`` by the caller.
 """
+
 from __future__ import annotations
 
 import json
@@ -129,14 +130,10 @@ EXTERNAL_STATUS_AREAS: Tuple[str, ...] = (
 )
 REVIEW_TRAILING_SECTION_NAMES = r"(?:Checks|Checks Run|Verification|Regression Checks)"
 REVIEW_TRAILING_SECTION_LOOKAHEAD = (
-    r"\n\s*(?:\*\*)?"
-    + REVIEW_TRAILING_SECTION_NAMES
-    + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
+    r"\n\s*(?:\*\*)?" + REVIEW_TRAILING_SECTION_NAMES + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
 )
 REVIEW_TRAILING_SECTION_SPLIT_RE = (
-    r"(?:^|\n)\s*(?:\*\*)?"
-    + REVIEW_TRAILING_SECTION_NAMES
-    + r"(?:\*\*)?\s*:?[^\n]*"
+    r"(?:^|\n)\s*(?:\*\*)?" + REVIEW_TRAILING_SECTION_NAMES + r"(?:\*\*)?\s*:?[^\n]*"
 )
 
 # Statuses that always mean "not clean" regardless of how a caller widens
@@ -440,7 +437,9 @@ def _defang_issue_aligned(text: str) -> str:
     if not text:
         return text
     return _DEFANG_ISSUE_ALIGNED_RE.sub(
-        lambda m: f"{m.group('lead')}{m.group('key')}*{m.group('close')}{m.group('sep')}",
+        lambda m: (
+            f"{m.group('lead')}{m.group('key')}*{m.group('close')}{m.group('sep')}"
+        ),
         text,
     )
 
@@ -972,9 +971,7 @@ def run_checkup_review_loop(
         base_local = pr_metadata.get("base_local_ref")
         if isinstance(base_local, str) and base_local.strip():
             base_for_preflight = base_local.strip()
-    preflight_conflict = _detect_pr_base_merge_conflict(
-        worktree, base_for_preflight
-    )
+    preflight_conflict = _detect_pr_base_merge_conflict(worktree, base_for_preflight)
     if preflight_conflict:
         conflict_finding = ReviewFinding(
             severity="blocker",
@@ -1175,7 +1172,9 @@ def run_checkup_review_loop(
                             )
                             if gate_findings:
                                 _record_gate_findings(state, gate_findings)
-                                state.reviewer_status[fallback_result.reviewer] = "findings"
+                                state.reviewer_status[fallback_result.reviewer] = (
+                                    "findings"
+                                )
                                 # The fallback reviewer is now the active
                                 # reviewer for the rest of the loop;
                                 # feed the gate findings to the fixer on
@@ -1242,8 +1241,7 @@ def run_checkup_review_loop(
                         _record_gate_findings(state, gate_findings)
                         state.reviewer_status[reviewer] = "findings"
                         state.stop_reason = (
-                            "Review-only mode: deterministic gates "
-                            "reported findings."
+                            "Review-only mode: deterministic gates reported findings."
                         )
                     else:
                         _mark_reviewer_findings_fixed(state, reviewer)
@@ -1529,8 +1527,7 @@ def run_checkup_review_loop(
         )
         if guard_refusal:
             _write_artifact(
-                artifacts_dir
-                / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                artifacts_dir / f"round-{round_number}-prompt-source-guard-refusal.txt",
                 guard_refusal + "\n",
             )
             state.stop_reason = guard_refusal
@@ -1686,16 +1683,14 @@ def run_checkup_review_loop(
             # is ``"unverified"``.
             state.verification_status_by_round[round_number] = "unverified"
             state.stop_reason = (
-                f"Primary reviewer {reviewer} could not verify fixes: "
-                f"{verify.status}."
+                f"Primary reviewer {reviewer} could not verify fixes: {verify.status}."
             )
             break
 
         verify_open_findings = _actionable_findings(state, verify.findings)
         verify_open_keys = {finding.key for finding in verify_open_findings}
         fixed_findings = [
-            finding for finding in fix_findings
-            if finding.key not in verify_open_keys
+            finding for finding in fix_findings if finding.key not in verify_open_keys
         ]
         _mark_findings_fixed(state, fixed_findings)
         _record_reviewer_feedback(state, verify_open_findings, fix)
@@ -1753,7 +1748,9 @@ def run_checkup_review_loop(
 
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
-        state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
+        state.stop_reason = _clean_stop_reason(
+            fresh_final=config.require_final_fresh_review
+        )
         break
 
     if not state.stop_reason and state.reviewer_status.get(reviewer) == "clean":
@@ -1774,7 +1771,10 @@ def run_checkup_review_loop(
         state.max_rounds_reached = True
         state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
-    if state.fresh_final_status == "missing" and state.reviewer_status.get(reviewer) == "clean":
+    if (
+        state.fresh_final_status == "missing"
+        and state.reviewer_status.get(reviewer) == "clean"
+    ):
         state.fresh_final_status = "clean"
 
     report = _finalize(context, state, roles, artifacts_dir)
@@ -1797,18 +1797,24 @@ def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     """Resolve the primary reviewer and fixer roles from new and legacy config."""
     legacy_roles = _normalize_reviewers(config.reviewers)
-    explicit_reviewer = _normalize_reviewers([config.reviewer]) if config.reviewer else []
+    explicit_reviewer = (
+        _normalize_reviewers([config.reviewer]) if config.reviewer else []
+    )
     explicit_fixer = _normalize_reviewers([config.fixer]) if config.fixer else []
 
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
+        else legacy_roles[0]
+        if legacy_roles
+        else DEFAULT_REVIEWER
     )
     fixer = (
         explicit_fixer[0]
         if explicit_fixer
-        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
+        else legacy_roles[1]
+        if len(legacy_roles) > 1
+        else DEFAULT_FIXER
     )
 
     if reviewer == fixer and not config.review_only:
@@ -2062,8 +2068,14 @@ def _package_companion_python_files(
                 name = entry.name
                 # Skip dot-dirs and conventional non-source roots.
                 if name.startswith(".") or name in {
-                    "__pycache__", "node_modules", "build", "dist",
-                    "site-packages", ".venv", "venv", "env",
+                    "__pycache__",
+                    "node_modules",
+                    "build",
+                    "dist",
+                    "site-packages",
+                    ".venv",
+                    "venv",
+                    "env",
                 }:
                     continue
                 # An "obvious package" has at least one ``.py`` file in it.
@@ -2215,8 +2227,7 @@ def _collect_static_analysis_candidate_findings(
 
     # Persist for offline inspection alongside the prompt artifact.
     _write_artifact(
-        artifacts_dir
-        / f"round-{round_number}-{mode}-static-analysis-candidates.json",
+        artifacts_dir / f"round-{round_number}-{mode}-static-analysis-candidates.json",
         json.dumps(candidates, indent=2),
     )
     return candidates
@@ -2290,9 +2301,7 @@ def _collect_companion_source_of_truth_files(
             base_ref_for_arch = local.strip()
         elif pr_metadata.get("base_ref"):
             base_ref_for_arch = f"origin/{str(pr_metadata['base_ref']).strip()}"
-    arch_entry_changed_set = _arch_entries_changed_set(
-        worktree, base_ref_for_arch
-    )
+    arch_entry_changed_set = _arch_entries_changed_set(worktree, base_ref_for_arch)
     # Build the full eligible set FIRST so the truncation marker (below)
     # can report total_eligible accurately and enumerate the omitted
     # paths. Walking ``mapping`` (the canonical code -> prompt registry)
@@ -2342,7 +2351,9 @@ def _collect_companion_source_of_truth_files(
     head = eligible[:max_entries]
     omitted_entries = eligible[max_entries:]
     omitted_paths_cap = max(1, max_entries // 2)
-    omitted_paths_shown = [entry["code_path"] for entry in omitted_entries[:omitted_paths_cap]]
+    omitted_paths_shown = [
+        entry["code_path"] for entry in omitted_entries[:omitted_paths_cap]
+    ]
     omitted_paths_remaining = max(0, len(omitted_entries) - omitted_paths_cap)
     head.append(
         {
@@ -2449,9 +2460,7 @@ def _maybe_run_fallback_reviewer(
         # in ``reviewer_status_details`` by the earlier ``_record_review``
         # call), tag it as superseded, then flip the rendered status to
         # ``"clean"`` so adapter rule r1 lets r1.5 fire.
-        original_detail = dict(
-            state.reviewer_status_details.get(primary_reviewer, {})
-        )
+        original_detail = dict(state.reviewer_status_details.get(primary_reviewer, {}))
         original_detail.setdefault("status", primary_status)
         original_detail.setdefault("classification", "unknown")
         original_detail.setdefault("exit_code", "no exit code")
@@ -2563,8 +2572,14 @@ def _maybe_run_fallback_fixer(
     if (
         canonical_fallback == normalized_primary[0]
         or canonical_fallback == normalized_reviewer[0]
-        or (active_reviewer_norm is not None and canonical_fallback == active_reviewer_norm)
-        or (original_reviewer_norm is not None and canonical_fallback == original_reviewer_norm)
+        or (
+            active_reviewer_norm is not None
+            and canonical_fallback == active_reviewer_norm
+        )
+        or (
+            original_reviewer_norm is not None
+            and canonical_fallback == original_reviewer_norm
+        )
     ):
         return None
 
@@ -2777,9 +2792,7 @@ def _run_review(
         # truncation note can actually inspect every omitted
         # prompt/architecture pair before issuing a verdict.
         omitted_full: List[Dict[str, Any]] = (
-            list(marker.get("omitted_entries_full", []))
-            if marker is not None
-            else []
+            list(marker.get("omitted_entries_full", [])) if marker is not None else []
         )
         artifact_payload = {
             "round": round_number,
@@ -2877,9 +2890,8 @@ def _run_review(
             )
             result.status_exit_code = result.status_exit_code or exit_code
             result.status_reason = result.status_reason or reason
-        if (
-            _should_attempt_parse_repair(output, result)
-            and not _budget_exhausted(config, state, deadline or float("inf"))
+        if _should_attempt_parse_repair(output, result) and not _budget_exhausted(
+            config, state, deadline or float("inf")
         ):
             repaired = _run_review_parse_repair(
                 reviewer=reviewer,
@@ -2909,8 +2921,7 @@ def _run_review(
                 # not silently drop the traceback tail.
                 if repaired.status in HARD_NOT_CLEAN_STATES:
                     repaired.status_classification = (
-                        repaired.status_classification
-                        or result.status_classification
+                        repaired.status_classification or result.status_classification
                     )
                     repaired.status_exit_code = (
                         repaired.status_exit_code or result.status_exit_code
@@ -2937,9 +2948,7 @@ def _run_review(
                         repaired.status_exit_code = (
                             repaired.status_exit_code or exit_code
                         )
-                        repaired.status_reason = (
-                            repaired.status_reason or reason
-                        )
+                        repaired.status_reason = repaired.status_reason or reason
                 result = repaired
     _write_artifact(
         artifacts_dir / f"{base}.findings.json",
@@ -2979,7 +2988,9 @@ def _run_review_parse_repair(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}:parse-repair", output))
+    state.raw_outputs.append(
+        (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
+    )
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     if not success:
         return None
@@ -2993,7 +3004,10 @@ def _run_review_parse_repair(
         round_number,
         allow_degraded=config.continue_on_reviewer_limit,
     )
-    if repaired.status in {"clean", "findings"} or repaired.status in HARD_NOT_CLEAN_STATES:
+    if (
+        repaired.status in {"clean", "findings"}
+        or repaired.status in HARD_NOT_CLEAN_STATES
+    ):
         return repaired
     return None
 
@@ -3036,7 +3050,9 @@ def _run_fix(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append((f"fix:{fixer}:for:{reviewer}:round{round_number}", output))
+    state.raw_outputs.append(
+        (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
+    )
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     changed_files = _git_changed_files(worktree)
     summary, dispositions, rationales = _parse_fix_output(output, findings)
@@ -3836,11 +3852,7 @@ def _filter_actionable_review_findings(
     findings: Sequence[ReviewFinding],
 ) -> List[ReviewFinding]:
     """Drop findings that only reflect external PR readiness status."""
-    return [
-        finding
-        for finding in findings
-        if not _is_external_status_finding(finding)
-    ]
+    return [finding for finding in findings if not _is_external_status_finding(finding)]
 
 
 def _is_external_status_finding(finding: ReviewFinding) -> bool:
@@ -4092,7 +4104,7 @@ def _markdown_findings_section(output: str) -> str:
     text = output or ""
     match = re.search(r"^\s*\*\*Findings\*\*\s*$", text, re.IGNORECASE | re.MULTILINE)
     if match:
-        text = text[match.end():]
+        text = text[match.end() :]
     return _strip_review_trailing_sections(text)
 
 
@@ -4175,7 +4187,7 @@ def _strip_markdown_emphasis(text: str) -> str:
             and value.endswith(marker)
             and len(value) >= len(marker) * 2
         ):
-            value = value[len(marker):-len(marker)].strip()
+            value = value[len(marker) : -len(marker)].strip()
     return value
 
 
@@ -4263,7 +4275,9 @@ def _pr_changed_files_all(
                 text=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            logger.debug("gates: changed-files base verify failed for %r: %s", base, exc)
+            logger.debug(
+                "gates: changed-files base verify failed for %r: %s", base, exc
+            )
             continue
         if verify.returncode != 0:
             continue
@@ -4382,9 +4396,7 @@ def _enforce_gates_before_clean(
     # is healthy or passes ``--no-gates`` explicitly.
     if pr_metadata and pr_metadata.get("base_ref_fetch_error"):
         base_ref_label = str(pr_metadata.get("base_ref") or "<unknown>")
-        scrubbed_err = _scrub_secrets(
-            str(pr_metadata["base_ref_fetch_error"])
-        )
+        scrubbed_err = _scrub_secrets(str(pr_metadata["base_ref_fetch_error"]))
         state.gate_runs.append(
             {
                 "round": round_number,
@@ -4451,9 +4463,7 @@ def _enforce_gates_before_clean(
     # earlier-commit poisoning slip through. Fail closed with a
     # synthetic blocker just like the base-ref-refresh failure path.
     if pr_metadata and pr_metadata.get("changed_files_fallback"):
-        scrubbed_err = _scrub_secrets(
-            str(pr_metadata["changed_files_fallback"])
-        )
+        scrubbed_err = _scrub_secrets(str(pr_metadata["changed_files_fallback"]))
         state.gate_runs.append(
             {
                 "round": round_number,
@@ -4736,10 +4746,7 @@ def _required_findings(
 ) -> List[ReviewFinding]:
     blocking = {sev.lower() for sev in config.blocking_severities}
     return [
-        f
-        for f in findings
-        if f.status != "fixed"
-        and f.severity.lower() in blocking
+        f for f in findings if f.status != "fixed" and f.severity.lower() in blocking
     ]
 
 
@@ -4876,7 +4883,9 @@ def _mark_budget_exhausted(
         state.stop_reason = f"Max review cost reached: ${config.max_cost:.2f}."
     if time.monotonic() >= deadline:
         state.max_duration_reached = True
-        state.stop_reason = f"Max review duration reached: {config.max_minutes:g} minutes."
+        state.stop_reason = (
+            f"Max review duration reached: {config.max_minutes:g} minutes."
+        )
 
 
 # Multi-word / specific substrings used to classify transient/infra failures.
@@ -5085,7 +5094,9 @@ def _fetch_pr_metadata(
     *,
     include_changed_files: bool = False,
 ) -> Dict[str, str]:
-    success, output = _run_gh_command(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}"]
+    )
     if not success:
         return {}
     try:
@@ -5384,9 +5395,7 @@ def _commit_and_push_if_changed(
     # staged-set check goes empty, and the function returned "no
     # eligible changes" while the real fixer commit silently rotted.
     has_unpushed_local_commits = bool(
-        pre_fix_sha
-        and current_head
-        and current_head != pre_fix_sha
+        pre_fix_sha and current_head and current_head != pre_fix_sha
     )
 
     if not changed and not has_unpushed_local_commits:
@@ -5425,7 +5434,9 @@ def _commit_and_push_if_changed(
                 "-m",
                 message,
             ]
-            result = subprocess.run(commit_cmd, cwd=worktree, capture_output=True, text=True)
+            result = subprocess.run(
+                commit_cmd, cwd=worktree, capture_output=True, text=True
+            )
             if result.returncode != 0:
                 return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
 
@@ -5445,7 +5456,10 @@ def _commit_and_push_if_changed(
         )
     fixer_sha = fixer_sha_result.stdout.strip()
     if not fixer_sha:
-        return False, "Failed to capture fixer commit SHA before push: empty rev-parse output"
+        return (
+            False,
+            "Failed to capture fixer commit SHA before push: empty rev-parse output",
+        )
 
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
@@ -5500,7 +5514,10 @@ def _commit_and_push_if_changed(
     # retry path used `https://x-access-token:...@github.com/...`. Scrub before
     # surfacing so secrets cannot leak into operator-visible logs or reports.
     token = _github_token_from_env()
-    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}"
+    return (
+        False,
+        f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}",
+    )
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -5560,8 +5577,7 @@ def _rebase_onto_updated_pr_head(
     )
     if not fetched:
         return False, (
-            "Failed to refresh PR branch before retrying push: "
-            f"{fetch_message}"
+            f"Failed to refresh PR branch before retrying push: {fetch_message}"
         )
 
     # Pin the local state to the original fixer commit before every rebase so
@@ -5588,9 +5604,7 @@ def _rebase_onto_updated_pr_head(
     # base — strictly identical behaviour to the pre-F3 single-commit
     # case.
     upstream = (
-        local_base_sha
-        if local_base_sha and local_base_sha != fixer_sha
-        else "HEAD~1"
+        local_base_sha if local_base_sha and local_base_sha != fixer_sha else "HEAD~1"
     )
     rebase = subprocess.run(
         [
@@ -5619,14 +5633,10 @@ def _rebase_onto_updated_pr_head(
         text=True,
     )
     token = _github_token_from_env()
-    rebase_tail = _redact_secret(
-        rebase.stderr.strip() or rebase.stdout.strip(), token
-    )
+    rebase_tail = _redact_secret(rebase.stderr.strip() or rebase.stdout.strip(), token)
     abort_note = ""
     if abort.returncode != 0:
-        abort_tail = _redact_secret(
-            abort.stderr.strip() or abort.stdout.strip(), token
-        )
+        abort_tail = _redact_secret(abort.stderr.strip() or abort.stdout.strip(), token)
         abort_note = f" (rebase --abort also failed: {abort_tail})"
     return False, (
         "Failed to rebase fixes onto updated PR branch before retrying push: "
@@ -5850,9 +5860,7 @@ def _load_prompt_source_map(
     return mapping
 
 
-def _arch_entries_changed_set(
-    worktree: Path, base_ref: Optional[str]
-) -> Set[str]:
+def _arch_entries_changed_set(worktree: Path, base_ref: Optional[str]) -> Set[str]:
     """Return the set of code_paths whose architecture entry differs
     between ``base_ref`` and HEAD.
 
@@ -5913,9 +5921,7 @@ def _arch_entries_changed_set(
             if not isinstance(filepath, str) or not filepath:
                 continue
             try:
-                out[Path(filepath).as_posix()] = json.dumps(
-                    entry, sort_keys=True
-                )
+                out[Path(filepath).as_posix()] = json.dumps(entry, sort_keys=True)
             except (TypeError, ValueError):
                 continue
         return out
@@ -5926,7 +5932,7 @@ def _arch_entries_changed_set(
     # with ``origin/``). Stop at the first ref that resolves.
     candidates: List[str] = [base]
     if base.startswith("origin/"):
-        candidates.append(base[len("origin/"):])
+        candidates.append(base[len("origin/") :])
     pre: Optional[Dict[str, str]] = None
     for cand in candidates:
         pre = _read_entries(cand)
@@ -6071,9 +6077,7 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
     return pairs
 
 
-def _path_exists_at_head(
-    worktree: Path, path: str, head_ref: str = "HEAD"
-) -> bool:
+def _path_exists_at_head(worktree: Path, path: str, head_ref: str = "HEAD") -> bool:
     """Return True if ``path`` exists in ``head_ref``'s tree.
 
     Used by ``_check_architecture_registry_edit_guard`` to distinguish
@@ -6418,9 +6422,7 @@ def _check_architecture_registry_edit_guard(
     # (``removed_only or implicit_retirement``) and the same notion
     # of "registered on either side of the registry edit".
     head_registered_paths = {path for pair in head_pairs for path in pair}
-    worktree_registered_paths = {
-        path for pair in worktree_pairs for path in pair
-    }
+    worktree_registered_paths = {path for pair in worktree_pairs for path in pair}
     unregistered_new_code_paths: List[str] = []
     if removed_only or implicit_retirement:
         for path in sorted(changed_norm):
@@ -6497,10 +6499,7 @@ def _check_architecture_registry_edit_guard(
             # comparison; ``_IMPORTABLE_SUFFIXES`` is already
             # lowercase so the tuple does not need re-casing.
             is_symlink = candidate.is_symlink()
-            if (
-                not is_symlink
-                and not path.lower().endswith(_IMPORTABLE_SUFFIXES)
-            ):
+            if not is_symlink and not path.lower().endswith(_IMPORTABLE_SUFFIXES):
                 continue
             # Treat either a real file or a symlink as "present on
             # disk" — symlinks are themselves part of the #1081
@@ -6567,10 +6566,14 @@ def _check_architecture_registry_edit_guard(
     repointed_by_code.sort()
     repointed_by_prompt.sort()
 
-    if not (offenders_added or offenders_removed
-            or repointed_by_code or repointed_by_prompt
-            or unregistered_new_code_paths
-            or submodule_offenders):
+    if not (
+        offenders_added
+        or offenders_removed
+        or repointed_by_code
+        or repointed_by_prompt
+        or unregistered_new_code_paths
+        or submodule_offenders
+    ):
         return None
 
     parts: List[str] = []
@@ -6602,13 +6605,9 @@ def _check_architecture_registry_edit_guard(
                 f"as a prompt)"
             )
         else:
-            parts.append(
-                f"added {code}\u2194{prompt} without prompt source on disk"
-            )
+            parts.append(f"added {code}\u2194{prompt} without prompt source on disk")
     for code, prompt in offenders_removed:
-        parts.append(
-            f"removed {code}\u2194{prompt} with code still present"
-        )
+        parts.append(f"removed {code}\u2194{prompt} with code still present")
     for code, old_prompt, new_prompt in repointed_by_code:
         # Round-14 finding (symmetry with the added-pair check): a
         # repoint whose NEW prompt path is not a ``.prompt`` file is the
@@ -6622,9 +6621,7 @@ def _check_architecture_registry_edit_guard(
                 f"(importable code disguised as a prompt)"
             )
         else:
-            parts.append(
-                f"repointed {code} from {old_prompt} to {new_prompt}"
-            )
+            parts.append(f"repointed {code} from {old_prompt} to {new_prompt}")
     for prompt, old_code, new_code in repointed_by_prompt:
         # Round-14 finding (defence-in-depth symmetry): ``prompt`` here
         # is HEAD-side (the unchanged registry key), so it should
@@ -6638,9 +6635,7 @@ def _check_architecture_registry_edit_guard(
                 f"file (importable code disguised as a prompt)"
             )
         else:
-            parts.append(
-                f"repointed {prompt} from {old_code} to {new_code}"
-            )
+            parts.append(f"repointed {prompt} from {old_code} to {new_code}")
     for path in submodule_offenders:
         parts.append(
             f"new git submodule {path} introduced via .gitmodules edit "
@@ -6683,15 +6678,16 @@ def _git_has_staged_changes(worktree: Path) -> bool:
 
 def _is_untracked_pdd_meta_artifact(path: str) -> bool:
     rel = path.replace(os.sep, "/")
-    return (
-        rel.startswith(".pdd/checkup-context/")
-        or (rel.startswith(".pdd/meta/") and rel.endswith(".json"))
+    return rel.startswith(".pdd/checkup-context/") or (
+        rel.startswith(".pdd/meta/") and rel.endswith(".json")
     )
 
 
 def _artifacts_dir(cwd: Path, issue_number: int, pr_number: int) -> Path:
     root = _get_git_root(cwd) or cwd
-    return root / ".pdd" / "checkup-review-loop" / f"issue-{issue_number}-pr-{pr_number}"
+    return (
+        root / ".pdd" / "checkup-review-loop" / f"issue-{issue_number}-pr-{pr_number}"
+    )
 
 
 def _write_artifact(path: Path, content: str) -> None:
@@ -6837,21 +6833,25 @@ def _post_review_loop_report(
 ) -> None:
     if not use_github_state:
         return
-    _run_gh_command([
-        "api",
-        f"repos/{context.repo_owner}/{context.repo_name}/issues/{context.issue_number}/comments",
-        "-X",
-        "POST",
-        "-f",
-        f"body={report}",
-    ])
-    _run_gh_command([
-        "pr",
-        "comment",
-        context.pr_url,
-        "--body",
-        report,
-    ])
+    _run_gh_command(
+        [
+            "api",
+            f"repos/{context.repo_owner}/{context.repo_name}/issues/{context.issue_number}/comments",
+            "-X",
+            "POST",
+            "-f",
+            f"body={report}",
+        ]
+    )
+    _run_gh_command(
+        [
+            "pr",
+            "comment",
+            context.pr_url,
+            "--body",
+            report,
+        ]
+    )
 
 
 def _finalize(
@@ -6901,9 +6901,7 @@ def _finalize(
         #  3. Otherwise the SHA the reviewer observed in the worktree
         #     before any fixer ran.
         compare_sha = (
-            state.verified_head_sha
-            or last_pushed_fix_sha
-            or state.reviewed_head_sha
+            state.verified_head_sha or last_pushed_fix_sha or state.reviewed_head_sha
         )
         metadata = _fetch_pr_metadata(
             context.pr_owner, context.pr_repo, context.pr_number
@@ -6920,7 +6918,10 @@ def _finalize(
                 stale_head = True
                 if state.fresh_final_status == "clean":
                     state.fresh_final_status = "missing"
-                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                    if (
+                        not state.stop_reason
+                        or "could not" not in state.stop_reason.lower()
+                    ):
                         state.stop_reason = (
                             "Reviewed PR head SHA was not observable; "
                             "cannot prove remote head matches review. "
@@ -6936,7 +6937,10 @@ def _finalize(
                     state.fresh_final_status = "missing"
                     short_reviewed = compare_sha[:7]
                     short_remote = remote_sha[:7]
-                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                    if (
+                        not state.stop_reason
+                        or "could not" not in state.stop_reason.lower()
+                    ):
                         # Pick the verb that matches what actually
                         # cleared the SHA. When the verifier was the
                         # one that cleared it, keep the existing
@@ -7008,11 +7012,15 @@ def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
         return True
     if state.active_reviewer:
         return state.reviewer_status.get(state.active_reviewer) in HARD_NOT_CLEAN_STATES
-    return any(status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values())
+    return any(
+        status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values()
+    )
 
 
 def _has_limit_state(state: ReviewLoopState) -> bool:
-    return state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached
+    return (
+        state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached
+    )
 
 
 def _render_final_report(
@@ -7081,9 +7089,7 @@ def _render_final_report(
             and status in HARD_NOT_CLEAN_STATES
         )
         if is_superseded:
-            cell = (
-                f"{status} (optional, superseded by {state.active_reviewer})"
-            )
+            cell = f"{status} (optional, superseded by {state.active_reviewer})"
         else:
             cell = status
         lines.append(f"| {reviewer} | {cell} |")
@@ -7227,13 +7233,15 @@ def _render_final_report(
                                 lines.append(f"    {output_line}")
                             lines.append("    ```")
 
-    lines.extend([
-        "",
-        "### Findings",
-        "",
-        "| Severity | Status | Location | Finding | Required fix | Reviewer |",
-        "|----------|--------|----------|---------|--------------|----------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Findings",
+            "",
+            "| Severity | Status | Location | Finding | Required fix | Reviewer |",
+            "|----------|--------|----------|---------|--------------|----------|",
+        ]
+    )
     if remaining_findings:
         for finding in remaining_findings:
             lines.append(
@@ -7265,13 +7273,17 @@ def _render_final_report(
             "review-loop |"
         )
 
-    lines.extend([
-        "",
-        "### Fixer Rationale",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Fixer Rationale",
+            "",
+        ]
+    )
     findings_with_rationale = [
-        finding for finding in remaining_findings if finding.key in state.dispute_notes_by_key
+        finding
+        for finding in remaining_findings
+        if finding.key in state.dispute_notes_by_key
     ]
     if findings_with_rationale:
         # Issue #1088 trust boundary: remaining findings are, by
@@ -7282,7 +7294,9 @@ def _render_final_report(
         # ``fixer_disposition=`` / ``fixer_rationale=`` note produced by
         # ``_fix_dispute_note``.
         for finding in findings_with_rationale:
-            note = state.dispute_notes_by_key.get(finding.key, "No fixer rationale captured.")
+            note = state.dispute_notes_by_key.get(
+                finding.key, "No fixer rationale captured."
+            )
             location = finding.location or "-"
             lines.append(
                 f"- {_escape_table(location)}: {_escape_table(finding.finding)} "
@@ -7291,11 +7305,13 @@ def _render_final_report(
     else:
         lines.append("- none")
 
-    lines.extend([
-        "",
-        "### Fixes Attempted",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Fixes Attempted",
+            "",
+        ]
+    )
     if state.fixes:
         # Verification trust boundary (issue #1088, R-V7). Render each
         # ``### Fixes Attempted`` bullet in the structured triple
@@ -7323,13 +7339,9 @@ def _render_final_report(
             )
             push_status = fix.push_status or "not_attempted"
             local_sha = (
-                fix.local_fixer_commit_sha[:7]
-                if fix.local_fixer_commit_sha
-                else "none"
+                fix.local_fixer_commit_sha[:7] if fix.local_fixer_commit_sha else "none"
             )
-            pushed_sha = (
-                fix.pushed_head_sha[:7] if fix.pushed_head_sha else "none"
-            )
+            pushed_sha = fix.pushed_head_sha[:7] if fix.pushed_head_sha else "none"
             # R-V7 + R-V5: verification=verified requires push_status
             # ``pushed``, the verifier cleared the pushed SHA, no
             # loop-level unfinished state, and the render-time re-fetch

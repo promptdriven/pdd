@@ -64,7 +64,9 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
 
 
 class TestCheckupReviewLoopCli:
-    def test_review_loop_flags_reach_agentic_checkup_without_forcing_no_fix(self) -> None:
+    def test_review_loop_flags_reach_agentic_checkup_without_forcing_no_fix(
+        self,
+    ) -> None:
         runner = CliRunner()
         with patch(
             "pdd.commands.checkup.run_agentic_checkup",
@@ -198,9 +200,7 @@ class TestPrMetadataFetch:
     def test_format_pr_api_changed_files_truncates_large_lists(self) -> None:
         import pdd.checkup_review_loop as mod
 
-        output = "\n".join(
-            f"modified\tpdd/file_{idx}.py\t" for idx in range(5)
-        )
+        output = "\n".join(f"modified\tpdd/file_{idx}.py\t" for idx in range(5))
 
         formatted = mod._format_pr_api_changed_files(output, max_lines=3)
 
@@ -272,9 +272,7 @@ class TestPrMetadataFetch:
     ) -> None:
         import pdd.checkup_review_loop as mod
 
-        file_rows = "\n".join(
-            f"modified\tpdd/file_{idx}.py\t" for idx in range(305)
-        )
+        file_rows = "\n".join(f"modified\tpdd/file_{idx}.py\t" for idx in range(305))
 
         def fake_run_gh_command(args: List[str]) -> Tuple[bool, str]:
             if args == ["api", "repos/o/r/pulls/1"]:
@@ -347,14 +345,14 @@ class TestCheckupReviewLoopRuntime:
                 "head_sha": "a" * 40,
             },
         )
-        monkeypatch.setattr(mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed"))
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
+        )
         # Issue #1088 trust boundary: ``_git_rev_parse_head`` returns "" on
         # ``tmp_path`` because it is not a real git repo. Return a stable
         # stub SHA so tests model the production case where a successful
         # push always yields an observable HEAD SHA.
-        monkeypatch.setattr(
-            mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40
-        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
@@ -455,7 +453,12 @@ class TestCheckupReviewLoopRuntime:
             label = kwargs["label"]
             calls.append(label)
             if "fix-" in label:
-                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["pdd/api.py"]}',
+                    1.0,
+                    role,
+                )
             return True, _json("findings", [finding]), 0.1, role
 
         pushes: List[str] = []
@@ -619,7 +622,12 @@ class TestCheckupReviewLoopRuntime:
             label = kwargs["label"]
             calls.append(label)
             if "fix-" in label:
-                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["pdd/api.py"]}',
+                    1.0,
+                    role,
+                )
             return True, _json("findings", [finding]), 0.1, role
 
         pushes: List[str] = []
@@ -674,7 +682,12 @@ class TestCheckupReviewLoopRuntime:
             if label == "checkup-review-loop-review-codex-round1":
                 return True, _json("findings", [finding]), 0.1, role
             if label == "checkup-review-loop-fix-claude-for-codex-round1":
-                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
             return True, _json("clean"), 0.1, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -720,7 +733,12 @@ class TestCheckupReviewLoopRuntime:
             if label == "checkup-review-loop-review-codex-round1":
                 return True, _json("findings", [finding]), 0.1, role
             if label == "checkup-review-loop-fix-claude-for-codex-round1":
-                return True, '{"summary":"fixed","changed_files":["src/secrets.py"]}', 0.2, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["src/secrets.py"]}',
+                    0.2,
+                    role,
+                )
             if label == "checkup-review-loop-verify-codex-round1":
                 return True, "No issues remaining. Targeted tests passed.", 0.1, role
             if label == "checkup-review-loop-parse-repair-verify-codex-round1":
@@ -740,9 +758,9 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert round(cost, 2) == 0.45
         assert (
-            ("codex", "checkup-review-loop-parse-repair-verify-codex-round1")
-            in calls
-        )
+            "codex",
+            "checkup-review-loop-parse-repair-verify-codex-round1",
+        ) in calls
         assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
         assert "Diagnostics can leak a partial secret." not in report
 
@@ -766,7 +784,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-               "base_ref": "main",
+                "base_ref": "main",
                 "base_ref": "main",
                 "head_sha": "a" * 40,
             },
@@ -835,7 +853,9 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
+        assert (
+            "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
+        )
         assert "Primary reviewer codex could not complete" in report
         assert "issue_aligned: unknown" in report
         assert "No findings remain." not in report
@@ -917,7 +937,9 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert "max-rounds-reached: true" in report
-        assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        assert (
+            "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        )
         assert "The API still does not work." in report
 
     def test_blocking_severities_prioritize_without_dropping_medium_findings(
@@ -944,17 +966,24 @@ class TestCheckupReviewLoopRuntime:
             calls.append((role, kwargs["label"]))
             if "fix-" in kwargs["label"]:
                 assert "non-blocking medium nit" in instruction
-                return True, json.dumps({
-                    "summary": "fixed medium finding",
-                    "changed_files": [],
-                    "findings": [
+                return (
+                    True,
+                    json.dumps(
                         {
-                            "key": normalized.key,
-                            "disposition": "fixed",
-                            "rationale": "fixed despite not being in the priority list",
+                            "summary": "fixed medium finding",
+                            "changed_files": [],
+                            "findings": [
+                                {
+                                    "key": normalized.key,
+                                    "disposition": "fixed",
+                                    "rationale": "fixed despite not being in the priority list",
+                                }
+                            ],
                         }
-                    ],
-                }), 0.1, role
+                    ),
+                    0.1,
+                    role,
+                )
             if "verify-" in kwargs["label"]:
                 return True, _json("clean", []), 0.1, role
             return True, _json("findings", [medium]), 0.1, role
@@ -1055,7 +1084,11 @@ class TestCheckupReviewLoopRuntime:
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs["label"]
             calls.append((role, label))
-            if "review-codex" in label and "verify" not in label and "fresh-final" not in label:
+            if (
+                "review-codex" in label
+                and "verify" not in label
+                and "fresh-final" not in label
+            ):
                 return True, _json("findings", [finding]), 0.1, role
             if "fix-" in label:
                 return True, '{"summary":"x","changed_files":["pdd/foo.py"]}', 0.1, role
@@ -1102,7 +1135,12 @@ class TestCheckupReviewLoopRuntime:
             if "review-codex" in label:
                 return True, _json("findings", [finding]), 0.1, role
             if "fix-" in label:
-                return True, '{"summary":"attempted","changed_files":["pdd/auth.py"]}', 0.1, role
+                return (
+                    True,
+                    '{"summary":"attempted","changed_files":["pdd/auth.py"]}',
+                    0.1,
+                    role,
+                )
             return True, _json("clean"), 0.1, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -1182,7 +1220,12 @@ class TestCheckupReviewLoopRuntime:
             if label == "checkup-review-loop-review-codex-round1":
                 return True, _json("findings", [fixed, still_open]), 0.1, role
             if label == "checkup-review-loop-fix-claude-for-codex-round1":
-                return True, '{"summary":"partially fixed","changed_files":[]}', 0.1, role
+                return (
+                    True,
+                    '{"summary":"partially fixed","changed_files":[]}',
+                    0.1,
+                    role,
+                )
             if label == "checkup-review-loop-verify-codex-round1":
                 return True, _json("findings", [still_open]), 0.1, role
             return True, _json("clean"), 0.1, role
@@ -1313,7 +1356,9 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert len(fix_calls) == 3
         assert "max-rounds-reached: true" in report
-        assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        assert (
+            "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        )
         assert "| blocker | open | pdd/review.py:9 |" in report
         assert "### Fixer Rationale" in report
         assert "fixer=claude fixer_disposition=not_valid" in report
@@ -1344,7 +1389,11 @@ class TestCheckupReviewLoopRuntime:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs["label"]
-            if "review-codex" in label and "verify" not in label and "fresh-final" not in label:
+            if (
+                "review-codex" in label
+                and "verify" not in label
+                and "fresh-final" not in label
+            ):
                 return True, _json("findings", [finding]), 0.1, role
             if "fix-claude-for-codex" in label:
                 return True, '{"summary":"x","changed_files":["pdd/foo.py"]}', 0.1, role
@@ -1389,9 +1438,7 @@ class TestCheckupReviewLoopRuntime:
         self._patch_io(monkeypatch, tmp_path)
 
         codex_stderr = (
-            "rate limit exceeded\n"
-            "error: openai responded with 429\n"
-            "exit code 7"
+            "rate limit exceeded\nerror: openai responded with 429\nexit code 7"
         )
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
@@ -1444,12 +1491,10 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert any(
-            "fallback-claude" in label or "review-claude" in label
-            for label in labels
+            "fallback-claude" in label or "review-claude" in label for label in labels
         ), labels
         assert (
-            "reviewer-status: codex=clean claude=clean fresh-final=clean"
-            in report
+            "reviewer-status: codex=clean claude=clean fresh-final=clean" in report
         ), report
         assert "reviewer-status: codex=failed" not in report
         assert "claude=clean" in report
@@ -1521,7 +1566,9 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert "claude" not in roles_called, roles_called
-        assert "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
+        assert (
+            "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
+        )
         assert "Primary reviewer codex could not complete" in report
         assert "issue_aligned: unknown" in report
         assert "Required review did not complete" in report
@@ -1678,9 +1725,7 @@ class TestCheckupReviewLoopRuntime:
         # drops codex from the required-reviewer set. Without this the
         # adapter's rule r1 trips on `codex=degraded` and the verdict is
         # forced to `unknown` — the exact failure #923 was opened against.
-        assert (
-            "| codex | degraded (optional, superseded by gemini) |" in report
-        ), report
+        assert "| codex | degraded (optional, superseded by gemini) |" in report, report
 
     def test_reviewer_fallback_skips_parse_repair_past_deadline(
         self, monkeypatch: Any, tmp_path: Path
@@ -1737,9 +1782,7 @@ class TestCheckupReviewLoopRuntime:
         # The fallback reviewer must have been called…
         assert any(role == "gemini" for role, _ in calls), calls
         # …but parse-repair must NOT fire after the deadline has passed.
-        assert not any(
-            "parse-repair" in label for _, label in calls
-        ), calls
+        assert not any("parse-repair" in label for _, label in calls), calls
 
     def test_fallback_reviewer_on_failure_skips_parse_repair_past_deadline(
         self, monkeypatch: Any, tmp_path: Path
@@ -1790,13 +1833,9 @@ class TestCheckupReviewLoopRuntime:
         )
 
         # The fallback fixer-as-reviewer must have been invoked…
-        assert any(
-            "fallback-claude" in label for _, label in calls
-        ), calls
+        assert any("fallback-claude" in label for _, label in calls), calls
         # …but parse-repair must NOT fire after the deadline has passed.
-        assert not any(
-            "parse-repair" in label for _, label in calls
-        ), calls
+        assert not any("parse-repair" in label for _, label in calls), calls
 
     def test_no_reviewer_fallback_preserves_legacy_behavior(
         self, monkeypatch: Any, tmp_path: Path
@@ -1860,7 +1899,9 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert "could not complete" in report
-        assert not any(label.startswith("checkup-review-loop-review-claude") for _, label in calls)
+        assert not any(
+            label.startswith("checkup-review-loop-review-claude") for _, label in calls
+        )
 
     def test_reviewer_fallback_provider_alias_of_fixer_is_ignored(
         self, monkeypatch: Any, tmp_path: Path
@@ -1889,8 +1930,13 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert "could not complete" in report
-        assert not any(label.startswith("checkup-review-loop-review-claude") for _, label in calls)
-        assert not any(label.startswith("checkup-review-loop-review-anthropic") for _, label in calls)
+        assert not any(
+            label.startswith("checkup-review-loop-review-claude") for _, label in calls
+        )
+        assert not any(
+            label.startswith("checkup-review-loop-review-anthropic")
+            for _, label in calls
+        )
 
     def test_reviewer_fallback_provider_alias_of_primary_is_ignored(
         self, monkeypatch: Any, tmp_path: Path
@@ -1918,7 +1964,8 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert "could not complete" in report
         codex_review_calls = [
-            label for _, label in calls
+            label
+            for _, label in calls
             if label.startswith("checkup-review-loop-review-codex")
         ]
         assert len(codex_review_calls) == 1
@@ -2086,9 +2133,7 @@ class TestCheckupReviewLoopRuntime:
         # the superseded primary's row is tagged `optional` so the verdict
         # adapter's rule r1 ignores codex=degraded and r4 upgrades the
         # ship to ship_degraded.
-        assert (
-            "| codex | degraded (optional, superseded by gemini) |" in report
-        ), report
+        assert "| codex | degraded (optional, superseded by gemini) |" in report, report
 
     # ------------------------------------------------------------------
     # ``fixer_fallback`` (this PR). Mirrors ``reviewer_fallback`` from
@@ -2147,7 +2192,9 @@ class TestCheckupReviewLoopRuntime:
 
         def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
             captured_state.append(state_arg)
-            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
 
         monkeypatch.setattr(mod, "_finalize", capture_finalize)
 
@@ -2166,7 +2213,12 @@ class TestCheckupReviewLoopRuntime:
                 )
             if label == "checkup-review-loop-fix-gemini-for-codex-round1":
                 # Fallback fixer succeeds.
-                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
             # Subsequent verify and re-review calls are clean.
             return True, _json("clean"), 0.1, role
 
@@ -2251,7 +2303,12 @@ class TestCheckupReviewLoopRuntime:
             if label == "checkup-review-loop-fix-claude-for-codex-round1":
                 return False, "primary credential-limit dead-stop", 0.0, role
             if label == "checkup-review-loop-fix-gemini-for-codex-round1":
-                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
             return True, _json("clean"), 0.1, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -2296,14 +2353,17 @@ class TestCheckupReviewLoopRuntime:
         # calls. They are inserted before the fallback fires; with the
         # bug present, neither command would be issued.
         reset_calls = [
-            c for c in subprocess_calls
-            if len(c) >= 5 and c[0] == "git" and c[1] == "-C"
+            c
+            for c in subprocess_calls
+            if len(c) >= 5
+            and c[0] == "git"
+            and c[1] == "-C"
             and c[3:5] == ["reset", "--hard"]
         ]
         clean_calls = [
-            c for c in subprocess_calls
-            if len(c) >= 4 and c[0] == "git" and c[1] == "-C"
-            and c[3] == "clean"
+            c
+            for c in subprocess_calls
+            if len(c) >= 4 and c[0] == "git" and c[1] == "-C" and c[3] == "clean"
         ]
         assert reset_calls, (
             f"expected 'git reset --hard HEAD' before fallback; "
@@ -2394,7 +2454,9 @@ class TestCheckupReviewLoopRuntime:
 
         def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
             captured_state.append(state_arg)
-            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
 
         monkeypatch.setattr(mod, "_finalize", capture_finalize)
 
@@ -2475,8 +2537,7 @@ class TestCheckupReviewLoopRuntime:
         assert "could not address" in report
         # No fallback was configured; no gemini fixer attempt is allowed.
         assert not any(
-            label.startswith("checkup-review-loop-fix-gemini-")
-            for _, label in calls
+            label.startswith("checkup-review-loop-fix-gemini-") for _, label in calls
         ), f"gemini must not run when fixer_fallback is unset; calls={calls!r}"
 
     def test_fixer_fallback_same_as_primary_skips(
@@ -2514,7 +2575,8 @@ class TestCheckupReviewLoopRuntime:
         assert "could not address" in report
         # Only the primary fix-claude call may exist; no second attempt.
         claude_fix_calls = [
-            label for _, label in calls
+            label
+            for _, label in calls
             if label.startswith("checkup-review-loop-fix-claude-")
         ]
         assert len(claude_fix_calls) == 1, (
@@ -2565,8 +2627,7 @@ class TestCheckupReviewLoopRuntime:
         # Only ONE fix invocation total (the primary) — fallback skipped
         # because ``anthropic`` normalizes to the same role as ``claude``.
         fix_calls = [
-            label for _, label in calls
-            if label.startswith("checkup-review-loop-fix-")
+            label for _, label in calls if label.startswith("checkup-review-loop-fix-")
         ]
         assert len(fix_calls) == 1, (
             f"expected exactly one fix attempt (primary, no alias fallback); "
@@ -2599,7 +2660,9 @@ class TestCheckupReviewLoopRuntime:
 
         def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
             captured_state.append(state_arg)
-            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
 
         monkeypatch.setattr(mod, "_finalize", capture_finalize)
 
@@ -2615,7 +2678,12 @@ class TestCheckupReviewLoopRuntime:
             # succeed at all. If the raw alias leaks through, this
             # branch never matches and the assertion below fires.
             if label == "checkup-review-loop-fix-gemini-for-codex-round1":
-                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+                return (
+                    True,
+                    '{"summary":"fixed","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
             return True, _json("clean"), 0.1, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -2698,9 +2766,9 @@ class TestCheckupReviewLoopRuntime:
         # never invoked.
         assert success is True
         assert "could not address" in report
-        assert not any(
-            "fix-not-a-real-role" in label for _, label in calls
-        ), f"unknown fallback role should not be executed; calls={calls!r}"
+        assert not any("fix-not-a-real-role" in label for _, label in calls), (
+            f"unknown fallback role should not be executed; calls={calls!r}"
+        )
 
     def test_fixer_fallback_same_as_reviewer_skips(
         self, monkeypatch: Any, tmp_path: Path
@@ -2739,7 +2807,8 @@ class TestCheckupReviewLoopRuntime:
         # codex must NOT have authored a fix. Only its review (and any
         # later verify) calls are allowed.
         codex_fix_calls = [
-            label for _, label in calls
+            label
+            for _, label in calls
             if label.startswith("checkup-review-loop-fix-codex-")
         ]
         assert not codex_fix_calls, (
@@ -2770,7 +2839,9 @@ class TestCheckupReviewLoopRuntime:
 
         def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
             captured_state.append(state_arg)
-            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
 
         monkeypatch.setattr(mod, "_finalize", capture_finalize)
 
@@ -2839,7 +2910,8 @@ class TestCheckupReviewLoopRuntime:
         # loop — round 2's gemini call comes from the main-loop
         # ``active_fixer`` override, not a second helper invocation.
         gemini_fix_calls = [
-            label for label in labels
+            label
+            for label in labels
             if label.startswith("checkup-review-loop-fix-gemini-")
         ]
         assert len(gemini_fix_calls) == 2, (
@@ -2922,8 +2994,11 @@ class TestCheckupReviewLoopRuntime:
         # commit would survive the reset and leak into the fallback's
         # push.
         reset_calls = [
-            c for c in subprocess_calls
-            if len(c) >= 5 and c[0] == "git" and c[1] == "-C"
+            c
+            for c in subprocess_calls
+            if len(c) >= 5
+            and c[0] == "git"
+            and c[1] == "-C"
             and c[3:5] == ["reset", "--hard"]
         ]
         assert reset_calls, (
@@ -2941,12 +3016,12 @@ class TestCheckupReviewLoopRuntime:
         # A rev-parse HEAD call must precede the reset so the SHA was
         # actually captured (and not pulled from somewhere stale).
         rev_parse_calls = [
-            c for c in subprocess_calls
+            c
+            for c in subprocess_calls
             if len(c) >= 4 and c[0] == "git" and c[3] == "rev-parse"
         ]
         assert rev_parse_calls, (
-            f"expected a git rev-parse HEAD before reset; "
-            f"calls={subprocess_calls!r}"
+            f"expected a git rev-parse HEAD before reset; calls={subprocess_calls!r}"
         )
         first_rev_parse_idx = subprocess_calls.index(rev_parse_calls[0])
         first_reset_idx = subprocess_calls.index(reset_calls[0])
@@ -2993,8 +3068,7 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         # The fallback must NOT have run — the budget gate cut it off.
         assert not any(
-            label.startswith("checkup-review-loop-fix-gemini-")
-            for _, label in calls
+            label.startswith("checkup-review-loop-fix-gemini-") for _, label in calls
         ), f"fallback fixer must not run after budget exhaustion; calls={calls!r}"
         # The report MUST mention budget exhaustion as the proximate cause
         # so operators know the fallback was gated, not silently skipped.
@@ -3047,7 +3121,9 @@ class TestCheckupReviewLoopRuntime:
 
         def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
             captured_state.append(state_arg)
-            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
 
         monkeypatch.setattr(mod, "_finalize", capture_finalize)
 
@@ -3102,9 +3178,9 @@ class TestCheckupReviewLoopRuntime:
         # review-mode invocations; ``-review-`` also appears in the
         # loop-wide prefix so we anchor on the canonical start.
         gemini_review_calls = [
-            label for role, label in calls
-            if role == "gemini"
-            and label.startswith("checkup-review-loop-review-")
+            label
+            for role, label in calls
+            if role == "gemini" and label.startswith("checkup-review-loop-review-")
         ]
         assert not gemini_review_calls, (
             f"reviewer-fallback must skip role already active as fixer; "
@@ -3281,9 +3357,7 @@ class TestShaBackedVerificationTrustBoundary:
     ) -> None:
         import pdd.checkup_review_loop as mod
 
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
@@ -3297,9 +3371,7 @@ class TestShaBackedVerificationTrustBoundary:
         monkeypatch.setattr(
             mod, "_commit_and_push_if_changed", lambda *a, **k: push_result
         )
-        monkeypatch.setattr(
-            mod, "_git_rev_parse_head", lambda *a, **k: rev_parse_head
-        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: rev_parse_head)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
@@ -3317,7 +3389,9 @@ class TestShaBackedVerificationTrustBoundary:
             if "verify-" in label:
                 return (
                     True,
-                    _json("clean") if verify_clean else _json("findings", [finding_blob]),
+                    _json("clean")
+                    if verify_clean
+                    else _json("findings", [finding_blob]),
                     0.1,
                     role,
                 )
@@ -3344,9 +3418,7 @@ class TestShaBackedVerificationTrustBoundary:
         import pdd.checkup_review_loop as mod
 
         sha = "f" * 40
-        self._patch_common(
-            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
-        )
+        self._patch_common(monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha)
         monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -3376,9 +3448,7 @@ class TestShaBackedVerificationTrustBoundary:
         assert final_state["verified_head_sha"] == sha
         assert final_state["remote_pr_head_sha"] == sha
         assert final_state["verification_status_by_round"]["1"] == "verified"
-        statuses = {
-            f["key"]: f["status"] for f in final_state["findings"]
-        }
+        statuses = {f["key"]: f["status"] for f in final_state["findings"]}
         assert all(status == "fixed" for status in statuses.values()), statuses
         fixes = final_state["fixes"]
         assert fixes and fixes[0]["push_status"] == "pushed"
@@ -3397,9 +3467,7 @@ class TestShaBackedVerificationTrustBoundary:
 
         sha_a = "a" * 40
         sha_b = "b" * 40
-        self._patch_common(
-            monkeypatch, tmp_path, head_sha=sha_b, rev_parse_head=sha_a
-        )
+        self._patch_common(monkeypatch, tmp_path, head_sha=sha_b, rev_parse_head=sha_a)
         monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -3427,9 +3495,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "stale"
-        assert all(
-            f["status"] != "fixed" for f in final_state["findings"]
-        ), final_state["findings"]
+        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
+            final_state["findings"]
+        )
 
     def test_remote_head_refetch_failure_reverts_fixed_state(
         self, monkeypatch: Any, tmp_path: Path
@@ -3442,9 +3510,7 @@ class TestShaBackedVerificationTrustBoundary:
         import pdd.checkup_review_loop as mod
 
         sha_a = "a" * 40
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         # First call returns ``head_sha`` (used by the worktree setup
         # path); the second call (from ``_finalize``) drops it to model
         # a failed re-fetch.
@@ -3455,7 +3521,7 @@ class TestShaBackedVerificationTrustBoundary:
             base = {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-            "base_ref": "main",
+                "base_ref": "main",
             }
             if len(metadata_calls) == 1:
                 base["head_sha"] = sha_a
@@ -3497,9 +3563,9 @@ class TestShaBackedVerificationTrustBoundary:
         )
         assert final_state["verification_status_by_round"]["1"] == "stale"
         assert "verification is treated as unverified" in final_state["stop_reason"]
-        assert all(
-            f["status"] != "fixed" for f in final_state["findings"]
-        ), final_state["findings"]
+        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
+            final_state["findings"]
+        )
 
     def test_no_commit_pushed_skips_verifier_and_keeps_finding_open(
         self, monkeypatch: Any, tmp_path: Path
@@ -3561,9 +3627,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "skipped"
-        assert all(
-            f["status"] != "fixed" for f in final_state["findings"]
-        ), final_state["findings"]
+        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
+            final_state["findings"]
+        )
         fixes = final_state["fixes"]
         assert fixes and fixes[0]["push_status"] == "not_attempted"
         assert fixes[0]["pushed_head_sha"] is None
@@ -3625,9 +3691,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "skipped"
-        assert all(
-            f["status"] != "fixed" for f in final_state["findings"]
-        ), final_state["findings"]
+        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
+            final_state["findings"]
+        )
 
     def test_budget_exhausted_after_fixer_pushes_leaves_round_unverified(
         self, monkeypatch: Any, tmp_path: Path
@@ -3641,9 +3707,7 @@ class TestShaBackedVerificationTrustBoundary:
         import pdd.checkup_review_loop as mod
 
         sha = "c" * 40
-        self._patch_common(
-            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
-        )
+        self._patch_common(monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha)
         calls: List[str] = []
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
@@ -3686,9 +3750,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "unverified"
-        assert all(
-            f["status"] != "fixed" for f in final_state["findings"]
-        ), final_state["findings"]
+        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
+            final_state["findings"]
+        )
         fixes = final_state["fixes"]
         assert fixes and fixes[0]["push_status"] == "pushed"
         assert fixes[0]["pushed_head_sha"] == sha
@@ -3705,9 +3769,7 @@ class TestShaBackedVerificationTrustBoundary:
         import pdd.checkup_review_loop as mod
 
         sha = "d" * 40
-        self._patch_common(
-            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
-        )
+        self._patch_common(monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha)
         monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
 
         run_checkup_review_loop(
@@ -3718,13 +3780,9 @@ class TestShaBackedVerificationTrustBoundary:
             use_github_state=False,
         )
 
-        artifacts_dir = (
-            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
-        )
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
         artifact = json.loads(
-            (
-                artifacts_dir / "round-1-fix-claude-for-codex.findings.json"
-            ).read_text()
+            (artifacts_dir / "round-1-fix-claude-for-codex.findings.json").read_text()
         )
         # Trust-boundary fields are present after push/SHA classification.
         for key in (
@@ -3770,9 +3828,7 @@ class TestShaBackedVerificationTrustBoundary:
                 "head_sha": sha_a if len(metadata_calls) == 1 else sha_b,
             }
 
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
         # No fixer should run. Fail loudly if push/rev-parse is touched.
         monkeypatch.setattr(
@@ -3850,7 +3906,7 @@ class TestShaBackedVerificationTrustBoundary:
             base: Dict[str, str] = {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-            "base_ref": "main",
+                "base_ref": "main",
             }
             if len(metadata_calls) == 1:
                 base["head_sha"] = sha_a
@@ -3858,9 +3914,7 @@ class TestShaBackedVerificationTrustBoundary:
             # a failed re-fetch.
             return base
 
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
         monkeypatch.setattr(
             mod,
@@ -3874,9 +3928,7 @@ class TestShaBackedVerificationTrustBoundary:
         monkeypatch.setattr(
             mod,
             "_run_role_task",
-            lambda role, instruction, cwd, **kwargs: (
-                True, _json("clean"), 0.1, role
-            ),
+            lambda role, instruction, cwd, **kwargs: (True, _json("clean"), 0.1, role),
         )
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -3922,9 +3974,7 @@ class TestShaBackedVerificationTrustBoundary:
         import pdd.checkup_review_loop as mod
 
         sha = "e" * 40
-        self._patch_common(
-            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
-        )
+        self._patch_common(monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha)
         calls: List[str] = []
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
@@ -3979,9 +4029,7 @@ class TestShaBackedVerificationTrustBoundary:
         assert final_state["verified_head_sha"] == sha
         assert final_state["verification_status_by_round"]["1"] == "verified"
         assert final_state["max_cost_reached"] is True
-        statuses = {
-            f["key"]: f["status"] for f in final_state["findings"]
-        }
+        statuses = {f["key"]: f["status"] for f in final_state["findings"]}
         assert statuses, final_state["findings"]
         assert all(status == "fixed" for status in statuses.values()), statuses
 
@@ -4000,9 +4048,7 @@ class TestShaBackedVerificationTrustBoundary:
         import pdd.checkup_review_loop as mod
 
         sha = "9" * 40
-        self._patch_common(
-            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
-        )
+        self._patch_common(monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha)
         # Two distinct findings — the verifier will accept (omit) the
         # first and re-report the second.
         accepted = self._finding()
@@ -4073,12 +4119,8 @@ class TestShaBackedVerificationTrustBoundary:
         # still-open finding remains ``open``. Discriminate by status
         # count rather than serialized field name so the test does not
         # depend on the specific finding-dict layout.
-        fixed_findings = [
-            f for f in final_state["findings"] if f["status"] == "fixed"
-        ]
-        open_findings = [
-            f for f in final_state["findings"] if f["status"] == "open"
-        ]
+        fixed_findings = [f for f in final_state["findings"] if f["status"] == "fixed"]
+        open_findings = [f for f in final_state["findings"] if f["status"] == "open"]
         assert len(fixed_findings) == 1, final_state["findings"]
         assert len(open_findings) == 1, final_state["findings"]
 
@@ -4172,9 +4214,7 @@ class TestShaBackedVerificationTrustBoundary:
         )
 
         assert success is True
-        artifacts_dir = (
-            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
-        )
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
         primary_artifact = json.loads(
             (artifacts_dir / "round-1-fix-claude-for-codex.findings.json").read_text()
         )
@@ -4206,7 +4246,9 @@ class TestPromptInjection:
         from pdd.checkup_review_loop import ReviewLoopState, _review_prompt
 
         context = _ctx(tmp_path)
-        context.pr_content = "PR body: this implementation intentionally uses a safer direction."
+        context.pr_content = (
+            "PR body: this implementation intentionally uses a safer direction."
+        )
         prompt = _review_prompt(
             reviewer="codex",
             context=context,
@@ -4260,7 +4302,11 @@ class TestPromptInjection:
     def test_verify_prompt_requires_full_rereview_until_round_limit(
         self, tmp_path: Path
     ) -> None:
-        from pdd.checkup_review_loop import ReviewFinding, ReviewLoopState, _review_prompt
+        from pdd.checkup_review_loop import (
+            ReviewFinding,
+            ReviewLoopState,
+            _review_prompt,
+        )
 
         prompt = _review_prompt(
             reviewer="codex",
@@ -4306,7 +4352,7 @@ class TestPromptInjection:
 
         assert "prioritizing the blocking severities\n(blocker)" in prompt
         assert "every valid" in prompt
-        assert "Do not use\n\"focused\"" in prompt
+        assert 'Do not use\n"focused"' in prompt
 
 
 class TestScrubSecretsPatterns:
@@ -4402,57 +4448,86 @@ class TestParseHelpers:
         from pdd.checkup_review_loop import _failure_status
 
         # ---- True positives: real infra-failure strings → "degraded".
-        assert _failure_status(
-            "ERROR: authentication failed: token expired", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "network error: connection refused", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "exit code 127: command not found", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "Command returned non-zero exit status 2", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "process exited with status 64", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "permission denied while creating sandbox", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "Unauthorized: missing API key", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "please log in to continue", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "dns resolution failed for api.example.com", allow_degraded=True
-        ) == "degraded"
-        assert _failure_status(
-            "failed to create sandbox: out of disk", allow_degraded=True
-        ) == "degraded"
+        assert (
+            _failure_status(
+                "ERROR: authentication failed: token expired", allow_degraded=True
+            )
+            == "degraded"
+        )
+        assert (
+            _failure_status("network error: connection refused", allow_degraded=True)
+            == "degraded"
+        )
+        assert (
+            _failure_status("exit code 127: command not found", allow_degraded=True)
+            == "degraded"
+        )
+        assert (
+            _failure_status(
+                "Command returned non-zero exit status 2", allow_degraded=True
+            )
+            == "degraded"
+        )
+        assert (
+            _failure_status("process exited with status 64", allow_degraded=True)
+            == "degraded"
+        )
+        assert (
+            _failure_status(
+                "permission denied while creating sandbox", allow_degraded=True
+            )
+            == "degraded"
+        )
+        assert (
+            _failure_status("Unauthorized: missing API key", allow_degraded=True)
+            == "degraded"
+        )
+        assert (
+            _failure_status("please log in to continue", allow_degraded=True)
+            == "degraded"
+        )
+        assert (
+            _failure_status(
+                "dns resolution failed for api.example.com", allow_degraded=True
+            )
+            == "degraded"
+        )
+        assert (
+            _failure_status(
+                "failed to create sandbox: out of disk", allow_degraded=True
+            )
+            == "degraded"
+        )
 
         # ---- True negatives: bait strings that the previous overly broad
         # markers ("auth", "login", "exit code", "subprocess") would have
         # falsely flagged. These must classify as "failed", not "degraded".
-        assert _failure_status(
-            "Author: Greg <g@example.com>\nfatal: stack trace", allow_degraded=True
-        ) == "failed"
-        assert _failure_status(
-            "DEBUG: logging request payload", allow_degraded=True
-        ) == "failed"
+        assert (
+            _failure_status(
+                "Author: Greg <g@example.com>\nfatal: stack trace", allow_degraded=True
+            )
+            == "failed"
+        )
+        assert (
+            _failure_status("DEBUG: logging request payload", allow_degraded=True)
+            == "failed"
+        )
         # exit code 0 is a success-y context — must not be flagged degraded.
-        assert _failure_status(
-            "trace line: exit code 0: ok", allow_degraded=True
-        ) == "failed"
-        assert _failure_status(
-            "trace line: exit status 0: ok", allow_degraded=True
-        ) == "failed"
+        assert (
+            _failure_status("trace line: exit code 0: ok", allow_degraded=True)
+            == "failed"
+        )
+        assert (
+            _failure_status("trace line: exit status 0: ok", allow_degraded=True)
+            == "failed"
+        )
         # "subprocess" appearing in a traceback path must not flag degraded.
-        assert _failure_status(
-            "trace: subprocess.run() helper called", allow_degraded=True
-        ) == "failed"
+        assert (
+            _failure_status(
+                "trace: subprocess.run() helper called", allow_degraded=True
+            )
+            == "failed"
+        )
 
     def test_failure_status_unrelated_failure_still_failed(self) -> None:
         from pdd.checkup_review_loop import _failure_status
@@ -4467,9 +4542,7 @@ class TestParseHelpers:
         from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
 
         # Generic prose with no structure — should be "failed".
-        result = _parse_review_output(
-            "Everything looks fine, no issues.", "codex", 1
-        )
+        result = _parse_review_output("Everything looks fine, no issues.", "codex", 1)
         assert result.status in HARD_NOT_CLEAN_STATES, (
             f"Expected failure status, got {result.status!r}"
         )
@@ -4743,9 +4816,17 @@ Checks: targeted tests passed.
             "critical",
             "medium",
         ]
-        assert result.findings[0].finding == "PR is not merge-ready against current `main`."
-        assert result.findings[1].finding == "Project Gallery link points to a non-existent route."
-        assert all("trailing whitespace" not in finding.evidence for finding in result.findings)
+        assert (
+            result.findings[0].finding
+            == "PR is not merge-ready against current `main`."
+        )
+        assert (
+            result.findings[1].finding
+            == "Project Gallery link points to a non-existent route."
+        )
+        assert all(
+            "trailing whitespace" not in finding.evidence for finding in result.findings
+        )
 
     def test_codex_finding_prefix_priority_is_parsed(self) -> None:
         """Codex can prefix priority headings with 'Finding:'."""
@@ -4920,10 +5001,7 @@ AST parsing passed.
         assert result.status == "findings"
         assert len(result.findings) == 1
         assert result.findings[0].severity == "critical"
-        assert (
-            result.findings[0].location
-            == "pdd/agentic_sync_runner.py:458"
-        )
+        assert result.findings[0].location == "pdd/agentic_sync_runner.py:458"
         assert result.findings[0].finding.startswith("Total-budget")
         assert "Repro with one module" in result.findings[0].evidence
         assert "AST parsing passed" not in result.findings[0].evidence
@@ -4957,7 +5035,9 @@ class TestPushWithRetryClonedRemote:
     """The review loop pushes to a PR head repo's clone URL, not `origin`.
     Verify push_with_retry handles that path including the auth-retry."""
 
-    def test_push_with_retry_first_attempt_success_uses_clone_url(self, tmp_path: Path) -> None:
+    def test_push_with_retry_first_attempt_success_uses_clone_url(
+        self, tmp_path: Path
+    ) -> None:
         from pdd.agentic_e2e_fix_orchestrator import push_with_retry
 
         with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
@@ -5011,7 +5091,9 @@ class TestPushWithRetryClonedRemote:
                 )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run):
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run
+        ):
             success, _err = push_with_retry(
                 tmp_path,
                 repo_owner="o",
@@ -5046,11 +5128,13 @@ class TestCommitAndPushIfChanged:
         pushes: List[Tuple[str, str, bool]] = []
 
         def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
-            pushes.append((
-                kwargs["remote"],
-                kwargs["refspec"],
-                kwargs["force_with_lease_on_non_fast_forward"],
-            ))
+            pushes.append(
+                (
+                    kwargs["remote"],
+                    kwargs["refspec"],
+                    kwargs["force_with_lease_on_non_fast_forward"],
+                )
+            )
             if len(pushes) == 1:
                 return (
                     False,
@@ -5179,6 +5263,7 @@ class TestCommitAndPushIfChanged:
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         import pdd.checkup_review_loop as mod
+
         metadata = {
             "clone_url": "https://github.com/o/r.git",
             "head_ref": "feature",
@@ -5239,6 +5324,7 @@ class TestCommitAndPushIfChanged:
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         import pdd.checkup_review_loop as mod
+
         metadata = {
             "clone_url": "https://github.com/o/r.git",
             "head_ref": "feature",
@@ -5256,7 +5342,10 @@ class TestCommitAndPushIfChanged:
             force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
             if pushes == 1:
                 return False, " ! [rejected] HEAD -> feature (fetch first)"
-            return False, "fatal: Authentication failed for 'https://github.com/o/r.git'"
+            return (
+                False,
+                "fatal: Authentication failed for 'https://github.com/o/r.git'",
+            )
 
         rebase_count = 0
 
@@ -5311,11 +5400,13 @@ class TestCommitAndPushIfChanged:
         pushes: List[Tuple[str, str, bool]] = []
 
         def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
-            pushes.append((
-                kwargs["remote"],
-                kwargs["refspec"],
-                kwargs["force_with_lease_on_non_fast_forward"],
-            ))
+            pushes.append(
+                (
+                    kwargs["remote"],
+                    kwargs["refspec"],
+                    kwargs["force_with_lease_on_non_fast_forward"],
+                )
+            )
             if len(pushes) == 1:
                 return (
                     False,
@@ -5415,7 +5506,9 @@ class TestCommitAndPushIfChanged:
                     },
                 )()
             if "rebase" in cmd and "--abort" not in cmd:
-                return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
+                return type(
+                    "R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"}
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -5528,7 +5621,10 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
 
         def fake_run(cmd: List[str], **_kwargs: Any):
-            if cmd[:3] == ["git", "fetch", "--no-tags"] and "x-access-token" not in cmd[3]:
+            if (
+                cmd[:3] == ["git", "fetch", "--no-tags"]
+                and "x-access-token" not in cmd[3]
+            ):
                 return type(
                     "R",
                     (),
@@ -5624,7 +5720,9 @@ class TestCommitAndPushIfChanged:
         git(previous_attempt, "commit", "-m", "prior checkup attempt")
         git(previous_attempt, "push", "origin", "HEAD:feature")
 
-        (current_attempt / "current.txt").write_text("current attempt\n", encoding="utf-8")
+        (current_attempt / "current.txt").write_text(
+            "current attempt\n", encoding="utf-8"
+        )
 
         success, message = mod._commit_and_push_if_changed(
             current_attempt,
@@ -5647,7 +5745,9 @@ class TestCommitAndPushIfChanged:
             text=True,
         )
         assert (verify / "prior.txt").read_text(encoding="utf-8") == "prior attempt\n"
-        assert (verify / "current.txt").read_text(encoding="utf-8") == "current attempt\n"
+        assert (verify / "current.txt").read_text(
+            encoding="utf-8"
+        ) == "current attempt\n"
 
     def test_push_with_retry_can_leave_non_fast_forward_to_caller(
         self, tmp_path: Path
@@ -5668,7 +5768,9 @@ class TestCommitAndPushIfChanged:
                 },
             )()
 
-        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run):
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run
+        ):
             success, err = push_with_retry(
                 tmp_path,
                 repo_owner="o",
@@ -5769,9 +5871,7 @@ class TestCommitAndPushIfChanged:
         rebase_cmd_index = [
             i
             for i, cmd in enumerate(recorded)
-            if "rebase" in cmd
-            and "--onto" in cmd
-            and "FETCH_HEAD" in cmd
+            if "rebase" in cmd and "--onto" in cmd and "FETCH_HEAD" in cmd
         ]
         reset_cmd_index = [
             i
@@ -5842,9 +5942,7 @@ class TestCommitAndPushIfChanged:
             "head_repo": "r",
         }
         monkeypatch.setattr(mod, "_git_changed_files", lambda _w: [])
-        monkeypatch.setattr(
-            mod, "_git_rev_parse_head", lambda _w: "b" * 40
-        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda _w: "b" * 40)
 
         pushes: List[Tuple[str, str]] = []
 
@@ -5858,7 +5956,8 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd[:3] == ["git", "rev-parse", "HEAD"]:
                 return type(
-                    "R", (),
+                    "R",
+                    (),
                     {"returncode": 0, "stdout": "b" * 40 + "\n", "stderr": ""},
                 )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
@@ -5867,7 +5966,9 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
         success, message = mod._commit_and_push_if_changed(
-            tmp_path, metadata, "fix: address findings",
+            tmp_path,
+            metadata,
+            "fix: address findings",
             pre_fix_sha="a" * 40,
         )
         assert success is True, message
@@ -5897,7 +5998,8 @@ class TestCommitAndPushIfChanged:
         success, message = mod._commit_and_push_if_changed(
             tmp_path,
             {"clone_url": "u", "head_ref": "h", "head_owner": "o", "head_repo": "r"},
-            "fix", pre_fix_sha=head,
+            "fix",
+            pre_fix_sha=head,
         )
         assert success is True
         assert "No changes to push" in message
@@ -5915,7 +6017,9 @@ class TestCommitAndPushIfChanged:
         )
 
         success, message = mod._commit_and_push_if_changed(
-            tmp_path, {}, "fix",
+            tmp_path,
+            {},
+            "fix",
         )
         assert success is True
         assert "No changes to push" in message
@@ -5933,11 +6037,13 @@ class TestCommitAndPushIfChanged:
             "head_repo": "r",
         }
         monkeypatch.setattr(
-            mod, "_git_changed_files",
+            mod,
+            "_git_changed_files",
             lambda _w: [".pdd/checkup-context/round-1/output.txt"],
         )
         monkeypatch.setattr(
-            mod, "_git_untracked_files",
+            mod,
+            "_git_untracked_files",
             lambda _w: [".pdd/checkup-context/round-1/output.txt"],
         )
         monkeypatch.setattr(mod, "_git_has_staged_changes", lambda _w: False)
@@ -5955,7 +6061,9 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd[:3] == ["git", "rev-parse", "HEAD"]:
                 return type(
-                    "R", (), {"returncode": 0, "stdout": "1" * 40 + "\n", "stderr": ""},
+                    "R",
+                    (),
+                    {"returncode": 0, "stdout": "1" * 40 + "\n", "stderr": ""},
                 )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
@@ -5963,7 +6071,9 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
         success, message = mod._commit_and_push_if_changed(
-            tmp_path, metadata, "fix: address findings",
+            tmp_path,
+            metadata,
+            "fix: address findings",
             pre_fix_sha="0" * 40,
         )
         assert success is True, message
@@ -5978,7 +6088,8 @@ class TestCommitAndPushIfChanged:
         import pdd.checkup_review_loop as mod
 
         monkeypatch.setattr(
-            mod, "_fetch_pr_head_for_rebase",
+            mod,
+            "_fetch_pr_head_for_rebase",
             lambda *_a, **_kw: (True, ""),
         )
 
@@ -5996,7 +6107,8 @@ class TestCommitAndPushIfChanged:
             tmp_path,
             clone_url="https://github.com/o/r.git",
             head_ref="feature",
-            repo_owner="o", repo_name="r",
+            repo_owner="o",
+            repo_name="r",
             fixer_sha=fixer_sha,
             local_base_sha=pre_fix_sha,
         )
@@ -6032,7 +6144,8 @@ class TestCommitAndPushIfChanged:
                 tmp_path,
                 clone_url="https://github.com/o/r.git",
                 head_ref="feature",
-                repo_owner="o", repo_name="r",
+                repo_owner="o",
+                repo_name="r",
                 fixer_sha="1" * 40,
                 local_base_sha=base,
             )
@@ -6118,10 +6231,7 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         # The missing items must be visible to the LLM.
         assert "QUX" in prompt and "QUUX" in prompt
         # And the candidate-findings JSON artifact must be persisted.
-        artifact = (
-            artifacts_dir
-            / "round-1-review-static-analysis-candidates.json"
-        )
+        artifact = artifacts_dir / "round-1-review-static-analysis-candidates.json"
         assert artifact.is_file()
 
     def test_no_static_section_when_changed_files_are_empty(
@@ -6301,12 +6411,8 @@ def _commit_arch_to_head(worktree: Path, modules: List[Dict[str, Any]]) -> Path:
         cwd=worktree,
         check=True,
     )
-    subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=worktree, check=True
-    )
-    subprocess.run(
-        ["git", "add", "architecture.json"], cwd=worktree, check=True
-    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=worktree, check=True)
+    subprocess.run(["git", "add", "architecture.json"], cwd=worktree, check=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", "seed registry"],
         cwd=worktree,
@@ -6424,9 +6530,7 @@ class TestPromptSourceGuardHelper:
         _commit_arch_to_head(
             tmp_path,
             [
-                _prompt_module(
-                    "agentic_update_python.prompt", "pdd/agentic_update.py"
-                ),
+                _prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py"),
                 _prompt_module(
                     "checkup_review_loop_python.prompt",
                     "pdd/checkup_review_loop.py",
@@ -6460,9 +6564,7 @@ class TestPromptSourceGuardHelper:
         _commit_arch_to_head(
             tmp_path,
             [
-                _prompt_module(
-                    "agentic_update_python.prompt", "pdd/agentic_update.py"
-                ),
+                _prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py"),
                 _prompt_module(
                     "checkup_review_loop_python.prompt",
                     "pdd/checkup_review_loop.py",
@@ -6498,15 +6600,11 @@ class TestPromptSourceGuardHelper:
 
         # No architecture.json in tmp_path on purpose.
         with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
-            reason = _check_prompt_source_guard(
-                tmp_path, ["pdd/agentic_update.py"]
-            )
+            reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
 
         assert reason is None
         # The operator must learn the guard was disabled this round.
-        assert any(
-            "architecture.json" in rec.getMessage() for rec in caplog.records
-        )
+        assert any("architecture.json" in rec.getMessage() for rec in caplog.records)
 
     def test_malformed_architecture_json_degrades_gracefully(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -6535,9 +6633,7 @@ class TestPromptSourceGuardHelper:
         (tmp_path / "architecture.json").write_text(
             "this is not json {", encoding="utf-8"
         )
-        subprocess.run(
-            ["git", "add", "architecture.json"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "add", "architecture.json"], cwd=tmp_path, check=True)
         subprocess.run(
             ["git", "commit", "-q", "-m", "garbage registry"],
             cwd=tmp_path,
@@ -6545,18 +6641,12 @@ class TestPromptSourceGuardHelper:
         )
 
         with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
-            reason = _check_prompt_source_guard(
-                tmp_path, ["pdd/agentic_update.py"]
-            )
+            reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
 
         assert reason is None
-        assert any(
-            "unparseable" in rec.getMessage() for rec in caplog.records
-        )
+        assert any("unparseable" in rec.getMessage() for rec in caplog.records)
 
-    def test_code_missing_with_prompt_missing_is_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_code_missing_with_prompt_missing_is_allowed(self, tmp_path: Path) -> None:
         """When the registered code path is in the change set but the
         code file is absent from disk after the change, there is
         nothing to drift from. Allow regardless of the prompt's fate.
@@ -6577,15 +6667,11 @@ class TestPromptSourceGuardHelper:
         )
         # Neither file on disk.
 
-        reason = _check_prompt_source_guard(
-            tmp_path, ["pdd/agentic_update.py"]
-        )
+        reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
 
         assert reason is None
 
-    def test_code_present_with_prompt_missing_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_code_present_with_prompt_missing_is_refused(self, tmp_path: Path) -> None:
         """The disk-state attack: code persists on disk, prompt is
         missing, and the prompt is NOT in the change set (a pre-
         existing stale-registry state, or a separate deletion the
@@ -6606,17 +6692,13 @@ class TestPromptSourceGuardHelper:
         # Code present, prompt absent.
         self._seed_code(tmp_path, "pdd/agentic_update.py")
 
-        reason = _check_prompt_source_guard(
-            tmp_path, ["pdd/agentic_update.py"]
-        )
+        reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
 
         assert reason is not None
         assert "pdd/agentic_update.py" in reason
         assert "pdd/prompts/agentic_update_python.prompt" in reason
 
-    def test_guard_reads_registry_from_head_not_worktree(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_reads_registry_from_head_not_worktree(self, tmp_path: Path) -> None:
         """The guard MUST consult ``architecture.json`` at HEAD, not
         the worktree filesystem (review pass #3 Finding 2).
 
@@ -6719,9 +6801,7 @@ class TestPromptSourceGuardHelper:
         )
         # Code persists on disk (modified, not deleted).
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
-        (tmp_path / "pdd" / "foo.py").write_text(
-            "modified code\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo.py").write_text("modified code\n", encoding="utf-8")
         # Prompt was deleted in this change set - intentionally NOT
         # creating it on disk.
 
@@ -6763,22 +6843,16 @@ class TestPromptSourceGuardChangedFilesParsing:
             cwd=worktree,
             check=True,
         )
-        subprocess.run(
-            ["git", "config", "user.name", "Test"], cwd=worktree, check=True
-        )
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=worktree, check=True)
 
-    def test_changed_files_includes_both_paths_for_rename(
-        self, tmp_path: Path
-    ) -> None:
+    def test_changed_files_includes_both_paths_for_rename(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _git_changed_files
 
         self._init_repo(tmp_path)
         (tmp_path / "pdd").mkdir()
         (tmp_path / "pdd" / "foo.py").write_text("x\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
 
         # Rename the registered code file.
         subprocess.run(
@@ -6796,9 +6870,7 @@ class TestPromptSourceGuardChangedFilesParsing:
         # And the literal "old -> new" collapsed string MUST NOT appear.
         assert not any("->" in entry for entry in changed)
 
-    def test_guard_handles_renamed_registered_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_handles_renamed_registered_file(self, tmp_path: Path) -> None:
         """End-to-end: a rename of a registered code file without its
         prompt change MUST be refused by the guard.
         """
@@ -6809,24 +6881,16 @@ class TestPromptSourceGuardChangedFilesParsing:
 
         self._init_repo(tmp_path)
         (tmp_path / "pdd" / "prompts").mkdir(parents=True)
-        (tmp_path / "pdd" / "agentic_update.py").write_text(
-            "code\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "agentic_update.py").write_text("code\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt").write_text(
             "prompt body\n", encoding="utf-8"
         )
         _write_arch_json(
             tmp_path,
-            [
-                _prompt_module(
-                    "agentic_update_python.prompt", "pdd/agentic_update.py"
-                )
-            ],
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
 
         # The fixer renames the registered code file without touching
         # the prompt - exactly the rename-handling drift case.
@@ -6856,13 +6920,9 @@ class TestPromptSourceGuardChangedFilesParsing:
 
         self._init_repo(tmp_path)
         (tmp_path / "pdd").mkdir()
-        (tmp_path / "pdd" / "name with space.py").write_text(
-            "x\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "name with space.py").write_text("x\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
         subprocess.run(
             [
                 "git",
@@ -6883,9 +6943,7 @@ class TestPromptSourceGuardChangedFilesParsing:
         # And nothing collapsed with the arrow literal.
         assert not any("->" in entry for entry in changed)
 
-    def test_changed_files_surfaces_deleted_files(
-        self, tmp_path: Path
-    ) -> None:
+    def test_changed_files_surfaces_deleted_files(self, tmp_path: Path) -> None:
         """Belt-and-suspenders for Finding B: confirm an ``rm`` of a
         registered prompt surfaces in ``_git_changed_files`` so the
         same-change-set deletion path in ``_check_prompt_source_guard``
@@ -6900,13 +6958,9 @@ class TestPromptSourceGuardChangedFilesParsing:
         (tmp_path / "pdd" / "prompts").mkdir(parents=True)
         prompt = tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt"
         prompt.write_text("body\n", encoding="utf-8")
-        (tmp_path / "pdd" / "agentic_update.py").write_text(
-            "code\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "agentic_update.py").write_text("code\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
 
         # Edit code and delete prompt - the module-retirement scenario.
         (tmp_path / "pdd" / "agentic_update.py").write_text(
@@ -6922,9 +6976,7 @@ class TestPromptSourceGuardChangedFilesParsing:
         assert "pdd/agentic_update.py" in changed
         assert "pdd/prompts/agentic_update_python.prompt" in changed
 
-    def test_paired_rename_of_code_and_prompt_is_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_paired_rename_of_code_and_prompt_is_allowed(self, tmp_path: Path) -> None:
         """Legitimate-refactor case (advisor reconciliation of
         Findings 1 and A): the fixer renames BOTH the registered
         code file AND its owning prompt in the same change set. The
@@ -6944,24 +6996,16 @@ class TestPromptSourceGuardChangedFilesParsing:
 
         self._init_repo(tmp_path)
         (tmp_path / "pdd" / "prompts").mkdir(parents=True)
-        (tmp_path / "pdd" / "agentic_update.py").write_text(
-            "code\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "agentic_update.py").write_text("code\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt").write_text(
             "prompt body\n", encoding="utf-8"
         )
         _write_arch_json(
             tmp_path,
-            [
-                _prompt_module(
-                    "agentic_update_python.prompt", "pdd/agentic_update.py"
-                )
-            ],
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
 
         # Paired rename: BOTH code and prompt move to new paths.
         subprocess.run(
@@ -7011,9 +7055,7 @@ class TestGitChangedFilesPorcelainDelegation:
     contract the shared helper expects.
     """
 
-    def test_copy_record_only_emits_destination_not_source(
-        self, monkeypatch
-    ) -> None:
+    def test_copy_record_only_emits_destination_not_source(self, monkeypatch) -> None:
         """``C  pdd/copied.py\\x00pdd/source.py\\x00 M tests/foo.py\\x00``
         must yield ``["pdd/copied.py", "tests/foo.py"]``. The source
         path of a copy is unchanged and must NOT appear.
@@ -7022,10 +7064,7 @@ class TestGitChangedFilesPorcelainDelegation:
 
         class _FakeResult:
             returncode = 0
-            stdout = (
-                b"C  pdd/copied.py\x00pdd/source.py\x00"
-                b" M tests/foo.py\x00"
-            )
+            stdout = b"C  pdd/copied.py\x00pdd/source.py\x00 M tests/foo.py\x00"
 
         def _fake_run(cmd, **kwargs):
             # Match the exact invocation; ensure text-mode is NOT used.
@@ -7034,9 +7073,7 @@ class TestGitChangedFilesPorcelainDelegation:
             assert kwargs.get("text") is not True
             return _FakeResult()
 
-        monkeypatch.setattr(
-            "pdd.checkup_review_loop.subprocess.run", _fake_run
-        )
+        monkeypatch.setattr("pdd.checkup_review_loop.subprocess.run", _fake_run)
 
         result = _git_changed_files(Path("/tmp/does-not-matter"))
 
@@ -7045,9 +7082,7 @@ class TestGitChangedFilesPorcelainDelegation:
         )
         assert "pdd/source.py" not in result
 
-    def test_rename_record_emits_both_old_and_new_paths(
-        self, monkeypatch
-    ) -> None:
+    def test_rename_record_emits_both_old_and_new_paths(self, monkeypatch) -> None:
         """``R  new.py\\x00old.py\\x00`` must yield ``["new.py", "old.py"]``
         — renames surface both sides so the guard sees the registered
         old path move out from under its prompt.
@@ -7061,9 +7096,7 @@ class TestGitChangedFilesPorcelainDelegation:
         def _fake_run(cmd, **kwargs):
             return _FakeResult()
 
-        monkeypatch.setattr(
-            "pdd.checkup_review_loop.subprocess.run", _fake_run
-        )
+        monkeypatch.setattr("pdd.checkup_review_loop.subprocess.run", _fake_run)
 
         result = _git_changed_files(Path("/tmp/does-not-matter"))
 
@@ -7099,9 +7132,7 @@ class TestPromptSourceGuardIntegration:
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
-    def _seed_registry(
-        self, tmp_path: Path, modules: List[Dict[str, Any]]
-    ) -> None:
+    def _seed_registry(self, tmp_path: Path, modules: List[Dict[str, Any]]) -> None:
         # ``_commit_arch_to_head`` initializes a git repo + commits the
         # registry to HEAD so the post-Finding-2 ``git show
         # HEAD:architecture.json`` read in ``_load_prompt_source_map``
@@ -7465,6 +7496,8 @@ class TestPromptSourceGuardIntegration:
         assert artifact["local_fixer_commit_sha"] is None, artifact
         assert artifact["pushed_head_sha"] is None, artifact
         assert artifact["round_number"] == 1, artifact
+
+
 # Issue #1081: architecture-registry edit guard
 #
 # Coordinated rename + prompt delete + ``architecture.json`` rewrite was
@@ -7493,9 +7526,7 @@ def _seed_repo_with_arch(
         cwd=worktree,
         check=True,
     )
-    subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=worktree, check=True
-    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=worktree, check=True)
     (worktree / "architecture.json").write_text(
         json.dumps(modules, indent=2), encoding="utf-8"
     )
@@ -7511,9 +7542,7 @@ def _seed_repo_with_arch(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
     subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True
-    )
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True)
 
 
 class TestArchitectureRegistryEditGuardHelper:
@@ -7529,9 +7558,7 @@ class TestArchitectureRegistryEditGuardHelper:
             [_arch_pair("foo_python.prompt", "pdd/foo.py")],
         )
         # Only a code-only change; architecture.json untouched.
-        reason = _check_architecture_registry_edit_guard(
-            tmp_path, ["pdd/foo.py"]
-        )
+        reason = _check_architecture_registry_edit_guard(tmp_path, ["pdd/foo.py"])
         assert reason is None
 
     def test_coordinated_bypass_with_registry_repoint_is_refused(
@@ -7554,9 +7581,7 @@ class TestArchitectureRegistryEditGuardHelper:
         #   2. delete pdd/prompts/foo_python.prompt
         #   3. rewrite architecture.json to point at the new path
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         new_arch = [_arch_pair("foo_v2_python.prompt", "pdd/foo_v2.py")]
         (tmp_path / "architecture.json").write_text(
@@ -7569,9 +7594,7 @@ class TestArchitectureRegistryEditGuardHelper:
             "pdd/foo.py",
             "pdd/prompts/foo_python.prompt",
         ]
-        reason = _check_architecture_registry_edit_guard(
-            tmp_path, changed_files
-        )
+        reason = _check_architecture_registry_edit_guard(tmp_path, changed_files)
         assert reason is not None
         # The refusal MUST name the added pair so the operator can act.
         assert "pdd/foo_v2.py" in reason
@@ -7579,9 +7602,7 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "without prompt source on disk" in reason
         assert "architecture.json registry edit refused" in reason
 
-    def test_repoint_with_same_prompt_name_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_repoint_with_same_prompt_name_is_refused(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import (
             _check_architecture_registry_edit_guard,
         )
@@ -7592,9 +7613,7 @@ class TestArchitectureRegistryEditGuardHelper:
         )
         # Rename code, keep the prompt name (prompt still on disk).
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         new_arch = [_arch_pair("foo_python.prompt", "pdd/foo_v2.py")]
         (tmp_path / "architecture.json").write_text(
             json.dumps(new_arch), encoding="utf-8"
@@ -7639,9 +7658,7 @@ class TestArchitectureRegistryEditGuardHelper:
         )
         assert reason is None
 
-    def test_registry_wiped_with_code_present_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_registry_wiped_with_code_present_is_refused(self, tmp_path: Path) -> None:
         """If the fixer wipes ``architecture.json`` to ``[]`` while the
         registered code/prompt still exist on disk, that is the #1081
         attack shape under the worktree-empty/HEAD-non-empty branch.
@@ -7678,9 +7695,7 @@ class TestArchitectureRegistryEditGuardHelper:
         # code and prompt as legitimately retired, but a new generated
         # code path still lands with no prompt source.
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
 
@@ -7757,9 +7772,7 @@ class TestArchitectureRegistryEditGuardHelper:
         )
         assert reason is None
 
-    def test_added_pair_without_prompt_on_disk_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_added_pair_without_prompt_on_disk_is_refused(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import (
             _check_architecture_registry_edit_guard,
         )
@@ -7801,8 +7814,7 @@ class TestArchitectureRegistryEditGuardHelper:
             )
         assert reason is None
         assert any(
-            "architecture-registry guard" in rec.getMessage()
-            for rec in caplog.records
+            "architecture-registry guard" in rec.getMessage() for rec in caplog.records
         )
 
     def test_empty_head_registry_degrades_gracefully(
@@ -7845,9 +7857,7 @@ class TestArchitectureRegistryEditGuardHelper:
         #   3. add pdd/foo_v2.py (unregistered new code)
         #   4. leave architecture.json UNTOUCHED
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
 
         reason = _check_architecture_registry_edit_guard(
@@ -7864,8 +7874,7 @@ class TestArchitectureRegistryEditGuardHelper:
         # No-arch-edit variant uses distinct wording so the operator
         # can tell the two #1081 variants apart.
         assert (
-            "retired registered pair on disk while new unregistered "
-            "code path"
+            "retired registered pair on disk while new unregistered code path"
         ) in reason
         assert "architecture.json not updated" in reason
 
@@ -7953,9 +7962,7 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "architecture.json registry edit refused" in reason
         assert "pdd/foo_v2.py" in reason
 
-    def test_added_pair_with_symlink_prompt_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_added_pair_with_symlink_prompt_is_refused(self, tmp_path: Path) -> None:
         """Round-3 finding 3: an added pair whose prompt is a symlink
         (rather than a real file) must be refused. ``Path.is_file()``
         follows symlinks, so a symlink to any existing file would
@@ -7996,9 +8003,7 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "pdd/baz.py" in reason
         assert "without prompt source on disk" in reason
 
-    def test_added_pair_with_py_prompt_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_added_pair_with_py_prompt_is_refused(self, tmp_path: Path) -> None:
         """Round-14 finding (codex review pass #14): a fixer rewrites
         ``architecture.json`` to register ``(pdd/foo_v2.py,
         pdd/prompts/foo_v2.py)`` — pointing the "prompt" at a ``.py``
@@ -8021,9 +8026,7 @@ class TestArchitectureRegistryEditGuardHelper:
         # Retire the original pair and add the disguised pair.
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# new\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# new\n", encoding="utf-8")
         # The "prompt" is actually a .py file (the bypass shape).
         (tmp_path / "pdd" / "prompts" / "foo_v2.py").write_text(
             "# disguised\n", encoding="utf-8"
@@ -8053,9 +8056,7 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "not a .prompt file" in reason
         assert "importable code disguised as a prompt" in reason
 
-    def test_added_pair_with_pyc_prompt_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_added_pair_with_pyc_prompt_is_refused(self, tmp_path: Path) -> None:
         """Round-14 follow-up: same shape but with a ``.pyc`` suffix
         instead of ``.py``. Sourceless bytecode is importable via
         ``importlib.machinery.SourcelessFileLoader``, so ``.pyc`` is
@@ -8069,12 +8070,8 @@ class TestArchitectureRegistryEditGuardHelper:
             tmp_path,
             [_arch_pair("foo_python.prompt", "pdd/foo.py")],
         )
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# new\n", encoding="utf-8"
-        )
-        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(
-            b"\x42\x0d\x0d\x0a"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# new\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(b"\x42\x0d\x0d\x0a")
         new_arch = [
             _arch_pair("foo_python.prompt", "pdd/foo.py"),
             {"filename": "foo_v2.pyc", "filepath": "pdd/foo_v2.py"},
@@ -8095,9 +8092,7 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "pdd/prompts/foo_v2.pyc" in reason
         assert "not a .prompt file" in reason
 
-    def test_added_pair_with_so_prompt_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_added_pair_with_so_prompt_is_refused(self, tmp_path: Path) -> None:
         """Round-14 follow-up: native extension ``.so`` disguised as a
         prompt. A C extension imports as ``pdd.prompts.<name>`` via
         ``importlib.machinery.ExtensionFileLoader`` with no Python
@@ -8111,12 +8106,8 @@ class TestArchitectureRegistryEditGuardHelper:
             tmp_path,
             [_arch_pair("foo_python.prompt", "pdd/foo.py")],
         )
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# new\n", encoding="utf-8"
-        )
-        (tmp_path / "pdd" / "prompts" / "foo_v2.so").write_bytes(
-            b"\x7fELF"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# new\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "foo_v2.so").write_bytes(b"\x7fELF")
         new_arch = [
             _arch_pair("foo_python.prompt", "pdd/foo.py"),
             {"filename": "foo_v2.so", "filepath": "pdd/foo_v2.py"},
@@ -8242,9 +8233,7 @@ class TestArchitectureRegistryEditGuardHelper:
         )
         # Worktree: swap variant. Same filepath repoints to a different
         # prompt; same prompt repoints to a different filepath.
-        (tmp_path / "pdd" / "bar.py").write_text(
-            "# bar\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "bar.py").write_text("# bar\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "bar_python.prompt").write_text(
             "p\n", encoding="utf-8"
         )
@@ -8270,8 +8259,7 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "repointed pdd/prompts/foo_python.prompt" in reason
         # And the underlying details:
         assert (
-            "pdd/prompts/foo_python.prompt to pdd/prompts/bar_python.prompt"
-            in reason
+            "pdd/prompts/foo_python.prompt to pdd/prompts/bar_python.prompt" in reason
         )
         assert "pdd/foo.py to pdd/bar.py" in reason
 
@@ -8282,9 +8270,7 @@ class TestArchitectureRegistryEditGuardIntegration:
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
         import pdd.checkup_review_loop as mod
 
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
@@ -8296,9 +8282,7 @@ class TestArchitectureRegistryEditGuardIntegration:
                 "head_repo": "r",
             },
         )
-        monkeypatch.setattr(
-            mod, "_post_review_loop_report", lambda *a, **k: None
-        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
@@ -8331,9 +8315,7 @@ class TestArchitectureRegistryEditGuardIntegration:
         # Apply the bypass: simulate the fixer's mutations on the
         # worktree filesystem before the guard reads it.
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         new_arch = [_arch_pair("foo_v2_python.prompt", "pdd/foo_v2.py")]
         (tmp_path / "architecture.json").write_text(
@@ -8428,9 +8410,7 @@ class TestArchitectureRegistryEditGuardIntegration:
         # (code gone + prompt gone), so the partial-wipe scan must
         # still catch foo_v2.py.
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
         (tmp_path / "architecture.json").write_text(
@@ -8486,10 +8466,7 @@ class TestArchitectureRegistryEditGuardIntegration:
         # Report carries the registry-edit refusal with the partial-wipe
         # diagnostic text.
         assert "architecture.json registry edit refused" in report
-        assert (
-            "removed registered pair while new unregistered code path"
-            in report
-        )
+        assert "removed registered pair while new unregistered code path" in report
         assert "pdd/foo_v2.py" in report
         # Ship-gate markers signal non-clean.
         assert "reviewer-status: codex=findings" in report
@@ -8518,9 +8495,7 @@ class TestArchitectureRegistryEditGuardIntegration:
 
         # Pure code-only edit; architecture.json is NOT in the change
         # set, so the 10b registry-edit guard short-circuits to None.
-        monkeypatch.setattr(
-            mod, "_git_changed_files", lambda _wt: ["pdd/foo.py"]
-        )
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _wt: ["pdd/foo.py"])
         push_calls: List[Any] = []
 
         def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
@@ -8580,9 +8555,7 @@ class TestArchitectureRegistryEditGuardIntegration:
         # No-arch-edit bypass: delete code, delete prompt, add new
         # code, do NOT edit architecture.json.
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
 
         # architecture.json is deliberately NOT in changed_files.
@@ -8635,8 +8608,7 @@ class TestArchitectureRegistryEditGuardIntegration:
         # no-arch-edit diagnostic text.
         assert "architecture.json registry edit refused" in report
         assert (
-            "retired registered pair on disk while new unregistered "
-            "code path"
+            "retired registered pair on disk while new unregistered code path"
         ) in report
         assert "pdd/foo_v2.py" in report
         assert "architecture.json not updated" in report
@@ -8785,9 +8757,7 @@ class TestRound6UntrackedDirectoryBypass:
         (tmp_path / "pdd").mkdir()
         (tmp_path / "pdd" / "foo.py").write_text("x\n", encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
 
         # Create a NEW untracked directory with two files inside it.
         new_pkg = tmp_path / "pdd" / "foo_v2"
@@ -8805,9 +8775,7 @@ class TestRound6UntrackedDirectoryBypass:
         assert "pdd/foo_v2/" not in changed
         assert not any(entry.endswith("/") for entry in changed)
 
-    def test_guard_refuses_untracked_directory_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_untracked_directory_bypass(self, tmp_path: Path) -> None:
         """End-to-end #1081 round-6 finding 1: the fixer deletes the
         registered code+prompt, creates a new package directory at
         ``pdd/foo_v2/__init__.py``, and wipes ``architecture.json``.
@@ -8833,12 +8801,8 @@ class TestRound6UntrackedDirectoryBypass:
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         new_pkg = tmp_path / "pdd" / "foo_v2"
         new_pkg.mkdir()
-        (new_pkg / "__init__.py").write_text(
-            "# package init\n", encoding="utf-8"
-        )
-        (tmp_path / "architecture.json").write_text(
-            "[]", encoding="utf-8"
-        )
+        (new_pkg / "__init__.py").write_text("# package init\n", encoding="utf-8")
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
 
         changed = _git_changed_files(tmp_path)
         # Sanity: the new file inside the untracked directory MUST
@@ -8851,10 +8815,7 @@ class TestRound6UntrackedDirectoryBypass:
         # The refusal must NAME the bypass file so the operator can act.
         assert "pdd/foo_v2/__init__.py" in reason
         assert "architecture.json registry edit refused" in reason
-        assert (
-            "removed registered pair while new unregistered code path"
-            in reason
-        )
+        assert "removed registered pair while new unregistered code path" in reason
 
 
 class TestRound6UntrackedDirectoryBypassIntegration:
@@ -8867,9 +8828,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
         import pdd.checkup_review_loop as mod
 
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
@@ -8881,9 +8840,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
                 "head_repo": "r",
             },
         )
-        monkeypatch.setattr(
-            mod, "_post_review_loop_report", lambda *a, **k: None
-        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
@@ -8915,12 +8872,8 @@ class TestRound6UntrackedDirectoryBypassIntegration:
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         new_pkg = tmp_path / "pdd" / "foo_v2"
         new_pkg.mkdir()
-        (new_pkg / "__init__.py").write_text(
-            "# package init\n", encoding="utf-8"
-        )
-        (tmp_path / "architecture.json").write_text(
-            "[]", encoding="utf-8"
-        )
+        (new_pkg / "__init__.py").write_text("# package init\n", encoding="utf-8")
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
 
         # Use the REAL ``_git_changed_files`` so the
         # ``--untracked-files=all`` flag is exercised end-to-end.
@@ -8961,9 +8914,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
         # Refusal carries the bypass file (NOT the bare directory).
         assert "architecture.json registry edit refused" in report
         assert "pdd/foo_v2/__init__.py" in report
-        assert "pdd/foo_v2/" not in report.replace(
-            "pdd/foo_v2/__init__.py", ""
-        )
+        assert "pdd/foo_v2/" not in report.replace("pdd/foo_v2/__init__.py", "")
         # Ship-gate markers signal non-clean.
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
@@ -8975,9 +8926,7 @@ class TestRound6ScanScopeBoundary:
     legitimate test/doc/script additions during a retirement.
     """
 
-    def test_retirement_with_new_test_file_is_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retirement_with_new_test_file_is_allowed(self, tmp_path: Path) -> None:
         """A legitimate retirement of ``pdd/foo.py`` that also adds a
         new test at ``tests/test_bar.py`` must NOT be refused.
         ``tests/`` is outside the registry-mutation scope.
@@ -9016,9 +8965,7 @@ class TestRound6ScanScopeBoundary:
         )
         assert reason is None
 
-    def test_retirement_with_new_doc_file_is_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retirement_with_new_doc_file_is_allowed(self, tmp_path: Path) -> None:
         """A legitimate retirement that also adds ``docs/new.md`` must
         NOT be refused. ``docs/`` is outside the registry-mutation
         scope.
@@ -9037,9 +8984,7 @@ class TestRound6ScanScopeBoundary:
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         (tmp_path / "docs").mkdir(exist_ok=True)
-        (tmp_path / "docs" / "new.md").write_text(
-            "# new\n", encoding="utf-8"
-        )
+        (tmp_path / "docs" / "new.md").write_text("# new\n", encoding="utf-8")
         new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
         (tmp_path / "architecture.json").write_text(
             json.dumps(new_arch), encoding="utf-8"
@@ -9056,9 +9001,7 @@ class TestRound6ScanScopeBoundary:
         )
         assert reason is None
 
-    def test_retirement_with_new_script_file_is_allowed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retirement_with_new_script_file_is_allowed(self, tmp_path: Path) -> None:
         """A legitimate retirement that also adds ``scripts/release.sh``
         must NOT be refused. Scripts live outside the registry-mutation
         scope.
@@ -9096,9 +9039,7 @@ class TestRound6ScanScopeBoundary:
         )
         assert reason is None
 
-    def test_retirement_with_new_pdd_module_is_refused(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retirement_with_new_pdd_module_is_refused(self, tmp_path: Path) -> None:
         """Positive control: a retirement that adds ``pdd/foo_v2.py``
         (in scope: under ``pdd/`` and ending in ``.py``) MUST still be
         refused. This is the existing ``foo_v2.py`` shape, retained.
@@ -9112,9 +9053,7 @@ class TestRound6ScanScopeBoundary:
             [_arch_pair("foo_python.prompt", "pdd/foo.py")],
         )
         (tmp_path / "pdd" / "foo.py").unlink()
-        (tmp_path / "pdd" / "foo_v2.py").write_text(
-            "# renamed\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text("# renamed\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
 
@@ -9150,9 +9089,7 @@ class TestRound6ScanScopeBoundary:
         (tmp_path / "pdd" / "foo.py").unlink()
         new_pkg = tmp_path / "pdd" / "foo_v2"
         new_pkg.mkdir()
-        (new_pkg / "__init__.py").write_text(
-            "# init\n", encoding="utf-8"
-        )
+        (new_pkg / "__init__.py").write_text("# init\n", encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
         (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
 
@@ -9188,9 +9125,7 @@ class TestRound6ScanScopeBoundary:
         )
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "pdd" / "fixture.txt").write_text(
-            "data\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "fixture.txt").write_text("data\n", encoding="utf-8")
         new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
         (tmp_path / "architecture.json").write_text(
             json.dumps(new_arch), encoding="utf-8"
@@ -9282,9 +9217,7 @@ class TestRound7SymlinkedPackageBypass:
         (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
         evil_pkg = tmp_path / "tests" / "evil_pkg"
         evil_pkg.mkdir(parents=True)
-        (evil_pkg / "__init__.py").write_text(
-            "# unregistered code\n", encoding="utf-8"
-        )
+        (evil_pkg / "__init__.py").write_text("# unregistered code\n", encoding="utf-8")
         # Relative symlink target so the link works regardless of where
         # the tmp_path lives.
         (tmp_path / "pdd" / "foo_v2").symlink_to(Path("..") / "tests" / "evil_pkg")
@@ -9304,9 +9237,7 @@ class TestRound7SymlinkedPackageBypass:
         # The refusal must NAME the symlinked-package bypass file.
         assert "pdd/foo_v2" in reason
 
-    def test_guard_refuses_py_symlink_to_external_module(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_py_symlink_to_external_module(self, tmp_path: Path) -> None:
         """A ``.py``-suffixed symlink to a file outside ``pdd/`` (a
         single-file Python module via symlink) is also a bypass shape.
         The existing ``.py`` filter already catches this, plus the
@@ -9330,9 +9261,7 @@ class TestRound7SymlinkedPackageBypass:
         (tmp_path / "tests" / "evil.py").write_text(
             "# unregistered\n", encoding="utf-8"
         )
-        (tmp_path / "pdd" / "foo_v2.py").symlink_to(
-            Path("..") / "tests" / "evil.py"
-        )
+        (tmp_path / "pdd" / "foo_v2.py").symlink_to(Path("..") / "tests" / "evil.py")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -9400,9 +9329,7 @@ class TestRound7SymlinkedPackageBypassIntegration:
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
         import pdd.checkup_review_loop as mod
 
-        monkeypatch.setattr(
-            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
-        )
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
@@ -9414,9 +9341,7 @@ class TestRound7SymlinkedPackageBypassIntegration:
                 "head_repo": "r",
             },
         )
-        monkeypatch.setattr(
-            mod, "_post_review_loop_report", lambda *a, **k: None
-        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
@@ -9449,12 +9374,8 @@ class TestRound7SymlinkedPackageBypassIntegration:
         (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
         evil_pkg = tmp_path / "tests" / "evil_pkg"
         evil_pkg.mkdir(parents=True)
-        (evil_pkg / "__init__.py").write_text(
-            "# unregistered\n", encoding="utf-8"
-        )
-        (tmp_path / "pdd" / "foo_v2").symlink_to(
-            Path("..") / "tests" / "evil_pkg"
-        )
+        (evil_pkg / "__init__.py").write_text("# unregistered\n", encoding="utf-8")
+        (tmp_path / "pdd" / "foo_v2").symlink_to(Path("..") / "tests" / "evil_pkg")
 
         # Use the REAL ``_git_changed_files`` so the symlink listing is
         # exercised end-to-end.
@@ -9528,9 +9449,7 @@ class TestRound8SourcelessBytecodeBypass:
     every suffix Python can import as ``pdd.<name>`` — not just ``.py``.
     """
 
-    def test_guard_refuses_sourceless_pyc_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_sourceless_pyc_bypass(self, tmp_path: Path) -> None:
         """The exact round-8 reproduction: delete the registered code+
         prompt, wipe ``architecture.json`` to ``[]``, and drop a valid
         ``pdd/foo_v2.pyc`` compiled from a temporary source (source
@@ -9556,9 +9475,7 @@ class TestRound8SourcelessBytecodeBypass:
         #   4. compile a sourceless .pyc into pdd/foo_v2.pyc
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         src = tmp_path / "_foo_v2_src.py"
         src.write_text("VALUE = 42\n", encoding="utf-8")
         py_compile.compile(
@@ -9580,9 +9497,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.pyc" in reason
 
-    def test_guard_refuses_native_extension_so_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_native_extension_so_bypass(self, tmp_path: Path) -> None:
         """A bare ``pdd/foo_v2.so`` dropped at the new code path is a
         native extension module — importable as ``pdd.foo_v2`` via the
         extension loader. The guard isn't validating the binary format
@@ -9600,9 +9515,7 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "pdd" / "foo_v2.so").write_bytes(b"\x7fELF stub")
 
         reason = _check_architecture_registry_edit_guard(
@@ -9617,9 +9530,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.so" in reason
 
-    def test_guard_refuses_windows_extension_pyd_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_windows_extension_pyd_bypass(self, tmp_path: Path) -> None:
         """The Windows counterpart to ``.so``: a ``pdd/foo_v2.pyd``
         native extension. The suffix filter must cover both POSIX and
         Windows extension shapes or attackers targeting Windows
@@ -9636,9 +9547,7 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "pdd" / "foo_v2.pyd").write_bytes(b"MZ stub")
 
         reason = _check_architecture_registry_edit_guard(
@@ -9653,9 +9562,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.pyd" in reason
 
-    def test_guard_refuses_windows_pyw_source_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_windows_pyw_source_bypass(self, tmp_path: Path) -> None:
         """Round-8 follow-up: a ``pdd/foo_v2.pyw`` is Windows-only Python
         source — on Windows ``importlib.machinery.SOURCE_SUFFIXES``
         includes ``.pyw`` so ``SourceFileLoader`` imports it as
@@ -9674,12 +9581,8 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
-        (tmp_path / "pdd" / "foo_v2.pyw").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
+        (tmp_path / "pdd" / "foo_v2.pyw").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -9693,9 +9596,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.pyw" in reason
 
-    def test_guard_refuses_uppercase_py_suffix_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_uppercase_py_suffix_bypass(self, tmp_path: Path) -> None:
         """Round-9 follow-up: an uppercase ``pdd/foo_v2.PY`` is
         importable as ``pdd.foo_v2`` on case-insensitive filesystems
         (Windows; macOS HFS+/APFS in default case-insensitive mode)
@@ -9716,12 +9617,8 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
-        (tmp_path / "pdd" / "foo_v2.PY").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
+        (tmp_path / "pdd" / "foo_v2.PY").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -9735,9 +9632,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.PY" in reason
 
-    def test_guard_refuses_uppercase_pyc_suffix_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_uppercase_pyc_suffix_bypass(self, tmp_path: Path) -> None:
         """Round-9 follow-up companion: an uppercase ``pdd/foo_v2.PYC``
         slips past a case-sensitive ``.pyc`` check the same way ``.PY``
         slips past ``.py``. The byte contents don't matter for the
@@ -9755,9 +9650,7 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "pdd" / "foo_v2.PYC").write_bytes(b"\x00\x00 stub")
 
         reason = _check_architecture_registry_edit_guard(
@@ -9772,9 +9665,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.PYC" in reason
 
-    def test_guard_refuses_mixed_case_so_suffix_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_mixed_case_so_suffix_bypass(self, tmp_path: Path) -> None:
         """Round-9 follow-up belt-and-suspenders: a mixed-case
         ``pdd/foo_v2.So`` native-extension suffix must also trip the
         scan. Confirms the case-insensitive comparison handles every
@@ -9791,9 +9682,7 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "pdd" / "foo_v2.So").write_bytes(b"\x7fELF stub")
 
         reason = _check_architecture_registry_edit_guard(
@@ -9808,9 +9697,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.So" in reason
 
-    def test_guard_refuses_uppercase_pdd_prefix_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_uppercase_pdd_prefix_bypass(self, tmp_path: Path) -> None:
         """Round-12 finding (codex review pass #12), sibling of R9: an
         uppercase ``PDD/foo_v2.py`` directory prefix aliases to
         ``pdd/foo_v2.py`` on case-insensitive filesystems (Windows;
@@ -9835,9 +9722,7 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         # ``exist_ok=True`` because the runner FS may be
         # case-insensitive (macOS APFS in default mode), in which
         # case ``PDD`` already exists as ``pdd``. On Linux this
@@ -9845,9 +9730,7 @@ class TestRound8SourcelessBytecodeBypass:
         # candidate file lives at the uppercase path and the guard
         # is fed the uppercase string.
         (tmp_path / "PDD").mkdir(exist_ok=True)
-        (tmp_path / "PDD" / "foo_v2.py").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (tmp_path / "PDD" / "foo_v2.py").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -9861,9 +9744,7 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "PDD/foo_v2.py" in reason
 
-    def test_guard_refuses_mixed_case_pdd_prefix_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_mixed_case_pdd_prefix_bypass(self, tmp_path: Path) -> None:
         """Round-12 follow-up: a mixed-case ``Pdd/foo_v2.py`` prefix
         must also trip the scan. Confirms the case-insensitive prefix
         comparison handles every mixed-case permutation, not just
@@ -9880,13 +9761,9 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "Pdd").mkdir(exist_ok=True)
-        (tmp_path / "Pdd" / "foo_v2.py").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (tmp_path / "Pdd" / "foo_v2.py").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -9921,9 +9798,7 @@ class TestRound8SourcelessBytecodeBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "PDD" / "PROMPTS").mkdir(parents=True, exist_ok=True)
         (tmp_path / "PDD" / "PROMPTS" / "foo.prompt").write_text(
             "prompt body\n", encoding="utf-8"
@@ -9965,9 +9840,7 @@ class TestRound8SourcelessBytecodeBypass:
         )
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "pdd" / "fixture.txt").write_text(
-            "data\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "fixture.txt").write_text("data\n", encoding="utf-8")
         new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
         (tmp_path / "architecture.json").write_text(
             json.dumps(new_arch), encoding="utf-8"
@@ -10004,9 +9877,7 @@ class TestRound8SourcelessBytecodeBypass:
         )
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "pdd" / "data.json").write_text(
-            "{}\n", encoding="utf-8"
-        )
+        (tmp_path / "pdd" / "data.json").write_text("{}\n", encoding="utf-8")
         new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
         (tmp_path / "architecture.json").write_text(
             json.dumps(new_arch), encoding="utf-8"
@@ -10035,9 +9906,7 @@ class TestRound11SubmoduleBypass:
     legitimate refactors do not add a submodule inside ``pdd/``.
     """
 
-    def test_guard_refuses_submodule_bypass(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_refuses_submodule_bypass(self, tmp_path: Path) -> None:
         """The exact round-11 reproduction: delete the registered
         code+prompt, wipe ``architecture.json`` to ``[]``, and stage
         a gitlink at ``pdd/foo_v2`` alongside a new ``.gitmodules``.
@@ -10067,20 +9936,14 @@ class TestRound11SubmoduleBypass:
         #      submodule HEAD)
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / ".gitmodules").write_text(
-            "[submodule \"pdd/foo_v2\"]\n"
-            "\tpath = pdd/foo_v2\n"
-            "\turl = ../foo_v2.git\n",
+            '[submodule "pdd/foo_v2"]\n\tpath = pdd/foo_v2\n\turl = ../foo_v2.git\n',
             encoding="utf-8",
         )
         submodule_dir = tmp_path / "pdd" / "foo_v2"
         submodule_dir.mkdir(parents=True, exist_ok=True)
-        (submodule_dir / "__init__.py").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (submodule_dir / "__init__.py").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -10125,16 +9988,12 @@ class TestRound11SubmoduleBypass:
         # trigger does not fire because head_pairs == worktree_pairs
         # and every HEAD-registered file is still present.
         (tmp_path / ".gitmodules").write_text(
-            "[submodule \"pdd/foo_v2\"]\n"
-            "\tpath = pdd/foo_v2\n"
-            "\turl = ../foo_v2.git\n",
+            '[submodule "pdd/foo_v2"]\n\tpath = pdd/foo_v2\n\turl = ../foo_v2.git\n',
             encoding="utf-8",
         )
         submodule_dir = tmp_path / "pdd" / "foo_v2"
         submodule_dir.mkdir(parents=True, exist_ok=True)
-        (submodule_dir / "__init__.py").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (submodule_dir / "__init__.py").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -10171,14 +10030,10 @@ class TestRound11SubmoduleBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         utils_dir = tmp_path / "pdd" / "utils"
         utils_dir.mkdir(parents=True, exist_ok=True)
-        (utils_dir / "__init__.py").write_text(
-            "VALUE = 42\n", encoding="utf-8"
-        )
+        (utils_dir / "__init__.py").write_text("VALUE = 42\n", encoding="utf-8")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -10240,9 +10095,7 @@ class TestRound13PromptsSubdirImportableBypass:
         #   4. drop importable Python at pdd/prompts/foo_v2.py
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_v2.py").write_text(
             "VALUE = 42\n", encoding="utf-8"
         )
@@ -10281,12 +10134,8 @@ class TestRound13PromptsSubdirImportableBypass:
 
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
-        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(
-            b"\x00\x00 stub"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(b"\x00\x00 stub")
 
         reason = _check_architecture_registry_edit_guard(
             tmp_path,
@@ -10300,9 +10149,7 @@ class TestRound13PromptsSubdirImportableBypass:
         assert reason is not None
         assert "pdd/prompts/foo_v2.pyc" in reason
 
-    def test_guard_allows_prompt_file_under_prompts_dir(
-        self, tmp_path: Path
-    ) -> None:
+    def test_guard_allows_prompt_file_under_prompts_dir(self, tmp_path: Path) -> None:
         """Negative: a ``pdd/prompts/foo_v2.prompt`` file in the change
         set (even when unregistered) must still be skipped by the
         unregistered-new-code scan because ``.prompt`` is the
@@ -10326,9 +10173,7 @@ class TestRound13PromptsSubdirImportableBypass:
         # scan ignores this path — it's not importable Python.
         (tmp_path / "pdd" / "foo.py").unlink()
         (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
-        (tmp_path / "architecture.json").write_text(
-            json.dumps([]), encoding="utf-8"
-        )
+        (tmp_path / "architecture.json").write_text(json.dumps([]), encoding="utf-8")
         (tmp_path / "pdd" / "prompts" / "foo_v2.prompt").write_text(
             "prompt body\n", encoding="utf-8"
         )
@@ -10348,6 +10193,8 @@ class TestRound13PromptsSubdirImportableBypass:
         # code scan must NOT flag the .prompt path.
         if reason is not None:
             assert "pdd/prompts/foo_v2.prompt" not in reason
+
+
 class TestReviewLoopDeterministicGates:
     """Issue #1092: deterministic local gates gate the clean verdict.
 
@@ -10439,7 +10286,9 @@ class TestReviewLoopDeterministicGates:
                 )
             ]
 
-        def fake_run(worktree, gates, *, artifacts_dir, round_number, mode, default_timeout=60.0):
+        def fake_run(
+            worktree, gates, *, artifacts_dir, round_number, mode, default_timeout=60.0
+        ):
             rounds_seen.append(round_number)
             exit_code = 1 if round_number in fail_rounds else 0
             return [
@@ -10481,7 +10330,12 @@ class TestReviewLoopDeterministicGates:
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             calls.append((role, kwargs["label"]))
             if "fix" in kwargs["label"]:
-                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -10512,7 +10366,12 @@ class TestReviewLoopDeterministicGates:
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             instructions.append(instruction)
             if "fix" in kwargs["label"]:
-                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "fixed", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -10526,9 +10385,7 @@ class TestReviewLoopDeterministicGates:
         )
 
         # The fixer's prompt must reference the synthetic gate finding.
-        fix_instructions = [
-            text for text in instructions if "fix" in text.lower()
-        ]
+        fix_instructions = [text for text in instructions if "fix" in text.lower()]
         joined = "\n".join(fix_instructions)
         assert "gate:prettier-check" in joined or "deterministic-gate" in joined
 
@@ -10544,7 +10401,12 @@ class TestReviewLoopDeterministicGates:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             if "fix" in kwargs["label"]:
-                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "fixed", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -10581,7 +10443,12 @@ class TestReviewLoopDeterministicGates:
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs["label"]
             if "fix" in label:
-                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "fixed", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             review_calls["n"] += 1
             if review_calls["n"] == 1:
                 # Reviewer reports a finding so the loop enters the
@@ -10669,7 +10536,12 @@ class TestReviewLoopDeterministicGates:
                 # Primary reviewer always fails → fallback promotion fires.
                 return False, "Authentication failed", 0.0, role
             if "fix" in label:
-                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             # Fallback reviewer always reports clean.
             return True, _json("clean"), 0.05, role
 
@@ -10701,6 +10573,7 @@ class TestReviewLoopDeterministicGates:
         import pdd.checkup_gates as gates_mod
 
         self._patch_io(monkeypatch, tmp_path)
+
         # Make ``discover_gates`` raise — if the loop is honouring
         # ``enable_gates=False``, the helper short-circuits before
         # touching ``checkup_gates`` and the loop completes cleanly.
@@ -10780,7 +10653,12 @@ class TestReviewLoopDeterministicGates:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             if "fix" in kwargs["label"]:
-                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -10799,7 +10677,11 @@ class TestReviewLoopDeterministicGates:
         # The final-state.json artifact must include the structured
         # gate-run audit trail.
         final_state_path = (
-            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-1"
+            / "final-state.json"
         )
         assert final_state_path.exists(), (
             f"missing {final_state_path}; siblings: "
@@ -10858,9 +10740,7 @@ class TestReviewLoopDeterministicGates:
         assert f.reviewer == "gate:runner"
         assert "runner" in f.finding.lower() or "crash" in f.finding.lower()
         evidence_lower = f.evidence.lower()
-        assert (
-            "runtimeerror" in evidence_lower or "runner kaboom" in evidence_lower
-        )
+        assert "runtimeerror" in evidence_lower or "runner kaboom" in evidence_lower
 
     def test_enforce_gates_runner_crash_scrubs_secrets_from_logs_and_state(
         self, monkeypatch: Any, tmp_path: Path, caplog: Any
@@ -10889,6 +10769,7 @@ class TestReviewLoopDeterministicGates:
             ]
 
         secret = "sk-supersecret-ABCDEFGHIJKLMNOPQRSTUVWX"
+
         def boom(*a: Any, **k: Any):
             raise RuntimeError(f"upstream barfed token={secret}")
 
@@ -10939,6 +10820,7 @@ class TestReviewLoopDeterministicGates:
         import pdd.checkup_gates as gates_mod
 
         secret = "sk-anothersecret-1234567890ABCDEFGHIJ"
+
         def boom_discover(*a: Any, **k: Any):
             raise RuntimeError(f"pyproject barfed token={secret}")
 
@@ -10997,9 +10879,12 @@ class TestReviewLoopDeterministicGates:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             if "fix" in kwargs["label"]:
-                return True, json.dumps(
-                    {"summary": "noop", "dispositions": {}}
-                ), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -11050,9 +10935,12 @@ class TestReviewLoopDeterministicGates:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             if "fix" in kwargs["label"]:
-                return True, json.dumps(
-                    {"summary": "noop", "dispositions": {}}
-                ), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -11126,9 +11014,12 @@ class TestReviewLoopDeterministicGates:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             if "fix" in kwargs["label"]:
-                return True, json.dumps(
-                    {"summary": "noop", "dispositions": {}}
-                ), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -11157,8 +11048,7 @@ class TestReviewLoopDeterministicGates:
         next_section_idx = rest.find("\n### ", 1)
         det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
         assert "[REDACTED]" in det_section, (
-            f"crash row must show [REDACTED] in place of the token:\n"
-            f"{det_section}"
+            f"crash row must show [REDACTED] in place of the token:\n{det_section}"
         )
         assert secret_token not in det_section
         # Defang must not eat the diagnostic context.
@@ -11168,7 +11058,11 @@ class TestReviewLoopDeterministicGates:
         # final-state.json persists ``state.gate_runs`` raw — make sure
         # the on-disk audit trail does NOT leak the token either.
         final_state_path = (
-            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-1"
+            / "final-state.json"
         )
         if final_state_path.exists():
             payload_text = final_state_path.read_text(encoding="utf-8")
@@ -11325,6 +11219,7 @@ class TestReviewLoopDeterministicGates:
         import pdd.checkup_review_loop as mod
 
         secret = "ghp_" + ("E" * 40)
+
         def boom(*a, **k):
             raise OSError(f"git binary missing — token {secret}")
 
@@ -11381,9 +11276,7 @@ class TestReviewLoopDeterministicGates:
         # Stub the scanner so it doesn't actually run git in the
         # test's tmp_path. The fail-closed branch fires BEFORE the
         # scan, so the stub need only return something innocuous.
-        monkeypatch.setattr(
-            mod, "_pr_changed_files_all", lambda *a, **k: []
-        )
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
 
         findings = _enforce_gates_before_clean(
             state=state,
@@ -11428,7 +11321,7 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-               "base_ref": "main",
+                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -11486,16 +11379,14 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-               "base_ref": "main",
+                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
         )
         calls: List[Dict[str, Any]] = []
 
-        def fake_refresh(
-            worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet
-        ):
+        def fake_refresh(worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet):
             calls.append({"owner": pr_owner, "repo": pr_repo, "n": pr_number})
             pr_metadata["base_local_ref"] = (
                 f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
@@ -11506,9 +11397,12 @@ class TestReviewLoopDeterministicGates:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             if "fix" in kwargs["label"]:
-                return True, json.dumps(
-                    {"summary": "noop", "dispositions": {}}
-                ), 0.05, role
+                return (
+                    True,
+                    json.dumps({"summary": "noop", "dispositions": {}}),
+                    0.05,
+                    role,
+                )
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -11549,7 +11443,7 @@ class TestReviewLoopDeterministicGates:
             return {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-               "base_ref": "main",
+                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             }
@@ -11557,9 +11451,7 @@ class TestReviewLoopDeterministicGates:
         monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_fetch)
         refresh_calls: List[int] = []
 
-        def fake_refresh(
-            worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet
-        ):
+        def fake_refresh(worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet):
             refresh_calls.append(pr_number)
             pr_metadata["base_local_ref"] = (
                 f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
@@ -11612,9 +11504,7 @@ class TestReviewLoopDeterministicGates:
         SECRET = "sk-proj-LEAK-CANARY-1234567890abcdef1234567890abcdef"
 
         def _exploding_discover(*args: Any, **kwargs: Any) -> Any:
-            raise RuntimeError(
-                f"discovery failed while reading {SECRET}/auth-cache"
-            )
+            raise RuntimeError(f"discovery failed while reading {SECRET}/auth-cache")
 
         # ``_enforce_gates_before_clean`` imports ``discover_gates``
         # lazily from ``pdd.checkup_gates`` — patch at the source.
@@ -11656,9 +11546,8 @@ class TestReviewLoopDeterministicGates:
         for rec in caplog.records:
             if rec.exc_info:
                 import traceback
-                tb = "".join(
-                    traceback.format_exception(*rec.exc_info)
-                )
+
+                tb = "".join(traceback.format_exception(*rec.exc_info))
                 captured = captured + "\n" + tb
         assert SECRET not in captured, (
             "iter-40 Finding 3: exception text containing a secret leaked "
@@ -11687,33 +11576,69 @@ class TestPrChangedFilesScannerBaseLocalRef:
         file. Returns (worktree, base_local_ref)."""
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
-             "commit", "--allow-empty", "-m", "init", "-q"],
-            cwd=tmp_path, check=True,
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+                "-q",
+            ],
+            cwd=tmp_path,
+            check=True,
         )
         # Synthetic release base diverged from main:
-        subprocess.run(["git", "checkout", "-q", "-b", "release-1.4"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "release-1.4"], cwd=tmp_path, check=True
+        )
         (tmp_path / "release_anchor.txt").write_text("anchor\n")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
-             "commit", "-m", "release-base", "-q"],
-            cwd=tmp_path, check=True,
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "release-base",
+                "-q",
+            ],
+            cwd=tmp_path,
+            check=True,
         )
         local_ref = "refs/remotes/pdd-checkup/pr-1/base"
         subprocess.run(
             ["git", "update-ref", local_ref, "HEAD"],
-            cwd=tmp_path, check=True,
+            cwd=tmp_path,
+            check=True,
         )
         # PR branch off the release base, changing a Python file:
-        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True
+        )
         (tmp_path / "pkg").mkdir()
         (tmp_path / "pkg" / "feature.py").write_text("x = 1\n")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
-             "commit", "-m", "feat", "-q"],
-            cwd=tmp_path, check=True,
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "feat",
+                "-q",
+            ],
+            cwd=tmp_path,
+            check=True,
         )
         return tmp_path, local_ref
 
@@ -11741,9 +11666,7 @@ class TestPrChangedFilesScannerBaseLocalRef:
         shim = worktree / "git"
         marker = worktree / "marker"
         shim.write_text(
-            "#!/bin/sh\n"
-            f"echo shim >> {marker}\n"
-            "exit 1\n",
+            f"#!/bin/sh\necho shim >> {marker}\nexit 1\n",
             encoding="utf-8",
         )
         shim.chmod(0o755)
@@ -11780,9 +11703,7 @@ class TestPrChangedFilesScannerBaseLocalRef:
         shim = worktree / "git"
         marker = worktree / "marker"
         shim.write_text(
-            "#!/bin/sh\n"
-            f"echo shim >> {marker}\n"
-            "exit 1\n",
+            f"#!/bin/sh\necho shim >> {marker}\nexit 1\n",
             encoding="utf-8",
         )
         shim.chmod(0o755)
@@ -11817,9 +11738,7 @@ def _make_pr_worktree_with_arch(
     worktree.mkdir()
 
     def run(*args: str) -> None:
-        subprocess.run(
-            ["git", *args], cwd=worktree, check=True, capture_output=True
-        )
+        subprocess.run(["git", *args], cwd=worktree, check=True, capture_output=True)
 
     run("init", "-q", "-b", "main")
     run("config", "user.email", "test@example.com")
@@ -11908,9 +11827,7 @@ class TestCompanionSourceOfTruthFiles:
         assert entry["prompt_in_diff"] is False
         assert entry["architecture_in_diff"] is False
 
-    def test_collector_omits_when_prompt_and_arch_in_diff(
-        self, tmp_path: Path
-    ) -> None:
+    def test_collector_omits_when_prompt_and_arch_in_diff(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
 
         worktree = _make_pr_worktree_with_arch(
@@ -11920,13 +11837,14 @@ class TestCompanionSourceOfTruthFiles:
             prompt_in_pr=True,
             arch_in_pr=True,
         )
-        assert _collect_companion_source_of_truth_files(
-            worktree, pr_metadata={"base_ref": "main"}
-        ) == []
+        assert (
+            _collect_companion_source_of_truth_files(
+                worktree, pr_metadata={"base_ref": "main"}
+            )
+            == []
+        )
 
-    def test_collector_surfaces_when_only_arch_in_diff(
-        self, tmp_path: Path
-    ) -> None:
+    def test_collector_surfaces_when_only_arch_in_diff(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
 
         worktree = _make_pr_worktree_with_arch(
@@ -11943,9 +11861,7 @@ class TestCompanionSourceOfTruthFiles:
         assert companions[0]["prompt_in_diff"] is False
         assert companions[0]["architecture_in_diff"] is True
 
-    def test_collector_fail_open_when_arch_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_collector_fail_open_when_arch_missing(self, tmp_path: Path) -> None:
         import subprocess
 
         from pdd.checkup_review_loop import _collect_companion_source_of_truth_files
@@ -11962,19 +11878,24 @@ class TestCompanionSourceOfTruthFiles:
             ["config", "user.email", "t@e.com"],
             ["config", "user.name", "T"],
         ):
-            subprocess.run(
-                ["git", *cfg], cwd=worktree, check=True, capture_output=True
-            )
+            subprocess.run(["git", *cfg], cwd=worktree, check=True, capture_output=True)
         (worktree / "pdd").mkdir()
         (worktree / "pdd" / "foo.py").write_text("x=1\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "add", "."], cwd=worktree, check=True, capture_output=True
+        )
         subprocess.run(
             ["git", "commit", "-q", "-m", "base"],
-            cwd=worktree, check=True, capture_output=True,
+            cwd=worktree,
+            check=True,
+            capture_output=True,
         )
-        assert _collect_companion_source_of_truth_files(
-            worktree, pr_metadata={"base_ref": "main"}
-        ) == []
+        assert (
+            _collect_companion_source_of_truth_files(
+                worktree, pr_metadata={"base_ref": "main"}
+            )
+            == []
+        )
 
     def test_review_prompt_includes_section_when_companions_passed(
         self, tmp_path: Path
@@ -12093,7 +12014,10 @@ class TestCompanionSourceOfTruthFiles:
         # omitted_paths_cap = max(1, 2//2) = 1. Shown omitted = 1,
         # remaining = 7.
         changed_files = [f"pdd/m{i}.py" for i in range(10)]
-        mapping = {p: p.replace("pdd/", "pdd/prompts/").replace(".py", "_python.prompt") for p in changed_files}
+        mapping = {
+            p: p.replace("pdd/", "pdd/prompts/").replace(".py", "_python.prompt")
+            for p in changed_files
+        }
 
         with (
             mock.patch(
@@ -12422,14 +12346,16 @@ class TestPrBaseMergeConflictPreflight:
             ["config", "user.email", "t@e.com"],
             ["config", "user.name", "T"],
         ):
-            subprocess.run(
-                ["git", *cmd], cwd=worktree, check=True, capture_output=True
-            )
+            subprocess.run(["git", *cmd], cwd=worktree, check=True, capture_output=True)
         (worktree / "a.py").write_text("x=1\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "add", "."], cwd=worktree, check=True, capture_output=True
+        )
         subprocess.run(
             ["git", "commit", "-q", "-m", "base"],
-            cwd=worktree, check=True, capture_output=True,
+            cwd=worktree,
+            check=True,
+            capture_output=True,
         )
         assert (
             _detect_pr_base_merge_conflict(worktree, "refs/heads/does-not-exist")
@@ -12450,13 +12376,15 @@ class TestPrBaseMergeConflictPreflight:
 
         monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *_a, **_k: (worktree, ""))
         monkeypatch.setattr(
-            mod, "_fetch_pr_metadata",
+            mod,
+            "_fetch_pr_metadata",
             lambda *_a, **_k: {"base_ref": "main", "base_local_ref": "main"},
         )
         monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *_a, **_k: None)
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda _w: "abc1234")
         monkeypatch.setattr(
-            mod, "_detect_pr_base_merge_conflict",
+            mod,
+            "_detect_pr_base_merge_conflict",
             lambda _w, _b: "CONFLICT (content): Merge conflict in shared.py",
         )
 
@@ -12492,8 +12420,12 @@ class TestPrBaseMergeConflictPreflight:
         )
 
         success, report, cost, _model = run_checkup_review_loop(
-            context=_ctx(tmp_path), config=cfg, cwd=tmp_path,
-            verbose=False, quiet=True, use_github_state=False,
+            context=_ctx(tmp_path),
+            config=cfg,
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            use_github_state=False,
         )
 
         assert success is True
@@ -12541,9 +12473,7 @@ class TestFilesChangedSinceHelper:
         files = _files_changed_since(worktree, base_sha)
         assert sorted(files) == ["a.py", "b.py"]
 
-    def test_rename_surfaces_both_old_and_new_paths(
-        self, tmp_path: Path
-    ) -> None:
+    def test_rename_surfaces_both_old_and_new_paths(self, tmp_path: Path) -> None:
         """Codex review finding F4."""
         import subprocess
 
@@ -12586,9 +12516,7 @@ class TestGuardBaselineHeadRef:
     baseline to ``pre_fix_sha``.
     """
 
-    def test_load_prompt_source_map_honours_head_ref(
-        self, tmp_path: Path
-    ) -> None:
+    def test_load_prompt_source_map_honours_head_ref(self, tmp_path: Path) -> None:
         """When ``head_ref`` is set to a SHA before the fixer made a
         committed registry repoint, the mapping reflects the pre-fix
         registry (not the current HEAD). This is what lets the
@@ -12653,17 +12581,15 @@ class TestGuardBaselineHeadRef:
 
         # Default head_ref="HEAD" reflects POST-fix registry (the bug).
         head_mapping = _load_prompt_source_map(worktree)
-        assert head_mapping == {
-            "pdd/foo.py": "pdd/prompts/bar_python.prompt"
-        }, head_mapping
+        assert head_mapping == {"pdd/foo.py": "pdd/prompts/bar_python.prompt"}, (
+            head_mapping
+        )
 
         # head_ref=pre_fix_sha reflects PRE-fix registry (the fix).
-        pre_mapping = _load_prompt_source_map(
-            worktree, head_ref=pre_fix_sha
+        pre_mapping = _load_prompt_source_map(worktree, head_ref=pre_fix_sha)
+        assert pre_mapping == {"pdd/foo.py": "pdd/prompts/foo_python.prompt"}, (
+            pre_mapping
         )
-        assert pre_mapping == {
-            "pdd/foo.py": "pdd/prompts/foo_python.prompt"
-        }, pre_mapping
 
     def test_prompt_source_guard_catches_committed_drift_with_pre_fix_baseline(
         self, tmp_path: Path
@@ -12729,9 +12655,7 @@ class TestGuardBaselineHeadRef:
 
         # With pre-fix baseline: guard MUST fire (the committed code-
         # only edit is real drift the loop must not push).
-        with_pre = _check_prompt_source_guard(
-            worktree, changed, head_ref=pre_fix_sha
-        )
+        with_pre = _check_prompt_source_guard(worktree, changed, head_ref=pre_fix_sha)
         assert with_pre is not None
         assert "pdd/foo.py" in with_pre
         assert "pdd/prompts/foo_python.prompt" in with_pre

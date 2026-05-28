@@ -493,16 +493,16 @@ def _has_active_noemit(tokens: List[str]) -> bool:
     for i, t in enumerate(tokens):
         if t == "--noemit":
             if i + 1 < len(tokens) and tokens[i + 1] in (
-                "false", "0", "no",
+                "false",
+                "0",
+                "no",
             ):
                 continue
             return True
     return False
 
 
-def _extract_tsc_project_paths(
-    script_command: str, worktree: Path
-) -> List[Path]:
+def _extract_tsc_project_paths(script_command: str, worktree: Path) -> List[Path]:
     """Return the worktree-resolved paths a tsc-flavoured script
     targets via ``-p <path>`` / ``--project <path>``.
 
@@ -542,7 +542,7 @@ def _extract_tsc_project_paths(
             continue
         for prefix in flag_equals:
             if tok_cmp.startswith(prefix):
-                raw_paths.append(tok[len(prefix):])
+                raw_paths.append(tok[len(prefix) :])
                 break
         i += 1
     resolved: List[Path] = []
@@ -726,9 +726,7 @@ def _tsconfig_chain_signals_emit(
             candidate = candidate / "tsconfig.json"
         if not candidate.name.endswith(".json"):
             candidate = candidate.with_suffix(candidate.suffix + ".json")
-        if _tsconfig_chain_signals_emit(
-            candidate, worktree, _depth=_depth + 1
-        ):
+        if _tsconfig_chain_signals_emit(candidate, worktree, _depth=_depth + 1):
             return True
     return False
 
@@ -757,9 +755,7 @@ _PACKAGE_MANAGER_CONFIG_BASENAMES: Tuple[str, ...] = (
 )
 
 
-def _npm_runner_redirect_unsafe(
-    worktree: Path, pr_changed_set: set
-) -> bool:
+def _npm_runner_redirect_unsafe(worktree: Path, pr_changed_set: set) -> bool:
     """Return True iff a package-manager config can redirect npm-family
     script execution to a PR-controlled binary or runtime.
 
@@ -934,12 +930,15 @@ def _discover_npm_gates(
     node_modules_pr_touched = any(
         path.startswith("node_modules/") for path in pr_changed_set
     )
+
     def _pr_modified_any(prefixes: Tuple[str, ...]) -> bool:
         for path in pr_changed_set:
             base = path.rsplit("/", 1)[-1]
             for pfx in prefixes:
-                if base == pfx or base.startswith(pfx + ".") or (
-                    pfx.endswith(".") and base.startswith(pfx)
+                if (
+                    base == pfx
+                    or base.startswith(pfx + ".")
+                    or (pfx.endswith(".") and base.startswith(pfx))
                 ):
                     return True
                 # Also match arbitrary-ext variants like
@@ -949,12 +948,8 @@ def _discover_npm_gates(
                     return True
         return False
 
-    prettier_config_changed = _pr_modified_any(
-        ("prettier.config", ".prettierrc")
-    )
-    eslint_config_changed = _pr_modified_any(
-        ("eslint.config", ".eslintrc")
-    )
+    prettier_config_changed = _pr_modified_any(("prettier.config", ".prettierrc"))
+    eslint_config_changed = _pr_modified_any(("eslint.config", ".eslintrc"))
     tsconfig_changed = any(
         path.endswith("tsconfig.json")
         or "/tsconfig." in path
@@ -979,9 +974,7 @@ def _discover_npm_gates(
                 continue
             if not isinstance(script_command, str):
                 continue
-            for project_path in _extract_tsc_project_paths(
-                script_command, worktree
-            ):
+            for project_path in _extract_tsc_project_paths(script_command, worktree):
                 chain_roots.append(project_path)
         chain_paths: set = set()
         seen_roots: set = set()
@@ -993,13 +986,12 @@ def _discover_npm_gates(
             if rkey in seen_roots:
                 continue
             seen_roots.add(rkey)
-            chain_paths.update(
-                _collect_tsconfig_chain_paths(root, worktree)
-            )
+            chain_paths.update(_collect_tsconfig_chain_paths(root, worktree))
         if chain_paths:
             lowered_chain = {p.lower() for p in chain_paths}
             if lowered_chain & pr_changed_set:
                 tsconfig_changed = True
+
     # Iter-29 Finding 2: prettier/eslint configs ``require()``
     # arbitrary local JavaScript — including files in subdirectories
     # like ``./src/plugin.js``. The iter-28 heuristic that allowed
@@ -1015,9 +1007,7 @@ def _discover_npm_gates(
     def _is_plugin_loadable(path: str) -> bool:
         return path.endswith((".cjs", ".mjs", ".js"))
 
-    js_plugin_module_changed = any(
-        _is_plugin_loadable(path) for path in pr_changed_set
-    )
+    js_plugin_module_changed = any(_is_plugin_loadable(path) for path in pr_changed_set)
     # Iter-28 Finding 1 + iter-29 Finding 1 + iter-38 Finding 2: a
     # script-based tsc gate runs the operator's unmodified argv, so we
     # cannot inject ``--incremental false`` / ``--tsBuildInfoFile
@@ -1038,9 +1028,7 @@ def _discover_npm_gates(
             continue
         if not isinstance(script_command, str):
             continue
-        for project_path in _extract_tsc_project_paths(
-            script_command, worktree
-        ):
+        for project_path in _extract_tsc_project_paths(script_command, worktree):
             tsconfig_signal_roots.append(project_path)
     tsconfig_signals_emit = False
     seen_emit_roots: set = set()
@@ -1120,9 +1108,7 @@ def _discover_npm_gates(
         # an operator-supplied custom path slips through. Parse the
         # script body for any ``--config`` / ``-c`` argument and
         # skip when that path is in the PR diff.
-        if _script_references_pr_modified_config(
-            script_command, pr_changed_set
-        ):
+        if _script_references_pr_modified_config(script_command, pr_changed_set):
             logger.debug(
                 "checkup-gates: skipping npm:%s — script body references "
                 "a PR-modified --config path",
@@ -1139,10 +1125,7 @@ def _discover_npm_gates(
         # to opt back in. We do not try to validate the hook body, because
         # the gate value here (a generic format/typecheck) is not worth
         # the attack surface of allowlisting more shell snippets.
-        if (
-            f"pre{script_name}" in scripts
-            or f"post{script_name}" in scripts
-        ):
+        if f"pre{script_name}" in scripts or f"post{script_name}" in scripts:
             logger.debug(
                 "checkup-gates: skipping npm:%s — pre/post lifecycle hook present",
                 script_name,
@@ -1279,7 +1262,9 @@ def _discover_python_gates(
 ) -> List[Gate]:
     gates: List[Gate] = []
     changed_py = [
-        rel for rel in changed_files if rel.endswith(".py") and (worktree / rel).is_file()
+        rel
+        for rel in changed_files
+        if rel.endswith(".py") and (worktree / rel).is_file()
     ]
     for rel in changed_py:
         gates.append(
@@ -1334,7 +1319,7 @@ def _discover_python_gates(
                     # itself uses.
                     f"Fix the syntax error in {rel}. To re-check locally "
                     f"without writing __pycache__ artifacts: "
-                    f"`python -B -c \"import sys; "
+                    f'`python -B -c "import sys; '
                     f"compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')\" "
                     f"{rel}`."
                 ),
@@ -1418,8 +1403,7 @@ def _discover_python_gates(
                 cmd=[ruff_abs, "check", "--", *changed_py],
                 source="pyproject.toml:[tool.ruff]",
                 required_fix_hint=(
-                    "Run `ruff check --fix` locally and address the remaining "
-                    "issues."
+                    "Run `ruff check --fix` locally and address the remaining issues."
                 ),
             )
         )
@@ -1599,7 +1583,7 @@ def _script_references_pr_modified_config(
             continue
         for prefix in flag_equals:
             if tok.startswith(prefix):
-                config_paths.append(tok[len(prefix):])
+                config_paths.append(tok[len(prefix) :])
                 break
         i += 1
     # Iter-37 Finding 3: ``--config config/../config/lint.json``
@@ -1607,9 +1591,7 @@ def _script_references_pr_modified_config(
     # the ``..``. Use ``os.path.normpath`` on BOTH sides of the
     # comparison so a PR-modified file isn't missed because the
     # script wrote a non-canonical path.
-    normalised_changed = {
-        os.path.normpath(p) for p in pr_changed_set
-    }
+    normalised_changed = {os.path.normpath(p) for p in pr_changed_set}
     for raw in config_paths:
         if not raw:
             continue
@@ -1635,9 +1617,7 @@ def _script_references_pr_modified_config(
     return False
 
 
-def _mypy_declares_local_plugin_anywhere(
-    worktree: Path, pyproject_text: str
-) -> bool:
+def _mypy_declares_local_plugin_anywhere(worktree: Path, pyproject_text: str) -> bool:
     """Return True iff ANY mypy config surface declares a local plugin.
 
     iter-34 Finding 2 generalises iter-32 Finding 1's check from
@@ -1799,7 +1779,7 @@ def _extract_mypy_plugin_entries(pyproject_text: str) -> List[str]:
     )
     if not header:
         return []
-    tail = pyproject_text[header.end():]
+    tail = pyproject_text[header.end() :]
     next_table = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_table else tail[: next_table.start()]
     plugins_match = re.search(
@@ -1826,7 +1806,7 @@ def _extract_ini_mypy_plugin_entries(text: str, header_pattern: str) -> List[str
     header = re.search(header_pattern, text, re.MULTILINE)
     if not header:
         return []
-    tail = text[header.end():]
+    tail = text[header.end() :]
     next_section = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_section else tail[: next_section.start()]
     plugins_match = re.search(
@@ -1853,7 +1833,7 @@ def _ini_section_has_local_plugin(text: str, header_pattern: str) -> bool:
     header = re.search(header_pattern, text, re.MULTILINE)
     if not header:
         return False
-    tail = text[header.end():]
+    tail = text[header.end() :]
     next_section = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_section else tail[: next_section.start()]
     plugins_match = re.search(
@@ -1909,7 +1889,7 @@ def _mypy_declares_local_plugin(pyproject_text: str) -> bool:
     if not header:
         return False
     # Slice from header to the next ``[`` table header (or EOF).
-    tail = pyproject_text[header.end():]
+    tail = pyproject_text[header.end() :]
     next_table = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_table else tail[: next_table.start()]
     plugins_match = re.search(
@@ -2093,11 +2073,7 @@ def discover_gates(
         base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
         gates.append(_git_diff_check_gate(trusted_git, base_spec))
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
-    gates.extend(
-        _discover_python_gates(
-            worktree, changed_files, base_ref=base_ref
-        )
-    )
+    gates.extend(_discover_python_gates(worktree, changed_files, base_ref=base_ref))
     # Stable order: git-diff-check first, then language-specific gates
     # in discovery order. The runner walks the list left-to-right so
     # operators see consistent artifact filenames across rounds.
@@ -2268,9 +2244,7 @@ def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
     if not isinstance(data, dict):
         return []
     top_files = data.get("files") if isinstance(data.get("files"), str) else None
-    top_exclude = (
-        data.get("exclude") if isinstance(data.get("exclude"), str) else None
-    )
+    top_exclude = data.get("exclude") if isinstance(data.get("exclude"), str) else None
     # Codex pass-11 finding 3: top-level ``default_stages`` applies when
     # a hook does not declare its own ``stages``. Propagate it so a PR
     # that changes ``default_stages: [pre-commit]`` → ``[manual]`` is
@@ -2315,10 +2289,12 @@ def _parse_ruff_format_scopes_from_text(
     for hook in _parse_ruff_format_hooks_from_text(text):
         files_pat = hook.get("files")
         exclude_pat = hook.get("exclude")
-        result.append((
-            files_pat if isinstance(files_pat, str) else None,
-            exclude_pat if isinstance(exclude_pat, str) else None,
-        ))
+        result.append(
+            (
+                files_pat if isinstance(files_pat, str) else None,
+                exclude_pat if isinstance(exclude_pat, str) else None,
+            )
+        )
     return result
 
 
@@ -2356,9 +2332,7 @@ def _ruff_format_pre_commit_scope(
     raw_scopes = _parse_ruff_format_scopes_from_text(text)
     if not raw_scopes:
         return None
-    result: List[
-        Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]
-    ] = []
+    result: List[Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]] = []
     for files_pat, exclude_pat in raw_scopes:
         files_re: Optional["re.Pattern[str]"] = None
         exclude_re: Optional["re.Pattern[str]"] = None
@@ -2519,11 +2493,9 @@ def _file_has_unchanged_ruff_format_signal(
     Fail-open: missing ``base_ref``, unresolvable git read, or missing
     signal at either version all return False.
     """
-    is_pre_commit = (rel_path == ".pre-commit-config.yaml")
+    is_pre_commit = rel_path == ".pre-commit-config.yaml"
     try:
-        post_text = (worktree / rel_path).read_text(
-            encoding="utf-8", errors="replace"
-        )
+        post_text = (worktree / rel_path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
     # Use the same exec-context-aware check as the scanner so a step-name
@@ -2647,9 +2619,7 @@ def _ruff_format_signaled_by_ci(
             # blocks a PR from silently adding the signal AND it
             # honours an unchanged signal even when the PR touched
             # another part of the same file.
-            if _file_has_unchanged_ruff_format_signal(
-                worktree, rel, base_ref
-            ):
+            if _file_has_unchanged_ruff_format_signal(worktree, rel, base_ref):
                 if is_pre_commit:
                     pre_commit_signaled = True
                 else:
@@ -2813,12 +2783,16 @@ def _execute_one(
         captured_stdout = ""
         captured_stderr = ""
         if exc.stdout:
-            captured_stdout = exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(
-                "utf-8", "replace"
+            captured_stdout = (
+                exc.stdout
+                if isinstance(exc.stdout, str)
+                else exc.stdout.decode("utf-8", "replace")
             )
         if exc.stderr:
-            captured_stderr = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode(
-                "utf-8", "replace"
+            captured_stderr = (
+                exc.stderr
+                if isinstance(exc.stderr, str)
+                else exc.stderr.decode("utf-8", "replace")
             )
         return GateResult(
             gate=gate,
@@ -3127,10 +3101,7 @@ def _build_finding_message(result: GateResult) -> str:
     # still per-gate-unique.
     scrubbed_name = _scrub(result.gate.name)
     if result.exit_code is None:
-        return (
-            f"Deterministic gate {scrubbed_name!r} failed to execute "
-            "(runner error)."
-        )
+        return f"Deterministic gate {scrubbed_name!r} failed to execute (runner error)."
     return (
         f"Deterministic gate {scrubbed_name!r} failed with exit "
         f"code {result.exit_code}."
