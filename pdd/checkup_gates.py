@@ -1447,17 +1447,22 @@ def _discover_python_gates(
         # Without ANY of these signals the format gate stays silent
         # — projects that use ruff for linting alone won't see false-
         # positive formatting blockers.
-        ci_signal_blocked = any(
-            (
+        # Codex pass-7 finding 2: exclude per-touched-file rather than
+        # blocking the whole CI-signal branch. Build the worktree-
+        # relative POSIX path set of CI config files in the PR diff;
+        # only those individual files are skipped during the scan, so
+        # an unchanged .pre-commit-config.yaml still contributes its
+        # signal even when a sibling workflow file IS in the diff.
+        ci_touched_paths: Set[str] = set()
+        for path in changed_files:
+            if (
                 path == ".pre-commit-config.yaml"
                 or path.startswith("cloudbuild-")
                 or path.startswith(".github/workflows/")
-            )
-            for path in changed_files
-        )
-        ci_signaled = (
-            (not ci_signal_blocked)
-            and _ruff_format_signaled_by_ci(worktree)
+            ):
+                ci_touched_paths.add(path)
+        ci_signaled = _ruff_format_signaled_by_ci(
+            worktree, exclude_paths=ci_touched_paths
         )
         if _tool_section_present("ruff.format") or ci_signaled:
             source_label = (
@@ -2182,10 +2187,22 @@ def _sanitized_path(worktree: Path) -> str:
     return os.pathsep.join(clean)
 
 
-_RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff\s+format\b")
+# Codex pass-7 finding 1: the original pattern (``\bruff\s+format\b``)
+# only matched the literal CI invocation form (``ruff format
+# --check``). Real-world ``.pre-commit-config.yaml`` files declare
+# the canonical hook via ``id: ruff-format`` (hyphen, not space), so
+# the pre-fix helper missed every project that uses the standard
+# pre-commit form. ``\bruff[\s-]+format\b`` matches both ``ruff
+# format`` (CI run lines) AND ``ruff-format`` (pre-commit hook id),
+# while ``\b`` word boundaries keep ``ruff_format`` / ``ruff.format``
+# substrings (file paths, attribute names) from triggering false
+# positives.
+_RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
 
 
-def _ruff_format_signaled_by_ci(worktree: Path) -> bool:
+def _ruff_format_signaled_by_ci(
+    worktree: Path, *, exclude_paths: Optional[Set[str]] = None
+) -> bool:
     """Return True if any CI / pre-commit config in ``worktree`` runs ``ruff format``.
 
     Codex review pass-6 finding 3: a project may run ``ruff format
@@ -2193,30 +2210,53 @@ def _ruff_format_signaled_by_ci(worktree: Path) -> bool:
     ``[tool.ruff.format]`` section). Without this signal the gate
     would silently skip ``ruff-format`` and the original CI-parity
     gap (Bug #2) re-emerges as a false negative — local clean +
-    failing CI. Scan the literal substring ``ruff\\s+format`` across
-    ``.pre-commit-config.yaml``, ``cloudbuild-*-ci.yaml``, and
-    ``.github/workflows/*.yml`` / ``*.yaml`` so projects that opt
-    in via CI alone still get the gate.
+    failing CI. Scan ``.pre-commit-config.yaml``, ``cloudbuild-*-
+    ci.yaml``, and ``.github/workflows/*.yml`` / ``*.yaml`` for the
+    ``\\bruff[\\s-]+format\\b`` pattern so both ``ruff format ...``
+    (CI run lines, codex pass-6) AND ``id: ruff-format`` (canonical
+    pre-commit hook id, codex pass-7 finding 1) trigger the signal.
+
+    Codex pass-7 finding 2: ``exclude_paths`` is a per-FILE
+    suppression set (worktree-relative POSIX paths the PR diff
+    touched). Only the touched config files are excluded from the
+    scan — unchanged config files in the SAME PR still contribute
+    their signal, so a PR that touches one workflow does not
+    silently disable the signal from an unchanged
+    ``.pre-commit-config.yaml``. Pre-fix the entire CI-signal branch
+    short-circuited when ANY CI config was in the diff, defeating
+    the gate's CI-parity intent.
 
     Fail-OPEN: any IO error returns ``False`` so the absence of a
-    signal never blocks clean verdicts. The CI-signal check is
-    intentionally guarded at the call site by a PR-touched check
-    (the same config files in the PR diff disable the signal) so a
-    fork PR cannot poison its way into a gate.
+    signal never blocks clean verdicts.
     """
+    skip = exclude_paths or set()
     candidates: List[Path] = []
     pre_commit = worktree / ".pre-commit-config.yaml"
-    if pre_commit.is_file():
+    if pre_commit.is_file() and ".pre-commit-config.yaml" not in skip:
         candidates.append(pre_commit)
     for cb in sorted(worktree.glob("cloudbuild-*-ci.yaml")):
-        if cb.is_file():
-            candidates.append(cb)
+        if not cb.is_file():
+            continue
+        try:
+            rel = cb.relative_to(worktree).as_posix()
+        except ValueError:
+            continue
+        if rel in skip:
+            continue
+        candidates.append(cb)
     workflows_dir = worktree / ".github" / "workflows"
     if workflows_dir.is_dir():
         for pattern in ("*.yml", "*.yaml"):
             for yml in sorted(workflows_dir.glob(pattern)):
-                if yml.is_file():
-                    candidates.append(yml)
+                if not yml.is_file():
+                    continue
+                try:
+                    rel = yml.relative_to(worktree).as_posix()
+                except ValueError:
+                    continue
+                if rel in skip:
+                    continue
+                candidates.append(yml)
     for path in candidates:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")

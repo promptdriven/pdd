@@ -12209,6 +12209,104 @@ class TestCompanionSourceOfTruthFiles:
             )
         assert companions_skipped == [], companions_skipped
 
+    def test_truncation_marker_carries_full_omitted_entries_for_artifact(
+        self,
+    ) -> None:
+        """Codex pass-7 finding 3: the sidecar artifact MUST be truly
+        complete. The collector now carries every omitted entry's
+        FULL per-entry dict on the marker under ``omitted_entries_
+        full`` so the artifact-persistence path in ``_run_review``
+        can write the complete eligible set to disk for reviewer
+        coverage. The prompt formatter still uses the bounded
+        ``omitted_code_paths`` for display only.
+        """
+        import unittest.mock as mock
+        from pathlib import Path as _Path
+
+        from pdd.checkup_review_loop import (
+            _collect_companion_source_of_truth_files,
+        )
+
+        # 5 eligible, cap shown to 2 → 3 omitted entries. The marker
+        # MUST carry all 3 omitted entries' full dicts even though
+        # the prompt-display omitted_code_paths is bounded at 1.
+        changed_files = [f"pdd/m{i}.py" for i in range(5)]
+        mapping = {
+            p: p.replace("pdd/", "pdd/prompts/").replace(".py", "_python.prompt")
+            for p in changed_files
+        }
+        with (
+            mock.patch(
+                "pdd.checkup_review_loop._pr_changed_files_all",
+                return_value=changed_files,
+            ),
+            mock.patch(
+                "pdd.checkup_review_loop._load_prompt_source_map",
+                return_value=mapping,
+            ),
+        ):
+            companions = _collect_companion_source_of_truth_files(
+                _Path("/tmp/fake"),
+                pr_metadata=None,
+                max_entries=2,
+            )
+
+        marker = next(c for c in companions if c.get("__truncated__"))
+        omitted_full = marker.get("omitted_entries_full", [])
+        # Three omitted, each carrying the full per-entry dict so the
+        # artifact has complete coverage of every omitted companion.
+        assert len(omitted_full) == 3
+        # Each omitted entry MUST carry the same per-entry fields the
+        # shown entries do (prompt_in_diff / architecture_in_diff /
+        # code_path / prompt_path).
+        for entry in omitted_full:
+            assert "code_path" in entry
+            assert "prompt_path" in entry
+            assert "prompt_in_diff" in entry
+            assert "architecture_in_diff" in entry
+
+    def test_format_does_not_leak_omitted_entries_full_into_prompt(
+        self,
+    ) -> None:
+        """Codex pass-7 finding 3 boundary: ``omitted_entries_full``
+        lives on the marker for artifact persistence. The formatter
+        MUST NOT render it into the prompt (which would defeat the
+        bound). The marker dict itself never appears in the prompt
+        JSON either.
+        """
+        from pdd.checkup_review_loop import _format_companion_source_of_truth
+
+        rendered = _format_companion_source_of_truth(
+            [
+                {
+                    "code_path": "pdd/a.py",
+                    "prompt_path": "pdd/prompts/a_python.prompt",
+                    "prompt_in_diff": False,
+                    "architecture_in_diff": False,
+                },
+                {
+                    "__truncated__": True,
+                    "total_eligible": 250,
+                    "shown": 200,
+                    "omitted_code_paths": ["pdd/x.py"],
+                    "omitted_paths_remaining": 49,
+                    "omitted_entries_full": [
+                        {
+                            "code_path": "pdd/x.py",
+                            "prompt_path": "pdd/prompts/x_python.prompt",
+                            "prompt_in_diff": False,
+                            "architecture_in_diff": False,
+                        }
+                    ],
+                },
+            ]
+        )
+        # The artifact-only field must not appear anywhere in the
+        # rendered prompt section.
+        assert "omitted_entries_full" not in rendered
+        # The bounded prompt-display path IS shown.
+        assert "pdd/x.py" in rendered
+
     def test_format_renders_truncation_section_explicitly(self) -> None:
         """The formatter MUST render the truncation marker as an
         explicit 'ALSO inspect' note, not silently drop it.

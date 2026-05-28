@@ -2327,12 +2327,18 @@ def _collect_companion_source_of_truth_files(
     # reviewer knows the listed entries are not the complete set.
     #
     # Codex review pass-5 finding 2: the omitted-paths list MUST itself
-    # be bounded. Pass-4's dump-everything approach defeated the
-    # original 200-entry cap — a 1000-file PR with 800 eligible would
-    # have spilled 600 paths into the reviewer prompt and blown the
-    # context budget. Cap the omitted-paths list at half of
-    # ``max_entries`` (so total visible list stays bounded at
-    # ``max_entries * 1.5`` items) and report the remainder as a count.
+    # be bounded in the PROMPT to keep the reviewer prompt's context
+    # budget predictable.
+    # Codex review pass-7 finding 3: but the SIDECAR ARTIFACT must
+    # carry the COMPLETE eligible set (full per-entry dicts) so the
+    # reviewer who follows the artifact-path instruction in the
+    # truncation note actually has every omitted prompt/architecture
+    # pair available to inspect. Store the full omitted_entries on
+    # the marker under ``omitted_entries_full`` (full dicts with
+    # prompt_in_diff / architecture_in_diff intact) and keep the
+    # bounded ``omitted_code_paths`` + ``omitted_paths_remaining``
+    # fields for the formatter's prompt rendering. The formatter does
+    # NOT render ``omitted_entries_full`` — it stays artifact-only.
     head = eligible[:max_entries]
     omitted_entries = eligible[max_entries:]
     omitted_paths_cap = max(1, max_entries // 2)
@@ -2345,6 +2351,10 @@ def _collect_companion_source_of_truth_files(
             "shown": max_entries,
             "omitted_code_paths": omitted_paths_shown,
             "omitted_paths_remaining": omitted_paths_remaining,
+            # Full per-entry dicts for the sidecar artifact only;
+            # underscored to discourage prompt rendering (formatter
+            # explicitly skips it).
+            "omitted_entries_full": list(omitted_entries),
         }
     )
     return head
@@ -2759,20 +2769,34 @@ def _run_review(
         # AND the omitted code-path list under separate keys so the
         # operator can reconstruct coverage. The marker's
         # ``omitted_paths_remaining`` count is also persisted.
+        # Codex pass-7 finding 3: the artifact MUST be truly complete.
+        # ``omitted_entries_full`` carries every omitted entry with
+        # the same per-entry fields (prompt_in_diff,
+        # architecture_in_diff) as the shown entries, so the reviewer
+        # who follows the artifact-path instruction in the prompt
+        # truncation note can actually inspect every omitted
+        # prompt/architecture pair before issuing a verdict.
+        omitted_full: List[Dict[str, Any]] = (
+            list(marker.get("omitted_entries_full", []))
+            if marker is not None
+            else []
+        )
         artifact_payload = {
             "round": round_number,
             "mode": mode,
             "shown_companions": full_eligible,
+            "omitted_companions": omitted_full,
             "truncation": (
                 {
                     "total_eligible": marker.get("total_eligible"),
                     "shown": marker.get("shown"),
-                    "omitted_code_paths_listed": marker.get(
+                    "omitted_code_paths_listed_in_prompt": marker.get(
                         "omitted_code_paths", []
                     ),
-                    "omitted_paths_remaining": marker.get(
+                    "omitted_paths_remaining_count_in_prompt": marker.get(
                         "omitted_paths_remaining", 0
                     ),
+                    "omitted_total": len(omitted_full),
                 }
                 if marker is not None
                 else None

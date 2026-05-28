@@ -523,6 +523,84 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "ruff-format" in names
 
+    def test_emits_ruff_format_when_signaled_by_canonical_precommit_hook_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-7 finding 1: the canonical pre-commit hook id is
+        ``ruff-format`` (hyphen). The pre-fix regex
+        ``\\bruff\\s+format\\b`` required whitespace between the
+        tokens and missed the standard form, leaving every
+        canonical-pre-commit project as a silent false negative.
+        The updated regex matches both space and hyphen separators.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        # Canonical .pre-commit-config.yaml — NO mention of literal
+        # "ruff format" (space-separated). Only the hyphenated hook id.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        assert "ruff-format" in names
+
+    def test_ci_signal_excludes_only_touched_files_not_whole_branch(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-7 finding 2: when the PR touches ONE CI config
+        but an UNCHANGED ``.pre-commit-config.yaml`` (or another
+        workflow) still runs ruff format, the gate MUST honour that
+        unchanged signal. Pre-fix code suppressed the entire CI-signal
+        branch on any touched CI file, reintroducing the local-clean +
+        failing-CI gap. The granular suppression skips only the
+        touched files from the scan.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n", encoding="utf-8"
+        )
+        # UNCHANGED pre-commit config has the canonical ruff-format hook.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        # PR touches an UNRELATED workflow file (no ruff format inside).
+        wf = tmp_path / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "release.yml").write_text(
+            "jobs:\n  release:\n    steps:\n      - run: echo release\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".github/workflows/release.yml"),
+            )
+        names = {g.name for g in gates}
+        # Even though one workflow file is in the diff, the unchanged
+        # .pre-commit-config.yaml still signals ruff format → gate fires.
+        assert "ruff-format" in names
+
     def test_skips_ruff_format_ci_signal_when_pr_touched_workflow(
         self, tmp_path: Path
     ) -> None:
