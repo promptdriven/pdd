@@ -194,10 +194,10 @@ def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     try:
         with open(pddrc_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-
+        
         if not isinstance(config, dict):
             raise ValueError(f"Invalid .pddrc format: expected dictionary at root level")
-
+        
         # Validate basic structure
         if 'contexts' not in config:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")

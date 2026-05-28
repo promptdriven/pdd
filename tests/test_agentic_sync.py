@@ -2549,8 +2549,8 @@ class TestRunDryRunValidation:
 
         assert all_valid is True
         assert cwds == {"changed": tmp_path}
-        assert errors == []
         assert cost == 0.0
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------
