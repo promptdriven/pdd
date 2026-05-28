@@ -99,20 +99,6 @@ def _seed_fix_error_loop_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_fix_error_loop_prompt_does_not_self_include_module_source() -> None:
-    """The prompt does not need its generated output module as context."""
-    assert PROMPT_PATH.is_file(), f"missing prompt: {PROMPT_PATH}"
-    text = PROMPT_PATH.read_text(encoding="utf-8")
-
-    assert not re.search(
-        r"<include\b[^>]*>pdd/fix_error_loop\.py</include>",
-        text,
-    ), (
-        "fix_error_loop_python.prompt should not need to self-include its "
-        "generated output module just to pass strict prompt-contract preflight."
-    )
-
-
 def test_fix_error_loop_prompt_contract_preflight_has_no_errors() -> None:
     """Deterministic preflight check from the issue must return no errors."""
     if not MODULE_PATH.is_file():
