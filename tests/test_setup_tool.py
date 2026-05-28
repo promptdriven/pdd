@@ -892,6 +892,31 @@ def test_local_and_custom_rows_preserved_through_curation(tmp_path, monkeypatch)
     assert "copilot" not in content.lower()    # device-login dropped
 
 
+def test_curation_preserves_in_place_edited_bundled_row(tmp_path, monkeypatch):
+    """Codex round-5 finding: a BUNDLED row the user edited in place (same model
+    name, changed base_url) must be preserved — only byte-identical pristine
+    bundled rows are auto-removed. Selecting Anthropic keeps the user's edited
+    OpenAI gpt-4o row."""
+    user_rows = [
+        {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY",
+         "base_url": "https://my-proxy.example/v1", "input": "5", "output": "15",
+         "coding_arena_elo": "1100", "max_reasoning_tokens": "",
+         "structured_output": "", "reasoning_type": "", "location": ""},
+    ]
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        user_csv_rows=user_rows,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "1", "", ""],  # select Anthropic
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "claude-sonnet" in content
+    assert "my-proxy.example" in content       # edited bundled row preserved
+    assert "hand-edited" in output.lower()
+
+
 def test_curation_preserves_hand_edited_removes_bundled(tmp_path, monkeypatch):
     """Curation auto-removes only PDD-managed rows (bundled reference models and
     device-login rows) of an unselected provider, with an explicit confirm +
@@ -956,6 +981,10 @@ def test_menu_added_provider_unioned_into_saved_selection(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.provider_manager._get_user_csv_path", lambda: csv_path
     )
+    monkeypatch.setattr(
+        setup_tool, "_scan_for_api_keys_quiet",
+        lambda: [("ANTHROPIC_API_KEY", "env"), ("OPENAI_API_KEY", "env")],
+    )
     before = setup_tool._keyed_providers_in_csv()
     # Simulate the menu adding OpenAI.
     csv_path.write_text(
@@ -983,6 +1012,10 @@ def test_menu_sync_does_not_reabsorb_preserved_or_declined_rows(tmp_path, monkey
     )
     monkeypatch.setattr(
         "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    monkeypatch.setattr(
+        setup_tool, "_scan_for_api_keys_quiet",
+        lambda: [("ANTHROPIC_API_KEY", "env"), ("OPENAI_API_KEY", "env")],
     )
     before = setup_tool._keyed_providers_in_csv()  # {Anthropic, OpenAI}
     setup_tool._union_providers_into_pref(setup_tool._keyed_providers_in_csv() - before)  # adds nothing
@@ -1017,6 +1050,10 @@ def test_keyed_providers_in_csv_excludes_device_login(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    monkeypatch.setattr(
+        setup_tool, "_scan_for_api_keys_quiet",
+        lambda: [("ANTHROPIC_API_KEY", "env")],
     )
     assert setup_tool._keyed_providers_in_csv() == {"Anthropic"}
 

@@ -122,9 +122,17 @@ def _save_selected_providers(providers: List[str]) -> None:
 
 def _keyed_providers_in_csv() -> set:
     """Return the set of providers in the user CSV that have at least one row
-    with an api_key (i.e. credential-backed, not device-login). Used to detect
-    what the options menu added."""
-    from pdd.provider_manager import _read_csv, _get_user_csv_path
+    whose api_key requirements are ACTUALLY satisfied in the environment (a real,
+    usable credential — not merely a non-empty api_key column naming an env var
+    that isn't set). Used to detect what the options menu actually configured.
+
+    Checking real availability (rather than just a non-empty api_key field)
+    matters because the menu's add-provider path appends a provider's rows even
+    when the user skips entering the key; such a provider is NOT credentialed and
+    must not be unioned into the saved selection (#1202 review)."""
+    from pdd.provider_manager import (
+        _read_csv, _get_user_csv_path, api_key_requirements_satisfied,
+    )
     user_csv = _get_user_csv_path()
     if not user_csv.exists():
         return set()
@@ -132,6 +140,7 @@ def _keyed_providers_in_csv() -> set:
         rows = _read_csv(user_csv)
     except Exception:
         return set()
+    found_key_names = [name for name, _ in _scan_for_api_keys_quiet()]
     by_provider: Dict[str, List[Dict[str, str]]] = {}
     for r in rows:
         prov = (r.get("provider") or "").strip()
@@ -139,7 +148,11 @@ def _keyed_providers_in_csv() -> set:
             by_provider.setdefault(prov, []).append(r)
     return {
         prov for prov, prs in by_provider.items()
-        if any((r.get("api_key") or "").strip() for r in prs)
+        if any(
+            (r.get("api_key") or "").strip()
+            and api_key_requirements_satisfied(r.get("api_key") or "", found_key_names)
+            for r in prs
+        )
     }
 
 
@@ -644,27 +657,43 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
     })
     selected = _select_providers_to_keep(combined, curatable)
     if selected is not None:
+        from pdd.provider_manager import CSV_FIELDNAMES
         selected_set = set(selected)
         curatable_set = set(curatable)
-        ref_models = {(r.get("model") or "").strip() for r in configured_models}
+        # Map model -> the pristine bundled reference row, to distinguish
+        # untouched PDD-managed rows from rows the user hand-edited in place.
+        ref_by_model: Dict[str, Dict[str, str]] = {}
+        for r in configured_models:
+            m = (r.get("model") or "").strip()
+            if m:
+                ref_by_model[m] = r
 
         def _unselected_curatable(row: Dict[str, str]) -> bool:
             prov = (row.get("provider") or "").strip()
             return prov in curatable_set and prov not in selected_set
 
+        def _is_pristine_bundled(row: Dict[str, str]) -> bool:
+            ref = ref_by_model.get((row.get("model") or "").strip())
+            if ref is None:
+                return False
+            return all(
+                (row.get(f) or "").strip() == (ref.get(f) or "").strip()
+                for f in CSV_FIELDNAMES
+            )
+
         # Of the unselected curatable providers' rows, only PDD-managed ones are
-        # auto-removed: bundled reference rows (model present in the reference
-        # CSV) and device-login rows (no api_key, e.g. GitHub Copilot — the
-        # free-login case #1202 is really about). Hand-edited KEYED custom rows
-        # (a model the user added themselves under that provider) are NEVER
-        # deleted — they are preserved and the user is warned they may still be
+        # auto-removed: device-login rows (no api_key, e.g. GitHub Copilot — the
+        # free-login case #1202 is really about) and PRISTINE bundled rows
+        # (byte-identical to the shipped reference). Any row the user hand-edited
+        # in place (changed base_url/costs/api_key/etc.) or added themselves is
+        # NEVER deleted — it is preserved and the user is warned it may still be
         # used, so we neither lose user data nor silently re-open cross-routing.
         to_remove, kept_custom = [], []
         for r in combined:
             if not _unselected_curatable(r):
                 continue
             is_device = not (r.get("api_key") or "").strip()
-            if (r.get("model") or "").strip() in ref_models or is_device:
+            if is_device or _is_pristine_bundled(r):
                 to_remove.append(r)
             else:
                 kept_custom.append(r)
