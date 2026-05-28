@@ -1,0 +1,13 @@
+% Fixture: non_sequential_ids_python.prompt
+% R2 is missing (gap between R1 and R3).
+% Expected: NON_SEQUENTIAL_ID warning.
+
+<vocabulary>
+- authorized user: a caller whose JWT has the upload scope
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R3: The system MUST return HTTP 201 on successful upload.
+R4: The system MUST NOT process requests without a valid token.
+</contract_rules>

@@ -1,0 +1,10 @@
+% Fixture: missing_modal_python.prompt
+% Rules lack MUST / MUST NOT / MAY / SHOULD.
+% Expected: MISSING_MODAL warnings/errors.
+
+<contract_rules>
+R1: The system rejects unauthorized requests.
+R2: Return HTTP 201 on upload completion.
+R3: The system MUST log all attempts.
+R4: Requests without authentication are refused.
+</contract_rules>

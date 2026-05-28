@@ -1,0 +1,15 @@
+% Fixture: legacy_no_sections_python.prompt
+% Plain text prompt with no contract sections.
+% Expected: 0 issues (legacy prompts must never hard-fail).
+
+You are a Python developer. Implement a file upload endpoint.
+
+Requirements:
+- Accept multipart/form-data POST requests.
+- Return HTTP 201 on successful upload.
+- Reject unauthorized requests with HTTP 401.
+- Handle duplicate uploads with HTTP 409.
+
+Instructions:
+- Use FastAPI.
+- Write pytest tests covering the happy path.

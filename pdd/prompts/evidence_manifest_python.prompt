@@ -1,0 +1,16 @@
+<pdd-reason>Writes optional per-run JSON evidence manifests for supported PDD commands.</pdd-reason>
+
+% Write `pdd/evidence_manifest.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Implement `write_evidence_manifest(...)` writing schema v1 JSON under `.pdd/evidence/`.
+- Hash prompt, outputs, and recursively resolved local includes for `context.includes` and `expanded_sha256`.
+- Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, dry_run=False)` mapping real sync outcomes.
+- Never claim `passed` unless the invoking command established that state.
+- Contract enrichment is optional: lazy-import `coverage_contracts` when present.
+
+% Deliverables
+- Code: `pdd/evidence_manifest.py`
+- Schema: `pdd/schemas/evidence_manifest.schema.json`

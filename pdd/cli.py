@@ -14,13 +14,18 @@ import os as _os
 import sys
 
 
-def _is_prompt_lint_json_invocation(arguments: list[str]) -> bool:
-    """Return whether this process is running prompt lint JSON output."""
+def _is_structured_json_invocation(arguments: list[str]) -> bool:
+    """Return whether this process is running a JSON-reporting checkup command."""
     pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and ("checkup", "lint") in pairs
+    return "--json" in arguments and (
+        ("checkup", "lint") in pairs
+        or ("checkup", "contract") in pairs
+        or ("checkup", "contracts") in pairs
+        or ("contracts", "check") in pairs
+    )
 
 
-if '--quiet' in sys.argv or _is_prompt_lint_json_invocation(sys.argv):
+if '--quiet' in sys.argv or _is_structured_json_invocation(sys.argv):
     _os.environ.setdefault('PDD_QUIET', '1')
 
 _DEFAULTS = {

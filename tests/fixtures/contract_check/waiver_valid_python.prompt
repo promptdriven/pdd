@@ -1,0 +1,31 @@
+% Fixture: waiver_valid_python.prompt
+% Valid waivers block; coverage uses WAIVED W1 which exists in waivers.
+% Expected: 0 issues.
+
+<vocabulary>
+- authorized user: a caller whose Bearer JWT contains the "upload" scope and is unexpired
+- provider error: an HTTP 5xx response from the upstream storage provider
+- successful upload: an upload that receives HTTP 201 within 2000 ms
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R2: The system MUST return HTTP 201 on successful upload.
+R3: The system MUST NOT call the provider before validating the file type.
+</contract_rules>
+
+<coverage>
+- R1: test_unauthorized_rejected (tests/test_upload.py)
+- R2: test_successful_upload (tests/test_upload.py)
+- R3: WAIVED W1
+</coverage>
+
+<waivers>
+W1:
+  Rule: R3
+  Status: temporary
+  Reason: Provider error fixture is not available yet.
+  Approved by: security-review
+  Expires: 2099-06-01
+  Follow-up: Add story__provider_validation.md and executable test.
+</waivers>

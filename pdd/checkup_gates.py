@@ -2235,13 +2235,18 @@ def _sanitized_path(worktree: Path) -> str:
 _RUFF_FORMAT_CI_PATTERN = re.compile(r"\bruff[\s-]+format\b")
 
 # Codex pass-11 finding 2: workflow/CloudBuild YAML can contain
-# non-executable text like ``name: ruff-format migration`` that
-# matches _RUFF_FORMAT_CI_PATTERN (which allows hyphens). For
-# workflow files we require the space-separated command form
-# ``ruff format`` — actual shell invocations in ``run:`` steps
-# use spaces, not hyphens, so this eliminates the job-name
-# false positive without missing real CI invocations.
+# non-executable text like ``name: ruff format migration`` that
+# still matches a bare ``\bruff\s+format\b`` regex (the step *name*
+# field, not a run command). Require ``ruff format`` to appear on a
+# line that is NOT a non-exec YAML key-value (e.g. ``name:``,
+# ``id:``, ``uses:``) but IS either a plain continuation line (inside
+# a multi-line run block) or the value of an exec-intent key
+# (``run:``, ``script:``, ``command:``, ``entrypoint:``).
 _RUFF_FORMAT_CMD_PATTERN = re.compile(r"\bruff\s+format\b")
+# Matches the start of a YAML key-value line (``key: value``).
+_YAML_KV_PREFIX = re.compile(r"^[A-Za-z_][\w-]*:\s")
+# Keys whose value is a shell command / exec intent.
+_YAML_EXEC_KEY = re.compile(r"^(?:run|script|command|entrypoint):\s")
 
 
 def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
@@ -2266,6 +2271,12 @@ def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
     top_exclude = (
         data.get("exclude") if isinstance(data.get("exclude"), str) else None
     )
+    # Codex pass-11 finding 3: top-level ``default_stages`` applies when
+    # a hook does not declare its own ``stages``. Propagate it so a PR
+    # that changes ``default_stages: [pre-commit]`` → ``[manual]`` is
+    # detected as a behavioral change even when the hook dict itself is
+    # otherwise unchanged.
+    top_default_stages = data.get("default_stages")
     repos = data.get("repos")
     if not isinstance(repos, list):
         return []
@@ -2284,6 +2295,8 @@ def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
                 merged["files"] = top_files
             if "exclude" not in merged and top_exclude is not None:
                 merged["exclude"] = top_exclude
+            if "stages" not in merged and top_default_stages is not None:
+                merged["stages"] = top_default_stages
             hooks_out.append(merged)
     return hooks_out
 
@@ -2418,6 +2431,36 @@ def _strip_yaml_comments(text: str) -> str:
     return "\n".join(out_lines)
 
 
+def _workflow_text_has_ruff_format(text: str) -> bool:
+    """Return True if ``text`` (a workflow/CloudBuild YAML) contains
+    ``ruff format`` in an executable position.
+
+    Codex pass-11 finding 2: a bare ``\\bruff\\s+format\\b`` scan matches
+    non-executable YAML fields such as ``name: ruff format migration``.
+    This helper checks each matching line: if the line (after stripping
+    any YAML list-item marker ``- ``) starts with a YAML key-value prefix
+    (``key: value``) and the key is NOT an execution-intent key
+    (``run``, ``script``, ``command``, ``entrypoint``), the match is
+    ignored. Lines without a key-value prefix are assumed to be multi-line
+    block-scalar continuations of an earlier ``run:`` and are counted.
+    """
+    _list_item = re.compile(r"^-\s+")
+    for line in _strip_yaml_comments(text).splitlines():
+        stripped = line.strip()
+        if not _RUFF_FORMAT_CMD_PATTERN.search(stripped):
+            continue
+        # Strip a leading list-item marker (``- ``) so ``- name: ruff format``
+        # is normalised to ``name: ruff format`` before the key check.
+        kv_candidate = _list_item.sub("", stripped)
+        if _YAML_KV_PREFIX.match(kv_candidate) and not _YAML_EXEC_KEY.match(
+            kv_candidate
+        ):
+            # Non-exec key-value line (e.g. ``name: ruff format migration``).
+            continue
+        return True
+    return False
+
+
 def _git_show_text(worktree: Path, ref: str, path: str) -> Optional[str]:
     """Return the contents of ``path`` at ``ref`` via ``git show``,
     or ``None`` on any failure. Used to read the pre-PR version of
@@ -2477,23 +2520,34 @@ def _file_has_unchanged_ruff_format_signal(
     signal at either version all return False.
     """
     is_pre_commit = (rel_path == ".pre-commit-config.yaml")
-    signal_pat = (
-        _RUFF_FORMAT_CI_PATTERN if is_pre_commit else _RUFF_FORMAT_CMD_PATTERN
-    )
     try:
         post_text = (worktree / rel_path).read_text(
             encoding="utf-8", errors="replace"
         )
     except OSError:
         return False
-    if not signal_pat.search(_strip_yaml_comments(post_text)):
+    # Use the same exec-context-aware check as the scanner so a step-name
+    # false positive (``name: ruff format migration``) does not count.
+    if is_pre_commit:
+        post_has_signal = bool(
+            _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(post_text))
+        )
+    else:
+        post_has_signal = _workflow_text_has_ruff_format(post_text)
+    if not post_has_signal:
         return False
     if not base_ref:
         return False
     pre_text = _git_show_text(worktree, base_ref, rel_path)
     if pre_text is None:
         return False
-    if not signal_pat.search(_strip_yaml_comments(pre_text)):
+    if is_pre_commit:
+        pre_has_signal = bool(
+            _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(pre_text))
+        )
+    else:
+        pre_has_signal = _workflow_text_has_ruff_format(pre_text)
+    if not pre_has_signal:
         return False
     # Codex pass-11 finding 3: for pre-commit configs, compare full hook
     # configs (including stages/args/always_run) so behavioural changes
@@ -2610,10 +2664,14 @@ def _ruff_format_signaled_by_ci(
                 type(exc).__name__,
             )
             continue
-        if signal_pat.search(_strip_yaml_comments(text)):
-            if is_pre_commit:
+        if is_pre_commit:
+            # Pre-commit: use the broader pattern (includes ``id: ruff-format``).
+            if _RUFF_FORMAT_CI_PATTERN.search(_strip_yaml_comments(text)):
                 pre_commit_signaled = True
-            else:
+        else:
+            # Workflow/CloudBuild: use the exec-context-aware scan
+            # (codex pass-11 finding 2) to skip non-exec YAML fields.
+            if _workflow_text_has_ruff_format(text):
                 workflow_signaled = True
     return (pre_commit_signaled, workflow_signaled)
 

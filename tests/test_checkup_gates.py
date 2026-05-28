@@ -978,16 +978,18 @@ class TestDiscoverGates:
         (tmp_path / "pyproject.toml").write_text(
             "[project]\nname = 'x'\n", encoding="utf-8"
         )
-        # Workflow has a step named "ruff-format migration" but does NOT
-        # actually run ruff format.
+        # Workflow has step names containing "ruff format" / "ruff-format"
+        # but does NOT actually run ruff format.
         wf = tmp_path / ".github" / "workflows"
         wf.mkdir(parents=True)
         (wf / "ci.yml").write_text(
             "jobs:\n"
             "  migrate:\n"
             "    steps:\n"
-            "      - name: ruff-format migration\n"
-            "        run: echo done\n",
+            "      - name: ruff format migration\n"
+            "        run: echo done\n"
+            "      - name: ruff-format cleanup\n"
+            "        run: echo also done\n",
             encoding="utf-8",
         )
         with patch(
@@ -995,7 +997,7 @@ class TestDiscoverGates:
         ):
             gates = discover_gates(tmp_path, changed_files=("a.py",))
         names = {g.name for g in gates}
-        # Job name match must NOT trigger the gate.
+        # Step name matches must NOT trigger the gate (only run: values count).
         assert "ruff-format" not in names
 
     def test_skips_ruff_format_when_hook_stages_made_manual(
@@ -1062,6 +1064,75 @@ class TestDiscoverGates:
             )
         names = {g.name for g in gates}
         # Hook config changed (stages added) → treat as PR-modified → no gate.
+        assert "ruff-format" not in names
+
+    def test_skips_ruff_format_when_default_stages_made_manual(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-12 finding 3: ``default_stages`` is a top-level
+        field that applies when a hook has no ``stages:``. A PR that
+        changes ``default_stages: [pre-commit]`` → ``[manual]`` must be
+        detected even though the hook dict itself is unchanged.
+        ``_parse_ruff_format_hooks_from_text`` now propagates
+        ``default_stages`` into the merged hook dict so the JSON
+        comparison catches the change.
+        """
+        import subprocess
+
+        from pdd.checkup_gates import discover_gates
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=tmp_path, check=True, capture_output=True
+            )
+
+        _git_init(tmp_path)
+        run("config", "user.email", "t@e.com")
+        run("config", "user.name", "T")
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # BASE: default_stages applies to all hooks including ruff-format.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "default_stages: [pre-commit]\n"
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        # PR: changes default_stages to [manual] — hook no longer runs automatically.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "default_stages: [manual]\n"
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "make all hooks manual-only via default_stages")
+        import shutil as _shutil
+        _real_which = _shutil.which
+
+        def _which_ruff_only(name: str, **kw: object) -> object:
+            if name == "ruff":
+                return "/usr/bin/ruff"
+            return _real_which(name, **kw)
+
+        with patch(
+            "pdd.checkup_gates.shutil.which", side_effect=_which_ruff_only
+        ):
+            gates = discover_gates(
+                tmp_path,
+                changed_files=("a.py", ".pre-commit-config.yaml"),
+                base_ref="HEAD~1",
+            )
+        names = {g.name for g in gates}
+        # default_stages changed → merged hook dict differs → no gate.
         assert "ruff-format" not in names
 
     def test_emits_ruff_format_when_ci_signal_present_and_no_tool_ruff_section(

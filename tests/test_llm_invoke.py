@@ -4818,6 +4818,27 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
 
+    def test_strength_05_fallbacks_sorted_by_closest_elo_to_base(self, llm_mod, tmp_path):
+        # Regression for #1197: at strength == 0.5, fallbacks must be sorted by
+        # closest ELO to base, not by highest ELO. Base is "mid" (ELO 1300);
+        # the closer-ELO model ("near", 1310) must rank above "high" (1500).
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "openai,mid,30,60,1300,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+            "openai,near,30,60,1310,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+            "openai,high,30,60,1500,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+        )
+        csv_path = tmp_path / "models_elo.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        candidates = llm_mod._select_model_candidates(0.5, "mid", df)
+        names = [c["model"] for c in candidates]
+        assert names == ["mid", "near", "high"], (
+            f"expected base first then closest-ELO ordering, got {names}"
+        )
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""

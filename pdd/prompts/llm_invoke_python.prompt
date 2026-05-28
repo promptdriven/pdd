@@ -112,7 +112,7 @@
     - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
-    - strength = 0.5: Use base model, fallback to next highest ELO on failure.
+    - strength = 0.5: Use base model, fallback to candidates with ELO closest to base on failure — sort remaining candidates ascending by `abs(coding_arena_elo - base_elo)`. This is the continuity limit of the `> 0.5` branch: as strength → 0.5 from above, the interpolated target ELO collapses to `base_elo`, so the correct ordering at exactly 0.5 is closest-ELO-to-base, not highest ELO.
     - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
 
 % API Key Management:

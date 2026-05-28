@@ -1,0 +1,37 @@
+% Fixture: rate_limiter_issues_python.prompt
+% Rate-limiter contract with a cluster of defects across sections:
+%   - NON_SEQUENTIAL_ID: R1, R2, R4 (gap at R3)
+%   - MISSING_MODAL: R4 line has no modal verb
+%   - VAGUE_TERM: "reasonable", "recent", "safe" (no vocabulary)
+%   - UNKNOWN_COVERAGE_REF: R3 cited in coverage but doesn't exist
+%   - UNCOVERED_MUST_NOT: R4 MUST NOT has no coverage
+% Expected: mix of errors and warnings
+
+You are a Python developer. Implement the rate-limiting middleware.
+
+<contract_rules>
+R1 - Per-user request cap
+The system MUST reject requests from a user who has exceeded their rate limit within a recent window.
+
+R2 - Backoff header
+The system MUST return a Retry-After header with a reasonable backoff value on every HTTP 429 response.
+
+R4 - Burst allowance
+The system MUST NOT permit more than 10 requests per second per user even during safe degraded-mode operation.
+
+R5 - Allowlist bypass
+For every request from an allowlisted IP,
+the system MAY bypass per-user rate limiting.
+</contract_rules>
+
+<coverage>
+- R1: test_rate_limit_enforced (tests/test_rate_limiter.py)
+- R2: test_retry_after_header (tests/test_rate_limiter.py)
+- R3: test_burst_window (tests/test_rate_limiter.py)
+- R5: test_allowlist_bypass (tests/test_rate_limiter.py)
+</coverage>
+
+<capabilities>
+- MAY use Redis sorted sets as the sliding-window counter backend.
+- MUST NOT block the event loop during counter increments.
+</capabilities>
