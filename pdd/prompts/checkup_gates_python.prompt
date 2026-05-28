@@ -68,11 +68,19 @@ loop refuses to ship and the fixer addresses the failure.
 
 % Issue #1433 Bug #2 — ruff format CI parity
 
-34. **`ruff-format` gate (CI parity, gltanaka/pdd#1433 Bug #2 + codex pass-6 finding 3).** When the existing ruff lint gate's conditions hold (`changed_py` present, `[tool.ruff]` declared in `pyproject.toml`, `ruff` binary resolved on the sanitized PATH via `_resolve_tool`, AND `python_tool_config_touched` is False), `_discover_python_gates` MUST emit a SECOND gate alongside `ruff` named `ruff-format` with argv `[ruff_abs, "format", "--check", "--", *changed_py]` when EITHER of these opt-in signals is present:
-    - (a) `[tool.ruff.format]` is explicitly declared in `pyproject.toml` (the canonical opt-in; `source = "pyproject.toml:[tool.ruff.format]"`); OR
-    - (b) `_ruff_format_signaled_by_ci(worktree)` returns True — the helper scans `.pre-commit-config.yaml`, `cloudbuild-*-ci.yaml`, and `.github/workflows/*.yml` / `*.yaml` for the literal substring `ruff\s+format` and returns True on any match. `source = "ci-config:ruff format"` in that case. Defence against PR poisoning: the CI-signal check is SUPPRESSED when the PR diff touched `.pre-commit-config.yaml`, any `cloudbuild-*-ci.yaml`, or anything under `.github/workflows/` — a fork PR cannot smuggle the signal in.
+34. **`ruff-format` gate (CI parity, gltanaka/pdd#1433 Bug #2 + codex pass-6/7/8 findings).** The ruff-format gate is INDEPENDENT of the ruff lint gate (codex pass-8 finding 3 — pre-fix code nested it inside the `[tool.ruff]` block and silently skipped projects that run `ruff format --check` in CI without any `[tool.ruff]` declaration). The format gate's prerequisites are JUST:
+    - `changed_py` present
+    - `ruff` binary resolved on the sanitized PATH via `_resolve_tool`
+    - `python_tool_config_touched` is False (same fork-PR-poisoning defence as the lint gate)
+    - One of the explicit/derived opt-in signals below.
 
-    The CI-signal branch exists because pass-5's `[tool.ruff.format]`-only rule produced false negatives for projects that run `ruff format --check` in CI using Ruff's default formatter config without declaring a `[tool.ruff.format]` section. Without the CI signal a local clean verdict + failing CI head re-emerges as the original Bug #2 failure mode. Pass-4's `[tool.black] absent → opt-in` heuristic stays REMOVED — black runs on defaults without a declared section and was producing false positives.
+    Opt-in signals (`_discover_python_gates` MUST emit a separate gate alongside `ruff` named `ruff-format` with argv `[ruff_abs, "format", "--check", "--", *changed_py]` when EITHER holds):
+    - (a) `[tool.ruff.format]` is explicitly declared in `pyproject.toml` (the canonical opt-in; `source = "pyproject.toml:[tool.ruff.format]"`); OR
+    - (b) `_ruff_format_signaled_by_ci(worktree, exclude_paths=...)` returns True — the helper scans `.pre-commit-config.yaml`, `cloudbuild-*-ci.yaml`, and `.github/workflows/*.yml` / `*.yaml` for the regex `\bruff[\s-]+format\b`. The hyphen alternative (pass-7 finding 1) matches the canonical pre-commit hook id `ruff-format` (`id: ruff-format`) so pre-commit-driven projects opt in without having to add a literal `ruff format` string. `source = "ci-config:ruff format"` in that case.
+
+    Defence against PR poisoning (codex pass-7 finding 2): pass `exclude_paths` as the SET of worktree-relative POSIX paths of CI config files that appear in `changed_files`. The helper skips only those specific touched files from the scan — unchanged config files in the SAME PR still contribute their signal, so a PR that touches one workflow does NOT silently disable the signal from an unchanged `.pre-commit-config.yaml`. Pre-fix code short-circuited the whole branch when any CI config was in the diff (pass-6's hammer), defeating the gate's intent.
+
+    The CI-signal branch exists because pass-5's `[tool.ruff.format]`-only rule produced false negatives for projects that run `ruff format --check` in CI using Ruff's default formatter config without declaring a `[tool.ruff.format]` section. Pass-4's `[tool.black] absent → opt-in` heuristic stays REMOVED — black runs on defaults without a declared section and was producing false positives.
 
     The `--` end-of-options separator and absolute tool path follow the same iter-25 / iter-40 contracts as the lint gate. Keep the format gate as a SEPARATE gate (not folded into the lint gate's argv) so per-tool `--gate-allow` filtering still works. `required_fix_hint`: `"Run `ruff format` locally and commit the formatting changes."`
 

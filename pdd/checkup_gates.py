@@ -61,7 +61,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -1420,39 +1420,39 @@ def _discover_python_gates(
                 ),
             )
         )
-        # Issue #1433 Bug #2: parity with CI's ``ruff format --check``.
-        # The lint check above does NOT cover formatting (whitespace,
-        # quote style, line length wrapping); a project whose CI runs
-        # both ``ruff check`` AND ``ruff format --check`` would have its
-        # format failures slip past the gate while the loop ships a
-        # clean verdict. Emit as a SEPARATE gate so per-tool
-        # ``--gate-allow`` filtering still works and the failure surfaces
-        # under its own ``ruff-format`` name in the report.
-        #
-        # Codex pass-4 finding 3 + pass-5 finding 3 + pass-6 finding 3:
-        # ruff-format opt-in requires an EXPLICIT signal that the
-        # project uses ruff format. Three signals are accepted:
-        #   1. ``[tool.ruff.format]`` declared in pyproject.toml — the
-        #      canonical opt-in.
-        #   2. ``ruff format`` invoked in any of the project's CI
-        #      configs: ``.pre-commit-config.yaml``,
-        #      ``cloudbuild-*-ci.yaml``, ``.github/workflows/*.yml``.
-        #      Detected by literal substring (case-sensitive
-        #      ``ruff\s+format``) so a project that runs ruff format
-        #      with Ruff's default formatter config and no
-        #      ``[tool.ruff.format]`` section still gets gate parity
-        #      with CI. To prevent a PR poisoning the signal, skip
-        #      the CI-signal check when the PR touched any of the
-        #      same CI config files.
-        # Without ANY of these signals the format gate stays silent
-        # — projects that use ruff for linting alone won't see false-
-        # positive formatting blockers.
-        # Codex pass-7 finding 2: exclude per-touched-file rather than
-        # blocking the whole CI-signal branch. Build the worktree-
-        # relative POSIX path set of CI config files in the PR diff;
-        # only those individual files are skipped during the scan, so
-        # an unchanged .pre-commit-config.yaml still contributes its
-        # signal even when a sibling workflow file IS in the diff.
+    # Issue #1433 Bug #2: parity with CI's ``ruff format --check``.
+    # Codex review pass-8 finding 3: the ruff-format gate is INDEPENDENT
+    # of the ruff lint gate. Pre-fix code nested it inside the ``[tool.
+    # ruff]`` block, so a project that runs ``ruff format --check`` in
+    # CI without ANY ``[tool.ruff]`` declaration silently skipped the
+    # gate — re-introducing the original Bug #2 local-clean/CI-red
+    # failure. The format gate's prerequisites are now JUST: a ruff
+    # binary on the sanitized PATH, a non-empty changed-Python set,
+    # ``python_tool_config_touched`` False (the same fork-PR-poisoning
+    # defence the lint gate uses), and one of the explicit/derived
+    # ruff-format opt-in signals below.
+    #
+    # Codex pass-4 finding 3 + pass-5 finding 3 + pass-6 finding 3 +
+    # pass-7 finding 1: ruff-format opt-in requires an EXPLICIT signal
+    # that the project uses ruff format. Two signals are accepted:
+    #   1. ``[tool.ruff.format]`` declared in pyproject.toml — the
+    #      canonical opt-in.
+    #   2. The literal pattern ``\bruff[\s-]+format\b`` appearing in
+    #      any of the project's CI configs (.pre-commit-config.yaml,
+    #      cloudbuild-*-ci.yaml, .github/workflows/*.yml|*.yaml). The
+    #      hyphen alternative matches the canonical pre-commit hook
+    #      id ``ruff-format`` (pass-7 finding 1).
+    # Without ANY of these signals the format gate stays silent —
+    # projects that use ruff for linting alone won't see false-positive
+    # formatting blockers.
+    #
+    # Codex pass-7 finding 2: exclude per-touched-file rather than
+    # blocking the whole CI-signal branch. Build the worktree-relative
+    # POSIX path set of CI config files in the PR diff; only those
+    # individual files are skipped during the scan, so an unchanged
+    # .pre-commit-config.yaml still contributes its signal when a
+    # sibling workflow file IS in the diff.
+    if changed_py and ruff_abs and not python_tool_config_touched:
         ci_touched_paths: Set[str] = set()
         for path in changed_files:
             if (

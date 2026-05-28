@@ -523,6 +523,43 @@ class TestDiscoverGates:
         names = {g.name for g in gates}
         assert "ruff-format" in names
 
+    def test_emits_ruff_format_when_ci_signal_present_and_no_tool_ruff_section(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex pass-8 finding 3: the ruff-format gate is independent
+        of the ruff lint gate. A project that runs ``ruff format
+        --check`` in CI with no ``[tool.ruff]`` declaration at all
+        MUST still get the gate when the CI-signal scan opts in.
+        Pre-fix code nested the format gate inside the [tool.ruff]
+        block and silently skipped this case, re-introducing the
+        Bug #2 local-clean / CI-red failure.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        # NO [tool.ruff] at all — only a [project] table.
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\n", encoding="utf-8"
+        )
+        # CI signal: pre-commit hook id.
+        (tmp_path / ".pre-commit-config.yaml").write_text(
+            "repos:\n"
+            "  - repo: https://github.com/astral-sh/ruff-pre-commit\n"
+            "    hooks:\n"
+            "      - id: ruff-format\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.checkup_gates.shutil.which", return_value="/usr/bin/ruff"
+        ):
+            gates = discover_gates(tmp_path, changed_files=("a.py",))
+        names = {g.name for g in gates}
+        # Lint gate stays absent (no [tool.ruff]) but format gate
+        # MUST fire because CI runs ruff format.
+        assert "ruff" not in names
+        assert "ruff-format" in names
+
     def test_emits_ruff_format_when_signaled_by_canonical_precommit_hook_id(
         self, tmp_path: Path
     ) -> None:
