@@ -19,7 +19,7 @@
   `pdd checkup contract check --help` must render the `contracts check` subcommand help
   and exit 0 (no doubled `check` token, no missing TARGET error).
 - Params:
-  - `target` arg (positional, optional — required for issue mode)
+- `target` arg (positional, optional — required for issue mode; also dispatches local checkup utilities below)
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
   - `--start-step` recovery override. Accept only `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, or `8`; pass the parsed int/float as `start_step_override` to the legacy `run_agentic_checkup` path.
@@ -50,6 +50,12 @@
   - `--gate-timeout` (float, default `60.0`; per-gate wall-clock cap in seconds — a gate exceeding the cap is recorded as a runner-side failure and treated as a blocker finding rather than blocking the loop)
   - `--gate-allow` (repeatable string, default `()`; forward-compatibility hook for opting extra gate names into discovery beyond the conservative v1 set — discovery remains allowlist-only; this argument is threaded through so the CLI surface and discovery surface can co-evolve)
 - Signature returns `Optional[Tuple[str, float, str]]`.
+- Local utility dispatch before mode validation:
+  - Import `prompt_lint` from `.prompt`, `contracts_group` from `.contracts`, and `coverage_cmd` from `.coverage`.
+  - For `target == "lint"`, delegate remaining args to `prompt_lint.main(...)`, enabling `pdd checkup lint`.
+  - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
+  - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
+  - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.

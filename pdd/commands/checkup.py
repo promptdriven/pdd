@@ -14,6 +14,7 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from .contracts import contracts_check, contracts_cli
+from .coverage import coverage_cmd
 from .prompt import prompt_lint
 
 
@@ -356,30 +357,49 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
       pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
+    Contract checks:
+      pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
+    Contract coverage:
+      pdd checkup coverage [OPTIONS] TARGET
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in ("contract", "lint", "simplify"):
+    if show_help and target not in {"lint", "contract", "contracts", "coverage", "simplify"}:
         click.echo(ctx.command.get_help(ctx))
         return None
 
-    if target == "contract":
+    if target in {"contract", "contracts"}:
         contract_args = list(ctx.args)
         if strict:
-            contract_args.insert(0, "--strict")
+            # Forward strict to the subcommand scope, not the group scope.
+            if contract_args and contract_args[0] == "check":
+                contract_args.insert(1, "--strict")
+            else:
+                contract_args.insert(0, "--strict")
         if not contract_args:
             click.echo(
                 contracts_cli.get_help(
-                    click.Context(contracts_cli, info_name="pdd checkup contract")
+                    click.Context(contracts_cli, info_name=f"pdd checkup {target}")
                 )
             )
             return None
         if show_help:
+            # Parent command owns -h/--help; explicitly render nested help.
+            if contract_args[:1] == ["check"]:
+                exit_code = contracts_check.main(
+                    args=["--help"],
+                    prog_name=f"pdd checkup {target} check",
+                    standalone_mode=False,
+                    obj=ctx.obj,
+                )
+                if exit_code:
+                    raise click.exceptions.Exit(exit_code)
+                return None
             contract_args.append("--help")
         if contract_args[0] == "check" and "--help" in contract_args[1:]:
             exit_code = contracts_check.main(
                 args=["--help"],
-                prog_name="pdd checkup contract check",
+                prog_name=f"pdd checkup {target} check",
                 standalone_mode=False,
                 obj=ctx.obj,
             )
@@ -388,7 +408,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             return None
         exit_code = contracts_cli.main(
             args=contract_args,
-            prog_name="pdd checkup contract",
+            prog_name=f"pdd checkup {target}",
             standalone_mode=False,
             obj=ctx.obj,
         )
@@ -433,6 +453,21 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             raise click.exceptions.Exit(exit_code)
         return None
 
+    if target == "coverage":
+        if show_help:
+            click.echo(
+                coverage_cmd.get_help(click.Context(coverage_cmd, info_name="pdd checkup coverage"))
+            )
+            return None
+        exit_code = coverage_cmd.main(
+            args=list(ctx.args),
+            prog_name="pdd checkup coverage",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
     if ctx.args:
         raise click.UsageError(f"Got unexpected extra arguments ({' '.join(ctx.args)})")
 
