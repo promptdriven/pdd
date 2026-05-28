@@ -87,10 +87,12 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Pass `error_file=output_file_paths.get("output_results")`, `strength`, `temperature`, `time`, `verbose`, and `protect_tests`.
    - Set `attempts = 1`.
    - Do not trust `updateUnitTest` / `updateCode` alone; if either file changed, validate with `run_pytest_on_file` using temp files. If nothing changed, `success=False`.
+   - Focused-repair path (large dev units): if `is_large(code_content, unit_test_content)`, call `prepare_focused_inputs` to obtain sliced failing-test and code subsets. Pass the slices as `unit_test` / `code` to the LLM call. After the call, reconstruct the full code with `reconstruct_code(code_content, fixed_code, focused_inputs.slices)`. Never use the returned sliced test content as the final test file; validate the fixed code against the full original test file with `run_pytest_on_file`. Always pass `protect_tests=True` (or equivalent `effective_protect_tests = protect_tests or bool(focused_inputs)`) to the LLM when focused slices are in use, so the model cannot return a test-only fix that would be silently discarded.
 
 7. Saving and reporting:
    - Write only non-empty outputs.
    - Never write the fixed test file when `protect_tests=True`; optionally log that skip in verbose mode.
+   - In focused-repair mode, the LLM only sees a test slice, so the returned test content is always a partial subset; never write it back as the final test file — always use the original full test content for the saved test output.
    - Create parent directories before writing.
    - When not quiet, print success/failure, attempts, cost, model, and saved paths with Rich.
    - Only print the test/code output path when that file was actually produced.
