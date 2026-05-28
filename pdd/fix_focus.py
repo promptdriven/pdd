@@ -282,7 +282,8 @@ def _match_slices_to_traceback(
     seen: set[str] = set()
 
     for name in target_names:
-        candidates = [s for s in all_slices if s.name == name]
+        # Match by simple name OR by qualname (e.g. "MyClass.run" from LLM output).
+        candidates = [s for s in all_slices if s.name == name or s.qualname == name]
         if not candidates:
             continue
         if len(candidates) == 1:
@@ -362,8 +363,15 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                 )
                 chunk = "".join(lines[deco_start - 1 : node_end])
                 is_fixture = any(
-                    (isinstance(d, ast.Attribute) and d.attr in ("fixture",))
-                    or (isinstance(d, ast.Name) and d.id in ("fixture",))
+                    (isinstance(d, ast.Attribute) and d.attr == "fixture")
+                    or (isinstance(d, ast.Name) and d.id == "fixture")
+                    or (
+                        isinstance(d, ast.Call)
+                        and (
+                            (isinstance(d.func, ast.Attribute) and d.func.attr == "fixture")
+                            or (isinstance(d.func, ast.Name) and d.func.id == "fixture")
+                        )
+                    )
                     for d in node.decorator_list
                 )
                 if node.name in target_names:

@@ -241,6 +241,35 @@ def test_extract_test_slices_result_smaller_than_original():
     assert len(result) < len(_TEST_FILE)
 
 
+def test_extract_test_slices_preserves_fixture_no_parens():
+    # @pytest.fixture (no parentheses) should be included in the preamble.
+    result = _extract_test_slices(_PYTEST_ERROR_LOG, _TEST_FILE)
+    assert "def calc(" in result
+
+
+def test_extract_test_slices_preserves_fixture_with_parens():
+    # @pytest.fixture() (with call parentheses, ast.Call) should also be preserved.
+    test_file_with_call_fixture = textwrap.dedent("""\
+        import pytest
+        from mymodule import add
+
+        @pytest.fixture()
+        def calc():
+            return {}
+
+        def test_add():
+            assert add(1, 2) == 3
+
+        def test_noop():
+            assert True
+    """)
+    error_log = "FAILED tests/test_math.py::test_add - AssertionError\n"
+    result = _extract_test_slices(error_log, test_file_with_call_fixture)
+    assert "def calc(" in result
+    assert "test_add" in result
+    assert "test_noop" not in result
+
+
 # ---------------------------------------------------------------------------
 # reconstruct_code – top-level function
 # ---------------------------------------------------------------------------
@@ -426,3 +455,21 @@ def test_match_slices_falls_back_to_all_when_no_line_info():
     qualnames = {s.qualname for s in matched}
     assert "A.run" in qualnames
     assert "B.run" in qualnames
+
+
+def test_match_slices_by_qualname():
+    """When LLM returns a qualified name like 'A.run', the slice is matched directly."""
+    src = textwrap.dedent("""\
+        class A:
+            def run(self):
+                return 1
+
+        class B:
+            def run(self):
+                return 2
+    """)
+    all_slices = _get_all_functions(src)
+    # Phase-1 LLM diagnosis returned the qualified name "A.run"
+    matched = _match_slices_to_traceback(all_slices, "", ["A.run"])
+    assert len(matched) == 1
+    assert matched[0].qualname == "A.run"
