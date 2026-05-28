@@ -583,6 +583,232 @@ class TestNoFixMode:
             "prevent stale-cache replay on the next run"
         )
 
+    def test_nofix_pr_step5_refusal_reruns_step5_on_second_run(self, tmp_path):
+        """Round-17 Finding 2: prove the fix end-to-end with the REAL
+        clear_workflow_state against real local state — two consecutive
+        --no-fix --pr runs must BOTH execute Step 5 (the first run's
+        clear wipes the cached skipped output so the second is not a
+        stale-cache replay)."""
+        from unittest.mock import patch as _patch
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+        step5_out = (
+            "No test suite found.\n"
+            "```failure_signal\n"
+            "status: skipped\n"
+            "exit_code: skipped\n"
+            "failing_ids: none\n"
+            "artifact_path: none\n"
+            "output: No tests found.\n"
+            "```\n"
+        )
+
+        step5_calls = {"n": 0}
+
+        def run_step(step_num, _name, _ctx, **_kw):
+            if step_num == 5:
+                step5_calls["n"] += 1
+                return (True, step5_out, 0.0, "fake")
+            return (True, f"out-{step_num}", 0.0, "fake")
+
+        common_args = dict(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            no_fix=True,
+            timeout_adder=0.0,
+            # use_github_state=False keeps clear/load against the real
+            # LOCAL state file so we exercise the genuine clear path.
+            use_github_state=False,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+        # NOTE: clear_workflow_state is NOT mocked — we want the real
+        # local-state deletion to happen between runs.
+        for _run in range(2):
+            with (
+                _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+                _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+                _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=run_step),
+            ):
+                success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**common_args)
+            assert success is False
+
+        assert step5_calls["n"] == 2, (
+            "Step 5 must run on BOTH runs — the first run's "
+            "clear_workflow_state must have wiped the cached skipped "
+            f"output so the second run is not a stale replay. Got "
+            f"{step5_calls['n']} Step 5 call(s)."
+        )
+
+    def test_nofix_pr_step5_refusal_warns_when_clear_unconfirmed(self, tmp_path):
+        """Round-17 Finding 1: when clear_workflow_state cannot confirm the
+        clear (e.g. the GitHub state comment could neither be deleted nor
+        neutralised), the returned message must warn the operator that a
+        rerun may replay the cached result."""
+        from unittest.mock import patch as _patch
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+        step5_out = (
+            "No test suite found.\n"
+            "```failure_signal\n"
+            "status: skipped\n"
+            "exit_code: skipped\n"
+            "failing_ids: none\n"
+            "artifact_path: none\n"
+            "output: No tests found.\n"
+            "```\n"
+        )
+
+        def run_step(step_num, _name, _ctx, **_kw):
+            if step_num == 5:
+                return (True, step5_out, 0.0, "fake")
+            return (True, f"out-{step_num}", 0.0, "fake")
+
+        with (
+            _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+            _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+            _patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)),
+            _patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
+            # Simulate an unconfirmed clear (remote comment stuck).
+            _patch("pdd.agentic_checkup_orchestrator.clear_workflow_state", return_value=False),
+            _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=run_step),
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=True,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert "could not confirm" in (msg or "").lower(), (
+            f"Expected an unconfirmed-clear warning in the message; got {msg!r}"
+        )
+
+
+class TestClearWorkflowStateRemoteNeutralize:
+    """Round-17 Finding 1 (root cause): github_clear_state must neutralise
+    a state comment it cannot DELETE so load_workflow_state — which loads
+    GitHub state with priority over local — can't replay it."""
+
+    def test_neutralizes_comment_when_delete_fails(self):
+        from unittest.mock import patch as _patch
+        from pdd import agentic_common
+
+        edited = {}
+
+        def fake_edit(_owner, _repo, cid, body, _cwd):
+            edited["id"] = cid
+            edited["body"] = body
+            return True
+
+        with (
+            _patch.object(agentic_common, "_find_all_state_comments", return_value=[123]),
+            _patch.object(agentic_common, "_github_delete_comment", return_value=False),
+            _patch.object(agentic_common, "_github_edit_comment", side_effect=fake_edit),
+        ):
+            ok = agentic_common.github_clear_state("o", "r", 99, "checkup", Path("/tmp"))
+
+        assert ok is True, "Neutralise fallback should count as a successful clear"
+        assert edited.get("id") == 123
+        # The tombstone body must NOT contain the live state marker.
+        assert agentic_common.GITHUB_STATE_MARKER_START not in edited.get("body", ""), (
+            "Neutralised body must not carry the PDD_WORKFLOW_STATE marker, "
+            "or load_workflow_state would still parse it as resumable state."
+        )
+
+    def test_returns_false_when_delete_and_edit_both_fail(self):
+        from unittest.mock import patch as _patch
+        from pdd import agentic_common
+
+        with (
+            _patch.object(agentic_common, "_find_all_state_comments", return_value=[123]),
+            _patch.object(agentic_common, "_github_delete_comment", return_value=False),
+            _patch.object(agentic_common, "_github_edit_comment", return_value=False),
+        ):
+            ok = agentic_common.github_clear_state("o", "r", 99, "checkup", Path("/tmp"))
+
+        assert ok is False, (
+            "When a state comment can be neither deleted nor neutralised, "
+            "github_clear_state must report failure so callers can warn."
+        )
+
+    def test_delete_success_does_not_attempt_edit(self):
+        from unittest.mock import patch as _patch
+        from pdd import agentic_common
+
+        edit_mock = MagicMock()
+        with (
+            _patch.object(agentic_common, "_find_all_state_comments", return_value=[1, 2]),
+            _patch.object(agentic_common, "_github_delete_comment", return_value=True),
+            _patch.object(agentic_common, "_github_edit_comment", edit_mock),
+        ):
+            ok = agentic_common.github_clear_state("o", "r", 99, "checkup", Path("/tmp"))
+
+        assert ok is True
+        edit_mock.assert_not_called()
+
+    def test_clear_workflow_state_returns_false_on_remote_failure(self, tmp_path):
+        from unittest.mock import patch as _patch
+        from pdd import agentic_common
+
+        with (
+            _patch.object(agentic_common, "_should_use_github_state", return_value=True),
+            _patch.object(agentic_common, "github_clear_state", return_value=False),
+        ):
+            ok = agentic_common.clear_workflow_state(
+                cwd=tmp_path,
+                issue_number=99,
+                workflow_type="checkup",
+                state_dir=tmp_path / ".pdd" / "checkup-state",
+                repo_owner="o",
+                repo_name="r",
+                use_github_state=True,
+            )
+        assert ok is False
+
 
 # ---------------------------------------------------------------------------
 # Worktree Handling

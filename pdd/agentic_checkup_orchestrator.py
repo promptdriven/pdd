@@ -2681,7 +2681,16 @@ def _run_agentic_checkup_orchestrator_inner(
                     # Without this, resume reuses step_outputs["5"] and fires
                     # the same refusal again even after the user fixes the
                     # environment — and posts a duplicate final-report comment.
-                    clear_workflow_state(
+                    #
+                    # Round-17 follow-up: ``load_workflow_state`` loads the
+                    # GitHub state comment with PRIORITY over local state, so
+                    # if the remote clear silently fails the next rerun
+                    # replays the stale cache anyway. ``clear_workflow_state``
+                    # now returns whether the clear (incl. the
+                    # neutralise-on-delete-failure fallback) was confirmed;
+                    # surface a warning when it was not so the operator knows
+                    # the rerun may need a manual state-comment cleanup.
+                    _cleared = clear_workflow_state(
                         cwd=cwd,
                         issue_number=issue_number,
                         workflow_type="checkup",
@@ -2690,6 +2699,16 @@ def _run_agentic_checkup_orchestrator_inner(
                         repo_name=repo_name,
                         use_github_state=use_github_state,
                     )
+                    if not _cleared:
+                        _clear_warn = (
+                            " (warning: could not confirm workflow-state "
+                            "cleanup — a rerun may replay the cached Step 5 "
+                            "result; delete the PDD_WORKFLOW_STATE comment "
+                            "on the issue manually if the refusal repeats)"
+                        )
+                        if not quiet:
+                            console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
+                        _nofix_refusal = f"{_nofix_refusal}{_clear_warn}"
                     return (
                         False,
                         f"{_nofix_refusal}{_nofix_post_suffix}",
