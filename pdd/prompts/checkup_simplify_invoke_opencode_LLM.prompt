@@ -1,0 +1,28 @@
+% OpenCode CLI profile for a Claude-Code-/simplify-equivalent cleanup pass.
+% Reference-only today: `pdd checkup simplify` does not invoke OpenCode yet.
+
+<include>checkup_simplify_workflow_LLM.prompt</include>
+
+<opencode>
+## Prerequisites
+- `opencode` CLI on PATH (`opencode --version`).
+- Authenticated per OpenCode docs (`opencode auth login` when required).
+
+## Suggested invocation pattern (manual / future PDD wiring)
+Run inside the candidate worktree with explicit in-scope paths in the prompt body:
+
+```bash
+cd "$CANDIDATE_WORKTREE"
+opencode run --format json "$(cat /path/to/simplify_prompt.txt)"
+```
+
+Adapt flags to your installed OpenCode version; prefer non-interactive, JSON-capable modes so PDD can
+parse success, cost, and summary when this profile is wired into `run_checkup_simplify`.
+
+## Model selection
+- Honor `OPENCODE_MODEL` when supported by your CLI build.
+
+## Parity notes
+- Same allowlist, backup, evidence, and `--verify` selection semantics as the Claude Code path.
+- Future PDD integration should reuse `checkup_simplify_workflow_LLM.prompt` for prompt parity.
+</opencode>

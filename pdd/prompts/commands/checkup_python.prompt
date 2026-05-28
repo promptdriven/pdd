@@ -11,6 +11,7 @@
 
 % Requirements
 - Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
+- Dispatch the reserved positional target `simplify` to `pdd.commands.checkup_simplify`, forwarding remaining Click arguments so `pdd checkup simplify [PATH] [OPTIONS]` is available as the local Claude Code candidate-cleanup subcommand. Because `checkup` is retained as a backwards-compatible command rather than converted to a Click group, disable Click's eager parent help option and forward a deferred `--help` flag when `target == "simplify"` so `pdd checkup simplify --help` renders simplify options; for all other targets it must still render normal checkup help.
 - Implement `pdd checkup lint ...` as the primary command to lint prompts and stories.
   The sub-invocation may use extra-argument dispatch, but `pdd checkup --help` and
   `pdd checkup lint --help` must both show the appropriate help output.

@@ -38,6 +38,7 @@ _pdd() {
     local sync_opts="--max-attempts --budget --skip-verify --skip-tests --target-coverage --dry-run --log --no-steer --steer-timeout --agentic --timeout-adder --no-github-state --one-session --no-one-session --durable --durable-branch --no-resume --durable-max-parallel"
     local checkup_opts="--validate-arch-includes --project-root --strict --no-fix --timeout-adder --start-step --no-github-state --pr --issue --review-loop --review-only --reviewers --reviewer --fixer --reviewer-fallback --fixer-fallback --max-review-rounds --max-review-cost --max-review-minutes --require-all-reviewers-clean --no-require-all-reviewers-clean --continue-on-reviewer-limit --fallback-reviewer-on-failure --require-final-fresh-review --no-require-final-fresh-review --blocking-severities --clean-reviewer-states"
     local checkup_gate_opts="--policy --stories-dir --tests-dir --json"
+    local checkup_simplify_opts="--apply --since --staged --max-files --attempts --engine --evidence --verify --no-format"
     local pytest_output_opts="--json-only"
 
     # Complete global options before command
@@ -153,11 +154,14 @@ _pdd() {
                 COMPREPLY+=($(compgen -W "$checkup_gate_opts" -- "$cur"))
                 return
             fi
-            if [[ $cword -eq 2 ]]; then
-                COMPREPLY+=($(compgen -W "lint contract contracts coverage gate" -- "$cur"))
+            if [[ ${words[2]} == simplify ]]; then
+                COMPREPLY+=($(compgen -W "$checkup_simplify_opts" -- "$cur"))
+            else
+                if [[ $cword -eq 2 && "$cur" != -* ]]; then
+                    COMPREPLY+=($(compgen -W "simplify lint contract contracts coverage gate" -- "$cur"))
+                fi
+                COMPREPLY+=($(compgen -W "$checkup_opts" -- "$cur"))
             fi
-            # Optional GitHub issue URL; PR mode uses --pr and --issue.
-            COMPREPLY+=($(compgen -W "$checkup_opts" -- "$cur"))
             ;;
         setup)
             # no command-specific options

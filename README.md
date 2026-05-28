@@ -2766,6 +2766,14 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 **Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` command.
 
+`pdd checkup simplify` is a local subcommand for candidate cleanup rather than
+a PR review gate. By default it calls Claude Code's bundled `/simplify` skill; use
+`--engine codex|gemini|opencode|auto` to run the same workflow through PDD's
+agentic providers instead. It operates over selected
+changed files. With `--attempts N`, PDD runs independent isolated candidates
+from the same input and copies back the smallest candidate that passes
+`--verify` by changed-file count; see [docs/checkup_simplify.md](docs/checkup_simplify.md).
+
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
@@ -2876,6 +2884,9 @@ pdd checkup \
   --issue https://github.com/myorg/myrepo/issues/42 \
   --review-loop \
   --review-only
+
+# Sample Claude Code /simplify candidates from a branch diff and apply a verified winner
+pdd checkup simplify --since origin/main --apply --attempts 3 --verify --evidence
 ```
 
 #### Evidence gate (`pdd checkup gate`)
