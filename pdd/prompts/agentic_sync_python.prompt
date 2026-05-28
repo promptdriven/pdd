@@ -81,7 +81,7 @@ Before dispatching to the runner, validate each module can actually sync:
 3. After any dry-run success (programmatic cwd or LLM-resolved cwd), run a deterministic prompt-contract preflight for that module before accepting it:
    - `_prompt_contract_errors_for_module(basename, cwd, project_root)` loads the matching architecture entry, resolves the prompt/output paths, and calls `validate_prompt_contract_context`.
    - Use architecture aliases from `agentic_sync_runner` so either prompt filename basenames or output filepath basenames match.
-   - Pass `require_prompt_local_source_context=True` only when `_prompt_contract_strict_self_context_required(prompt_path, root)` says the prompt file changed relative to git status or the merge base with main. This stages the no-self-include hard failure for newly changed/generated prompt contracts while keeping existing first-party legacy prompts syncable.
+   - Pass `require_prompt_local_source_context=True` only when `_prompt_contract_strict_self_context_required(prompt_path, root)` says the prompt file changed relative to git status or the merge base with main. The validator still allows prompts with no self-include; it only rejects present-but-partial self-includes that omit declared existing symbols.
    - If the preflight reports errors, treat validation as failed with `"prompt contract preflight failed"` and do not invoke the LLM fallback for that module. The fallback only resolves cwd/command errors; it cannot make an inconsistent prompt/code contract safe.
 4. On dry-run failure, invoke `_llm_fix_dry_run_failure` as fallback: load `agentic_sync_fix_dry_run_LLM` prompt template with project tree (2 levels), .pddrc locations, and the error. Run the LLM-suggested command via shell, extract effective cwd using a pwd marker appended to the command. Validate resolved cwd is within project root. If it succeeds, still run the prompt-contract preflight before accepting the cwd.
 5. `_run_dry_run_validation(modules, project_root)`: orchestrates the above per module, returns (all_valid, module_to_cwd_map, errors, total_llm_cost).
@@ -111,7 +111,7 @@ After dry-run validation, check which modules are already fully synced:
 - `_run_single_dry_run(basename: str, cwd: Path, quiet: bool) -> Tuple[bool, str]`: run pdd sync dry-run
 - `_llm_fix_dry_run_failure(basename, project_root, dry_run_error, ...) -> Tuple[bool, Optional[Path], float, str]`: LLM fallback for failed dry-runs
 - `_prompt_contract_errors_for_module(basename: str, cwd: Path, project_root: Path) -> List[str]`: deterministic prompt-contract preflight for the matching architecture module
-- `_prompt_contract_strict_self_context_required(prompt_path: Path, project_root: Path) -> bool`: return True when the prompt file is changed according to git status or diff against main, enabling staged strict no-self-include checks
+- `_prompt_contract_strict_self_context_required(prompt_path: Path, project_root: Path) -> bool`: return True when the prompt file is changed according to git status or diff against main, enabling staged strict prompt-contract checks
 - `_format_prompt_contract_preflight_error(basename: str, errors: List[str]) -> str`: format dry-run validation errors for prompt-contract failures
 - `_run_dry_run_validation(modules, project_root, ...) -> Tuple[bool, Dict[str, Path], List[str], float]`: orchestrate dry-run validation
 - `_filter_already_synced(modules, module_cwds, quiet) -> List[str]`: filter out fully-synced modules via fingerprint check

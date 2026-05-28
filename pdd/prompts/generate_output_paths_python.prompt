@@ -72,6 +72,13 @@
       directory structure; apply filename pattern only to name part (e.g., 'core/test_cloud.py')
   - Explicit directory paths: Context paths ending with '/' are complete directories;
       do NOT add basename's dir_prefix (e.g., 'pdd/' + 'core/cloud' -> 'pdd/cloud.py')
+  - fix/auto-deps + input_file_dirs (issue #1211): when these commands route output to the
+      existing input file's directory (clause 1b), `input_file_dirs[output_key]` already roots
+      the path at the file's deepest subdir. If `basename` also carries a subdir chain (from a
+      nested prompt under `prompts/...`), the default filename must be regenerated from the
+      name part only — joining the full default filename here would prepend the subdir twice
+      (e.g. `src/routers/src/routers/foo.py`). Use `_get_default_filename(command, output_key,
+      name_part, language, file_extension)` where `name_part = basename.rsplit('/', 1)[-1]`.
 
 % Error Handling
   - Unknown command or missing basename: log error, return empty dict

@@ -208,9 +208,15 @@ def auto_deps_main(
                             f"{output_path}; skipping fingerprint finalization.[/yellow]"
                         )
                 else:
+                    # Issue #1211: route clear/verify/save through the same
+                    # `paths` hint (the prompt path we just wrote) so all
+                    # three target the subproject's .pdd/meta — not a parent
+                    # CWD orphan — when auto-deps is run from above the
+                    # subproject root.
+                    _autodeps_paths = {"prompt": Path(output_path)}
                     # Clear stale run report; do not let its failure block fingerprint save
                     try:
-                        clear_run_report(basename, language)
+                        clear_run_report(basename, language, paths=_autodeps_paths)
                     except Exception as cr_exc:
                         if not quiet:
                             console.print(
@@ -220,7 +226,9 @@ def auto_deps_main(
                     # Defensive: clear_run_report() in pdd.operation_log silently swallows
                     # OSError on the actual unlink, so verify the report is really gone.
                     try:
-                        _stale_report_path = get_run_report_path(basename, language)
+                        _stale_report_path = get_run_report_path(
+                            basename, language, paths=_autodeps_paths
+                        )
                         if _stale_report_path.exists():
                             if not quiet:
                                 console.print(
@@ -239,7 +247,7 @@ def auto_deps_main(
                             basename=basename,
                             language=language,
                             operation="auto-deps",
-                            paths={"prompt": Path(output_path)},
+                            paths=_autodeps_paths,
                             cost=total_cost,
                             model=model_name,
                         )

@@ -631,6 +631,143 @@ def test_list_available_contexts_malformed_pddrc(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         list_available_contexts()
 
+# ---- Issue #1198: .pddrc unknown-key validation ----
+
+from pdd.construct_paths import _load_pddrc_config
+
+
+def test_load_pddrc_warns_on_unknown_root_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears at the root level."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="fake_unknown_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_context_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in a context block."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    typo_context_key: oops\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="typo_context_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_defaults_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in defaults."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      typo_defaults_key: oops\n'
+    )
+    with pytest.warns(UserWarning, match="typo_defaults_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_clean_config_no_warnings(tmp_path, recwarn):
+    """Issue #1198: a config with only known keys should not emit unknown-key warnings."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      generate_output_path: "src/"\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '      default_language: python\n'
+        '      strength: 0.5\n'
+        '      temperature: 0.0\n'
+        '      target_coverage: 80.0\n'
+        '      budget: 10.0\n'
+        '      max_attempts: 3\n'
+    )
+    _load_pddrc_config(pddrc)
+    unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
+    assert unknown_warnings == []
+
+
+def test_load_pddrc_warning_message_format(tmp_path):
+    """Issue #1198: warning should follow the format: contains unknown key 'X' at path 'Y', ignored."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning) as caught:
+        _load_pddrc_config(pddrc)
+    msg = str(caught[0].message)
+    assert "fake_unknown_key" in msg
+    assert "ignored" in msg.lower()
+    assert "pdd setup" in msg.lower()
+
+def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: auto_deps_csv_path is prescribed
+    by pdd/templates/generic/generate_pddrc_YAML.prompt but never consumed by
+    _resolve_config_hierarchy. Validator should surface it as unknown until the
+    wiring is added (separate issue). If this test starts failing, either the
+    wiring landed and the key should move into _PDDRC_DEFAULTS_KEYS with
+    regression coverage proving .pddrc affects the auto-deps CSV path, or the
+    template re-introduced the prescription and needs to be cleaned up."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      auto_deps_csv_path: "project_dependencies.csv"\n'
+    )
+    with pytest.warns(UserWarning, match="auto_deps_csv_path"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_prompt_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: prompt_path was documented in
+    construct_paths_python.prompt as an alias for prompts_dir, but
+    _resolve_config_hierarchy never implemented the resolution chain. Per Greg's
+    second review, removed from the schema and from the prompt's spec. Validator
+    should surface it as unknown until aliasing is actually wired through. If
+    this test starts failing, either the wiring landed (CLI prompt_path, .pddrc
+    prompt_path, PDD_PROMPT_PATH env var, all resolving to prompts_dir with the
+    documented precedence) and the key should move into _PDDRC_DEFAULTS_KEYS
+    with regression coverage proving .pddrc affects prompts_dir resolution, or
+    the prompt re-introduced the alias documentation and needs cleanup."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      prompt_path: "configured_prompts"\n'
+    )
+    with pytest.warns(UserWarning, match="prompt_path"):
+        _load_pddrc_config(pddrc)
+
 
 # ---- Issue #1198: .pddrc unknown-key validation ----
 
@@ -727,6 +864,7 @@ def test_load_pddrc_warning_message_format(tmp_path):
 
 
 def test_construct_paths_missing_command_options(tmpdir):
+
     """
     Test that construct_paths handles missing command options (None) gracefully.
     """
@@ -2619,9 +2757,10 @@ class TestConstructPathsResolutionModeParameter:
         pddrc = subdir / ".pddrc"
         pddrc.write_text("""contexts:
   default:
-    generate_output_path: "src/"
-    test_output_path: "tests/"
-    example_output_path: "examples/"
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
 """)
 
         # Create input files
@@ -2679,9 +2818,10 @@ class TestConstructPathsResolutionModeParameter:
         pddrc = subdir / ".pddrc"
         pddrc.write_text("""contexts:
   default:
-    generate_output_path: "src/"
-    test_output_path: "tests/"
-    example_output_path: "examples/"
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
 """)
 
         # Create input files
@@ -3518,6 +3658,64 @@ class TestStripLanguageSuffixWithSubdir:
             Path("/Users/me/project/prompts/ci_validation_python.prompt")
         )
         assert result == "ci_validation"
+
+    # ------------------------------------------------------------------
+    # Issue #1211 (Step 6a fix): honor .pddrc prompts_dir as the anchor
+    # instead of hard-coding the literal "prompts/" segment.
+    # ------------------------------------------------------------------
+
+    def test_prompts_dir_override_strips_full_anchor(self):
+        """When prompts_dir="prompts/backend" matches the path, no leading 'backend/' leaks into basename.
+
+        Pre-fix: anchor was the literal "prompts" segment, so "backend" became a
+        subdir under the anchor and the basename was "backend/admin_get_users",
+        producing a double-nested output path like backend/functions/backend/...
+        """
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/backend/admin_get_users_python.prompt"),
+            prompts_dir="prompts/backend",
+        )
+        assert result == "admin_get_users"
+
+    def test_prompts_dir_override_preserves_nested_subdir(self):
+        """Subdirectories below the configured prompts_dir are still preserved."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/backend/services/billing/charge_python.prompt"),
+            prompts_dir="prompts/backend",
+        )
+        assert result == str(Path("services") / "billing" / "charge")
+
+    def test_prompts_dir_override_absolute_path(self):
+        """Anchor matching works on absolute paths too."""
+        result = _strip_language_suffix_with_subdir(
+            Path("/repo/extensions/app/prompts/src/routers/webhook_handlers_Python.prompt"),
+            prompts_dir="prompts",
+        )
+        assert result == str(Path("src") / "routers" / "webhook_handlers")
+
+    def test_prompts_dir_override_with_trailing_slash(self):
+        """Trailing slash on prompts_dir is normalized and still matches."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/backend/admin_python.prompt"),
+            prompts_dir="prompts/backend/",
+        )
+        assert result == "admin"
+
+    def test_prompts_dir_override_no_match_falls_back_to_literal_prompts(self):
+        """When prompts_dir is configured but doesn't appear in the path, the literal 'prompts/' anchor still works."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/commands/fix_python.prompt"),
+            prompts_dir="some/other/dir",
+        )
+        assert result == str(Path("commands") / "fix")
+
+    def test_prompts_dir_none_preserves_legacy_behavior(self):
+        """Omitting prompts_dir (legacy callers) keeps the literal 'prompts/' anchor."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/commands/fix_python.prompt"),
+            prompts_dir=None,
+        )
+        assert result == str(Path("commands") / "fix")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -2501,14 +2501,10 @@ class TestRunDryRunValidation:
         assert errors == []
         assert cost == 0.0
 
-    def test_dry_run_success_changed_no_self_include_prompt_contract_passes(
+    def test_dry_run_success_allows_changed_no_self_include_prompt_contract(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Changed prompts without a self-include remain valid (issue #1237).
-
-        The validator must only reject *partial* self-includes that omit
-        declared symbols, not prompts that have no self-include at all.
-        """
+        """Changed prompt-local contracts do not need output self-includes."""
         prompts = tmp_path / "prompts"
         prompts.mkdir()
         (tmp_path / "changed.py").write_text(
