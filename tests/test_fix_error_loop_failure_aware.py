@@ -128,8 +128,8 @@ def test_failure_aware_disabled_allows_multiple_syntax_attempts(
 
 @patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
 @patch("pdd.fix_error_loop.run_pytest_on_file")
-def test_failure_aware_assertion_uses_max_attempts(mock_pytest, mock_fix, setup_files):
-    """Assertion/logic failures are not cut short by failure-aware logic."""
+def test_failure_aware_assertion_stagnant_exits_early(mock_pytest, mock_fix, setup_files):
+    """Stagnant assertion/logic failures exit after 2 attempts when failure-aware is enabled."""
     files = setup_files
     mock_pytest.return_value = (1, 0, 0, ASSERT_OUTPUT)
     mock_fix.return_value = (
@@ -157,8 +157,54 @@ def test_failure_aware_assertion_uses_max_attempts(mock_pytest, mock_fix, setup_
         failure_aware_retries=True,
     )
 
-    assert attempts == 4
-    assert mock_fix.call_count == 4
+    assert attempts == 2
+    assert mock_fix.call_count == 2
+
+
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+def test_failure_aware_assertion_continues_with_decreasing_failures(
+    mock_pytest, mock_fix, setup_files
+):
+    """When assertion failures decrease each iteration, the stagnant breaker does not fire."""
+    files = setup_files
+    # Initial run + 5 post-fix runs: failures decrease 5→4→3→2→1→0 (success on last)
+    mock_pytest.side_effect = [
+        (5, 0, 0, ASSERT_OUTPUT),  # initial
+        (4, 0, 0, ASSERT_OUTPUT),  # post-fix iter 1
+        (3, 0, 0, ASSERT_OUTPUT),  # post-fix iter 2
+        (2, 0, 0, ASSERT_OUTPUT),  # post-fix iter 3
+        (1, 0, 0, ASSERT_OUTPUT),  # post-fix iter 4
+        (0, 0, 0, ""),             # post-fix iter 5 (success)
+    ]
+    mock_fix.return_value = (
+        True,
+        True,
+        files["test_file"].read_text(),
+        files["code_file"].read_text(),
+        "analysis",
+        0.01,
+        "mock-model",
+    )
+
+    success, _, _, attempts, _, _ = fix_error_loop(
+        unit_test_file=str(files["test_file"]),
+        code_file=str(files["code_file"]),
+        prompt_file="dummy_prompt.txt",
+        prompt="prompt",
+        verification_program=str(files["verify_file"]),
+        strength=0.5,
+        temperature=0.0,
+        max_attempts=5,
+        budget=10.0,
+        error_log_file=str(files["error_log"]),
+        agentic_fallback=False,
+        failure_aware_retries=True,
+    )
+
+    assert success is True
+    assert attempts == 5
+    assert mock_fix.call_count == 5
 
 
 @patch("pdd.fix_error_loop.fix_errors_from_unit_tests")

@@ -1954,3 +1954,50 @@ def test_early_exit_assertion_logic_stagnant(setup_files):
     assert success is False
     # Exited early after 2 stagnant attempts
     assert attempts == 2
+
+
+def test_assertion_logic_convergence_runs_to_completion(setup_files):
+    """
+    When total failures strictly decrease each iteration, the stagnant assertion
+    breaker must not fire, and the loop converges to success in 5 iterations.
+
+    This covers the source bug from issue #1230: a sequence of 5→4→3→2→1→0
+    wording mismatches converging without the breaker firing.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_run_pytest:
+        mock_run_pytest.side_effect = [
+            (5, 0, 0, "AssertionError: wording mismatch"),  # initial
+            (4, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 1
+            (3, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 2
+            (2, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 3
+            (1, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 4
+            (0, 0, 0, ""),                                  # post-fix iter 5 (success)
+        ]
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                True, True,
+                files["test_file"].read_text(),
+                files["code_file"].read_text(),
+                "analysis", 0.01, "mock-model",
+            )
+
+            success, _, _, attempts, _, _ = fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=5,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False,
+                failure_aware_retries=True,
+            )
+
+    assert success is True
+    assert attempts == 5
+    assert mock_fix.call_count == 5
