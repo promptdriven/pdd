@@ -3349,7 +3349,18 @@ def sync_orchestration(
                         if success:
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
-                            _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
+                            # Don't save the fingerprint for a no-op fix (zero cost, empty/unknown
+                            # model) — the loop may be about to abort this as a logical failure, and
+                            # persisting "fix completed" state before that check is detected would
+                            # leave stale metadata behind.
+                            _model_name_lower_check = str(model_name).strip().lower()
+                            _is_noop_fix = (
+                                operation == 'fix'
+                                and actual_cost == 0.0
+                                and _model_name_lower_check in ['', 'none', 'unknown', 'n/a']
+                            )
+                            if not _is_noop_fix:
+                                _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
                             if operation_rollback is not None:
                                 operation_rollback.commit()
 
