@@ -9,6 +9,7 @@ from ..fix_verification_main import fix_verification_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..operation_log import log_operation
+from ..evidence_manifest import write_evidence_manifest
 
 @click.command("install_completion")
 @click.pass_context
@@ -66,6 +67,12 @@ def install_completion_cmd(ctx: click.Context) -> None:
     default=True,
     help="Enable agentic fallback if the primary fix mechanism fails.",
 )
+@click.option(
+    "--evidence",
+    is_flag=True,
+    default=False,
+    help="Write a machine-readable evidence manifest for this run.",
+)
 @click.pass_context
 @log_operation(operation="verify", clears_run_report=True, updates_run_report=True)
 @track_cost
@@ -80,6 +87,7 @@ def verify(
     max_attempts: int,
     budget: float,
     agentic_fallback: bool,
+    evidence: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Verify code using a verification program."""
     try:
@@ -106,6 +114,21 @@ def verify(
             "code_content": code_content,
             "attempts": attempts,
         }
+        if evidence:
+            write_evidence_manifest(
+                command="pdd verify",
+                prompt_file=prompt_file,
+                output_files=[
+                    path
+                    for path in (output_code, output_program, output_results)
+                    if path
+                ],
+                model=model_name,
+                cost_usd=total_cost,
+                temperature=(ctx.obj or {}).get("temperature", 0.0),
+                validation={"verify": "passed" if success else "failed"},
+                logs={"verify_results": output_results},
+            )
         return result, total_cost, model_name
     except click.Abort:
         raise
