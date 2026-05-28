@@ -323,13 +323,13 @@ Implement helpers for running examples with error detection:
 
 Use these functions from `operation_log` module (already imported above):
 
-- `load_operation_log(basename, language)` - Load JSONL log entries (handles backward compatibility for entries without `invocation_mode`)
+- `load_operation_log(basename, language, paths=None)` - Load JSONL log entries (handles backward compatibility for entries without `invocation_mode`); pass `paths=pdd_files` for subproject anchoring (issue #1211)
 - `create_log_entry(operation, reason, invocation_mode, estimated_cost, confidence, decision_type)` - Create log entry dict
 - `update_log_entry(entry, success, cost, model, duration, error)` - Add execution results to log entry
 - `append_log_entry(basename, language, entry, paths=None)` - Append entry to log file; pass `paths=pdd_files` so the log anchors at the subproject `.pdd/meta` (issue #1211)
 - `log_event(basename, language, event_type, details, invocation_mode, paths=None)` - Log system events (lock_acquired, budget_warning, etc.); pass `paths=pdd_files` for subproject anchoring
 - `save_fingerprint(basename, language, operation, paths=None, cost, model)` - Save fingerprint after success; pass `paths=pdd_files` for subproject anchoring
-- `save_run_report(basename, language, report_data)` - Save RunReport dict
+- `save_run_report(basename, language, report_data, paths=None)` - Save RunReport dict; pass `paths=pdd_files` for subproject anchoring (issue #1211)
 - `clear_run_report(basename, language, paths=None)` - Remove stale run report; pass `paths=pdd_files` for subproject anchoring
 
 **Creating sync log entries from SyncDecision**: Extract fields from the decision object:
@@ -346,7 +346,7 @@ entry = create_log_entry(
 
 ### Local helpers (implement in this module)
 
-- `_display_sync_log(basename, language, verbose)` - Format and display sync log using `load_operation_log()`. Suppress the `Model:` header if the model name is empty, "unknown", or "N/A" (case-insensitive).
+- `_display_sync_log(basename, language, verbose, paths=None)` - Format and display sync log using `load_operation_log()`; pass `paths=pdd_files` for subproject anchoring (issue #1211). Suppress the `Model:` header if the model name is empty, "unknown", or "N/A" (case-insensitive).
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
 - `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
 - `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage; uses `test_files` when provided
