@@ -9434,5 +9434,44 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Optional per-run JSON evidence manifests for supported commands.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "pdd/evidence_manifest_python.prompt",
+    "filepath": "pdd/evidence_manifest.py",
+    "tags": [
+      "module",
+      "python",
+      "evidence"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "write_evidence_manifest",
+            "signature": "(**, command: str, ...) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "validation_from_sync",
+            "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict",
+            "returns": "dict"
+          },
+          {
+            "name": "resolve_generate_output_paths",
+            "signature": "(prompt_file, *, output=None, ...) -> list[str]",
+            "returns": "list[str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
   }
 ]

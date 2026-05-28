@@ -12,6 +12,7 @@ from pdd import cli
 from pdd.architecture_include_validation import (
     collect_architecture_include_validation_warnings,
     cross_validate_architecture_with_prompt_includes,
+    resolve_architecture_prompt_path,
 )
 
 
@@ -396,3 +397,24 @@ def test_dict_format_architecture_validates_includes(tmp_path: Path) -> None:
         "Dict-format architecture should be validated for include mismatches, "
         "but isinstance(data, list) at architecture_include_validation.py:76 silently skips it"
     )
+
+
+def test_resolve_packaged_prompt_under_pdd_prompts(tmp_path: Path) -> None:
+    """Prompts for pdd/* modules live under pdd/prompts/, not only prompts/ symlink."""
+    root = tmp_path / "repo"
+    prompt = root / "pdd" / "prompts" / "evidence_manifest_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Reason\n", encoding="utf-8")
+
+    resolved = resolve_architecture_prompt_path("pdd/evidence_manifest_python.prompt", root)
+    assert resolved == prompt.resolve()
+
+    arch = [
+        {
+            "filename": "pdd/evidence_manifest_python.prompt",
+            "filepath": "pdd/evidence_manifest.py",
+            "dependencies": [],
+        }
+    ]
+    warnings = cross_validate_architecture_with_prompt_includes(arch, root)
+    assert not any("prompt file not found" in w for w in warnings)
