@@ -1,46 +1,36 @@
-# Contract coverage matrix (`pdd coverage --contracts`)
+# Contract coverage matrix (`pdd checkup coverage`)
 
 Build an inspectable rule-to-evidence matrix for `.prompt` files that define `<contract_rules>`.
 No LLM required — pure static analysis.
 
-Issue [#823](https://github.com/promptdriven/pdd/issues/823) specifies the top-level CLI:
-
-```bash
-pdd coverage --contracts
-pdd coverage --contracts --json
-pdd coverage --contracts prompts/refund_payment_python.prompt
-```
-
-The same engine is available under checkup:
+Coverage is exposed via checkup:
 
 ```bash
 pdd checkup coverage prompts/refund_payment_python.prompt
 ```
-
-On `pdd coverage`, `--contracts` is a compatibility flag (coverage is implied by the command name).
 
 ---
 
 ## Quick start
 
 ```bash
-# Single file (issue #823 entry point)
-pdd coverage --contracts prompts/refund_payment_python.prompt
+# Single file
+pdd checkup coverage prompts/refund_payment_python.prompt
 
 # Directory (scans recursively, skips *_LLM.prompt)
-pdd coverage --contracts prompts/
+pdd checkup coverage prompts/
 
 # JSON output for CI
-pdd coverage --contracts --json prompts/
+pdd checkup coverage --json prompts/
 
 # Custom story and test directories
-pdd coverage --contracts \
+pdd checkup coverage \
     --stories-dir user_stories \
     --tests-dir   tests \
     prompts/refund_payment_python.prompt
 
-# Equivalent nested form
-pdd checkup coverage --json prompts/
+# Alias: --stories
+pdd checkup coverage --stories user_stories prompts/
 ```
 
 Default directories:
@@ -51,7 +41,7 @@ Default directories:
 Runnable demo files live in `examples/coverage_contracts_demo/`:
 
 ```bash
-pdd coverage --contracts \
+pdd checkup coverage \
   --stories-dir examples/coverage_contracts_demo/user_stories \
   --tests-dir examples/coverage_contracts_demo/tests \
   examples/coverage_contracts_demo/prompts/refund_payment_python.prompt
@@ -219,7 +209,7 @@ Prompt: prompts/legacy_utility_python.prompt
 - No rules reported
 - No errors raised
 
-This means `pdd coverage --contracts` (and `pdd checkup coverage`) is safe to run against any repository, even those that pre-date the contract rules convention.
+This means `pdd checkup coverage` is safe to run against any repository, even those that pre-date the contract rules convention.
 
 ---
 
@@ -229,7 +219,7 @@ The coverage matrix (**#823**) is static analysis only; it does not call an LLM.
 
 | Piece | Role | Required for #823? |
 |-------|------|--------------------|
-| `pdd coverage --contracts` / `pdd checkup coverage` | Coverage CLI and `pdd/coverage_contracts.py` | **Yes** |
+| `pdd checkup coverage` | Coverage CLI and `pdd/coverage_contracts.py` | **Yes** |
 | `pdd contracts check` / `pdd checkup contract check` | Authoring lint for contract sections | **No** — optional companion |
 | `pdd checkup lint` | Prompt/user-story quality lint | **No** |
 | `pdd evidence` / `--evidence` manifests (#824) | Run audit receipts | **No** — separate feature |

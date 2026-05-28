@@ -427,18 +427,6 @@ class TestCoverageCliRegistration:
         assert result.exit_code == 0
         assert "no contract coverage data" in result.output.lower()
 
-    def test_registered_top_level_coverage_command_accepts_contracts_flag(self, tmp_path):
-        """Issue #823 contract: `pdd coverage --contracts ...` is available."""
-        prompt = _write(tmp_path, "legacy_python.prompt", LEGACY_PROMPT)
-        runner = CliRunner()
-        result = runner.invoke(
-            cli.cli,
-            ["--quiet", "coverage", "--contracts", str(prompt)],
-            catch_exceptions=False,
-        )
-        assert result.exit_code == 0
-        assert "no contract coverage data" in result.output.lower()
-
     @pytest.mark.parametrize(
         ("target", "expected_exit_code"),
         [
@@ -478,10 +466,10 @@ class TestCoverageCliRegistration:
         payload = json.loads(result.stdout)
         assert isinstance(payload, dict)
 
-    def test_top_level_coverage_json_stdout_is_parseable_with_default_update_env(
+    def test_checkup_coverage_json_stdout_is_parseable_with_default_update_env(
         self,
     ) -> None:
-        """Regression: top-level JSON mode must suppress update chatter on stdout."""
+        """Regression: checkup JSON mode must suppress update chatter on stdout."""
         target = FIXTURES / "legacy_no_contracts_python.prompt"
         env = os.environ.copy()
         env.update(
@@ -496,8 +484,8 @@ class TestCoverageCliRegistration:
                 sys.executable,
                 "-m",
                 "pdd",
+                "checkup",
                 "coverage",
-                "--contracts",
                 "--json",
                 str(target),
             ],
