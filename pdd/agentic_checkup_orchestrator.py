@@ -2333,7 +2333,16 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs[step_key] = persistable_output
             last_completed_step_to_save = step_num
             consecutive_provider_failures = 0
-            if description:
+            # External review (PR #1215) Finding 3: in PR mode the orchestrator
+            # owns the single canonical Step 7 report, posted via
+            # ``_post_pr_mode_final_report`` on every terminal path. Posting a
+            # per-step Step 7 comment here too duplicates Step 7 reporting on
+            # the issue thread (prompt contract: "Step 7 must not post GitHub
+            # comments in PR mode"). Suppress the per-step comment for Step 7 in
+            # PR mode only; earlier steps' progress comments are unaffected, and
+            # issue-mode runs still post a Step 7 comment (they have no separate
+            # final-report post).
+            if description and not (pr_mode and step_num == 7):
                 _maybe_post_step_comment(step_num, description, persistable_output, iteration)
         else:
             step_outputs[step_key] = f"FAILED: {persistable_output}"

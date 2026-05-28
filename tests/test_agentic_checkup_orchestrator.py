@@ -6196,6 +6196,58 @@ class TestExternalReviewPR1215StaleSignalAndCleanup:
             "cleanup did not remove it."
         )
 
+    def test_step7_no_duplicate_per_step_comment_in_pr_mode(self, tmp_path):
+        """FAILS_ON_CURRENT_CODE: in PR mode the orchestrator owns the single
+        canonical Step 7 report (_post_pr_mode_final_report); _handle_step_result
+        must NOT also post a per-step Step 7 issue comment, or the issue thread
+        gets duplicate Step 7 reporting (prompt contract: 'Step 7 must not post
+        GitHub comments in PR mode')."""
+        from unittest.mock import patch as _patch
+
+        posted_keys: List[int] = []
+
+        def fake_post_once(*_args, step_num=None, **_kwargs):
+            posted_keys.append(step_num)
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            # Step 5 fails so the fixer + Step 7 verify path runs end-to-end.
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (
+                    True,
+                    "<step_report>Step 7 verified.</step_report>\n" + ALL_ISSUES_FIXED,
+                    0.1,
+                    "model",
+                )
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], \
+             patches[10], \
+             _patch(
+                 "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+                 side_effect=fake_post_once,
+             ):
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        # _step_comment_key projects step 7 to (iteration*10000 + 70), so a
+        # Step 7 per-step comment is any posted key with key % 10000 == 70.
+        step7_keys = [k for k in posted_keys if k is not None and k % 10000 == 70]
+        assert not step7_keys, (
+            "Step 7 must not post a per-step issue comment in PR mode — the "
+            "orchestrator's canonical final report already covers Step 7. "
+            f"Saw Step 7 comment key(s): {step7_keys}"
+        )
+
     def test_provider_success_logical_failure_detail_visible_in_quiet(self, tmp_path):
         """FAILS_ON_CURRENT_CODE: when Step 5 reports provider success but its
         ``failure_signal`` block declares ``status: fail``, the failing-test
