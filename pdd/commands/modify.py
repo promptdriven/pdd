@@ -18,7 +18,6 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
-from ..evidence_manifest import write_evidence_manifest
 
 console = Console()
 
@@ -188,12 +187,6 @@ def split(
 @click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (agentic mode only).")
 @click.option("--no-github-state", is_flag=True, default=False, help="Disable GitHub state persistence (agentic mode only).")
 @click.option(
-    "--evidence",
-    is_flag=True,
-    default=False,
-    help="Write a machine-readable evidence manifest for this run.",
-)
-@click.option(
     "--clean-restart",
     is_flag=True,
     default=False,
@@ -215,7 +208,6 @@ def change(
     csv: bool,
     timeout_adder: float,
     no_github_state: bool,
-    evidence: bool,
     clean_restart: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
@@ -291,15 +283,6 @@ def change(
                 use_csv=csv,
                 budget=budget
             )
-            if evidence:
-                write_evidence_manifest(
-                    command="pdd change",
-                    prompt_file=input_prompt,
-                    output_files=[output] if output else (),
-                    model=model,
-                    cost_usd=cost,
-                    temperature=ctx.obj.get("temperature", 0.0),
-                )
             return result, cost, model
 
         else:
@@ -339,15 +322,6 @@ def change(
             if not success:
                 raise click.exceptions.Exit(1)
 
-            if evidence:
-                write_evidence_manifest(
-                    command="pdd change",
-                    output_files=changed_files,
-                    model=model,
-                    cost_usd=cost,
-                    temperature=ctx.obj.get("temperature", 0.0),
-                    basename="agentic-change",
-                )
             return message, cost, model
 
     except (click.Abort, click.exceptions.Exit, click.UsageError):

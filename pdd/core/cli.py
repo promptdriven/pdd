@@ -107,6 +107,7 @@ def _is_structured_json_invocation(arguments: List[str]) -> bool:
         or ("checkup", "contract") in pairs
         or ("checkup", "contracts") in pairs
         or ("checkup", "coverage") in pairs
+        or "coverage" in arguments
         or ("contracts", "check") in pairs
     )
 

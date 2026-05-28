@@ -18,7 +18,6 @@ from ..user_story_tests import run_user_story_tests
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..operation_log import log_operation
-from ..evidence_manifest import write_evidence_manifest
 
 _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
@@ -71,12 +70,6 @@ def get_context_obj(ctx: click.Context) -> Dict[str, Any]:
     default=True,
     help="Stop on the first failing story in user story validation mode.",
 )
-@click.option(
-    "--evidence",
-    is_flag=True,
-    default=False,
-    help="Write a machine-readable evidence manifest for this run.",
-)
 @click.pass_context
 @track_cost
 def detect_change(
@@ -88,7 +81,6 @@ def detect_change(
     prompts_dir: Optional[str] = None,
     include_llm: bool = False,
     fail_fast: bool = True,
-    evidence: bool = False,
 ) -> Optional[Tuple[Any, float, str]]:
     """Detect prompt changes or run user story validation via --stories."""
     try:
@@ -113,15 +105,6 @@ def detect_change(
                 include_llm_prompts=include_llm,
                 cache_story_prompt_links=True,
             )
-            if evidence:
-                write_evidence_manifest(
-                    command="pdd detect --stories",
-                    model=model_name,
-                    cost_usd=total_cost,
-                    temperature=obj.get("temperature", 0.0),
-                    validation={"detect_stories": "passed" if passed else "failed"},
-                    basename="stories",
-                )
             return {"passed": passed, "results": results}, total_cost, model_name
 
         if len(files) < 2:
@@ -137,15 +120,6 @@ def detect_change(
             change_file=change_file,
             output=output,
         )
-        if evidence:
-            write_evidence_manifest(
-                command="pdd detect",
-                prompt_file=prompt_files[0],
-                output_files=[output] if output else (),
-                model=model_name,
-                cost_usd=total_cost,
-                temperature=get_context_obj(ctx).get("temperature", 0.0),
-            )
         return result, total_cost, model_name
     except (click.Abort, click.ClickException):
         raise

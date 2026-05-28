@@ -477,3 +477,37 @@ class TestCoverageCliRegistration:
         assert result.returncode == expected_exit_code
         payload = json.loads(result.stdout)
         assert isinstance(payload, dict)
+
+    def test_top_level_coverage_json_stdout_is_parseable_with_default_update_env(
+        self,
+    ) -> None:
+        """Regression: top-level JSON mode must suppress update chatter on stdout."""
+        target = FIXTURES / "legacy_no_contracts_python.prompt"
+        env = os.environ.copy()
+        env.update(
+            {
+                "PDD_PATH": str(REPO_ROOT / "pdd"),
+                "PYTHONPATH": str(REPO_ROOT),
+                "PDD_AUTO_UPDATE": "true",
+            }
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pdd",
+                "coverage",
+                "--contracts",
+                "--json",
+                str(target),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        payload = json.loads(result.stdout)
+        assert isinstance(payload, dict)

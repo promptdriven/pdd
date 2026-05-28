@@ -95,7 +95,6 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
     "prompts/*_LLM.prompt",
     "templates/**",
     "data/*",
-    "schemas/*.schema.json",
     "docs/prompting_guide.md",
     "mcp_config.json",
     "*.zsh",

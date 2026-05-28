@@ -61,13 +61,312 @@ except Exception:
     # Be conservative: default to True even if env parsing fails
     litellm.drop_params = True
 
+# Anthropic enforced the adaptive thinking API for Claude Opus 4.7 on
+# 2026-05-23: the legacy `thinking={"type":"enabled","budget_tokens":N}`
+# shape now returns 400 "is not supported for this model" on Anthropic-
+# family providers that perform strict validation (Vertex AI confirmed;
+# Bedrock has the same inheritance path). The direct-Anthropic endpoint
+# happens to tolerate both shapes together, which is why PR #1156 (CSV
+# flip to `adaptive`) appeared sufficient — it isn't, on Vertex.
+#
+# LiteLLM's gating helper for "model uses adaptive thinking" has been
+# renamed between releases:
+#   * 1.80.x — `AnthropicConfig._is_claude_opus_4_5` matches only
+#     opus-4-5. `_map_reasoning_effort` ignores the model and always
+#     returns the legacy enabled shape; `map_openai_params` then adds
+#     output_config.effort *and* leaves the enabled-shape thinking
+#     unchanged. So we need (a) predicate extension AND (b) a
+#     post-process wrap to replace the stale enabled shape.
+#   * 1.82.x — `_is_claude_opus_4_5` is gone, replaced by
+#     `_is_claude_4_6_model` (+ `_is_opus_4_6_model`). The new
+#     `_map_reasoning_effort(model)` returns `{type: adaptive}` directly
+#     when the predicate matches, and `map_openai_params` then adds
+#     output_config.effort. So we only need predicate extension.
+#
+# Each patch is in its own try/except and sentinel-guarded against
+# `importlib.reload(pdd.llm_invoke)` (several tests do that). Each is a
+# no-op when the corresponding helper isn't present, so the same module
+# works across LiteLLM 1.80.x and 1.82.x. Remove when LiteLLM ships
+# native opus-4-7 matching.
+#
+# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig,
+# so none of these patches reach the Azure adapter. Azure Opus 4.7
+# callers need a separate code-path fix (stock CSV row is `budget`).
+try:
+    from litellm.llms.anthropic.chat.transformation import (
+        AnthropicConfig as _AnthropicConfigOpus47,
+    )
+except Exception as _opus_4_7_import_err:  # pylint: disable=broad-except
+    _AnthropicConfigOpus47 = None  # type: ignore
+    logger.error(
+        "[opus_4_7_patch] Could not import AnthropicConfig: %s",
+        _opus_4_7_import_err,
+    )
+
+if _AnthropicConfigOpus47 is not None:
+    # Aliases the patched predicate must additionally match. Opus 4.5 is
+    # included so the 1.82.x predicate rename doesn't silently regress
+    # callers (LiteLLM 1.82.6 dropped 4.5 from `_is_claude_4_6_model`,
+    # which it now controls). Dot-aliases mirror LiteLLM's own naming
+    # support so we don't miss `claude-opus-4.7` style identifiers.
+    _OPUS_ADDITIONAL_ALIASES = (
+        "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+        "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
+    )
+
+    # ---- 1.80.x predicate: _is_claude_opus_4_5 -------------------------------
+    try:
+        _existing_is_opus_4_5 = getattr(_AnthropicConfigOpus47, "_is_claude_opus_4_5", None)
+        if _existing_is_opus_4_5 is not None and not getattr(
+            _existing_is_opus_4_5, "_pdd_opus_4_7_patched", False
+        ):
+            _orig_is_opus_4_5 = _existing_is_opus_4_5
+            def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
+                m = model.lower() if isinstance(model, str) else ""
+                return _orig_is_opus_4_5(self, model) or any(a in m for a in _OPUS_ADDITIONAL_ALIASES)
+            _patched_is_opus_4_5._pdd_opus_4_7_patched = True
+            _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[opus_4_7_patch] _is_claude_opus_4_5 patch failed: %s", _err)
+
+    # ---- 1.82.x predicates: _is_claude_4_6_model + _is_opus_4_6_model --------
+    # These are @staticmethod in 1.82.x. Wrap and reinstall as staticmethod so
+    # internal `AnthropicConfig._is_claude_4_6_model(model)` calls still work.
+    for _helper_name in ("_is_claude_4_6_model", "_is_opus_4_6_model"):
+        try:
+            _existing_helper = getattr(_AnthropicConfigOpus47, _helper_name, None)
+            if _existing_helper is None:
+                continue
+            _underlying = (
+                _existing_helper.__func__
+                if hasattr(_existing_helper, "__func__")
+                else _existing_helper
+            )
+            if getattr(_underlying, "_pdd_opus_4_7_helper_patched", False):
+                continue
+            def _make_patched(orig, aliases):
+                def _patched(model):
+                    m = model.lower() if isinstance(model, str) else ""
+                    return orig(model) or any(a in m for a in aliases)
+                _patched._pdd_opus_4_7_helper_patched = True
+                return _patched
+            _new_static = staticmethod(_make_patched(_underlying, _OPUS_ADDITIONAL_ALIASES))
+            setattr(_AnthropicConfigOpus47, _helper_name, _new_static)
+        except Exception as _err:  # pylint: disable=broad-except
+            logger.error("[opus_4_7_patch] %s patch failed: %s", _helper_name, _err)
+
+    # ---- map_openai_params post-process wrap (both versions) -----------------
+    # 1.80.x: _map_reasoning_effort always returns the legacy enabled shape;
+    #         reasoning_effort branch overwrites caller's adaptive thinking
+    #         with that — the wrap rewrites enabled→adaptive on opus-4-7.
+    # 1.82.x: _map_reasoning_effort returns adaptive (with the patched
+    #         predicate) but DROPS caller-supplied `display`/extra fields
+    #         when the reasoning_effort branch fires after the thinking
+    #         branch — the wrap restores the caller's richer payload.
+    try:
+        _existing_map = _AnthropicConfigOpus47.map_openai_params
+        if not getattr(_existing_map, "_pdd_opus_4_7_thinking_patched", False):
+            _orig_map_openai_params = _existing_map
+            def _adaptive_pred(self, model):
+                """Either-version predicate accessor."""
+                p1 = getattr(self, "_is_claude_opus_4_5", None)
+                if p1 is not None and p1(model):
+                    return True
+                p2 = getattr(self, "_is_claude_4_6_model", None)
+                if p2 is not None and p2(model):
+                    return True
+                return False
+            def _patched_map_openai_params(self, non_default_params, optional_params, model, drop_params=False):  # pylint: disable=function-redefined
+                result = _orig_map_openai_params(self, non_default_params, optional_params, model, drop_params)
+                if not _adaptive_pred(self, model):
+                    return result
+                current = result.get("thinking")
+                if not isinstance(current, dict):
+                    return result
+                # Case A (1.80.x): result still has enabled shape — rewrite.
+                # Case B (1.82.x): result has bare {type:adaptive} — preserve caller's payload.
+                user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
+                if current.get("type") == "enabled":
+                    if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                        result["thinking"] = user_thinking
+                    else:
+                        result["thinking"] = {"type": "adaptive"}
+                elif current.get("type") == "adaptive":
+                    if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                        # Caller supplied richer payload (display/effort/...) —
+                        # merge their fields into the result without dropping
+                        # anything LiteLLM already filled in.
+                        merged = dict(current)
+                        for k, v in user_thinking.items():
+                            if k not in merged:
+                                merged[k] = v
+                        result["thinking"] = merged
+                return result
+            _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
+            _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[opus_4_7_patch] map_openai_params patch failed: %s", _err)
+
+# Bedrock Converse uses AmazonConverseConfig — a separate class that does
+# NOT inherit from AnthropicConfig — so the patches above don't reach it
+# directly. In 1.80.x, Converse's `map_openai_params` calls
+# `AnthropicConfig._map_reasoning_effort(value)` (always enabled shape).
+# In 1.82.x, Converse calls `_handle_reasoning_effort_parameter` which
+# calls `AnthropicConfig._map_reasoning_effort(reasoning_effort=value,
+# model=model)` — and the predicate patch above flips that to adaptive
+# for opus-4-7, with no effort field attached.
+#
+# AWS Bedrock Converse for Claude flattens adaptive thinking into a
+# single key (no output_config sibling like the direct Anthropic API).
+# Wrap Converse `map_openai_params` to:
+#   * normalize any remaining `thinking.type.enabled` to adaptive on
+#     opus-4-7 (defensive — 1.80.x without the predicate-effective
+#     change), and
+#   * make sure the effort hint from `reasoning_effort` lands in the
+#     thinking dict so `time_to_effort_level()` isn't dropped.
+try:
+    from litellm.llms.bedrock.chat.converse_transformation import (
+        AmazonConverseConfig as _AmazonConverseConfigOpus47,
+    )
+    _existing_converse_map = _AmazonConverseConfigOpus47.map_openai_params
+    if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
+        _orig_converse_map = _existing_converse_map
+        # Match LiteLLM's own naming convention (hyphen + dot aliases).
+        _CONVERSE_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
+            result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
+            m = model.lower() if isinstance(model, str) else ""
+            if not any(a in m for a in _CONVERSE_OPUS_47_ALIASES):
+                return result
+            current = result.get("thinking")
+            if not isinstance(current, dict):
+                return result
+            ctype = current.get("type")
+            if ctype not in ("enabled", "adaptive"):
+                return result
+            new_thinking = {"type": "adaptive"} if ctype == "enabled" else dict(current)
+            user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
+            if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                # Caller-supplied payload wins (carries display=summarized, etc.)
+                new_thinking = dict(user_thinking)
+            effort = non_default_params.get("reasoning_effort") if isinstance(non_default_params, dict) else None
+            if isinstance(effort, str) and "effort" not in new_thinking:
+                new_thinking["effort"] = effort
+            result["thinking"] = new_thinking
+            return result
+        _patched_converse_map._pdd_opus_4_7_converse_patched = True
+        _AmazonConverseConfigOpus47.map_openai_params = _patched_converse_map
+except Exception as _converse_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch AmazonConverseConfig for opus-4-7: %s",
+        _converse_patch_err,
+    )
+
+# Vertex AI Anthropic transform_request unconditionally strips `output_config`
+# from the request body (litellm/llms/vertex_ai/.../transformation.py
+# line ~74 in 1.82.6, comment: "VertexAI doesn't support output_config").
+# That comment is wrong for Opus 4.7: the Vertex API explicitly REQUIRES
+# `output_config.effort` alongside `thinking.type.adaptive` (the error
+# message itself instructs callers to use both).
+#
+# Wrap transform_request: after the original runs (and strips output_config),
+# if model name contains opus-4-7 and the caller's optional_params had an
+# output_config, re-add it to the request body so Vertex receives both
+# `thinking={"type":"adaptive"}` and `output_config={"effort":X}`.
+#
+# Remove this patch when LiteLLM drops the output_config strip for
+# Opus 4.7+ (or learns to gate the strip per model).
+try:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig as _VertexAIAnthropicConfigOpus47,
+    )
+    _existing_vertex_transform = _VertexAIAnthropicConfigOpus47.transform_request
+    if not getattr(_existing_vertex_transform, "_pdd_opus_4_7_vertex_patched", False):
+        _orig_vertex_transform = _existing_vertex_transform
+        _VERTEX_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        # Map LiteLLM "low/medium/high/max" reasoning_effort levels back to a
+        # default `output_config.effort` value when none is present on the
+        # incoming request. This mirrors what LiteLLM's map_openai_params
+        # does — we replicate it here so retry-path calls that bypass
+        # map_openai_params still get a sensible effort hint.
+        def _effort_from_budget_tokens(budget_tokens):
+            try:
+                bt = int(budget_tokens or 0)
+            except Exception:  # pylint: disable=broad-except
+                return "high"
+            # Anthropic's documented buckets:
+            #   minimal/low: 1024, medium: 4096, high: 8192, max: 16384+
+            if bt >= 16384:
+                return "max"
+            if bt >= 8192:
+                return "high"
+            if bt >= 4096:
+                return "medium"
+            return "low"
+
+        def _patched_vertex_transform(self, model, messages, optional_params, litellm_params, headers):  # pylint: disable=function-redefined
+            data = _orig_vertex_transform(self, model, messages, optional_params, litellm_params, headers)
+            m = model.lower() if isinstance(model, str) else ""
+            if not any(a in m for a in _VERTEX_OPUS_47_ALIASES):
+                return data
+            # Vertex AI Opus 4.7 rejects the legacy `thinking.type.enabled`
+            # shape entirely; the API instructs callers to use
+            # `thinking.type.adaptive` + `output_config.effort`. Force this
+            # shape unconditionally for opus-4-7 because:
+            #
+            #   * map_openai_params produces the right shape on the first
+            #     call (predicate + restore-output_config patches both fire),
+            #     but LiteLLM's `num_retries` retry path re-enters
+            #     transform_request with a stale `optional_params` dict that
+            #     carries `thinking={type:enabled,budget_tokens:N}` and no
+            #     output_config. Without unconditional rewrite here, the
+            #     retry call goes out with the legacy shape and Vertex 400s.
+            #
+            #   * Other code paths (compact-mode retry, fallback budget
+            #     calculation, anything that calls litellm.completion()
+            #     directly with thinking={"type":"enabled",...}) hit the
+            #     same wire if not normalized here.
+            current_thinking = data.get("thinking")
+            budget_tokens = None
+            if isinstance(current_thinking, dict):
+                if current_thinking.get("type") == "enabled":
+                    budget_tokens = current_thinking.get("budget_tokens")
+                    data["thinking"] = {"type": "adaptive"}
+            else:
+                data["thinking"] = {"type": "adaptive"}
+            # output_config: prefer caller's value, else derive from
+            # reasoning_effort/budget_tokens, else default to "high".
+            if "output_config" not in data:
+                oc = optional_params.get("output_config") if isinstance(optional_params, dict) else None
+                if isinstance(oc, dict):
+                    data["output_config"] = oc
+                else:
+                    effort = None
+                    if isinstance(optional_params, dict):
+                        re_effort = optional_params.get("reasoning_effort")
+                        if isinstance(re_effort, str):
+                            effort = re_effort
+                    if effort is None and budget_tokens is not None:
+                        effort = _effort_from_budget_tokens(budget_tokens)
+                    if effort is None:
+                        effort = "high"
+                    data["output_config"] = {"effort": effort}
+            return data
+        _patched_vertex_transform._pdd_opus_4_7_vertex_patched = True
+        _VertexAIAnthropicConfigOpus47.transform_request = _patched_vertex_transform
+except Exception as _vertex_transform_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch VertexAIAnthropicConfig.transform_request: %s",
+        _vertex_transform_patch_err,
+    )
+
 # Add a console handler if none exists
 if not logger.handlers:
     console_handler = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
+
     # Only add handler to litellm logger if it doesn't have any
     if not litellm_logger.handlers:
         litellm_logger.addHandler(console_handler)
@@ -77,7 +376,7 @@ def setup_file_logging(log_file_path=None):
     """Configure rotating file handler for logging"""
     if not log_file_path:
         return
-        
+
     try:
         from logging.handlers import RotatingFileHandler
         file_handler = RotatingFileHandler(
@@ -141,7 +440,7 @@ def set_quiet_logging() -> None:
 # Honor process-level quiet mode as early as possible.
 if os.getenv("PDD_QUIET") == "1":
     set_quiet_logging()
-    
+
 # --- End Logging Configuration ---
 
 import json
@@ -683,7 +982,7 @@ def _llm_invoke_cloud(
 def _is_wsl_environment() -> bool:
     """
     Detect if we're running in WSL (Windows Subsystem for Linux) environment.
-    
+
     Returns:
         True if running in WSL, False otherwise
     """
@@ -693,15 +992,15 @@ def _is_wsl_environment() -> bool:
             with open('/proc/version', 'r') as f:
                 version_info = f.read().lower()
                 return 'microsoft' in version_info or 'wsl' in version_info
-        
+
         # Alternative check: WSL_DISTRO_NAME environment variable
         if os.getenv('WSL_DISTRO_NAME'):
             return True
-            
+
         # Check for Windows-style paths in PATH
         path_env = os.getenv('PATH', '')
         return '/mnt/c/' in path_env.lower()
-        
+
     except Exception:
         return False
 
@@ -725,12 +1024,12 @@ def _openai_responses_supports_response_format() -> bool:
 def _get_environment_info() -> Dict[str, str]:
     """
     Get environment information for debugging and error reporting.
-    
+
     Returns:
         Dictionary containing environment details
     """
     import platform
-    
+
     info = {
         'platform': platform.system(),
         'platform_release': platform.release(),
@@ -739,12 +1038,12 @@ def _get_environment_info() -> Dict[str, str]:
         'is_wsl': str(_is_wsl_environment()),
         'python_version': platform.python_version(),
     }
-    
+
     # Add WSL-specific information
     if _is_wsl_environment():
         info['wsl_distro'] = os.getenv('WSL_DISTRO_NAME', 'unknown')
         info['wsl_interop'] = os.getenv('WSL_INTEROP', 'not_set')
-    
+
     return info
 
 # <<< SET LITELLM DEBUG LOGGING >>>
@@ -1922,10 +2221,10 @@ def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
 
 def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     """Loads and preprocesses the LLM model data from CSV.
-    
+
     Args:
         csv_path: Path to CSV file, or None to use package default
-        
+
     Returns:
         DataFrame with model configuration data
     """
@@ -1942,7 +2241,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             except Exception as e:
                 logger.warning(f"Failed to load CSV from {csv_path}: {e}, trying package default")
                 csv_path = None
-    
+
     # If csv_path is None or loading failed, use package default
     if csv_path is None:
         try:
@@ -1953,7 +2252,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             logger.info("Loaded model data from package default")
         except Exception as e:
             raise FileNotFoundError(f"Failed to load default LLM model CSV from package: {e}")
-    
+
     try:
         # Basic validation and type conversion
         required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output', 'reasoning_type']
@@ -2012,6 +2311,55 @@ _PROVIDER_PREFIX_TO_PROVIDER = {
     "anthropic/": "Anthropic",
     "azure_ai/": "Azure AI",
 }
+
+
+def _is_permanent_invalid_request_error(exc: Exception) -> bool:
+    """Classify whether an exception represents a permanent parameter
+    rejection that retrying through other candidate models cannot fix.
+
+    Used by the candidate-iteration loop in :func:`llm_invoke` to fast-
+    fail the cascade when the request shape itself is wrong (e.g. an
+    unsupported parameter for the model class). Every other provider that
+    relays the same model family will reject the same shape identically,
+    so cascading through them wastes time and hides the root error.
+
+    Intentionally conservative — only clear "wrong parameter" cases are
+    treated as permanent. Context-window errors are explicitly retryable
+    (a different model may have a larger context). Rate limits, transient
+    5xxs, auth failures, and everything else fall through to the existing
+    retry logic.
+
+    Concrete trigger that motivated this: Anthropic enforcing
+    ``thinking.type.adaptive`` for Opus 4.7 on 2026-05-23, where the
+    legacy ``thinking.type.enabled`` shape produces a 400 ``not supported
+    for this model``. Retrying through Vertex/Bedrock/Azure/OpenRouter/
+    Perplexity hits the same Anthropic API and the same 400, every time.
+    """
+    try:
+        import litellm
+    except ImportError:
+        return False
+
+    # Context-window-exceeded is a BadRequestError subclass but IS
+    # retryable: a different model with a larger context may succeed.
+    ctx_err = getattr(litellm.exceptions, "ContextWindowExceededError", None)
+    if ctx_err is not None and isinstance(exc, ctx_err):
+        return False
+
+    bad_req = getattr(litellm.exceptions, "BadRequestError", None)
+    if bad_req is not None and not isinstance(exc, bad_req):
+        return False
+
+    msg = str(exc).lower()
+    # Conservative allow-list of phrases that indicate a permanent
+    # parameter rejection. Extend cautiously — when in doubt, retry.
+    permanent_markers = (
+        "is not supported for this model",
+        "unsupported parameter",
+        "thinking.type",
+        "output_config.effort",
+    )
+    return any(marker in msg for marker in permanent_markers)
 
 
 def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
@@ -2146,8 +2494,10 @@ def _select_model_candidates(
 
     if strength == 0.5:
         # target_model = base_model
-        # Sort remaining by ELO descending as fallback
-        available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
+        # Sort remaining by ELO closest to base (continuity limit of the > 0.5 branch:
+        # as strength → 0.5 from above, the interpolated target ELO collapses to base_elo).
+        base_elo = base_model['coding_arena_elo']
+        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - base_elo)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
         # Ensure effective base model is first if it exists (supports surrogate base)
         effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
@@ -2212,48 +2562,48 @@ def _select_model_candidates(
 def _sanitize_api_key(key_value: str) -> str:
     """
     Sanitize API key by removing whitespace and carriage returns.
-    
+
     This fixes WSL environment issues where API keys may contain trailing \r characters
     that make them invalid for HTTP headers.
-    
+
     Args:
         key_value: The raw API key value from environment
-        
+
     Returns:
         Sanitized API key with whitespace and carriage returns removed
-        
+
     Raises:
         ValueError: If the API key format is invalid after sanitization
     """
     if not key_value:
         return key_value
-    
+
     # Strip all whitespace including carriage returns, newlines, etc.
     sanitized = key_value.strip()
-    
+
     # Additional validation: ensure no remaining control characters
     if any(ord(c) < 32 for c in sanitized):
         logger.warning("API key contains control characters that may cause issues")
         # Remove any remaining control characters
         sanitized = ''.join(c for c in sanitized if ord(c) >= 32)
-    
+
     # Validate API key format (basic checks)
     if sanitized:
         # Check for common API key patterns
         if len(sanitized) < 10:
             logger.warning(f"API key appears too short ({len(sanitized)} characters) - may be invalid")
-        
+
         # Check for invalid characters in API keys (should be printable ASCII)
         if not all(32 <= ord(c) <= 126 for c in sanitized):
             logger.warning("API key contains non-printable characters")
-            
+
         # Check for WSL-specific issues (detect if original had carriage returns)
         if key_value != sanitized and '\r' in key_value:
             if _is_wsl_environment():
                 logger.info("Detected and fixed WSL line ending issue in API key")
             else:
                 logger.info("Detected and fixed line ending issue in API key")
-    
+
     return sanitized
 
 
@@ -2309,11 +2659,15 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     api_key_field = str(model_info.get('api_key', '') or '')
 
     if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
-        # GitHub Copilot models use an interactive OAuth device flow managed by
-        # litellm.  In non-interactive (--force) mode we must skip the model
-        # unless the user has already authenticated (token file exists).
+        # github_copilot uses litellm-managed device-flow OAuth. If the
+        # cached token file is missing, litellm hangs waiting for a human
+        # to complete the device flow — never a viable code path in server
+        # / non-interactive contexts. Skip the model with a clear hint
+        # regardless of PDD_FORCE; CLI users who set up Copilot via
+        # ``pdd setup`` will have the token file present and proceed
+        # normally. Caller is _ensure_api_key in llm_invoke.py.
         model_name = str(model_info.get('model', ''))
-        if model_name.startswith("github_copilot/") and os.environ.get('PDD_FORCE'):
+        if model_name.startswith("github_copilot/"):
             token_dir = Path(os.environ.get(
                 'GITHUB_COPILOT_TOKEN_DIR',
                 str(Path.home() / ".config" / "litellm" / "github_copilot"),
@@ -2322,8 +2676,9 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
             token_path = token_dir / api_key_file
             if not token_path.exists():
                 logger.warning(
-                    f"Skipping GitHub Copilot model '{model_name}' in --force mode: "
-                    f"no OAuth token found at {token_path}. Run 'pdd setup' to authenticate."
+                    f"Skipping GitHub Copilot model '{model_name}': "
+                    f"no OAuth token at {token_path}. "
+                    f"Run 'pdd setup' to authenticate Copilot, or unset it to skip silently."
                 )
                 return False
         if verbose:
@@ -2907,7 +3262,7 @@ def llm_invoke(
     """
     # Set verbose logging if requested
     set_verbose_logging(verbose)
-    
+
     if verbose:
         logger.debug("llm_invoke start - Arguments received:")
         logger.debug(f"  prompt: {'provided' if prompt else 'None'}")
@@ -2980,6 +3335,69 @@ def llm_invoke(
         },
     )
 
+    # Track chronological history of every model attempted across cloud and
+    # local fallback so callers (and `track_cost`) can record the full path.
+    attempted_models: List[str] = []
+
+    # Snapshot any attempts already accumulated on `ctx.obj` by earlier
+    # `llm_invoke` calls within the same tracked CLI command (e.g. `pdd
+    # generate` invoking code generation followed by postprocess). Each call
+    # contributes only its own attempts to `attempted_models`; we publish
+    # `_prior_ctx_attempts + list(attempted_models)` to ctx.obj so the
+    # cross-call audit log is the union and earlier-call fallbacks survive
+    # whatever track_cost ultimately reads.
+    #
+    # We intentionally do NOT rewind ctx.obj on failure. Issue #897 frames
+    # `attempted_models` as a chronological audit log of EVERY model the
+    # command tried, including ones that were "attempted and then
+    # abandoned" — that's the whole point of the column. Rewinding on
+    # exception would silently drop the very rows users opened the
+    # feature to investigate (a failed substep recovered by an outer
+    # catch, e.g. `auto_include` falling back to `summary_model` when
+    # the final auto_include_LLM call errors). The `model` column names
+    # the model that produced the output; `attempted_models` is the
+    # record of what was tried — they may legitimately diverge.
+    _prior_ctx_attempts: List[str] = []
+    try:
+        import click as _click_for_prior  # local import; llm_invoke must work without click
+        _ctx_for_prior = _click_for_prior.get_current_context(silent=True)
+        if (
+            _ctx_for_prior is not None
+            and isinstance(_ctx_for_prior.obj, dict)
+        ):
+            _existing = _ctx_for_prior.obj.get('attempted_models')
+            if isinstance(_existing, list):
+                _prior_ctx_attempts = list(_existing)
+    except Exception:
+        pass
+
+    def _publish_attempted_models() -> None:
+        """Best-effort: mirror attempted_models onto Click ctx.obj for track_cost.
+
+        Preserves attempts contributed by earlier llm_invoke calls within the
+        same tracked command by writing `_prior_ctx_attempts + list(attempted_models)`
+        rather than overwriting with just the current call's history.
+        """
+        try:
+            import click as _click  # local import; llm_invoke must work without click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                click_ctx.obj['attempted_models'] = _prior_ctx_attempts + list(attempted_models)
+        except Exception:
+            pass
+
+    def _record_attempt(model_label: str) -> None:
+        """Append a model attempt and publish to Click context."""
+        attempted_models.append(model_label)
+        _publish_attempted_models()
+
     if use_cloud:
         from rich.console import Console
         console = Console()
@@ -2989,7 +3407,12 @@ def llm_invoke(
 
         try:
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
-            return _llm_invoke_cloud(
+            # Record the cloud attempt BEFORE the request so cloud-then-local
+            # fallbacks preserve the cloud attempt in attempted_models even
+            # when the cloud raises before returning a model name.
+            _cloud_placeholder = f"cloud:{DEFAULT_BASE_MODEL}" if DEFAULT_BASE_MODEL else "cloud:default"
+            _record_attempt(_cloud_placeholder)
+            cloud_result = _llm_invoke_cloud(
                 prompt=prompt,
                 input_json=input_json,
                 strength=strength,
@@ -3002,6 +3425,18 @@ def llm_invoke(
                 messages=messages,
                 language=language,
             )
+            # On success, replace the placeholder with the cloud-returned
+            # modelName so the history reflects the actual model used.
+            try:
+                cloud_model_name = cloud_result.get("model_name") if isinstance(cloud_result, dict) else None
+            except Exception:
+                cloud_model_name = None
+            if cloud_model_name and attempted_models:
+                attempted_models[-1] = str(cloud_model_name)
+                _publish_attempted_models()
+            if isinstance(cloud_result, dict):
+                cloud_result.setdefault("attempted_models", list(attempted_models))
+            return cloud_result
         except CloudFallbackError as e:
             # Notify user and fall back to local execution
             console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
@@ -3012,9 +3447,19 @@ def llm_invoke(
                 **_safe_error_fields(e),
             )
             # Continue to local execution below
-        except InsufficientCreditsError:
-            # Re-raise credit errors - user needs to know
+        except InsufficientCreditsError as exc:
+            # Re-raise credit errors - user needs to know. Attach the
+            # per-call attempts to the exception (parity with the terminal
+            # RuntimeError below) — worker threads (Click context is
+            # thread-local; workers can't read ctx.obj) recover the
+            # cloud attempt via getattr(e, "attempted_models", None).
+            # Main-thread callers see the same attempts already on
+            # ctx.obj because we don't rewind on failure.
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+            try:
+                setattr(exc, "attempted_models", list(attempted_models))
+            except Exception:
+                pass
             raise
         except CloudInvocationError as e:
             # Non-recoverable cloud error - notify and fall back
@@ -3063,6 +3508,15 @@ def llm_invoke(
             "llm_invoke.model_selection_error",
             **_safe_error_fields(e),
         )
+        # Attach attempts to the exception so worker threads can recover
+        # the cloud placeholder (if cloud was attempted before local
+        # model loading failed) via getattr — parity with the terminal
+        # RuntimeError and InsufficientCreditsError paths. Main-thread
+        # callers see the same attempts already on ctx.obj.
+        try:
+            setattr(e, "attempted_models", list(attempted_models))
+        except Exception:
+            pass
         raise
 
     _emit_llm_attribution(
@@ -3088,7 +3542,7 @@ def llm_invoke(
         max_elo = model_df['coding_arena_elo'].max()
         base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
         base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
-        
+
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
             # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
@@ -3108,7 +3562,7 @@ def llm_invoke(
                 return max(0.5, min(1.0, 0.5 + rel * 0.5))
             else:
                 return 0.5
-        
+
         model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
         logger.info("Candidate models selected and ordered (with strength): %s", model_strengths_formatted) # CORRECTED
         logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
@@ -3120,18 +3574,18 @@ def llm_invoke(
             # Only print input_json if it was actually provided (not when messages were used)
             if input_json is not None:
                 logger.info("Input JSON:")
-                logger.info(input_json) 
+                logger.info(input_json)
             else:
                  logger.info("Input: Using pre-formatted 'messages'.")
         except Exception:
-            logger.info("Input JSON/Messages (fallback print):") 
+            logger.info("Input JSON/Messages (fallback print):")
             logger.info(input_json if input_json is not None else "[Messages provided directly]")
 
 
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
-    
+
     # Initialize variables for retry section
     response_format = None
     time_kwargs = {}
@@ -3148,6 +3602,12 @@ def llm_invoke(
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+
+        # Record this candidate before any pre-call validation/skip logic so
+        # models skipped mid-call (context window pre-check, missing api_key,
+        # github_copilot OAuth missing, auth-error skip, etc.) are still
+        # captured in the history.
+        _record_attempt(str(model_name_litellm))
 
         if verbose:
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
@@ -3685,6 +4145,7 @@ def llm_invoke(
                             'model_name': model_name_litellm,
                             'thinking_output': None,
                             'finish_reason': finish_reason,
+                            'attempted_models': list(attempted_models),
                         }
                     except Exception as e:
                         last_exception = e
@@ -3870,7 +4331,7 @@ def llm_invoke(
                                 )
                             except Exception:
                                 pass
-                        
+
                         # Check if raw_result is None (likely cached corrupted data)
                         if raw_result is None:
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
@@ -4025,7 +4486,7 @@ def llm_invoke(
                                         except ImportError:
                                             logger.warning("jsonschema not installed, skipping validation")
                                             parsed_result = json.dumps(raw_result)
-                                    
+
                                     if verbose:
                                         logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
@@ -4050,7 +4511,7 @@ def llm_invoke(
                                             try:
                                                 if verbose:
                                                     logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
-                                                
+
                                                 if output_pydantic:
                                                     parsed_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
                                                 else:
@@ -4322,7 +4783,7 @@ def llm_invoke(
                     logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         logger.info("[RESULT] Thinking Output:")
-                        logger.info(final_thinking) 
+                        logger.info(final_thinking)
 
                 # --- Print raw output before returning if verbose ---
                 if verbose:
@@ -4350,6 +4811,7 @@ def llm_invoke(
                     'model_name': model_name_litellm, # Actual model used
                     'thinking_output': final_thinking if final_thinking else None,
                     'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
+                    'attempted_models': list(attempted_models),
                 }
 
             # --- 6b. Handle Invocation Errors ---
@@ -4364,7 +4826,7 @@ def llm_invoke(
                     provider=str(provider),
                     **_safe_error_fields(e),
                 )
-                
+
                 # Check for WSL-specific issues in authentication errors
                 if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
                     logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
@@ -4372,7 +4834,7 @@ def llm_invoke(
                     logger.warning("[WSL AUTH ERROR] Try setting your API key again or check your .env file for line ending issues")
                     env_info = _get_environment_info()
                     logger.debug(f"Environment info: {env_info}")
-                    
+
                 if newly_acquired_keys.get(api_key_name):
                     logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
                     # Invalidate the key in env for this session to force re-prompt on retry
@@ -4478,6 +4940,20 @@ def llm_invoke(
                 # Log more details in verbose mode
                 if verbose:
                     logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
+                # Fast-fail on permanent parameter errors: every other
+                # candidate that proxies the same model family will reject
+                # the same shape identically. Surface the root error
+                # instead of burying it under cascade noise (and avoid
+                # hanging on github_copilot device-flow OAuth deeper in
+                # the candidate list). See
+                # :func:`_is_permanent_invalid_request_error` for the
+                # conservative allow-list of phrases this matches.
+                if _is_permanent_invalid_request_error(e):
+                    logger.error(
+                        f"[FAST-FAIL] Permanent invalid_request_error from "
+                        f"{model_name_litellm}; not cascading through other candidates."
+                    )
+                    raise
                 break # Break inner loop, try next model candidate
 
         # If the inner loop was broken (not by success), continue to the next candidate model
@@ -4499,7 +4975,18 @@ def llm_invoke(
         failure_reason="all_candidate_models_failed",
         last_error_type=type(last_exception).__name__ if last_exception else None,
     )
-    raise RuntimeError(error_message) from last_exception
+    # Attach the per-call attempts to the terminal exception so worker
+    # threads (Click context is thread-local; workers can't read ctx.obj)
+    # can recover the full history via getattr(exc, "attempted_models",
+    # None). Main-thread callers see the same attempts already on
+    # ctx.obj because we don't rewind on failure — `attempted_models`
+    # is a chronological audit log per issue #897.
+    terminal_error = RuntimeError(error_message)
+    try:
+        setattr(terminal_error, "attempted_models", list(attempted_models))
+    except Exception:
+        pass
+    raise terminal_error from last_exception
 
 # --- Example Usage (Optional) ---
 if __name__ == "__main__":
