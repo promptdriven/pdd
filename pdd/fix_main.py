@@ -202,6 +202,7 @@ def fix_main(
                     "temperature": temperature,
                     "time": time if time is not None else 0.25,
                     "verbose": verbose,
+                    "protectTests": protect_tests or bool(_fix_focused_slices),
                 }
 
                 headers = {
@@ -421,7 +422,7 @@ def fix_main(
                 temperature=temperature,
                 time=time, # Pass time to fix_errors_from_unit_tests
                 verbose=verbose,
-                protect_tests=protect_tests
+                protect_tests=protect_tests or bool(_local_focused_slices)
             )
             # Reconstruct full file when focused repair was used.
             if _local_focused_slices and fixed_code and update_code:
