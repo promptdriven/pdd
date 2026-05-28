@@ -499,3 +499,17 @@ class TestCoverageCliRegistration:
         assert result.returncode == 0
         payload = json.loads(result.stdout)
         assert isinstance(payload, dict)
+
+    def test_checkup_coverage_help_renders_coverage_command_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            ["coverage", "--help"],
+            obj={"quiet": True},
+        )
+        assert result.exit_code == 0
+        assert "--json" in result.output
+        assert "--stories-dir, --stories" in result.output
+        assert "--tests-dir" in result.output
+        # Regression: generic checkup options should not appear here.
+        assert "--review-loop" not in result.output

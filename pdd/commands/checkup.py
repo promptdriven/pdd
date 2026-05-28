@@ -360,7 +360,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in {"lint", "contract", "contracts"}:
+    if show_help and target not in {"lint", "contract", "contracts", "coverage"}:
         click.echo(ctx.command.get_help(ctx))
         return None
 
@@ -415,6 +415,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             raise click.exceptions.Exit(exit_code)
         return None
     if target == "coverage":
+        if show_help:
+            click.echo(
+                coverage_cmd.get_help(click.Context(coverage_cmd, info_name="pdd checkup coverage"))
+            )
+            return None
         exit_code = coverage_cmd.main(
             args=list(ctx.args),
             prog_name="pdd checkup coverage",
