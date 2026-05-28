@@ -1404,8 +1404,13 @@ class TestStateIdentityPrHeadSha:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             executed_steps.append(step_num)
-            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                # Clean Step 5 so the --no-fix Step-5 gate passes; this test
+                # exercises the resume cache-identity guard, not Step 5.
+                return (True, _step5_pass_output(), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         with patch(
             "pdd.agentic_checkup_orchestrator.load_workflow_state",
