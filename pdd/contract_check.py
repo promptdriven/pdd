@@ -24,15 +24,30 @@ from pathlib import Path
 from typing import Optional
 
 from .contract_ir import (
+    COVERAGE_REF_RE as _COVERAGE_REF_RE,
     PromptContractIR,
     Rule,
+    VAGUE_TERMS,
     Waiver,
     extract_rules as _extract_rules,
     extract_sections as _extract_sections,
     extract_waivers as _extract_waivers,
+    iter_covers_refs,
     parse_prompt_contracts,
 )
-from .prompt_lint import VAGUE_TERMS
+
+__all__ = [
+    "ContractIssue",
+    "ContractResult",
+    "Rule",
+    "Waiver",
+    "_extract_rules",
+    "_extract_waivers",
+    "check_directory",
+    "check_prompt",
+    "check_stories",
+    "run_llm_ambiguity_pass",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -55,16 +70,6 @@ MODALS: frozenset[str] = frozenset({
 # Ordered longest-first so "MUST NOT" matches before "MUST"
 _MODAL_PATTERN = re.compile(
     r"\b(" + "|".join(re.escape(m) for m in sorted(MODALS, key=len, reverse=True)) + r")\b",
-)
-
-# ---------------------------------------------------------------------------
-# Rule ID patterns (shared with coverage_contracts via contract_ir)
-# ---------------------------------------------------------------------------
-
-from .contract_ir import (  # noqa: E402  (regex aliases co-located with parsers)
-    COVERAGE_REF_RE as _COVERAGE_REF_RE,
-    CROSS_MODULE_REF_RE as _CROSS_MODULE_REF_RE,
-    iter_covers_refs,
 )
 
 # Canonical explicit IDs (both R1 and R-001 forms supported):
@@ -263,7 +268,7 @@ def _check_vague_terms(
 ) -> list[ContractIssue]:
     """
     Warn when a rule line uses a known vague phrase not covered by <vocabulary>.
-    Reuses the VAGUE_TERMS frozenset and vocabulary suppression from prompt_lint.
+    Flag vague phrases in <contract_rules> not defined in <vocabulary>.
     """
     issues: list[ContractIssue] = []
     _vague_pat = re.compile(
@@ -383,6 +388,20 @@ def _check_coverage_entries(
     return issues
 
 
+def _covered_rule_ids_from_coverage(coverage_text: str) -> set[str]:
+    """Return rule IDs with leading <coverage> entries (not incidental mentions)."""
+    covered_ids: set[str] = set()
+    for line in coverage_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        id_match = _COVERAGE_REF_RE.match(stripped.lstrip("-* "))
+        if not id_match:
+            continue
+        covered_ids.add(id_match.group(1).upper())
+    return covered_ids
+
+
 def _check_must_not_coverage(
     rules: list[Rule],
     coverage_text: str,
@@ -392,9 +411,7 @@ def _check_must_not_coverage(
     Only fires when a <coverage> section is present at all.
     """
     issues: list[ContractIssue] = []
-    covered_ids: set[str] = set()
-    for coverage_match in _COVERAGE_REF_RE.finditer(coverage_text):
-        covered_ids.add(coverage_match.group(1).upper())
+    covered_ids = _covered_rule_ids_from_coverage(coverage_text)
 
     for rule in rules:
         if not rule.is_must_not:
@@ -611,7 +628,7 @@ def _check_story_covers(
 # Top-level check functions
 # ---------------------------------------------------------------------------
 
-def _check_unknown_test_refs(
+def _check_unknown_test_refs(  # pylint: disable=too-many-branches
     coverage_text: str,
     known_ids: set[str],
     prompt_path: Path,
@@ -670,7 +687,11 @@ def _check_unknown_test_refs(
     return issues
 
 
-def check_prompt_from_ir(ir: PromptContractIR, *, strict: bool = False) -> ContractResult:  # pylint: disable=too-many-locals
+def check_prompt_from_ir(  # pylint: disable=too-many-locals,invalid-name
+    ir: PromptContractIR,
+    *,
+    strict: bool = False,
+) -> ContractResult:
     """Run deterministic checks on a parsed PromptContractIR."""
     result = ContractResult(path=ir.path)
 
@@ -729,15 +750,15 @@ def check_prompt_from_ir(ir: PromptContractIR, *, strict: bool = False) -> Contr
     return result
 
 
-def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
+def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:  # pylint: disable=invalid-name
     """
     Run all deterministic checks on a single prompt file.
 
     Returns a ContractResult with zero issues for prompts that have no
     contract sections (legacy prompts without structure are never hard-failed).
     """
-    ir = parse_prompt_contracts(path)
-    return check_prompt_from_ir(ir, strict=strict)
+    parsed = parse_prompt_contracts(path)
+    return check_prompt_from_ir(parsed, strict=strict)
 
 
 def check_directory(directory: Path, *, strict: bool = False) -> list[ContractResult]:
@@ -748,7 +769,7 @@ def check_directory(directory: Path, *, strict: bool = False) -> list[ContractRe
     return results
 
 
-def check_stories(  # pylint: disable=too-many-locals
+def check_stories(  # pylint: disable=too-many-locals,invalid-name
     stories_dir: Path,
     prompts_dir: Optional[Path] = None,
     *,
@@ -769,9 +790,9 @@ def check_stories(  # pylint: disable=too-many-locals
     if prompts_dir and prompts_dir.exists():
         for prompt_path in prompts_dir.rglob("*.prompt"):
             try:
-                ir = parse_prompt_contracts(prompt_path)
-                if ir.has_contract_rules:
-                    prompt_id_map[prompt_path.name] = ir.known_rule_ids
+                parsed = parse_prompt_contracts(prompt_path)
+                if parsed.has_contract_rules:
+                    prompt_id_map[prompt_path.name] = parsed.known_rule_ids
             except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 pass
 
@@ -824,7 +845,6 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
     """
     try:
         from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
-        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
     except ImportError:
         logger.warning("LLM dependencies not available; skipping ambiguity pass.")
         return []
@@ -849,10 +869,10 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
             Path(__file__).parent / "prompts" / "contract_check_LLM.prompt"
         )
         template = prompt_template_path.read_text(encoding="utf-8")
+        # Keep lint read-only: do not preprocess (would execute <shell> in inspected content).
         filled = template.replace("{contract_content}", rules_text).replace(
             "{vague_terms_list}", ", ".join(found_terms)
         )
-        filled = preprocess(filled, recursive=False, double_curly_brackets=False)
 
         result = llm_invoke(
             messages=[{"role": "user", "content": filled}],

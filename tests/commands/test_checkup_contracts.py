@@ -17,6 +17,14 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "contract_check"
 REPO_ROOT = Path(__file__).parents[2]
 
 
+def test_checkup_help_without_target() -> None:
+    """``pdd checkup --help`` must work (contract dispatch must not break it)."""
+    result = CliRunner().invoke(checkup, ["--help"], obj={"quiet": True})
+    assert result.exit_code == 0
+    assert "checkup" in result.output.lower()
+    assert "contract" in result.output.lower()
+
+
 def test_contracts_check_top_level_alias_json() -> None:
     """``pdd contracts check`` mirrors ``pdd checkup contract check``."""
     result = CliRunner().invoke(
@@ -71,6 +79,32 @@ def test_checkup_contract_check_strict_is_forwarded() -> None:
     assert isinstance(json.loads(result.output), list)
 
 
+def test_checkup_contract_check_help_renders_and_exits_zero() -> None:
+    """The documented canonical help path must work:
+
+    PDD_AUTO_UPDATE=false PDD_PATH=$PWD/pdd python -m pdd checkup contract check --help
+    """
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDD_PATH": str(REPO_ROOT / "pdd"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PDD_AUTO_UPDATE": "false",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pdd", "checkup", "contract", "check", "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "Usage: pdd checkup contract check" in result.stdout
+    assert "Missing argument 'TARGET'" not in result.stdout
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "expected_exit_code"),
     [("valid_contract_python.prompt", 0), ("missing_modal_python.prompt", 1)],
@@ -83,7 +117,7 @@ def test_checkup_contract_check_real_cli_json_stdout_is_parseable_only(
         {
             "PDD_PATH": str(REPO_ROOT / "pdd"),
             "PYTHONPATH": str(REPO_ROOT),
-            "PDD_AUTO_UPDATE": "true",
+            "PDD_AUTO_UPDATE": "false",
         }
     )
     result = subprocess.run(

@@ -28,21 +28,6 @@ import pytest
 # Mark all tests in this module as e2e (slow, uses real LLM)
 pytestmark = pytest.mark.e2e
 
-RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
-
-
-def _skip_unless_real_llm() -> None:
-    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
-        pytest.skip(
-            "E2E operation logging tests require network/API access; set "
-            "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
-        )
-
-
-@pytest.fixture(autouse=True)
-def _require_real_llm_for_e2e() -> None:
-    _skip_unless_real_llm()
-
 
 class TestOperationLoggingE2E:
     """E2E tests verifying CLI commands log with invocation_mode='manual'."""

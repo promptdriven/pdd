@@ -305,7 +305,7 @@ from .prompt import prompt_lint
 )
 @click.pass_context
 @track_cost
-def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,unknown-option-value
+def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
     validate_arch_includes: bool,
@@ -360,7 +360,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
-    if show_help and target != "lint":
+    if show_help and target not in {"lint", "contract", "contracts"}:
         click.echo(ctx.command.get_help(ctx))
         return None
 
@@ -382,6 +382,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if exit_code:
             raise click.exceptions.Exit(exit_code)
         return None
+
     if target in {"contract", "contracts"}:
         contract_args = list(ctx.args)
         if strict:
@@ -391,6 +392,19 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 contract_args.insert(1, "--strict")
             else:
                 contract_args.insert(0, "--strict")
+        if show_help:
+            # Because `checkup` owns `--help` (add_help_option=False) Click will eagerly
+            # consume a trailing `--help` and not forward it to `contracts`. For the
+            # documented canonical path `pdd checkup contract check --help`, render the
+            # `contracts check` help directly and exit 0.
+            if not contract_args or contract_args[:1] == ["check"]:
+                contracts_check_cmd = contracts_cli.get_command(ctx, "check")
+                click.echo(
+                    contracts_check_cmd.get_help(
+                        click.Context(contracts_check_cmd, info_name=f"pdd checkup {target} check")
+                    )
+                )
+                return None
         exit_code = contracts_cli.main(
             args=contract_args,
             prog_name=f"pdd checkup {target} check",
