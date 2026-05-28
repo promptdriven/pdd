@@ -73,7 +73,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 
 import pytest
 
@@ -567,7 +567,7 @@ def test_run_report_clears_via_clear_run_report(tmp_path: Path) -> None:
     with patch.object(ms, "clear_run_report") as mock_clear, \
          patch.object(ms, "save_fingerprint"):
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
-    mock_clear.assert_called_once_with("demo", "python")
+    mock_clear.assert_called_once_with("demo", "python", paths=ANY)
     assert result.stages["run_report"].status == "ok"
 
 
