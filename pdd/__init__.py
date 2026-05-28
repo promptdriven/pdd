@@ -14,6 +14,12 @@ def _load_package_version() -> str:
 
 __version__ = _load_package_version()
 
+
+def get_version() -> str:
+    """Return the installed pdd-cli distribution version."""
+    return _load_package_version()
+
+
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
 # operations. The module should have a large context window and be affordable.

@@ -13,6 +13,25 @@ from pdd.commands.modify import change
 from pdd.commands.utility import verify
 
 
+def test_generate_evidence_records_default_output_path(tmp_path) -> None:
+    prompt = tmp_path / "item_python.prompt"
+    prompt.write_text("prompt", encoding="utf-8")
+    default_output = str(tmp_path / "pdd" / "item.py")
+    with patch("pdd.commands.generate.code_generator_main", return_value=("code", False, 0.1, "model")), \
+         patch(
+             "pdd.commands.generate.resolve_generate_output_paths",
+             return_value=[default_output],
+         ), \
+         patch("pdd.commands.generate.write_evidence_manifest") as record:
+        result = CliRunner().invoke(
+            generate,
+            [str(prompt), "--evidence"],
+            obj={"temperature": 0.0, "quiet": True},
+        )
+    assert result.exit_code == 0, result.output
+    assert record.call_args.kwargs["output_files"] == [default_output]
+
+
 def test_generate_evidence_records_completed_output(tmp_path) -> None:
     prompt = tmp_path / "item_python.prompt"
     output = tmp_path / "item.py"
