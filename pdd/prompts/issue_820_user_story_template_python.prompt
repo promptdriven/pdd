@@ -56,11 +56,12 @@ R4 - MUST NOT → Negative Cases hint
 When seeded rules include modal `MUST NOT`, the generator MUST add at least one bullet under
 `## Negative Cases` naming the forbidden outcome (derived from rule text, not invented APIs).
 
-R5 - Oracle / Non-Oracle defaults
-The generator MUST emit non-empty starter bullets under `## Oracle` and `## Non-Oracle`
-(issue examples: error type, state transition, external call presence, value shape;
-non-oracle: helper names, internal structure, irrelevant ordering).
-Do not call an LLM for story generation; remain deterministic.
+R5 - Oracle and Non-Oracle defaults
+The generator MUST emit non-empty starter bullets under `## Oracle` and `## Non-Oracle`.
+Oracle starter examples MUST include error type, state transition, external call presence,
+and returned value shape. Non-Oracle starter examples MUST include private helper names,
+internal class structure, and deterministic but irrelevant ordering.
+The generator MUST NOT call an LLM for story generation; it MUST remain deterministic.
 
 R6 - Backward compatibility
 `discover_story_files`, `cache_story_prompt_links`, `run_user_story_tests`, and
@@ -70,13 +71,14 @@ validation. Do not add hard failures in `user_story_tests.py` for absent Covers/
 R7 - Documentation alignment
 `README.md` (user story section) and `docs/prompting_guide.md` MUST state that user stories
 are example-level coverage for contract rules and point to `## Covers`.
-Where the guide uses `## Forbidden Outcomes`, add a one-line note that issue #820 and the
-on-disk template use `## Negative Cases` as the canonical heading (same intent).
+When the prompting guide documents `## Forbidden Outcomes`, the change MUST add a one-line
+note that the canonical template and `pdd test` story generation use `## Negative Cases`
+with the same intent.
 
 R8 - Preservation
-When editing `pdd/user_story_tests.py`, preserve existing comments, docstrings, and behavior
-outside story rendering per issue #926. Keep lazy `change_main` import and `skip_user_stories`
-hygiene unchanged.
+When editing `pdd/user_story_tests.py`, the change MUST preserve existing comments,
+docstrings, and behavior outside story rendering per issue #926.
+The change MUST keep lazy `change_main` import and `skip_user_stories` hygiene unchanged.
 </contract_rules>
 
 <vocabulary>
