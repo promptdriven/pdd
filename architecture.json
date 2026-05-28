@@ -9381,7 +9381,7 @@
     "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
     "dependencies": [],
     "priority": 239,
-    "filename": "evidence_manifest_python.prompt",
+    "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [
       "module",

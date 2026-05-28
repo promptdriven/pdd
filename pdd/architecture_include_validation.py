@@ -123,9 +123,25 @@ def print_architecture_include_validation_warnings(*, quiet: bool, verbose: bool
 def _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path:
     """Resolve architecture ``filename`` to an on-disk path under the project."""
     rel = filename.replace("\\", "/").lstrip("/")
+    candidates: list[Path] = []
     if rel.startswith("prompts/"):
-        return (project_root / rel).resolve()
-    return (project_root / "prompts" / rel).resolve()
+        candidates.append(project_root / rel)
+    elif rel.startswith("pdd/prompts/"):
+        candidates.append(project_root / rel)
+    elif rel.startswith("pdd/") and rel.endswith(".prompt"):
+        candidates.append(project_root / rel)
+        candidates.append(project_root / "pdd" / "prompts" / Path(rel).name)
+    else:
+        candidates.append(project_root / "prompts" / rel)
+        candidates.append(project_root / "pdd" / "prompts" / rel)
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if resolved.is_file():
+            return resolved
+    return candidates[0].resolve()
 
 
 def resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path:
