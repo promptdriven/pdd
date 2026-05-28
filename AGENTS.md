@@ -22,3 +22,11 @@ Commitizen is configured for Conventional Commits; prefer messages like `feat: i
 
 ## Configuration & Secrets
 Run `pdd setup` once per machine to create `~/.pdd` credentials, and never commit keys or cache files (the repo `.gitignore` already excludes them). Use the public setup documentation to provision provider tokens. When recording logs for debugging, redact token strings and strip `litellm_cache.sqlite` before sharing artifacts.
+
+## Security & Prompt Injection Sanitization
+All agentic orchestrators (`change`, `bug`, `fix`, `test`, `checkup`, `sync`) route their inputs through `sanitize_agent_input(content, source)` in `pdd/agentic_common.py` before passing content to the agent. The utility detects and wraps two injection patterns:
+
+- **R-INJ1 (file-read injection):** A sentence appended at the end of a task prompt telling the agent to read a file named `.agentic_prompt_<hex>.txt`. Detected only in the trailing 500 characters of the prompt; mid-content occurrences are ignored. Matched text is wrapped with `[UNTRUSTED CONTENT: file-read-injection]...[/UNTRUSTED CONTENT]`.
+- **R-INJ2 (system-reminder injection):** `<system-reminder>...</system-reminder>` blocks embedded in tool results (grep output, search results, GitHub issue bodies). Each block is wrapped with `[UNTRUSTED CONTENT: system-reminder-injection]...[/UNTRUSTED CONTENT]`.
+
+Content is never silently stripped — wrapping preserves the original text with an explicit trust boundary signal so the agent can reason about the label. Each detection is logged via `console.print`. The two call sites in `run_agentic_task` are the `instruction` argument (source label `"task_prompt"`) and the `PDD_USER_FEEDBACK` env var value (source label `"user_feedback"`).

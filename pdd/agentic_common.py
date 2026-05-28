@@ -2070,6 +2070,67 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     return input_cost + cache_read_cost + cache_write_cost + output_cost
 
 
+# --- Prompt Injection Sanitization (Issue #996) ---
+
+_FILE_READ_INJECTION_RE = re.compile(
+    r'[Rr]ead\s+the\s+file\s+\.agentic_prompt_[0-9a-f]+\.txt'
+)
+_SYSTEM_REMINDER_RE = re.compile(
+    r'<system-reminder>.*?</system-reminder>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def sanitize_agent_input(content: str, source: str) -> Tuple[str, List[str]]:
+    """Detect and wrap prompt injection patterns before passing content to the agent.
+
+    Returns ``(sanitized_content, detections)`` where ``detections`` is a list
+    of short description strings for each injection found.
+
+    R-INJ1 (file-read injection): Scans the last 500 characters for a sentence
+    instructing the agent to read a ``.agentic_prompt_*.txt`` file.  Only
+    end-of-content occurrences are wrapped; mid-content occurrences are ignored.
+
+    R-INJ2 (system-reminder injection): Scans the full content for
+    ``<system-reminder>…</system-reminder>`` blocks and wraps each one.
+    Content is never silently stripped — wrapping preserves it with an explicit
+    trust-boundary signal.
+    """
+    detections: List[str] = []
+
+    def _wrap(match: re.Match, label: str) -> str:  # type: ignore[type-arg]
+        detections.append(f"{label} detected in {source}")
+        console.print(
+            f"[bold red]⚠ Prompt injection detected ({label}) in source {source!r}[/bold red]"
+        )
+        return f"[UNTRUSTED CONTENT: {label}]{match.group(0)}[/UNTRUSTED CONTENT]"
+
+    # R-INJ1: file-read injection — only flag when in the trailing 500 chars
+    tail_start = max(0, len(content) - 500)
+    tail = content[tail_start:]
+    new_tail = _FILE_READ_INJECTION_RE.sub(
+        lambda m: _wrap(m, "file-read-injection"), tail
+    )
+    sanitized = content[:tail_start] + new_tail
+
+    # R-INJ2: system-reminder injection — scan full content
+    sanitized = _SYSTEM_REMINDER_RE.sub(
+        lambda m: _wrap(m, "system-reminder-injection"), sanitized
+    )
+
+    return sanitized, detections
+
+
+def _format_injection_notice(detections: List[str]) -> str:
+    """Format a list of injection detections as a notice string to prepend to output."""
+    if not detections:
+        return ""
+    lines = ["⚠ Prompt injection detected and sanitized before agent execution:"]
+    for d in detections:
+        lines.append(f"  - {d}")
+    return "\n".join(lines) + "\n\n"
+
+
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -2131,10 +2192,16 @@ def run_agentic_task(
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
     prompt_path = cwd / prompt_filename
 
+    # Sanitize instruction for prompt injection patterns before passing to agent
+    instruction, instr_detections = sanitize_agent_input(instruction, "task_prompt")
+    all_detections: List[str] = list(instr_detections)
+
     # Inject user feedback from GitHub issue comments (set by GitHub App executor)
     user_feedback = os.environ.get("PDD_USER_FEEDBACK")
     feedback_section = ""
     if user_feedback:
+        user_feedback, fb_detections = sanitize_agent_input(user_feedback, "user_feedback")
+        all_detections.extend(fb_detections)
         feedback_section = (
             "\n\n## User Feedback\n"
             "The user provided the following feedback from a previous execution attempt. "
@@ -2333,7 +2400,8 @@ def run_agentic_task(
                             model=effective_model,
                             include_bodies=verbose,
                         )
-                        return True, output, cost, provider
+                        notice = _format_injection_notice(all_detections)
+                        return True, notice + output, cost, provider
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 # Issue #1376 codex round 2: log each failed attempt inside
@@ -2429,7 +2497,8 @@ def run_agentic_task(
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
-        return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
+        notice = _format_injection_notice(all_detections)
+        return False, notice + f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
 
     finally:
         # Cleanup prompt file
