@@ -804,7 +804,10 @@ def fix_error_loop(unit_test_file: str,
             break
 
         # Update unit test file if needed.
-        if updated_unit_test and not protect_tests:
+        # Skip when focused repair was used: the LLM only saw a slice of the
+        # test file, so writing fixed_unit_test would truncate the full file
+        # to just the failing subset.
+        if updated_unit_test and not protect_tests and not _focused:
             try:
                 # Ensure we have valid content even if the returned fixed_unit_test is empty
                 content_to_write = fixed_unit_test if fixed_unit_test else unit_test_contents
@@ -815,9 +818,9 @@ def fix_error_loop(unit_test_file: str,
             except Exception as e:
                 rprint(f"[red]Error writing updated unit test:[/red] {e}")
                 break
-        elif updated_unit_test and protect_tests:
+        elif updated_unit_test and (protect_tests or _focused):
             if verbose:
-                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
+                rprint("[yellow]Unit test update skipped (protect_tests=True or focused repair active).[/yellow]")
 
         # Update code file and run verification if needed.
         if updated_code:

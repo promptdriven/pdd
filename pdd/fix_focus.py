@@ -228,6 +228,11 @@ _TRACEBACK_FRAME = re.compile(
     r'^\s+File "[^"]+", line \d+, in (\w+)\s*$',
     re.MULTILINE,
 )
+# Variant that also captures the line number for line-based disambiguation.
+_TRACEBACK_FRAME_WITH_LINE = re.compile(
+    r'^\s+File "[^"]+", line (\d+), in (\w+)\s*$',
+    re.MULTILINE,
+)
 _NON_FUNC_NAMES = frozenset(
     {"<module>", "<listcomp>", "<dictcomp>", "<setcomp>", "<genexpr>", "<lambda>"}
 )
@@ -249,6 +254,64 @@ def extract_function_names_from_traceback(error: str) -> list[str]:
     if 1 <= len(names) <= 3:
         return names
     return []
+
+
+def _match_slices_to_traceback(
+    all_slices: list[FunctionSlice],
+    error: str,
+    target_names: list[str],
+) -> list[FunctionSlice]:
+    """
+    Select slices matching *target_names*, using traceback line numbers to
+    disambiguate when multiple slices share the same simple name (e.g. two
+    classes both have a ``run`` method).
+
+    For each target name with multiple candidates, only slices whose
+    ``start_line..end_line`` range contains a traceback line number are
+    selected.  If no line number resolves the ambiguity, all candidates are
+    included so the caller falls back gracefully.
+    """
+    # Build name -> [lineno, ...] from traceback frames.
+    name_to_linenos: dict[str, list[int]] = {}
+    for m in _TRACEBACK_FRAME_WITH_LINE.finditer(error):
+        name = m.group(2)
+        if name in target_names and name not in _NON_FUNC_NAMES:
+            name_to_linenos.setdefault(name, []).append(int(m.group(1)))
+
+    matched: list[FunctionSlice] = []
+    seen: set[str] = set()
+
+    for name in target_names:
+        candidates = [s for s in all_slices if s.name == name]
+        if not candidates:
+            continue
+        if len(candidates) == 1:
+            slc = candidates[0]
+            if slc.qualname not in seen:
+                matched.append(slc)
+                seen.add(slc.qualname)
+            continue
+        # Multiple candidates share the same simple name (class methods).
+        # Try line-based disambiguation.
+        linenos = name_to_linenos.get(name, [])
+        line_matched = [
+            c for c in candidates
+            if any(c.start_line <= ln <= c.end_line for ln in linenos)
+            and c.qualname not in seen
+        ]
+        if line_matched:
+            for slc in line_matched:
+                matched.append(slc)
+                seen.add(slc.qualname)
+        else:
+            # No useful line info: include all candidates (reconstruct_code
+            # will handle them correctly via qualname matching).
+            for c in candidates:
+                if c.qualname not in seen:
+                    matched.append(c)
+                    seen.add(c.qualname)
+
+    return matched
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +502,9 @@ def prepare_focused_inputs(
         if not all_slices:
             return None
 
-        matched = [s for s in all_slices if s.name in target_names]
+        # Use traceback line numbers to disambiguate same-named methods across
+        # different classes before falling back to simple name matching.
+        matched = _match_slices_to_traceback(all_slices, error, target_names)
         if not matched:
             return None
 
@@ -494,9 +559,14 @@ def reconstruct_code(
 
         # Process in reverse line order to prevent offset drift.
         for slc in sorted(slices, key=lambda s: s.start_line, reverse=True):
-            # Prefer qualname match (handles class stubs and avoids collisions);
-            # fall back to simple name match for plain top-level returns.
-            fixed_dedented = fixed_by_qualname.get(slc.qualname) or fixed_by_name.get(slc.name)
+            # Prefer qualname match (handles class stubs and avoids collisions).
+            # Only fall back to simple name for top-level functions (where
+            # qualname == name): never for class methods, because two classes
+            # can share the same method name and the wrong fix would be spliced
+            # into the non-targeted class.
+            fixed_dedented = fixed_by_qualname.get(slc.qualname)
+            if fixed_dedented is None and slc.qualname == slc.name:
+                fixed_dedented = fixed_by_name.get(slc.name)
             if fixed_dedented is None:
                 continue
 

@@ -8,6 +8,7 @@ from pdd.fix_focus import (
     _extract_test_slices,
     _format_slice_for_llm,
     _get_all_functions,
+    _match_slices_to_traceback,
     build_skeleton,
     extract_function_names_from_traceback,
     is_large,
@@ -340,3 +341,88 @@ def test_reconstruct_returns_original_on_syntax_error_in_fixed():
     slices = _get_all_functions(original)
     result = reconstruct_code(original, "def foo(:\n    bad\n", slices)
     assert result == original
+
+
+# ---------------------------------------------------------------------------
+# reconstruct_code – no cross-class splicing when both slices are selected
+# ---------------------------------------------------------------------------
+
+def test_reconstruct_no_cross_class_splice_when_both_selected():
+    """
+    Regression test: when A.run and B.run are both in slices but the LLM only
+    returns a fix for A.run, B.run must NOT be overwritten with A.run's body.
+    Previously the simple-name fallback in reconstruct_code caused this bug.
+    """
+    original = textwrap.dedent("""\
+        class A:
+            def run(self):
+                return 1
+
+        class B:
+            def run(self):
+                return 2
+    """)
+    slices = _get_all_functions(original)
+    # Both A.run and B.run are in slices (simulates the fast-path selecting all
+    # slices whose .name matches the traceback name "run").
+    assert len(slices) == 2
+
+    # LLM only returns a fix for A.run (one class stub).
+    fixed_focused = textwrap.dedent("""\
+        class A:
+            def run(self):
+                return 99
+    """)
+    result = reconstruct_code(original, fixed_focused, slices)
+
+    lines = result.splitlines()
+    # A.run updated
+    assert any("return 99" in l for l in lines), "A.run fix not applied"
+    # B.run must NOT be overwritten
+    assert any("return 2" in l for l in lines), "B.run was incorrectly overwritten"
+
+
+# ---------------------------------------------------------------------------
+# _match_slices_to_traceback – line-based disambiguation
+# ---------------------------------------------------------------------------
+
+def test_match_slices_disambiguates_by_line():
+    """
+    When A.run is at lines 2-3 and B.run is at lines 6-7, a traceback
+    pointing to line 3 (inside A.run) should select only A.run.
+    """
+    src = textwrap.dedent("""\
+        class A:
+            def run(self):
+                return 1
+
+        class B:
+            def run(self):
+                return 2
+    """)
+    all_slices = _get_all_functions(src)
+    # Traceback line 3 falls inside A.run; line 3 is "return 1" inside A.
+    traceback = '  File "foo.py", line 3, in run\nAssertionError'
+    matched = _match_slices_to_traceback(all_slices, traceback, ["run"])
+    assert len(matched) == 1
+    assert matched[0].qualname == "A.run"
+
+
+def test_match_slices_falls_back_to_all_when_no_line_info():
+    """Without line numbers in the traceback, all candidates are returned."""
+    src = textwrap.dedent("""\
+        class A:
+            def run(self):
+                return 1
+
+        class B:
+            def run(self):
+                return 2
+    """)
+    all_slices = _get_all_functions(src)
+    # Traceback has no line number format (e.g. from Phase-1 LLM diagnosis)
+    traceback = "run failed somehow"
+    matched = _match_slices_to_traceback(all_slices, traceback, ["run"])
+    qualnames = {s.qualname for s in matched}
+    assert "A.run" in qualnames
+    assert "B.run" in qualnames
