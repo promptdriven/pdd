@@ -338,19 +338,40 @@ canonical map: a normalized view of distinct CSV provider names (so `OpenAI`
 Gemini`, `anthropic` → `Anthropic` — used for any alias the CSV map does not
 already define (CSV-derived aliases always win on conflict, so a CSV with an
 exact short provider name like `Gemini` keeps mapping `gemini` to its own
-`Gemini` row instead of being rerouted to `Google Gemini`). When a canonical
-alias resolves to a provider that has zero matching rows in the CSV, PDD
-aborts with a clear error — it does NOT fall through to substring matching,
-because a recognized alias with no rows means the user pinned a provider
-this CSV doesn't have. Only when no canonical alias matches at all does PDD
-try a case-insensitive substring match on the CSV `provider` column, and
-only when that produces no rows does it try substring matching on the
-`model` column. So `gemini` selects only `Google Gemini` rows (not
-`github_copilot/gemini-...` cross-routed rows), `anthropic` selects only
-`Anthropic` rows (not AWS Bedrock / OpenRouter rows whose model names
-include `anthropic`), and `vertex_ai` — which is not a CSV provider name on
-its own — still resolves cleanly because the prefix table maps it to
-`Google Vertex AI`. Both substring fallbacks refuse to pick across
+`Gemini` row instead of being rerouted to `Google Gemini`).
+
+The documented canonical aliases — `openai`, `azure_openai`, `vertex_ai`,
+`azure_ai`, `anthropic`, `gemini`, `github_copilot`, `openrouter`,
+`perplexity` — are **reserved**: each names a specific provider identity, so
+a pin equal to one of them only ever matches the `provider` column or an
+anchored `<alias>/` model-routing prefix. It never falls through to a loose
+substring match, so `--provider openai` on a CSV whose only `openai`-bearing
+row is a model named `lm_studio/openai/gpt-oss-120b` aborts rather than
+silently routing you to lm_studio.
+
+When a canonical alias resolves to a provider that has zero exact rows in the
+CSV, PDD first tries to match rows whose `model` column *starts with*
+`<alias>/` (an anchored prefix, not a substring). This supports older
+single-name CSVs — e.g. a `~/.pdd/llm_model.csv` that labels both backends
+under one `Google` provider with `gemini/...` and `vertex_ai/...` model
+prefixes: `--provider gemini` selects the `gemini/...` row and
+`--provider vertex_ai` selects the `vertex_ai/...` row, with no cross-routing.
+If that prefix spans more than one provider, PDD aborts (ambiguous). If
+neither an exact provider row nor a `<alias>/` prefix matches, PDD aborts
+with a clear error rather than falling through to substring matching, because
+a recognized alias with no rows means you pinned a provider this CSV doesn't
+have. (`--provider google` is *not* a reserved alias: it matches the
+user-labeled `Google` provider column exactly and returns all `Google` rows;
+pin the more specific `gemini`/`vertex_ai` to select one backend.)
+
+For non-reserved tokens only, PDD then tries a case-insensitive substring
+match on the CSV `provider` column, and only when that produces no rows does
+it try substring matching on the `model` column. So `gemini` selects only
+`Google Gemini` rows (not `github_copilot/gemini-...` cross-routed rows),
+`anthropic` selects only `Anthropic` rows (not AWS Bedrock / OpenRouter rows
+whose model names include `anthropic`), and `vertex_ai` — which is not a CSV
+provider name on its own — still resolves cleanly because the prefix table
+maps it to `Google Vertex AI`. Both substring fallbacks refuse to pick across
 providers: a token that matches more than one distinct provider (e.g. `open`
 → OpenAI + Azure OpenAI on the provider column, `claude` or `gpt` → many
 providers via the model column) aborts with a list of the matched providers
@@ -725,7 +746,7 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
-- `--provider TEXT`: Pin local-mode model selection to a single provider. Resolves canonical aliases first (`vertex_ai`, `azure_ai`, `gemini`, `anthropic`, plus normalized CSV provider names like `azure_openai`, `github_copilot`), then case-insensitive substring on the CSV `provider` column, then on the `model` column. Both substring fallbacks refuse to pick when the token spans multiple providers — bare tokens like `open` (OpenAI + Azure OpenAI), `claude`, or `gpt` abort listing the matches so you can disambiguate. Also accepts the `PDD_PROVIDER` environment variable. Has no effect when running in cloud mode.
+- `--provider TEXT`: Pin local-mode model selection to a single provider. Resolves canonical aliases first (`vertex_ai`, `azure_ai`, `gemini`, `anthropic`, plus normalized CSV provider names like `azure_openai`, `github_copilot`); a canonical alias with no exact provider rows then tries an anchored `<alias>/` model-routing prefix (so legacy single-name CSVs like one `Google` provider holding `gemini/...` and `vertex_ai/...` rows still resolve). The documented canonical aliases (`openai`, `azure_openai`, `vertex_ai`, `azure_ai`, `anthropic`, `gemini`, `github_copilot`, `openrouter`, `perplexity`) are reserved and never fall through to a loose substring match. Only non-reserved tokens use case-insensitive substring on the CSV `provider` column, then on the `model` column. Every substring/prefix fallback refuses to pick when the token spans multiple providers — bare tokens like `open` (OpenAI + Azure OpenAI), `claude`, or `gpt` abort listing the matches so you can disambiguate. Also accepts the `PDD_PROVIDER` environment variable. Has no effect when running in cloud mode.
 - `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
 - `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.

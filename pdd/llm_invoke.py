@@ -2312,6 +2312,27 @@ _PROVIDER_PREFIX_TO_PROVIDER = {
     "azure_ai/": "Azure AI",
 }
 
+# Documented canonical provider aliases for the ``--provider`` / ``PDD_PROVIDER``
+# pin. These name a specific provider identity, so a pin equal to one of them
+# must resolve via the provider column (canonical-alias or exact match) or an
+# anchored ``<alias>/`` model-routing prefix — it must NEVER fall through to the
+# free substring fallbacks, which could silently route to a different provider
+# whose model name merely contains the token (e.g. ``openai`` matching
+# ``lm_studio/openai/gpt-oss-120b``). Keep this in sync with the ``--provider``
+# help text in ``prompts/core/cli_python.prompt``, the README "Pinning a
+# Provider" section, and the completion scripts (bash/zsh/fish).
+_RESERVED_PROVIDER_ALIASES = frozenset({
+    "openai",
+    "azure_openai",
+    "vertex_ai",
+    "azure_ai",
+    "anthropic",
+    "gemini",
+    "github_copilot",
+    "openrouter",
+    "perplexity",
+})
+
 
 def _is_permanent_invalid_request_error(exc: Exception) -> bool:
     """Classify whether an exception represents a permanent parameter
@@ -2482,23 +2503,72 @@ def _select_model_candidates(
                 continue
             alias_to_canonical[alias] = canonical
 
+        normalized_pin = re.sub(r'[^a-z0-9]+', '_', provider_pin).strip('_')
         canonical_provider = alias_to_canonical.get(provider_pin)
         if canonical_provider is None:
             # Also try a normalized form (e.g. user types ``Github Copilot``
             # or ``azure-openai`` instead of ``github_copilot``/``azure_openai``).
-            canonical_provider = alias_to_canonical.get(
-                re.sub(r'[^a-z0-9]+', '_', provider_pin).strip('_')
-            )
+            canonical_provider = alias_to_canonical.get(normalized_pin)
+
+        # A reserved alias (the documented ``--provider`` set) names a specific
+        # provider identity, so it must resolve via the provider column or an
+        # anchored ``<alias>/`` model-routing prefix — never via the free
+        # substring fallbacks. Without this guard, ``PDD_PROVIDER=openai`` on a
+        # CSV with no OpenAI provider row but a model named
+        # ``lm_studio/openai/gpt-oss-120b`` would silently route to lm_studio,
+        # breaking the "a pin never routes to a different provider" promise.
+        is_reserved = (
+            provider_pin in _RESERVED_PROVIDER_ALIASES
+            or normalized_pin in _RESERVED_PROVIDER_ALIASES
+        )
+
+        def _match_model_routing_prefix() -> pd.DataFrame:
+            """Match rows whose ``model`` column starts with ``<pin>/`` (anchored,
+            NOT a substring). This supports legacy/coarse CSVs that label several
+            backends under one provider name (e.g. ``Google`` for both
+            ``gemini/...`` and ``vertex_ai/...`` rows) where the backend lives
+            only in the model-routing prefix. ``startswith`` (not ``contains``)
+            is deliberate: a substring match would let ``openai`` match
+            ``lm_studio/openai/gpt-oss-120b`` and reopen the wrong-routing bug.
+            Raises if the prefix spans more than one distinct provider."""
+            model_col_lc = model_df['model'].astype(str).str.strip().str.lower()
+            prefixes = {f"{provider_pin}/"}
+            if normalized_pin:
+                prefixes.add(f"{normalized_pin}/")
+            prefix_mask = pd.Series(False, index=model_df.index)
+            for pfx in prefixes:
+                prefix_mask = prefix_mask | model_col_lc.str.startswith(pfx, na=False)
+            matched = model_df[prefix_mask]
+            prefix_providers = sorted({
+                str(p).strip()
+                for p in matched['provider'].dropna()
+                if str(p).strip()
+            })
+            if len(prefix_providers) > 1:
+                raise RuntimeError(
+                    f"PDD_PROVIDER='{provider_pin}' is ambiguous; its "
+                    f"'{provider_pin}/' model-routing prefix spans multiple "
+                    f"providers: {', '.join(prefix_providers)}. "
+                    "Use one of those exact provider names."
+                )
+            return matched
 
         pinned_df = pd.DataFrame()
         if canonical_provider is not None:
             pinned_df = model_df[provider_col == canonical_provider.lower()]
             if pinned_df.empty:
-                # The user pinned a recognised canonical provider (alias
-                # resolved cleanly), but the CSV has no exact provider rows
-                # for it. Falling through to substring fallbacks here would
-                # silently route to a different provider whose model column
-                # happens to contain the alias token (e.g. ``gemini`` matching
+                # Canonical alias resolved but the CSV has no exact provider
+                # rows for it. Before failing, support legacy/coarse CSVs that
+                # encode the backend only in the model prefix (e.g. a single
+                # ``Google`` provider with ``gemini/...`` and ``vertex_ai/...``
+                # rows): an anchored ``<alias>/`` prefix match resolves the pin
+                # to the user's rows without cross-routing.
+                pinned_df = _match_model_routing_prefix()
+            if pinned_df.empty:
+                # Neither exact provider rows nor an anchored prefix match.
+                # Falling through to substring fallbacks would silently route
+                # to a different provider whose model column happens to contain
+                # the alias token (e.g. ``gemini`` matching
                 # ``github_copilot/gemini-3-pro-preview``), reopening the
                 # wrong-routing class this pin is meant to close. Fail loudly.
                 known_providers = sorted({
@@ -2507,15 +2577,37 @@ def _select_model_candidates(
                 raise RuntimeError(
                     f"PDD_PROVIDER='{provider_pin}' resolved to canonical provider "
                     f"'{canonical_provider}' but no rows for that provider exist in "
-                    f"the LLM model CSV. Available providers: "
+                    f"the LLM model CSV (matched neither the provider column nor a "
+                    f"'{provider_pin}/' model-routing prefix). Available providers: "
                     f"{', '.join(known_providers) or '(none)'}"
                 )
 
-        if pinned_df.empty:
-            # Substring fallback on the provider column. Detect ambiguity so
-            # tokens like ``open`` (matches OpenAI and Azure OpenAI and
-            # OpenRouter) or ``azure`` (matches Azure AI and Azure OpenAI)
-            # fail loudly instead of silently picking the first hit.
+        if pinned_df.empty and is_reserved:
+            # Reserved alias that did not resolve to a canonical provider (e.g.
+            # ``openai`` against a CSV with no OpenAI provider row). It may only
+            # match an anchored ``<alias>/`` model-routing prefix — never a free
+            # substring — so it can never silently route to a different
+            # provider. If neither matches, fail loudly.
+            pinned_df = _match_model_routing_prefix()
+            if pinned_df.empty:
+                known_providers = sorted({
+                    p for p in model_df['provider'].astype(str).str.strip() if p
+                })
+                raise RuntimeError(
+                    f"PDD_PROVIDER='{provider_pin}' is a recognized provider alias "
+                    f"but no rows for it exist in the LLM model CSV (matched neither "
+                    f"the provider column nor a '{provider_pin}/' model-routing "
+                    f"prefix). PDD will not route a reserved provider alias to a "
+                    f"different provider via a loose substring match. Available "
+                    f"providers: {', '.join(known_providers) or '(none)'}"
+                )
+
+        if pinned_df.empty and not is_reserved:
+            # Substring fallback on the provider column (free, non-reserved pins
+            # only). Detect ambiguity so tokens like ``open`` (matches OpenAI
+            # and Azure OpenAI and OpenRouter) or ``azure`` (matches Azure AI
+            # and Azure OpenAI) fail loudly instead of silently picking the
+            # first hit.
             provider_mask = provider_col.str.contains(provider_pin, regex=False, na=False)
             matched_providers = sorted({
                 str(p).strip()
@@ -2531,16 +2623,16 @@ def _select_model_candidates(
                 )
             pinned_df = model_df[provider_mask]
 
-        if pinned_df.empty:
-            # Final fallback: model-column substring match. Preserves cases
-            # like a CSV where a provider token only appears as a routing
-            # prefix in the model column. Same ambiguity guard as the
-            # provider-column fallback above — tokens like ``claude`` or
-            # ``gpt`` substring-match model names across many providers
-            # (Bedrock, OpenRouter, Github Copilot, Perplexity, Vercel, ...)
-            # in the bundled CSV. Picking the first one would recreate the
-            # cross-provider wrong-routing class the pin is meant to prevent,
-            # so fail loudly and list the matched providers instead.
+        if pinned_df.empty and not is_reserved:
+            # Final fallback (free, non-reserved pins only): model-column
+            # substring match. Preserves cases like a CSV where a provider
+            # token only appears as a routing prefix in the model column. Same
+            # ambiguity guard as the provider-column fallback above — tokens
+            # like ``claude`` or ``gpt`` substring-match model names across many
+            # providers (Bedrock, OpenRouter, Github Copilot, Perplexity,
+            # Vercel, ...) in the bundled CSV. Picking the first one would
+            # recreate the cross-provider wrong-routing class the pin is meant
+            # to prevent, so fail loudly and list the matched providers instead.
             model_col = model_df['model'].astype(str).str.lower()
             model_mask = model_col.str.contains(provider_pin, regex=False, na=False)
             matched_providers = sorted({

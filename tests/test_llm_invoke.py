@@ -5230,6 +5230,129 @@ class TestSelectModelCandidates:
         assert len(candidates) == 1
         assert candidates[0]["model"] == "gemini-pro"
 
+    def test_provider_pin_reserved_openai_raises_when_only_model_substring_matches(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for Greg's review of #1246 (finding 1): a CSV with no
+        ``OpenAI`` provider row but a model name that *contains* ``openai``
+        (e.g. ``lm_studio/openai/gpt-oss-120b``) must NOT route
+        ``PDD_PROVIDER=openai`` to that ``lm_studio`` row. ``openai`` is a
+        documented (reserved) canonical alias, so it may only match the
+        provider column or an anchored ``openai/`` model-routing prefix —
+        never a loose substring. The embedded (non-prefix) ``openai`` here
+        must therefore raise, honouring the 'a pin never silently routes to a
+        different provider' promise."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "lm_studio,lm_studio/openai/gpt-oss-120b,0,0,1200,,"
+            "True,none,4096,4096,0\n"
+        )
+        csv_path = tmp_path / "lmstudio_openai.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        monkeypatch.setenv("PDD_PROVIDER", "openai")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        msg = str(excinfo.value).lower()
+        assert "openai" in msg
+        # The error must explain that the reserved alias did not match and
+        # list the providers actually present so the user can correct it.
+        assert "lm_studio" in msg
+
+    def _make_legacy_google_df(self, llm_mod, tmp_path):
+        """Mirror a real legacy ``~/.pdd/llm_model.csv`` that labels both the
+        Gemini-API and Vertex backends under one coarse ``Google`` provider,
+        encoding the backend only in the model-routing prefix. The bundled
+        CSV uses ``Google Gemini`` / ``Google Vertex AI``, but older user
+        configs predate that split (codex/Greg review of #1246, finding 2)."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Google,vertex_ai/claude-opus-4-6,5.0,25.0,1561,VERTEX_CREDENTIALS,"
+            "True,budget,200000,8192,128000\n"
+            "Google,gemini/gemini-3.1-pro-preview,2.0,12.0,1456,GEMINI_API_KEY,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "legacy_google.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_provider_pin_legacy_google_csv_vertex_ai_resolves(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Regression for Greg's review of #1246 (finding 2): on a legacy CSV
+        where the provider column is the coarse ``Google`` for both backends,
+        ``PDD_PROVIDER=vertex_ai`` must resolve to the ``vertex_ai/...`` row via
+        an anchored model-routing prefix (not raise, not cross-route)."""
+        df = self._make_legacy_google_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "vertex_ai")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert {c["provider"] for c in candidates} == {"Google"}
+        assert {c["model"] for c in candidates} == {"vertex_ai/claude-opus-4-6"}
+
+    def test_provider_pin_legacy_google_csv_gemini_resolves(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Companion to the vertex_ai legacy case: ``PDD_PROVIDER=gemini`` on a
+        coarse ``Google`` CSV resolves to the ``gemini/...`` row via the
+        anchored prefix, excluding the ``vertex_ai/...`` row."""
+        df = self._make_legacy_google_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "gemini")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert {c["provider"] for c in candidates} == {"Google"}
+        assert {c["model"] for c in candidates} == {"gemini/gemini-3.1-pro-preview"}
+
+    def test_provider_pin_legacy_google_csv_google_selects_provider_column(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """``PDD_PROVIDER=google`` is a free (non-reserved) pin that matches the
+        user-labeled ``Google`` provider column exactly, so it returns all
+        ``Google`` rows. This is intentional: the column literally says
+        ``Google`` for both, and users who want one backend pin the more
+        specific reserved aliases ``gemini`` / ``vertex_ai`` (covered above).
+        It is provider-column selection, not cross-routing to a *different*
+        provider, so it does not violate the pin promise."""
+        df = self._make_legacy_google_df(llm_mod, tmp_path)
+        monkeypatch.setenv("PDD_PROVIDER", "google")
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        assert {c["provider"] for c in candidates} == {"Google"}
+        assert {c["model"] for c in candidates} == {
+            "vertex_ai/claude-opus-4-6",
+            "gemini/gemini-3.1-pro-preview",
+        }
+
+    def test_provider_pin_model_prefix_collision_across_providers_raises(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Safety guard for the anchored model-prefix fallback: if a
+        ``<alias>/`` prefix matches rows under more than one distinct provider,
+        the pin must raise rather than silently mixing providers. Here two
+        different providers both carry a ``vertex_ai/`` model, so
+        ``PDD_PROVIDER=vertex_ai`` (with no exact ``Google Vertex AI`` rows)
+        is ambiguous and must fail loudly listing the matched providers."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Google,vertex_ai/claude-opus-4-6,5,25,1561,VERTEX_CREDENTIALS,"
+            "True,budget,200000,8192,128000\n"
+            "OtherProv,vertex_ai/gemini-x,2,12,1400,OTHER_KEY,"
+            "True,none,200000,8192,0\n"
+        )
+        csv_path = tmp_path / "prefix_collision.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+        monkeypatch.setenv("PDD_PROVIDER", "vertex_ai")
+        with pytest.raises(RuntimeError) as excinfo:
+            llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        msg = str(excinfo.value).lower()
+        assert "ambiguous" in msg
+        assert "google" in msg
+        assert "otherprov" in msg
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""
