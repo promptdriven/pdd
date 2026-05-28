@@ -4,7 +4,10 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .contract_ir import Rule
 
 from rich import print as rprint
 
@@ -132,6 +135,14 @@ def _prompt_reference_for_metadata(prompt_path: Path, prompts_dir: Optional[Path
         except ValueError:
             pass
     return prompt_path.name
+
+
+def _cross_module_covers_ref(prompt_ref: str) -> str:
+    """Normalize a prompt ref for cross-module ``## Covers`` lines (``prompts/...#R1``)."""
+    normalized = prompt_ref.replace("\\", "/")
+    if normalized.startswith("prompts/"):
+        return normalized
+    return f"prompts/{normalized}"
 
 
 def _upsert_story_prompt_metadata(
@@ -446,9 +457,9 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     return "Prompt included in story scope."
 
 
-def _rule_covers_summary(rule: object) -> str:
+def _rule_covers_summary(rule: "Rule") -> str:
     """Return a short human-readable summary for a parsed contract rule."""
-    line = getattr(rule, "line", "").strip()
+    line = rule.line.strip()
     summary = ""
     id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", line, re.IGNORECASE)
     if id_prefix:
@@ -456,14 +467,12 @@ def _rule_covers_summary(rule: object) -> str:
     elif line:
         summary = re.sub(r"^[^a-zA-Z0-9]+", "", line).strip()
     if not summary:
-        block = getattr(rule, "block", "")
-        first = block.splitlines()[0].strip() if block else ""
+        first = rule.block.splitlines()[0].strip() if rule.block else ""
         id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", first, re.IGNORECASE)
         summary = id_prefix.group(1).strip() if id_prefix else re.sub(r"^[^a-zA-Z0-9]+", "", first).strip()
     if len(summary) > 120:
         return summary[:117].rstrip() + "..."
-    raw_id = getattr(rule, "raw_id", "R?")
-    return summary or str(raw_id).upper()
+    return summary or rule.raw_id.upper()
 
 
 def _seed_covers_from_prompts(
@@ -490,15 +499,22 @@ def _seed_covers_from_prompts(
     return seeded
 
 
+_FORBIDDEN_MODAL_RE = re.compile(r"\b(?:MUST|SHALL|MAY)\s+NOT\b", re.IGNORECASE)
+_FORBIDDEN_CLAUSE_RE = re.compile(
+    r"\b(?:must|shall|may)\s+not\s+([^.\n]+)",
+    re.IGNORECASE,
+)
+
+
 def _seed_negative_cases_from_rules(
     rules: List[Tuple[str, str, str, str]],
 ) -> List[str]:
-    """Extract forbidden outcomes from rules containing MUST NOT."""
+    """Extract forbidden outcomes from rules containing MUST/SHALL/MAY NOT."""
     negatives: List[str] = []
     for _, _, _, rule_text in rules:
-        if not re.search(r"\bMUST\s+NOT\b", rule_text, re.IGNORECASE):
+        if not _FORBIDDEN_MODAL_RE.search(rule_text):
             continue
-        match = re.search(r"\bmust\s+not\s+([^.\n]+)", rule_text, re.IGNORECASE)
+        match = _FORBIDDEN_CLAUSE_RE.search(rule_text)
         if not match:
             continue
         clause = match.group(1).strip()
@@ -536,10 +552,12 @@ def _render_story_markdown_from_prompts(
     seeded_rules = _seed_covers_from_prompts(prompt_paths, prompts_root)
     covers_lines: List[str] = []
     if seeded_rules:
+        # Cross-module Covers when the story scopes multiple prompt files.
         use_cross = len(prompt_paths) > 1
         for ref, rule_id, summary, _ in seeded_rules:
             if use_cross:
-                covers_lines.append(f"- {ref}#{rule_id}: {summary}")
+                cross_ref = _cross_module_covers_ref(ref)
+                covers_lines.append(f"- {cross_ref}#{rule_id}: {summary}")
             else:
                 covers_lines.append(f"- {rule_id}: {summary}")
     else:

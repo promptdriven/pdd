@@ -436,6 +436,7 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     assert "## Non-Oracle" in story_text
     assert "## Negative Cases" in story_text
     assert "## Prompt Scope" not in story_text
+    assert "- R1: Add contract rule IDs here after contracts are authored." in story_text
 
 
 def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_path):
@@ -513,8 +514,8 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
 
     assert success is True
     story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "- contract_rules_python.prompt#R1: Positive amount" in story_text
-    assert "- contract_rules_python.prompt#R2: Remaining balance" in story_text
+    assert "- prompts/contract_rules_python.prompt#R1: Positive amount" in story_text
+    assert "- prompts/contract_rules_python.prompt#R2: Remaining balance" in story_text
 
 
 def test_legacy_minimal_story_passes_validation(tmp_path):
