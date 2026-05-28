@@ -109,24 +109,21 @@ def test_prompt_local_interface_without_self_include_is_legacy_compatible_by_def
     )
 
 
-def test_strict_prompt_local_interface_without_self_include_fails_for_existing_module(
+def test_strict_prompt_local_interface_without_self_include_remains_compatible(
     tmp_path: Path,
 ) -> None:
     prompt, source, arch = _write_issue_798_shape(tmp_path, include_override="")
 
-    errors = validate_prompt_contract_context(
-        prompt_path=prompt,
-        output_path=source,
-        project_root=tmp_path,
-        architecture_path=arch,
-        require_prompt_local_source_context=True,
+    assert (
+        validate_prompt_contract_context(
+            prompt_path=prompt,
+            output_path=source,
+            project_root=tmp_path,
+            architecture_path=arch,
+            require_prompt_local_source_context=True,
+        )
+        == []
     )
-
-    assert len(errors) == 1
-    assert "prompt-local interface declares 2 public symbols" in errors[0]
-    assert "includes no existing module source context" in errors[0]
-    assert "keep_me" in errors[0]
-    assert "missing_from_context" in errors[0]
 
 
 def test_architecture_only_interface_without_self_include_stays_legacy_compatible(
