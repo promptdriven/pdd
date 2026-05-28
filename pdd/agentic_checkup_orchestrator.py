@@ -2675,7 +2675,13 @@ def _run_agentic_checkup_orchestrator_inner(
                         (_art / "nofix-step5-failure-refusal.txt").write_text(
                             _nofix_refusal + "\n"
                         )
-                    return (False, _nofix_refusal, total_cost, last_model_used)
+                    _nofix_post_suffix = _post_pr_mode_final_report(_nofix_refusal)
+                    return (
+                        False,
+                        f"{_nofix_refusal}{_nofix_post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
 
         # Skip step 6 sub-steps.
         for sub_step in (6.1, 6.2, 6.3):
