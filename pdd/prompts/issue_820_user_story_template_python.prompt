@@ -1,0 +1,202 @@
+<pdd-reason>
+Epic #833 / issue #820: align the canonical user-story template and `pdd test` story
+generation with contract-rule coverage evidence (Covers, Oracle, Non-Oracle, Negative Cases).
+</pdd-reason>
+
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+
+% Implement GitHub issue #820 — user stories as example-level contract coverage.
+%
+% Primary module: `pdd/user_story_tests.py` (extend; do not fork a parallel story generator).
+% Authoring assets: `user_stories/story__template.md`, `README.md`, `docs/prompting_guide.md`.
+%
+% Tracker: https://github.com/promptdriven/pdd/issues/820
+% Epic: https://github.com/promptdriven/pdd/issues/833
+
+<include>context/python_preamble.prompt</include>
+
+% Problem
+PDD already discovers `user_stories/story__*.md`, validates them with `pdd detect --stories`,
+and links prompts via `<!-- pdd-story-prompts: ... -->`. `contract_check` and
+`coverage --contracts` already understand story `## Covers` references via `contract_ir`.
+The on-disk template and programmatic story generator still use a minimal shape
+(Story, Context, Acceptance Criteria, Non-Goals, Notes) and emit `## Prompt Scope`
+instead of contract-aware sections. Authors lack a single source of truth that matches
+the prompting guide and coverage tooling.
+
+% Goal
+Make user stories first-class **example-level coverage** for named contract rules without
+breaking legacy stories. New templates and generated stories MUST teach the Covers /
+Oracle / Non-Oracle / Negative Cases habit; validation MUST remain backward compatible.
+
+<contract_rules>
+R1 - Canonical template
+The repository MUST ship `user_stories/story__template.md` containing, in order:
+`## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+`## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Notes`.
+Placeholder text MUST match the issue #820 proposal (persona/behavior/value placeholders).
+
+R2 - Generated story parity
+When `generate_user_story()` / `_render_story_markdown_from_prompts()` runs (invoked from
+`pdd test <*.prompt>` story mode via `pdd/commands/generate.py`), the written markdown MUST
+include the same section headings as R1. The generator MUST NOT emit `## Prompt Scope`;
+scope belongs in `## Context` and `<!-- pdd-story-prompts: ... -->`.
+
+R3 - Covers seeding from prompts
+When any input `.prompt` contains `<contract_rules>`, the generator MUST seed `## Covers`
+with one bullet per rule ID using `parse_prompt_contracts()` from `pdd/contract_ir.py`:
+format `- R{n}: <short rule summary>` (first line or trimmed obligation text, max 120 chars).
+For multi-prompt generation, use cross-module Covers lines when multiple prompts contribute
+rules: `prompts/<file>.prompt#R{n}: <summary>`.
+When no `<contract_rules>` exist, emit a Covers section with a single placeholder bullet
+instructing the author to add rule IDs after contracts are authored.
+
+R4 - MUST NOT → Negative Cases hint
+When seeded rules include modal `MUST NOT`, the generator MUST add at least one bullet under
+`## Negative Cases` naming the forbidden outcome (derived from rule text, not invented APIs).
+
+R5 - Oracle / Non-Oracle defaults
+The generator MUST emit non-empty starter bullets under `## Oracle` and `## Non-Oracle`
+(issue examples: error type, state transition, external call presence, value shape;
+non-oracle: helper names, internal structure, irrelevant ordering).
+Do not call an LLM for story generation; remain deterministic.
+
+R6 - Backward compatibility
+`discover_story_files`, `cache_story_prompt_links`, `run_user_story_tests`, and
+`run_user_story_fix` MUST NOT require the new sections. Missing sections MUST NOT fail
+validation. Do not add hard failures in `user_story_tests.py` for absent Covers/Oracle.
+
+R7 - Documentation alignment
+`README.md` (user story section) and `docs/prompting_guide.md` MUST state that user stories
+are example-level coverage for contract rules and point to `## Covers`.
+Where the guide uses `## Forbidden Outcomes`, add a one-line note that issue #820 and the
+on-disk template use `## Negative Cases` as the canonical heading (same intent).
+
+R8 - Preservation
+When editing `pdd/user_story_tests.py`, preserve existing comments, docstrings, and behavior
+outside story rendering per issue #926. Keep lazy `change_main` import and `skip_user_stories`
+hygiene unchanged.
+</contract_rules>
+
+<vocabulary>
+- **Covers**: story `## Covers` bullets mapping rule IDs (R1, R2, or cross-module
+  `prompts/foo.prompt#R3`) to human-readable obligation summaries.
+- **Oracle**: observations that determine pass/fail for this story.
+- **Non-Oracle**: details explicitly declared irrelevant to pass/fail.
+- **Negative Cases**: forbidden outcomes the story protects against (especially MUST NOT rules).
+- **Example-level coverage**: stories supplement tests; they are evidence for
+  `pdd checkup coverage`, not a replacement for executable tests.
+</vocabulary>
+
+% Implementation requirements
+
+1. **`user_stories/story__template.md`**
+   Replace content with the canonical markdown below (exact headings for R1).
+
+2. **`pdd/user_story_tests.py`**
+   - Refactor `_render_story_markdown_from_prompts()` to build R1 sections.
+   - Add `_seed_covers_from_prompts(prompt_paths: List[Path]) -> List[str]` using
+     `parse_prompt_contracts` (handle missing file / no rules gracefully).
+   - Add `_seed_negative_cases_from_rules(rules) -> List[str]` for R4.
+   - Keep `_story_title_from_prompts`, metadata insertion, and post-write `detect_change`
+     linking behavior intact.
+   - Export nothing new unless tests need helpers; prefer private functions.
+
+3. **Tests — `tests/test_user_story_tests.py`**
+   - Update `test_generate_user_story_creates_story_file_and_links` expectations:
+     assert `## Covers`, `## Oracle`, `## Non-Oracle`, `## Negative Cases` present;
+     assert `## Prompt Scope` absent.
+   - Add fixture prompt under `tests/fixtures/` with minimal `<contract_rules>` and assert
+     Covers bullets reference R1/R2.
+   - Add test that an existing minimal story file (no new sections) still passes
+     `run_user_story_tests` when `detect_change` returns no changes.
+
+4. **Docs**
+   - README: 2–4 sentences on contract coverage + link to template and
+     `docs/coverage_contracts.md` / `docs/contract_check.md`.
+   - prompting_guide: reconcile Negative Cases vs Forbidden Outcomes per R7.
+
+% Canonical template (write verbatim to `user_stories/story__template.md`)
+
+```md
+<!-- pdd-story-prompts: prompts/<module>_<language>.prompt -->
+
+# User Story: <name>
+
+## Covers
+
+- R1: <contract rule name>
+- R2: <contract rule name>
+
+## Story
+
+As a <persona>,
+I want <behavior>,
+so that <value>.
+
+## Context
+
+Describe relevant state, assumptions, fixtures, users, records, external services, or dependencies.
+
+## Acceptance Criteria
+
+1. Given ..., when ..., then ...
+2. Given ..., when ..., then ...
+
+## Oracle
+
+These details matter for pass/fail:
+- error type
+- state transition
+- absence/presence of external call
+- emitted event
+- returned value shape
+
+## Non-Oracle
+
+These details should not matter:
+- private helper names
+- internal class structure
+- exact wording of non-user-facing messages
+- deterministic but irrelevant ordering
+
+## Negative Cases
+
+List forbidden outcomes this story protects against.
+
+## Non-Goals
+
+What this story explicitly does not cover.
+
+## Notes
+
+Links, edge cases, fixtures, rationale, or implementation hints.
+```
+
+<acceptance_tests>
+- `pytest tests/test_user_story_tests.py -q` MUST pass.
+- `pdd detect --stories` against a repo using the new template sections MUST NOT regress
+  (no new required sections enforced).
+- `pdd test <prompt_with_contract_rules>.prompt` MUST write `user_stories/story__*.md` containing
+  `## Covers`, `## Oracle`, `## Non-Oracle`, and `## Negative Cases`.
+- A legacy `story__*.md` without those sections MUST still validate when `detect_change` is empty.
+</acceptance_tests>
+
+% Verification commands (run before finishing)
+```bash
+pytest -vv tests/test_user_story_tests.py
+pylint pdd/user_story_tests.py
+```
+
+% Non-goals
+- Do not require LLM story authoring.
+- Do not change `detect_change` semantics or `contract_check` story parsers.
+- Do not migrate every existing story file in the repo (template + generator only).
+- Do not implement issue #821 (contract-aware `context/test.prompt`) in this change.
+
+% Deliverables
+- `user_stories/story__template.md`
+- `pdd/user_story_tests.py`
+- `tests/test_user_story_tests.py` (+ minimal fixture prompt if needed)
+- `README.md`, `docs/prompting_guide.md` (targeted edits only)
