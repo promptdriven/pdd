@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from pdd.evidence_store import ManifestView
+from pdd.evidence_manifest import validation_from_sync
+from pdd.evidence_store import ManifestView, sha256_file
 from pdd.gate_main import evaluate_manifest, run_gate_policy
 from pdd.gate_policy import GatePolicy, GateLimits, load_policy
 
@@ -30,6 +31,15 @@ def _write_routine_manifest(
         "contracts": {},
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _production_default_validation() -> dict[str, str]:
+    """Validation block shape from ``write_evidence_manifest`` before overrides."""
+    return {
+        "detect_stories": "not_available",
+        "unit_tests": "not_available",
+        "verify": "not_available",
+    }
 
 
 def test_load_policy_yaml(tmp_path: Path) -> None:
@@ -308,3 +318,93 @@ def test_gate_fails_nondeterministic_context_limit(tmp_path: Path) -> None:
     result = run_gate_policy(project, target="refund", policy_path=policy_file)
     assert not result.passed
     assert any(f.code == "nondeterministic_context_limit" for f in result.failures)
+
+
+def test_gate_fails_generate_only_not_available_validation(tmp_path: Path) -> None:
+    """Generate-only manifests default validation fields to not_available."""
+    project = tmp_path
+    code = project / "src" / "refund.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("def refund():\n    return 1\n", encoding="utf-8")
+    manifest_path = project / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
+    _write_routine_manifest(
+        manifest_path,
+        basename="refund",
+        output_rel="src/refund.py",
+        output_hash=sha256_file(code),
+        validation=_production_default_validation(),
+    )
+    result = run_gate_policy(project, target="refund")
+    assert not result.passed
+    codes = {failure.code for failure in result.failures}
+    assert "detect_stories_not_available" in codes
+    assert "unit_tests_not_available" in codes
+    assert "verify_not_available" in codes
+
+
+def test_gate_fails_sync_skip_not_applicable_validation(tmp_path: Path) -> None:
+    """Sync with --skip-tests/--skip-verify records not_applicable, not pass."""
+    project = tmp_path
+    code = project / "src" / "refund.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("def refund():\n    return 1\n", encoding="utf-8")
+    validation = validation_from_sync({}, skip_tests=True, skip_verify=True)
+    assert validation["unit_tests"] == "not_applicable"
+    assert validation["verify"] == "not_applicable"
+    manifest_path = project / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
+    _write_routine_manifest(
+        manifest_path,
+        basename="refund",
+        output_rel="src/refund.py",
+        output_hash=sha256_file(code),
+        validation=validation,
+    )
+    result = run_gate_policy(project, target="refund")
+    assert not result.passed
+    codes = {failure.code for failure in result.failures}
+    assert "skipped_tests" in codes
+    assert "skipped_verify" in codes
+    assert "stories_pass" in codes
+
+
+def test_checkup_gate_without_target_runs_all_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare ``pdd checkup gate`` must run the gate, not print help and exit 0."""
+    from click.testing import CliRunner
+
+    from pdd import cli
+
+    project = tmp_path
+    monkeypatch.chdir(project)
+    code = project / "src" / "refund.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("def refund():\n    return 1\n", encoding="utf-8")
+    manifest_path = project / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
+    _write_routine_manifest(
+        manifest_path,
+        basename="refund",
+        output_rel="src/refund.py",
+        output_hash=sha256_file(code),
+        validation=_production_default_validation(),
+    )
+    result = CliRunner().invoke(cli.cli, ["checkup", "gate"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "Usage:" not in result.output
+    assert "PDD gate failed" in result.output
+    assert "not_available" in result.output
+
+
+def test_checkup_gate_without_target_empty_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bare ``pdd checkup gate`` with no manifests reports no_manifests, not help."""
+    from click.testing import CliRunner
+
+    from pdd import cli
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli.cli, ["checkup", "gate"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "No evidence manifests found" in result.output
+    assert "Usage:" not in result.output

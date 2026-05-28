@@ -434,7 +434,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
     if target == "gate":
         gate_args = list(ctx.args)
-        if not gate_args or show_help:
+        if show_help and not gate_args:
             click.echo(
                 gate_cmd.get_help(click.Context(gate_cmd, info_name="pdd checkup gate"))
             )

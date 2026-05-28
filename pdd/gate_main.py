@@ -54,11 +54,41 @@ class GateResult:
         }
 
 
-def _validation_failed(status: str) -> bool:
-    normalized = (status or "").strip().lower()
-    if not normalized or normalized in {"pass", "passed", "ok", "success", "not_applicable"}:
-        return False
-    return normalized in {"fail", "failed", "error", "skip", "skipped"} or "fail" in normalized
+_PASS_STATUSES = frozenset({"pass", "passed", "ok", "success"})
+
+
+def _validation_passes(status: str) -> bool:
+    """True only for explicit pass outcomes from evidence manifests."""
+    return (status or "").strip().lower() in _PASS_STATUSES
+
+
+def _append_skipped_validation_failure(
+    failures: list[GateFailure],
+    *,
+    manifest: ManifestView,
+    manifest_key: str,
+    policy: GatePolicy,
+) -> bool:
+    """Record skip/not_applicable failures when policy disallows them."""
+    if manifest_key == "verify" and not policy.allows("skipped_verify"):
+        failures.append(
+            GateFailure(
+                code="skipped_verify",
+                message=f"{manifest.basename}: verify was skipped against policy",
+                fix_command="Re-run without --skip-verify",
+            )
+        )
+        return True
+    if manifest_key == "unit_tests" and not policy.allows("skipped_tests"):
+        failures.append(
+            GateFailure(
+                code="skipped_tests",
+                message=f"{manifest.basename}: unit tests were skipped against policy",
+                fix_command="Re-run without --skip-tests",
+            )
+        )
+        return True
+    return False
 
 
 def _check_validation_flags(
@@ -76,7 +106,8 @@ def _check_validation_flags(
         if not policy.requires(policy_key):
             continue
         status = validation.get(manifest_key, "missing")
-        if status == "missing":
+        normalized = (status or "").strip().lower()
+        if normalized == "missing":
             failures.append(
                 GateFailure(
                     code=f"{policy_key}_missing",
@@ -88,7 +119,41 @@ def _check_validation_flags(
                 )
             )
             continue
-        if _validation_failed(status):
+        if _validation_passes(status):
+            continue
+        if normalized == "not_available":
+            failures.append(
+                GateFailure(
+                    code=f"{manifest_key}_not_available",
+                    message=(
+                        f"{manifest.basename}: validation.{manifest_key} is "
+                        f"not_available (required check was not recorded)"
+                    ),
+                    fix_command=f"Run a PDD command with --evidence for {manifest.basename}",
+                )
+            )
+            continue
+        if normalized == "not_applicable":
+            if _append_skipped_validation_failure(
+                failures, manifest=manifest, manifest_key=manifest_key, policy=policy
+            ):
+                continue
+            failures.append(
+                GateFailure(
+                    code=policy_key,
+                    message=(
+                        f"{manifest.basename}: validation.{manifest_key} is "
+                        f"not_applicable but policy requires {policy_key}"
+                    ),
+                    fix_command=fix,
+                )
+            )
+            continue
+        if normalized in {"skip", "skipped"}:
+            if _append_skipped_validation_failure(
+                failures, manifest=manifest, manifest_key=manifest_key, policy=policy
+            ):
+                continue
             failures.append(
                 GateFailure(
                     code=policy_key,
@@ -98,22 +163,16 @@ def _check_validation_flags(
                     fix_command=fix,
                 )
             )
-        if manifest_key == "verify" and status == "skipped" and not policy.allows("skipped_verify"):
-            failures.append(
-                GateFailure(
-                    code="skipped_verify",
-                    message=f"{manifest.basename}: verify was skipped against policy",
-                    fix_command="Re-run without --skip-verify",
-                )
+            continue
+        failures.append(
+            GateFailure(
+                code=policy_key,
+                message=(
+                    f"{manifest.basename}: validation.{manifest_key}={status!r}"
+                ),
+                fix_command=fix,
             )
-        if manifest_key == "unit_tests" and status == "skipped" and not policy.allows("skipped_tests"):
-            failures.append(
-                GateFailure(
-                    code="skipped_tests",
-                    message=f"{manifest.basename}: unit tests were skipped against policy",
-                    fix_command="Re-run without --skip-tests",
-                )
-            )
+        )
     if policy.requires("stories_pass") and prompt_changed_since_manifest(manifest):
         failures.append(
             GateFailure(
