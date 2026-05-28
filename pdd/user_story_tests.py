@@ -4,13 +4,11 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
-
-if TYPE_CHECKING:
-    from .contract_ir import Rule
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich import print as rprint
 
+from .contract_ir import Rule, parse_prompt_contracts
 from .detect_change import detect_change
 from .get_extension import get_extension
 
@@ -28,6 +26,11 @@ STORY_PROMPTS_METADATA_RE = re.compile(
 STORY_PROMPT_REFERENCE_RE = re.compile(
     r"(?P<ref>[A-Za-z0-9_./-]+\.prompt)\b",
     flags=re.IGNORECASE,
+)
+_FORBIDDEN_MODAL_RE = re.compile(r"\b(?:MUST|SHALL|MAY)\s+NOT\b", re.IGNORECASE)
+_FORBIDDEN_CLAUSE_RE = re.compile(
+    r"\b(?:must|shall|may)\s+not\s+([^.\n]+)",
+    re.IGNORECASE,
 )
 logger = logging.getLogger(__name__)
 
@@ -457,19 +460,20 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     return "Prompt included in story scope."
 
 
-def _rule_covers_summary(rule: "Rule") -> str:
-    """Return a short human-readable summary for a parsed contract rule."""
-    line = rule.line.strip()
-    summary = ""
-    id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", line, re.IGNORECASE)
+def _summary_text_from_rule_line(text: str) -> str:
+    """Extract display summary from a rule header or first block line."""
+    id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", text, re.IGNORECASE)
     if id_prefix:
-        summary = id_prefix.group(1).strip()
-    elif line:
-        summary = re.sub(r"^[^a-zA-Z0-9]+", "", line).strip()
-    if not summary:
-        first = rule.block.splitlines()[0].strip() if rule.block else ""
-        id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", first, re.IGNORECASE)
-        summary = id_prefix.group(1).strip() if id_prefix else re.sub(r"^[^a-zA-Z0-9]+", "", first).strip()
+        return id_prefix.group(1).strip()
+    return re.sub(r"^[^a-zA-Z0-9]+", "", text).strip()
+
+
+def _rule_covers_summary(rule: Rule) -> str:
+    """Return a short human-readable summary for a parsed contract rule."""
+    summary = _summary_text_from_rule_line(rule.line.strip())
+    if not summary and rule.block:
+        first_line = rule.block.splitlines()[0].strip()
+        summary = _summary_text_from_rule_line(first_line)
     if len(summary) > 120:
         return summary[:117].rstrip() + "..."
     return summary or rule.raw_id.upper()
@@ -480,8 +484,6 @@ def _seed_covers_from_prompts(
     prompts_root: Optional[Path],
 ) -> List[Tuple[str, str, str, str]]:
     """Seed Covers bullets from ``<contract_rules>`` via ``contract_ir.parse_prompt_contracts``."""
-    from .contract_ir import parse_prompt_contracts
-
     seeded: List[Tuple[str, str, str, str]] = []
     for path in prompt_paths:
         if not path.exists() or not path.is_file():
@@ -497,13 +499,6 @@ def _seed_covers_from_prompts(
             summary = _rule_covers_summary(rule)
             seeded.append((ref, rule_id, summary, rule.block))
     return seeded
-
-
-_FORBIDDEN_MODAL_RE = re.compile(r"\b(?:MUST|SHALL|MAY)\s+NOT\b", re.IGNORECASE)
-_FORBIDDEN_CLAUSE_RE = re.compile(
-    r"\b(?:must|shall|may)\s+not\s+([^.\n]+)",
-    re.IGNORECASE,
-)
 
 
 def _seed_negative_cases_from_rules(
