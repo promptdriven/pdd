@@ -2,8 +2,8 @@
 
 Locks in the prompt-contract fix that lets `pdd sync fix_error_loop` pass
 strict preflight: `pdd/prompts/fix_error_loop_python.prompt` must include
-source context for the existing public symbols it declares
-(`cloud_fix_errors`, `fix_error_loop`).
+source context for the existing public symbols declared by the prompt-local
+and architecture interfaces.
 
 The unit-style tests check the live repo state. The integration tests
 exercise the cross-module flow agentic_sync -> architecture_include_validation
@@ -103,27 +103,30 @@ def test_fix_error_loop_prompt_self_includes_module_source() -> None:
     """Prompt must carry source context for its declared public symbols.
 
     Either a full `<include>pdd/fix_error_loop.py</include>` or per-symbol
-    `<include select="def:...">pdd/fix_error_loop.py</include>` lines
-    satisfy strict preflight. A revert that drops both would regress #1237.
+    `<include select="def:...">pdd/fix_error_loop.py</include>` lines for
+    every architecture-declared existing symbol satisfy strict preflight. A
+    revert that drops both would regress #1237.
     """
     assert PROMPT_PATH.is_file(), f"missing prompt: {PROMPT_PATH}"
     text = PROMPT_PATH.read_text(encoding="utf-8")
 
     full_include = "<include>pdd/fix_error_loop.py</include>" in text
-    has_cloud_select = (
-        '<include select="def:cloud_fix_errors">pdd/fix_error_loop.py</include>'
-        in text
-    )
-    has_loop_select = (
-        '<include select="def:fix_error_loop">pdd/fix_error_loop.py</include>'
-        in text
-    )
+    required_selects = {
+        "escape_brackets",
+        "cloud_fix_errors",
+        "run_pytest_on_file",
+        "format_log_for_output",
+        "fix_error_loop",
+    }
+    missing_selects = {
+        name for name in required_selects
+        if f'<include select="def:{name}">pdd/fix_error_loop.py</include>' not in text
+    }
 
-    assert full_include or (has_cloud_select and has_loop_select), (
+    assert full_include or not missing_selects, (
         "fix_error_loop_python.prompt must self-include pdd/fix_error_loop.py "
-        "(full include, or per-symbol selects for cloud_fix_errors and "
-        "fix_error_loop) so strict prompt-contract preflight has source "
-        "context for the declared existing public symbols."
+        "(full include, or per-symbol selects for all architecture-declared "
+        f"existing public symbols). Missing selects: {sorted(missing_selects)}"
     )
 
 
