@@ -1298,6 +1298,40 @@ def test_existing_stale_provider_rows_curated_on_env_switch(tmp_path, monkeypatc
     assert pref["selected_providers"] == ["Google Gemini"]
 
 
+def test_default_keep_prefers_usable_device_over_stale_keyless_provider(tmp_path, monkeypatch):
+    """Codex edge: when the only USABLE provider is device-login (no keys set)
+    and a stale keyless non-device provider lingers in the CSV, the default to
+    KEEP must be the usable device provider — never the stale keyless one (which
+    would remove the only usable row). Here: stale Anthropic row, no API keys,
+    only GitHub Copilot (device) usable."""
+    ref = [
+        {"provider": "Anthropic", "model": "claude-opus-4-7", "api_key": "ANTHROPIC_API_KEY",
+         "base_url": "", "input": "5", "output": "25", "coding_arena_elo": "1565",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "effort",
+         "location": ""},
+        {"provider": "GitHub Copilot", "model": "github_copilot/gpt-5", "api_key": "",
+         "base_url": "", "input": "0", "output": "0", "coding_arena_elo": "1300",
+         "max_reasoning_tokens": "", "structured_output": "True", "reasoning_type": "none",
+         "location": ""},
+    ]
+    existing_anthropic = [dict(ref[0])]
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=ref,
+        user_csv_rows=existing_anthropic,
+        env_keys={},                         # no API keys at all
+        has_provider_oauth=True,             # OAuth present → step 1 skips key prompt
+        create_pddrc=True,
+        sidecar_providers=["Anthropic"],     # stale
+        input_sequence=["", "", "", ""],     # accept default (Copilot), confirm removal
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "github_copilot/gpt-5" in content       # usable device provider kept
+    assert "claude-opus-4-7" not in content         # stale keyless provider removed
+    pref = json.loads((tmp_path / "home" / ".pdd" / "setup_preferences.json").read_text())
+    assert pref["selected_providers"] == ["GitHub Copilot"]
+
+
 def test_env_switch_clears_stale_sidecar(tmp_path, monkeypatch):
     """Review finding (follow-up): with a saved selection of Anthropic but only
     GEMINI_API_KEY now set (single available provider → no prompt), the stale

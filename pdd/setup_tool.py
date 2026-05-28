@@ -271,14 +271,17 @@ def _select_providers_to_keep(
                     pass
         return best
 
-    # First-time default is a SINGLE provider — the highest-ELO AVAILABLE
-    # non-device one (a free device login or a keyless stale provider must never
-    # be the default over a usable configured key). A single-provider default
-    # means accepting it (Enter) yields an unambiguous pin, so `pdd --local`
-    # cannot cost/ELO-route across providers (issue #1202). A user who genuinely
-    # wants several selects them explicitly; that explicit multi-provider choice
-    # is saved and honored as the default on re-run.
-    _default_pool = [p for p in non_device if p in available_set] or non_device
+    # First-time default is a SINGLE provider — the highest-ELO USABLE one — so
+    # accepting it (Enter) yields an unambiguous, usable pin and `pdd --local`
+    # cannot cost/ELO-route across providers (issue #1202). Priority:
+    #   1. available non-device (a real configured key wins over a free login);
+    #   2. else available device-login (when a device login is all that's usable,
+    #      it's the right default — better than a keyless stale provider);
+    #   3. else (nothing usable — degenerate) fall back to a single provider.
+    # A keyless/stale provider is therefore NEVER the default to keep.
+    _available_non_device = [p for p in non_device if p in available_set]
+    _available_any = [p for p in providers if p in available_set]
+    _default_pool = _available_non_device or _available_any or non_device or providers
     single_default = [max(_default_pool, key=_best_elo)] if _default_pool else providers[:1]
     saved = _load_selected_providers()
     default = [p for p in providers if p in saved] if saved else list(single_default)
