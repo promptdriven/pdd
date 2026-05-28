@@ -816,8 +816,15 @@ class TestPrModeFixPushBack:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             executed_steps.append(step_num)
-            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (True, _step7_clean_output(), 0.0, "fake-model")
+            if step_num == 5:
+                # Real Step-5 failure so the fixer (6.1/6.2/6.3) runs and
+                # produces an in-scope change to commit and push.
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         wt = tmp_path / "wt"
         wt.mkdir()
@@ -835,6 +842,9 @@ class TestPrModeFixPushBack:
             return_value=None,
         ), patch(
             "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
             return_value={
@@ -897,13 +907,21 @@ class TestPrModeFixPushBack:
         events: list[str] = []
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = (
-                'All Issues Fixed\n{"success": true, "issue_aligned": true, '
-                '"issues": []}'
-                if step_num == 7
-                else f"Step {step_num} output"
-            )
-            return (True, output, 0.0, "fake-model")
+            if step_num == 7:
+                return (
+                    True,
+                    'All Issues Fixed\n{"success": true, "issue_aligned": true, '
+                    '"issues": []}',
+                    0.0,
+                    "fake-model",
+                )
+            if step_num == 5:
+                # Real Step-5 failure so the fixer runs and there is a fix to
+                # push (the push→pr_comment→issue_comment ordering under test).
+                return (False, _step5_fail_output("tests/test_main.py"), 0.0, "fake-model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: tests/test_main.py", 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         def fake_push(*_args, **_kwargs):  # noqa: ANN001
             events.append("push")
@@ -939,6 +957,9 @@ class TestPrModeFixPushBack:
                 "head_repo": "r",
                 "head_sha": "deadbeef",
             },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["tests/test_main.py"],
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             side_effect=fake_push,
