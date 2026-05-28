@@ -1,9 +1,13 @@
 # Checkup simplify — multi-provider agent profiles
 
-`pdd checkup simplify` **currently invokes Claude Code's bundled `/simplify` skill only**.
-Runtime behavior is unchanged; this document and the companion prompt assets describe how to run
-the **same conservative simplify workflow** with other agent CLIs when you wire them manually or in
-a future PDD release.
+`pdd checkup simplify` ships **multi-engine runtime support**:
+
+- **`--engine claude`** (default): Claude Code bundled `/simplify`
+- **`--engine codex|gemini|opencode`**: the shared workflow prompt via PDD `run_agentic_task`
+- **`--engine auto`**: Claude when installed, else the first available agentic provider
+
+This document and the companion prompt assets describe provider setup, parity expectations, and
+how the workflow prompt maps to each CLI.
 
 ## Shared workflow prompt
 
@@ -26,10 +30,10 @@ Run the agent **inside the candidate worktree** PDD created, not on your live wo
 
 | Provider | CLI | Model env (typical) | Notes |
 |----------|-----|---------------------|-------|
-| Claude Code | `claude` | `CLAUDE_MODEL` | **Shipped** — `pdd checkup simplify --apply` |
-| OpenAI Codex | `codex` | `CODEX_MODEL` | See `checkup_simplify_invoke_codex_LLM.prompt` |
-| Google Gemini | `gemini` / `agy` | `GEMINI_MODEL` | See `checkup_simplify_invoke_gemini_LLM.prompt` |
-| OpenCode | `opencode` | `OPENCODE_MODEL` | See `checkup_simplify_invoke_opencode_LLM.prompt` |
+| Claude Code | `claude` | `CLAUDE_MODEL` | `pdd checkup simplify --apply` (default engine) |
+| OpenAI Codex | `codex` | `CODEX_MODEL` | `pdd checkup simplify --apply --engine codex` |
+| Google Gemini | `gemini` / `agy` | `GEMINI_MODEL` | `pdd checkup simplify --apply --engine gemini` |
+| OpenCode | `opencode` | `OPENCODE_MODEL` | `pdd checkup simplify --apply --engine opencode` |
 
 ## Parity checklist (any provider)
 
@@ -44,4 +48,7 @@ Run the agent **inside the candidate worktree** PDD created, not on your live wo
 Copy `docs/skills/checkup-simplify/SKILL.md` into your personal Cursor skills directory when you
 want the same workflow available to the IDE agent without running the CLI.
 
-See also: [checkup_simplify.md](checkup_simplify.md) for the shipped Claude Code command.
+Invoke-specific setup notes live in `checkup_simplify_invoke_*_LLM.prompt` (reference profiles for
+humans and other LLM harnesses; runtime uses the shared workflow prompt for agentic engines).
+
+See also: [checkup_simplify.md](checkup_simplify.md) for CLI usage and verification behavior.

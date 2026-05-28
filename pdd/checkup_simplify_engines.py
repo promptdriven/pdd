@@ -54,7 +54,11 @@ def resolve_simplify_engine(engine: str) -> str:
     ):
         if provider in available:
             return candidate
-    return "claude"
+    raise ValueError(
+        "No simplify engine available for --engine auto. "
+        "Install Claude Code (`npm install -g @anthropic-ai/claude-code`) or "
+        "configure an agentic provider (codex, gemini, or opencode)."
+    )
 
 
 def _read_workflow_prompt() -> str:

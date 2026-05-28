@@ -451,7 +451,8 @@ _pdd_pytest_output() {
 _pdd_checkup_simplify() {
   _arguments -s \
     $_pdd_global_opts \
-    '--apply[Run Claude Code /simplify and apply a selected candidate]' \
+    '--apply[Run simplify and apply a selected candidate]' \
+    '--engine[Simplify engine]:engine:(claude codex gemini opencode auto)' \
     '--since[Use a Git ref as the selected diff baseline]:ref:' \
     '--staged[Limit candidates to staged paths]' \
     '--max-files[Maximum selected source files]:count:' \

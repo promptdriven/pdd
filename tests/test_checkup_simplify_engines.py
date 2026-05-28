@@ -53,6 +53,18 @@ def test_resolve_auto_prefers_claude_when_available() -> None:
         assert resolve_simplify_engine("auto") == "claude"
 
 
+def test_resolve_auto_raises_when_no_engine_available() -> None:
+    with patch(
+        "pdd.checkup_simplify_engines.check_claude_code_simplify_available",
+        return_value=(None, None, "missing"),
+    ), patch(
+        "pdd.checkup_simplify_engines.get_available_agents",
+        return_value=[],
+    ):
+        with pytest.raises(ValueError, match="No simplify engine available"):
+            resolve_simplify_engine("auto")
+
+
 def test_resolve_auto_falls_back_to_codex() -> None:
     with patch(
         "pdd.checkup_simplify_engines.check_claude_code_simplify_available",

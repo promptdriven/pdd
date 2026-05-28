@@ -1,8 +1,7 @@
 % Portable conservative code-simplify workflow (provider-agnostic).
 % Mirrors the intent of Claude Code's bundled `/simplify` skill without binding to a single CLI.
-% PDD's shipped `pdd checkup simplify` command still invokes Claude Code `/simplify` today; use this
-% prompt when wiring additional agent CLIs (Codex, Gemini, OpenCode, etc.) or when running simplify
-% manually inside an isolated candidate worktree.
+% Shipped runtime: `pdd checkup simplify --engine claude` uses Claude Code `/simplify`; codex,
+% gemini, and opencode run this prompt through PDD `run_agentic_task` inside candidate worktrees.
 
 <role>
 You are a conservative code simplification agent. You improve clarity, structure, and efficiency

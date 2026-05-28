@@ -9528,15 +9528,12 @@
     }
   },
   {
-    "reason": "Runs Claude Code's bundled simplify skill in isolated candidate worktrees and copies back a conservatively selected verified result.",
-    "description": "Provides multi-attempt candidate simplification for changed code while enforcing file scope, backups, evidence, and optional verification.",
-    "dependencies": [
-      "checkup_file_selection_python.prompt",
-      "git_porcelain_python.prompt"
-    ],
+    "reason": "Invokes Claude Code bundled /simplify for the default simplify engine.",
+    "description": "Finds the Claude CLI, builds slash messages, and runs /simplify with JSON output parsing.",
+    "dependencies": [],
     "priority": 5,
-    "filename": "checkup_simplify_python.prompt",
-    "filepath": "pdd/checkup_simplify.py",
+    "filename": "checkup_simplify_claude_python.prompt",
+    "filepath": "pdd/checkup_simplify_claude.py",
     "tags": [
       "checkup",
       "simplify",
@@ -9548,14 +9545,91 @@
       "module": {
         "functions": [
           {
-            "name": "run_checkup_simplify",
-            "signature": "(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult",
-            "returns": "SimplifyRunResult"
+            "name": "check_claude_code_simplify_available",
+            "signature": "(*, quiet: bool) -> Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]",
+            "returns": "Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]"
+          },
+          {
+            "name": "build_simplify_slash_message",
+            "signature": "(rel_files: Sequence[str], *, focus: str) -> str",
+            "returns": "str"
           },
           {
             "name": "run_claude_simplify_command",
             "signature": "(slash_message: str, repo_root: Path, *, cli_path: str, verbose: bool, quiet: bool, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Selects and runs simplify engines (claude, codex, gemini, opencode, auto) for checkup simplify.",
+    "description": "Resolves engine names, checks provider availability, and dispatches to Claude Code or agentic workflow execution.",
+    "dependencies": [
+      "checkup_simplify_claude_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "checkup_simplify_engines_python.prompt",
+    "filepath": "pdd/checkup_simplify_engines.py",
+    "tags": [
+      "checkup",
+      "simplify",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "normalize_simplify_engine",
+            "signature": "(engine: Optional[str], *, default: str = \"claude\") -> str",
+            "returns": "str"
+          },
+          {
+            "name": "resolve_simplify_engine",
+            "signature": "(engine: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "check_simplify_engine_available",
+            "signature": "(engine: str, *, quiet: bool) -> Tuple[str, str, Optional[str]]",
+            "returns": "Tuple[str, str, Optional[str]]"
+          },
+          {
+            "name": "run_simplify_engine_command",
+            "signature": "(engine: str, rel_files: Sequence[str], repo_root: Path, *, focus: str, verbose: bool, quiet: bool, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Orchestrates multi-engine simplify candidates in isolated worktrees and copies back a conservatively selected verified result.",
+    "description": "Provides multi-attempt candidate simplification for changed code while enforcing file scope, backups, evidence, and optional verification.",
+    "dependencies": [
+      "checkup_file_selection_python.prompt",
+      "checkup_simplify_engines_python.prompt",
+      "checkup_simplify_claude_python.prompt",
+      "git_porcelain_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "checkup_simplify_python.prompt",
+    "filepath": "pdd/checkup_simplify.py",
+    "tags": [
+      "checkup",
+      "simplify",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_checkup_simplify",
+            "signature": "(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], engine: Optional[str], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult",
+            "returns": "SimplifyRunResult"
           }
         ]
       }
