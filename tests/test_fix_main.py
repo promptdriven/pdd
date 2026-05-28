@@ -2544,11 +2544,13 @@ def test_fix_main_passes_protect_tests_to_fix_errors_from_unit_tests(
 
 
 def test_fix_main_code_checks_protect_tests_before_writing_test():
-    """fix_main.py should check protect_tests before writing test file.
+    """fix_main.py should check protect_tests and focused-repair guards before writing test file.
 
-    This is a source code inspection test to ensure the conditional:
-        if fixed_unit_test and not protect_tests:
-    exists in fix_main.py, preventing test file writes when protect_tests=True.
+    This is a source code inspection test to ensure the write-guard condition
+    skips test writes both when protect_tests=True and when focused repair is
+    active (to avoid truncating the full test file with a sliced payload).
+    The guard should include all three conditions:
+        if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:
     """
     from pathlib import Path
 
@@ -2556,9 +2558,14 @@ def test_fix_main_code_checks_protect_tests_before_writing_test():
     fix_main_path = Path(__file__).parent.parent / "pdd" / "fix_main.py"
     source = fix_main_path.read_text()
 
-    # Check that the code includes "protect_tests" check when writing test file
-    assert "if fixed_unit_test and not protect_tests:" in source, \
-        "fix_main.py should check 'if fixed_unit_test and not protect_tests:' before writing test file"
+    # Check that the code includes both protect_tests and focused-slice guards when writing test file
+    assert (
+        "if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:" in source
+    ), (
+        "fix_main.py should guard test writes with "
+        "'if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:' "
+        "to prevent truncating the full test file during focused repair"
+    )
 
 
 # --- CI auth hang regression tests (GitHub Actions #462) ---
