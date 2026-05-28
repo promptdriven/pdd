@@ -426,11 +426,16 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     output_path = Path(story_file)
     assert output_path.exists()
     story_text = output_path.read_text(encoding="utf-8")
-    assert story_text.startswith("# User Story:")
+    assert story_text.startswith("<!-- pdd-story-prompts:")
     assert "<!-- pdd-story-prompts: notify_python.prompt -->" in story_text
+    assert "## Covers" in story_text
     assert "## Story" in story_text
-    assert "## Prompt Scope" in story_text
+    assert "## Context" in story_text
     assert "## Acceptance Criteria" in story_text
+    assert "## Oracle" in story_text
+    assert "## Non-Oracle" in story_text
+    assert "## Negative Cases" in story_text
+    assert "## Prompt Scope" not in story_text
 
 
 def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_path):
@@ -458,6 +463,90 @@ def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_
     assert "<!-- pdd-story-prompts:" in story_text
     assert "upload_python.prompt" in story_text
     assert "notify_python.prompt" in story_text
+
+
+def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "contract_rules_python.prompt"
+    prompt_content = fixture_path.read_text(encoding="utf-8")
+
+    prompt_one = prompts_dir / "contract_rules_python.prompt"
+    prompt_one.write_text(prompt_content, encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.1, "gpt-test")
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "- R1: Positive amount" in story_text
+    assert "- R2: Remaining balance" in story_text
+    assert "- R3: No provider call before validation" in story_text
+    assert "Call the payment provider for requests rejected by R1 or R2." in story_text
+
+
+def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    fixture_path = Path(__file__).resolve().parent / "fixtures" / "contract_rules_python.prompt"
+    prompt_content = fixture_path.read_text(encoding="utf-8")
+
+    prompt_one = prompts_dir / "contract_rules_python.prompt"
+    prompt_one.write_text(prompt_content, encoding="utf-8")
+    prompt_two = prompts_dir / "other_python.prompt"
+    prompt_two.write_text("Handle other stuff.", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.1, "gpt-test")
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one), str(prompt_two)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "- contract_rules_python.prompt#R1: Positive amount" in story_text
+    assert "- contract_rules_python.prompt#R2: Remaining balance" in story_text
+
+
+def test_legacy_minimal_story_passes_validation(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_one = prompts_dir / "math_python.prompt"
+    prompt_one.write_text("Math operations.", encoding="utf-8")
+
+    story_path = stories_dir / "story__legacy.md"
+    story_path.write_text(
+        "# User Story: Legacy Math Flow\n\n"
+        "<!-- pdd-story-prompts: math_python.prompt -->\n\n"
+        "## Story\n"
+        "As a legacy user, I want basic math to work.\n\n"
+        "## Acceptance Criteria\n"
+        "- Basic addition works.\n",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.1, "gpt-legacy")
+        success, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+        )
+
+    assert success is True
+    assert len(results) == 1
+    assert results[0]["passed"] is True
 
 
 def test_generate_user_story_missing_prompt_fails(tmp_path):

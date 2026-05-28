@@ -446,6 +446,82 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     return "Prompt included in story scope."
 
 
+def _rule_covers_summary(rule: object) -> str:
+    """Return a short human-readable summary for a parsed contract rule."""
+    line = getattr(rule, "line", "").strip()
+    summary = ""
+    id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", line, re.IGNORECASE)
+    if id_prefix:
+        summary = id_prefix.group(1).strip()
+    elif line:
+        summary = re.sub(r"^[^a-zA-Z0-9]+", "", line).strip()
+    if not summary:
+        block = getattr(rule, "block", "")
+        first = block.splitlines()[0].strip() if block else ""
+        id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", first, re.IGNORECASE)
+        summary = id_prefix.group(1).strip() if id_prefix else re.sub(r"^[^a-zA-Z0-9]+", "", first).strip()
+    if len(summary) > 120:
+        return summary[:117].rstrip() + "..."
+    raw_id = getattr(rule, "raw_id", "R?")
+    return summary or str(raw_id).upper()
+
+
+def _seed_covers_from_prompts(
+    prompt_paths: List[Path],
+    prompts_root: Optional[Path],
+) -> List[Tuple[str, str, str, str]]:
+    """Seed Covers bullets from ``<contract_rules>`` via ``contract_ir.parse_prompt_contracts``."""
+    from .contract_ir import parse_prompt_contracts
+
+    seeded: List[Tuple[str, str, str, str]] = []
+    for path in prompt_paths:
+        if not path.exists() or not path.is_file():
+            continue
+        parsed = parse_prompt_contracts(path.resolve())
+        if not parsed.rules:
+            continue
+        ref = _prompt_reference_for_metadata(path, prompts_root)
+        for rule in parsed.rules:
+            if rule.raw_id == "(unnumbered)":
+                continue
+            rule_id = rule.raw_id.upper()
+            summary = _rule_covers_summary(rule)
+            seeded.append((ref, rule_id, summary, rule.block))
+    return seeded
+
+
+def _seed_negative_cases_from_rules(
+    rules: List[Tuple[str, str, str, str]],
+) -> List[str]:
+    """Extract forbidden outcomes from rules containing MUST NOT."""
+    negatives: List[str] = []
+    for _, _, _, rule_text in rules:
+        if not re.search(r"\bMUST\s+NOT\b", rule_text, re.IGNORECASE):
+            continue
+        match = re.search(r"\bmust\s+not\s+([^.\n]+)", rule_text, re.IGNORECASE)
+        if not match:
+            continue
+        clause = match.group(1).strip()
+        if not clause:
+            continue
+        cleaned = re.sub(r"^[^a-zA-Z0-9]+", "", clause).strip()
+        if not cleaned:
+            continue
+        bullet = cleaned[0].upper() + cleaned[1:]
+        if not bullet.endswith("."):
+            bullet += "."
+        negatives.append(bullet)
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for neg in negatives:
+        key = neg.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(neg)
+    return deduped
+
+
 def _render_story_markdown_from_prompts(
     *,
     title: str,
@@ -457,23 +533,75 @@ def _render_story_markdown_from_prompts(
         _prompt_reference_for_metadata(path, prompts_root)
         for path in prompt_paths
     ]
-    scope_lines = []
+    seeded_rules = _seed_covers_from_prompts(prompt_paths, prompts_root)
+    covers_lines: List[str] = []
+    if seeded_rules:
+        use_cross = len(prompt_paths) > 1
+        for ref, rule_id, summary, _ in seeded_rules:
+            if use_cross:
+                covers_lines.append(f"- {ref}#{rule_id}: {summary}")
+            else:
+                covers_lines.append(f"- {rule_id}: {summary}")
+    else:
+        covers_lines.append(
+            "- R1: Add contract rule IDs here after contracts are authored."
+        )
+    covers_block = "\n".join(covers_lines)
+
+    negatives = _seed_negative_cases_from_rules(seeded_rules)
+    if negatives:
+        neg_block = "\n".join(f"- {neg}" for neg in negatives)
+    else:
+        neg_block = "- List forbidden outcomes this story protects against."
+
+    context_lines = [
+        "Describe relevant state, assumptions, fixtures, users, records, "
+        "external services, or dependencies.",
+        "",
+        "This story covers the following prompt files:",
+    ]
     for path in prompt_paths:
         ref = _prompt_reference_for_metadata(path, prompts_root)
         summary = _prompt_summary_line(path)
-        scope_lines.append(f"- `{ref}`: {summary}")
+        context_lines.append(f"- `{ref}`: {summary}")
+    context_block = "\n".join(context_lines)
 
-    scope_block = "\n".join(scope_lines)
+    metadata_line = f"<!-- {STORY_PROMPTS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
     return (
+        f"{metadata_line}\n\n"
         f"# User Story: {title}\n\n"
-        f"<!-- {STORY_PROMPTS_METADATA_KEY}: {', '.join(metadata_refs)} -->\n\n"
-        "## Story\n"
-        "As a user, I want the scoped prompt capabilities to compose correctly so that the full workflow works end-to-end.\n\n"
-        "## Prompt Scope\n"
-        f"{scope_block}\n\n"
-        "## Acceptance Criteria\n"
-        "- [ ] Behavior required by all listed prompts works when used together.\n"
-        "- [ ] `pdd detect --stories` reports no required prompt changes for this story.\n"
+        "## Covers\n\n"
+        f"{covers_block}\n\n"
+        "## Story\n\n"
+        "As a <persona>,\n"
+        "I want the scoped prompt capabilities to compose correctly,\n"
+        "so that the full workflow works end-to-end.\n\n"
+        "## Context\n\n"
+        f"{context_block}\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given behavior required by all listed prompts, when used together, "
+        "then all components function correctly.\n"
+        "2. Given `pdd detect --stories` is run, when analyzed, then it reports "
+        "no required prompt changes.\n\n"
+        "## Oracle\n\n"
+        "These details matter for pass/fail:\n"
+        "- error type\n"
+        "- state transition\n"
+        "- absence/presence of external call\n"
+        "- emitted event\n"
+        "- returned value shape\n\n"
+        "## Non-Oracle\n\n"
+        "These details should not matter:\n"
+        "- private helper names\n"
+        "- internal class structure\n"
+        "- exact wording of non-user-facing messages\n"
+        "- deterministic but irrelevant ordering\n\n"
+        "## Negative Cases\n\n"
+        f"{neg_block}\n\n"
+        "## Non-Goals\n\n"
+        "What this story explicitly does not cover.\n\n"
+        "## Notes\n\n"
+        "Links, edge cases, fixtures, rationale, or implementation hints.\n"
     )
 
 
