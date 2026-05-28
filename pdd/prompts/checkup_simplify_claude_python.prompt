@@ -1,0 +1,13 @@
+% Write `pdd/checkup_simplify_claude.py`, Claude Code `/simplify` helpers for checkup simplify.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Invokes Claude Code's bundled simplify skill directly without routing through generic agentic prompts.</pdd-reason>
+
+% Public API
+- `check_claude_code_simplify_available(*, quiet: bool) -> Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]`
+- `build_simplify_slash_message(rel_files: Sequence[str], *, focus: str) -> str`
+- `run_claude_simplify_command(slash_message: str, repo_root: Path, *, cli_path: str, verbose: bool, quiet: bool, timeout: float) -> Tuple[bool, str, float, str]`
+
+% Code output
+- Code: `pdd/checkup_simplify_claude.py`

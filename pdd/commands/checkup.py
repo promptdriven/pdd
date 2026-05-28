@@ -13,7 +13,8 @@ from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
-from .contracts import contracts_cli
+from .checkup_simplify import checkup_simplify
+from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .drift import drift_cmd
 from .prompt import prompt_lint
@@ -296,8 +297,8 @@ from .prompt import prompt_lint
     ),
 )
 @click.option(
-    "--help",
     "-h",
+    "--help",
     "show_help",
     is_flag=True,
     is_eager=True,
@@ -309,6 +310,7 @@ from .prompt import prompt_lint
 def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unknown-option-value
     ctx: click.Context,
     target: Optional[str],
+    show_help: bool,
     validate_arch_includes: bool,
     project_root: Optional[Path],
     strict: bool,
@@ -338,7 +340,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_gates: bool,
     gate_timeout: float,
     gate_allow: Tuple[str, ...],
-    show_help: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -352,10 +353,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Contract checks:
+      pdd checkup contract check TARGET [OPTIONS]
+    Simplify (Claude Code /simplify, requires --apply):
+      pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
       pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
     Contract checks:
-      pdd checkup contract check [OPTIONS] TARGET  (alias: ``pdd contracts check``)
+      pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
     Regeneration drift:
@@ -363,8 +368,79 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in {"lint", "contract", "contracts", "coverage", "drift"}:
+    if show_help and target not in {
+        "lint",
+        "contract",
+        "contracts",
+        "coverage",
+        "simplify",
+        "drift",
+    }:
         click.echo(ctx.command.get_help(ctx))
+        return None
+
+    if target in {"contract", "contracts"}:
+        contract_args = list(ctx.args)
+        if strict:
+            # Forward strict to the subcommand scope, not the group scope.
+            if contract_args and contract_args[0] == "check":
+                contract_args.insert(1, "--strict")
+            else:
+                contract_args.insert(0, "--strict")
+        if not contract_args:
+            click.echo(
+                contracts_cli.get_help(
+                    click.Context(contracts_cli, info_name=f"pdd checkup {target}")
+                )
+            )
+            return None
+        if show_help:
+            # Parent command owns -h/--help; explicitly render nested help.
+            if contract_args[:1] == ["check"]:
+                exit_code = contracts_check.main(
+                    args=["--help"],
+                    prog_name=f"pdd checkup {target} check",
+                    standalone_mode=False,
+                    obj=ctx.obj,
+                )
+                if exit_code:
+                    raise click.exceptions.Exit(exit_code)
+                return None
+            contract_args.append("--help")
+        if contract_args[0] == "check" and "--help" in contract_args[1:]:
+            exit_code = contracts_check.main(
+                args=["--help"],
+                prog_name=f"pdd checkup {target} check",
+                standalone_mode=False,
+                obj=ctx.obj,
+            )
+            if exit_code:
+                raise click.exceptions.Exit(exit_code)
+            return None
+        exit_code = contracts_cli.main(
+            args=contract_args,
+            prog_name=f"pdd checkup {target}",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "simplify":
+        simplify_args = list(ctx.args)
+        if show_help:
+            simplify_args.append("--help")
+        exit_code = checkup_simplify.main(
+            args=simplify_args,
+            prog_name="pdd checkup simplify",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if show_help:
+            ctx.exit()
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
         return None
 
     if target == "lint":
@@ -386,37 +462,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             raise click.exceptions.Exit(exit_code)
         return None
 
-    if target in {"contract", "contracts"}:
-        contract_args = list(ctx.args)
-        if strict:
-            # Forward strict to the *subcommand* (e.g. "check"), not the group.
-            # Otherwise Click treats it as an option to the "contracts" group.
-            if contract_args and contract_args[0] == "check":
-                contract_args.insert(1, "--strict")
-            else:
-                contract_args.insert(0, "--strict")
-        if show_help:
-            # Because `checkup` owns `--help` (add_help_option=False) Click will eagerly
-            # consume a trailing `--help` and not forward it to `contracts`. For the
-            # documented canonical path `pdd checkup contract check --help`, render the
-            # `contracts check` help directly and exit 0.
-            if not contract_args or contract_args[:1] == ["check"]:
-                contracts_check_cmd = contracts_cli.get_command(ctx, "check")
-                click.echo(
-                    contracts_check_cmd.get_help(
-                        click.Context(contracts_check_cmd, info_name=f"pdd checkup {target} check")
-                    )
-                )
-                return None
-        exit_code = contracts_cli.main(
-            args=contract_args,
-            prog_name=f"pdd checkup {target} check",
-            standalone_mode=False,
-            obj=ctx.obj,
-        )
-        if exit_code:
-            raise click.exceptions.Exit(exit_code)
-        return None
     if target == "coverage":
         if show_help:
             click.echo(
