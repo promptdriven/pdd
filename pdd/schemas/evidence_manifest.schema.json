@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptdriven.dev/schemas/evidence_manifest.schema.json",
+  "title": "PDD Evidence Manifest",
+  "type": "object",
+  "required": ["schema_version", "run", "prompt", "context", "generation", "outputs", "contracts", "validation", "logs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run": {
+      "type": "object",
+      "required": ["id", "command", "pdd_version", "timestamp"],
+      "properties": {
+        "id": {"type": "string"},
+        "command": {"type": "string"},
+        "pdd_version": {"type": "string"},
+        "timestamp": {"type": "string"}
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "required": ["path", "sha256", "expanded_sha256", "uses_nondeterministic_tags"],
+      "properties": {
+        "path": {"type": ["string", "null"]},
+        "sha256": {"type": ["string", "null"]},
+        "expanded_sha256": {"type": ["string", "null"]},
+        "uses_nondeterministic_tags": {"type": "boolean"}
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": ["includes", "web_snapshots", "shell_snapshots"],
+      "properties": {
+        "includes": {"type": "array", "items": {"$ref": "#/$defs/fileHash"}},
+        "web_snapshots": {"type": "array"},
+        "shell_snapshots": {"type": "array"}
+      }
+    },
+    "generation": {
+      "type": "object",
+      "required": ["model", "temperature", "cost_usd", "grounding_examples"],
+      "properties": {
+        "model": {"type": ["string", "null"]},
+        "temperature": {"type": ["number", "null"]},
+        "cost_usd": {"type": "number"},
+        "grounding_examples": {"type": "array"}
+      }
+    },
+    "outputs": {"type": "array", "items": {"$ref": "#/$defs/fileHash"}},
+    "contracts": {
+      "type": "object",
+      "required": ["status", "rules"],
+      "properties": {
+        "status": {"enum": ["available", "not_applicable", "not_available"]},
+        "rules": {"type": "object"}
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["detect_stories", "unit_tests", "verify"],
+      "additionalProperties": {"type": "string"}
+    },
+    "logs": {
+      "type": "object",
+      "required": ["core_dump", "verify_results", "cost_csv"],
+      "additionalProperties": {"type": ["string", "null"]}
+    }
+  },
+  "$defs": {
+    "fileHash": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": "string"}
+      }
+    }
+  }
+}
