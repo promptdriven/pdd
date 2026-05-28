@@ -62,6 +62,7 @@ class GateResult:
 
 
 _PASS_STATUSES = frozenset({"pass", "passed", "ok", "success"})
+_SKIP_SHAPED_STATUSES = frozenset({"not_applicable", "skip", "skipped"})
 
 
 def _validation_passes(status: str) -> bool:
@@ -69,15 +70,17 @@ def _validation_passes(status: str) -> bool:
     return (status or "").strip().lower() in _PASS_STATUSES
 
 
-def _append_skipped_validation_failure(
+def _handle_skip_shaped_validation(
     failures: list[GateFailure],
     *,
     manifest: ManifestView,
     manifest_key: str,
     policy: GatePolicy,
 ) -> bool:
-    """Record skip/not_applicable failures when policy disallows them."""
-    if manifest_key == "verify" and not policy.allows("skipped_verify"):
+    """Apply allow.skipped_* for verify/unit_tests; return True when consumed."""
+    if manifest_key == "verify":
+        if policy.allows("skipped_verify"):
+            return True
         failures.append(
             GateFailure(
                 code="skipped_verify",
@@ -86,7 +89,9 @@ def _append_skipped_validation_failure(
             )
         )
         return True
-    if manifest_key == "unit_tests" and not policy.allows("skipped_tests"):
+    if manifest_key == "unit_tests":
+        if policy.allows("skipped_tests"):
+            return True
         failures.append(
             GateFailure(
                 code="skipped_tests",
@@ -140,32 +145,21 @@ def _check_validation_flags(
                 )
             )
             continue
-        if normalized == "not_applicable":
-            if _append_skipped_validation_failure(
-                failures, manifest=manifest, manifest_key=manifest_key, policy=policy
-            ):
-                continue
+        if normalized in _SKIP_SHAPED_STATUSES:
+            if manifest_key in {"verify", "unit_tests"}:
+                if _handle_skip_shaped_validation(
+                    failures,
+                    manifest=manifest,
+                    manifest_key=manifest_key,
+                    policy=policy,
+                ):
+                    continue
             failures.append(
                 GateFailure(
                     code=policy_key,
                     message=(
                         f"{manifest.basename}: validation.{manifest_key} is "
-                        f"not_applicable but policy requires {policy_key}"
-                    ),
-                    fix_command=fix,
-                )
-            )
-            continue
-        if normalized in {"skip", "skipped"}:
-            if _append_skipped_validation_failure(
-                failures, manifest=manifest, manifest_key=manifest_key, policy=policy
-            ):
-                continue
-            failures.append(
-                GateFailure(
-                    code=policy_key,
-                    message=(
-                        f"{manifest.basename}: validation.{manifest_key}={status!r}"
+                        f"{normalized!r} but policy requires {policy_key}"
                     ),
                     fix_command=fix,
                 )

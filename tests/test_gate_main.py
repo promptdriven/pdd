@@ -367,6 +367,34 @@ def test_gate_fails_sync_skip_not_applicable_validation(tmp_path: Path) -> None:
     assert "stories_pass" in codes
 
 
+def test_gate_allows_skipped_verify_and_tests_when_policy_permits(
+    tmp_path: Path,
+) -> None:
+    """``allow.skipped_*: true`` satisfies skip-shaped verify/tests validation."""
+    project = tmp_path
+    code = project / "src" / "refund.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("def refund():\n    return 1\n", encoding="utf-8")
+    validation = validation_from_sync({}, skip_tests=True, skip_verify=True)
+    validation["detect_stories"] = "passed"
+    manifest_path = project / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
+    _write_routine_manifest(
+        manifest_path,
+        basename="refund",
+        output_rel="src/refund.py",
+        output_hash=sha256_file(code),
+        validation=validation,
+    )
+    policy_file = project / "policy.yml"
+    policy_file.write_text(
+        "allow:\n  skipped_verify: true\n  skipped_tests: true\n",
+        encoding="utf-8",
+    )
+    result = run_gate_policy(project, target="refund", policy_path=policy_file)
+    assert result.passed
+    assert result.failures == []
+
+
 def test_checkup_gate_without_target_runs_all_manifests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
