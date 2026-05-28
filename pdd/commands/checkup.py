@@ -13,6 +13,7 @@ from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
+from .contracts import contracts_check, contracts_cli
 from .prompt import prompt_lint
 
 
@@ -349,6 +350,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Contract checks:
+      pdd checkup contract check TARGET [OPTIONS]
     Simplify (Claude Code /simplify, requires --apply):
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
@@ -356,8 +359,41 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in ("lint", "simplify"):
+    if show_help and target not in ("contract", "lint", "simplify"):
         click.echo(ctx.command.get_help(ctx))
+        return None
+
+    if target == "contract":
+        contract_args = list(ctx.args)
+        if strict:
+            contract_args.insert(0, "--strict")
+        if not contract_args:
+            click.echo(
+                contracts_cli.get_help(
+                    click.Context(contracts_cli, info_name="pdd checkup contract")
+                )
+            )
+            return None
+        if show_help:
+            contract_args.append("--help")
+        if contract_args[0] == "check" and "--help" in contract_args[1:]:
+            exit_code = contracts_check.main(
+                args=["--help"],
+                prog_name="pdd checkup contract check",
+                standalone_mode=False,
+                obj=ctx.obj,
+            )
+            if exit_code:
+                raise click.exceptions.Exit(exit_code)
+            return None
+        exit_code = contracts_cli.main(
+            args=contract_args,
+            prog_name="pdd checkup contract",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
         return None
 
     if target == "simplify":
