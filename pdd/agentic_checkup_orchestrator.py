@@ -2056,6 +2056,29 @@ def _run_agentic_checkup_orchestrator_inner(
                     )
                 last_completed_step = actual_last_success
 
+        # External review (PR #1215) Finding 2: a loaded state whose run
+        # already COMPLETED (last_completed_step is the terminal step) must NOT
+        # be resumed. The terminal ``clear_workflow_state`` is best-effort and
+        # ``load_workflow_state`` prefers the GitHub state comment over local,
+        # so a remote clear that failed (e.g. a token without
+        # comment-delete/edit scope) would otherwise let this rerun skip every
+        # step and replay the cached Step 7 verdict as "Checkup complete"
+        # without re-verifying the current PR head. Discard it and re-run from
+        # scratch. Preserve ``github_comment_id`` so the fresh run PATCHes the
+        # lingering state comment instead of creating a duplicate.
+        if start_step_override is None and last_completed_step >= STEP_ORDER[-1]:
+            if not quiet:
+                console.print(
+                    "[yellow]Cached workflow state is from a completed run "
+                    "(its terminal cleanup did not remove the state comment); "
+                    "discarding it and re-running verification from "
+                    "scratch.[/yellow]"
+                )
+            github_comment_id = loaded_gh_id
+            last_completed_step = 0
+            state = None
+
+    if state is not None:
         resume_start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
         if not quiet:
             console.print(
@@ -3147,11 +3170,19 @@ def _run_agentic_checkup_orchestrator_inner(
                                 f"{status_value!r}; treating as a test failure."
                                 "[/yellow]"
                             )
-                            if persisted_for_surface:
-                                console.print(
-                                    "[yellow]Step 5 failure detail:\n"
-                                    f"{persisted_for_surface}[/yellow]"
-                                )
+                        # External review (PR #1215) Finding 3: surface the
+                        # failure detail unconditionally — visible even in quiet
+                        # mode — to match the provider-failure path's
+                        # always-on print (see ``_handle_step_result``). Quiet
+                        # automation is exactly where operators have no other
+                        # window into the failing tests this branch handles.
+                        # ``persisted_for_surface`` is the already-scrubbed
+                        # ``context['step5_output']``.
+                        if persisted_for_surface:
+                            console.print(
+                                "[yellow]Step 5 failure detail:\n"
+                                f"{persisted_for_surface}[/yellow]"
+                            )
                         if not step_outputs.get("5", "").startswith("FAILED:"):
                             step_outputs["5"] = f"FAILED: {persisted_for_surface}"
                             _save_state()
@@ -3191,6 +3222,18 @@ def _run_agentic_checkup_orchestrator_inner(
                         context["step5_failure_signal_missing"] = ",".join(
                             signal_missing
                         )
+                    else:
+                        # External review (PR #1215) Finding 1: the failure
+                        # signal is written ONLY on the failing path above and
+                        # ``context`` persists across fix-verify iterations. A
+                        # clean (or skipped — both set ``step5_clean``) Step 5
+                        # in a later iteration would otherwise leave the PRIOR
+                        # iteration's failure block in place, driving Step 6 to
+                        # "fix" a failure that no longer exists. Clear it
+                        # whenever Step 5 is clean so Step 6 only ever sees the
+                        # current iteration's signal.
+                        context["step5_failure_signal"] = ""
+                        context["step5_failure_signal_missing"] = ""
 
                 if step_num == 7:
                     step7_output = output
@@ -4072,8 +4115,15 @@ def _run_agentic_checkup_orchestrator_inner(
             if abort is not None:
                 return abort
 
-    # All steps complete — clear state.
-    clear_workflow_state(
+    # All steps complete — clear state. External review (PR #1215) Finding 2:
+    # ``load_workflow_state`` loads the GitHub state comment with PRIORITY over
+    # local state, so a remote clear that cannot be confirmed (e.g. a token
+    # without comment-delete/edit scope) would let the NEXT run resume from this
+    # stale completed state instead of rerunning verification. Surface a warning
+    # when the clear is unconfirmed. The checkup itself succeeded, so this is
+    # appended to the message rather than flipping the verdict (mirrors the
+    # no-fix early-refusal path).
+    _state_cleared = clear_workflow_state(
         cwd=cwd,
         issue_number=issue_number,
         workflow_type="checkup",
@@ -4082,6 +4132,16 @@ def _run_agentic_checkup_orchestrator_inner(
         repo_name=repo_name,
         use_github_state=use_github_state,
     )
+    if not _state_cleared:
+        _clear_warn = (
+            " (warning: could not confirm workflow-state cleanup — a rerun "
+            "may replay the cached completed state; delete the "
+            "PDD_WORKFLOW_STATE comment on the issue manually if a stale "
+            "verdict reappears)"
+        )
+        if not quiet:
+            console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
+        pending_post_suffix = f"{pending_post_suffix}{_clear_warn}"
 
     final_msg = "Checkup complete"
     if not quiet:

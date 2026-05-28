@@ -5996,3 +5996,254 @@ class TestIssue1215Round10Step5StatusHelper:
 
         assert _step5_was_skipped("") is False
         assert _step5_was_skipped("No structured block here at all.") is False
+
+
+# Step 5 failure block declaring ``status: fail`` for the F1 stale-signal test.
+STEP5_FAIL_OUTPUT = (
+    "Tests failed.\n"
+    "```failure_signal\n"
+    "command: pytest -q\n"
+    "exit_code: 1\n"
+    "status: fail\n"
+    "failing_ids: tests/test_main.py::test_iter1_only\n"
+    "artifact_path: inline\n"
+    "output: |\n"
+    "  E   AssertionError: iteration-1 failure that must not survive\n"
+    "  FAILED tests/test_main.py::test_iter1_only\n"
+    "```"
+)
+
+
+class TestExternalReviewPR1215StaleSignalAndCleanup:
+    """External review (PR #1215) follow-up:
+
+    * Finding 1 — ``context['step5_failure_signal']`` is written only on the
+      failing Step 5 path and never cleared, so a later iteration with a clean
+      Step 5 can still drive the fixer with the previous failure block.
+    * Finding 2 — the terminal success path discards ``clear_workflow_state``'s
+      bool, so a failed remote-state clear is silently ignored and the next run
+      can replay stale completed state.
+    * Finding 3 — the provider-success/logical-failure branch hides the Step 5
+      failure detail behind ``if not quiet``, leaving quiet automation with no
+      concrete failing-test context.
+    """
+
+    def test_stale_step5_signal_cleared_when_later_iteration_is_clean(self, tmp_path):
+        """FAILS_ON_CURRENT_CODE: iteration 1 fails Step 5, iteration 2 has a
+        clean Step 5 but the fixer still runs (Step 3 dirty); the stale
+        iteration-1 ``failure_signal`` block must NOT reach Step 6."""
+        captured_iter2_step6: List[Dict] = []
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            iteration = context.get("fix_verify_iteration", "1")
+            if step_num == 3:
+                # iter1 clean, iter2 dirty so the all-clean fixer skip does
+                # NOT apply and Step 6 runs with iteration-2's clean Step 5.
+                if iteration == "2":
+                    return (False, "FAILED: build step regressed", 0.1, "model")
+                return (True, "out-3", 0.0, "model")
+            if step_num == 5:
+                if iteration == "1":
+                    return (False, STEP5_FAIL_OUTPUT, 0.1, "model")
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 6.1:
+                if iteration == "2":
+                    captured_iter2_step6.append(dict(context))
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                # iter1: not yet fixed -> loop continues to iteration 2.
+                if iteration == "1":
+                    return (True, "Issues remain.", 0.1, "model")
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        assert captured_iter2_step6, "Step 6.1 must run in iteration 2"
+        ctx = captured_iter2_step6[0]
+        assert ctx.get("step5_failure_signal", "") == "", (
+            "Iteration-2 Step 6 received a stale Step 5 failure_signal from "
+            "iteration 1; it must be cleared once Step 5 is clean. Got: "
+            f"{ctx.get('step5_failure_signal', '')!r}"
+        )
+        assert ctx.get("step5_failure_signal_missing", "") == "", (
+            "step5_failure_signal_missing must also be cleared on a clean "
+            "Step 5 iteration."
+        )
+
+    def test_success_path_warns_when_clear_workflow_state_unconfirmed(self, tmp_path):
+        """FAILS_ON_CURRENT_CODE: the terminal success path must surface a
+        warning when ``clear_workflow_state`` could not confirm the remote
+        clear, while still returning success."""
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+        )
+        # Replace the clear_workflow_state patch (index 7) with one that
+        # reports an unconfirmed remote clear.
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+                 return_value=False,
+             ), \
+             patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        # The checkup itself succeeded — the cleanup miss is a warning, not a
+        # verdict flip.
+        assert success is True, msg
+        assert "cleanup" in (msg or "").lower(), (
+            "Terminal success path must append a workflow-state cleanup "
+            f"warning when the remote clear is unconfirmed. Got: {msg!r}"
+        )
+
+    def test_completed_state_not_replayed_when_clear_failed(self, tmp_path):
+        """FAILS_ON_CURRENT_CODE: a completed --no-fix --pr run whose terminal
+        clear_workflow_state failed remotely leaves resumable state behind. The
+        next run must re-verify (re-execute Step 5/Step 7) rather than skipping
+        every step and replaying the cached Step 7 verdict as a clean result.
+
+        Trap guard: the cached state's pr_head_sha MATCHES the current head, so
+        the identity validator does NOT discard it — the completed-state guard
+        is the only thing that can prevent the replay."""
+        from unittest.mock import patch as _patch
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+
+        per_run_calls: List[List] = []
+
+        def make_run_step(sink):
+            def run_step(step_num, _name, _ctx, **_kw):
+                sink.append(step_num)
+                if step_num == 5:
+                    return (True, STEP5_CLEAN_OUTPUT, 0.0, "fake")
+                if step_num == 7:
+                    return (True, ALL_ISSUES_FIXED, 0.0, "fake")
+                return (True, f"out-{step_num}", 0.0, "fake")
+            return run_step
+
+        common_args = dict(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            no_fix=True,
+            timeout_adder=0.0,
+            # use_github_state=False keeps load/save against the REAL local
+            # state file so the completed state persists between runs.
+            use_github_state=False,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+        # clear_workflow_state is a no-op returning False — simulates a failed
+        # remote clear that leaves the saved state behind. load/save are REAL.
+        for _run in range(2):
+            sink: List = []
+            per_run_calls.append(sink)
+            with (
+                _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+                _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+                _patch("pdd.agentic_checkup_orchestrator.clear_workflow_state", return_value=False),
+                _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=make_run_step(sink)),
+            ):
+                success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**common_args)
+            assert success is True, _msg
+
+        # Run 1 verified normally. Run 2 must NOT be a stale-state replay — it
+        # must re-execute Step 5 and Step 7 instead of skipping every step.
+        assert 5 in per_run_calls[1] and 7 in per_run_calls[1], (
+            "Second run replayed completed cached state without re-verifying "
+            f"(steps executed on run 2: {sorted(set(per_run_calls[1]))}). A "
+            "completed run's state must be discarded on load when its terminal "
+            "cleanup did not remove it."
+        )
+
+    def test_provider_success_logical_failure_detail_visible_in_quiet(self, tmp_path):
+        """FAILS_ON_CURRENT_CODE: when Step 5 reports provider success but its
+        ``failure_signal`` block declares ``status: fail``, the failing-test
+        detail must be printed even under ``quiet=True`` (matching the
+        unconditional print on the provider-failure path)."""
+        step5_output = (
+            "Provider call returned success.\n"
+            "```failure_signal\n"
+            "command: pytest -q\n"
+            "exit_code: 1\n"
+            "status: fail\n"
+            "failing_ids: tests/test_main.py::test_quiet_path\n"
+            "artifact_path: inline\n"
+            "output: |\n"
+            "  E   AssertionError: quiet-mode failure detail\n"
+            "  FAILED tests/test_main.py::test_quiet_path\n"
+            "```"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                # Provider SUCCESS, but the block declares a logical failure.
+                return (True, step5_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+        )
+        # _PR_ARGS_1212 sets quiet=True.
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], \
+             patches[10] as mc:
+            run_agentic_checkup_orchestrator(**{**_PR_ARGS_1212, "cwd": tmp_path})
+
+        all_printed = " ".join(
+            str(arg) for call_obj in mc.print.call_args_list for arg in call_obj.args
+        )
+        assert (
+            "quiet-mode failure detail" in all_printed
+            or "test_quiet_path" in all_printed
+        ), (
+            "Step 5 provider-success/logical-failure detail must be printed "
+            "even in quiet mode so automation sees the failing-test context."
+        )
