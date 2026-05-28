@@ -2467,6 +2467,7 @@ def sync_orchestration(
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_fingerprint_atomic(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
+                        consecutive_noop_fixes = 0
                         continue
                     if operation == 'fix' and skip_tests:
                         skipped_operations.append('fix')
@@ -2483,6 +2484,7 @@ def sync_orchestration(
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_fingerprint_atomic(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
+                        consecutive_noop_fixes = 0
                         continue
                     if operation == 'crash' and (skip_tests or skip_verify):
                         skipped_operations.append('crash')
@@ -2503,6 +2505,7 @@ def sync_orchestration(
                             test_hash=current_hashes.get('test_hash')
                         )
                         _save_run_report_atomic(asdict(synthetic_report), basename, language, paths=pdd_files)
+                        consecutive_noop_fixes = 0
                         continue
 
                     current_function_name_ref[0] = operation
