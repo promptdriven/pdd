@@ -96,6 +96,29 @@ def _cached_jwt_matches_expected_audience(jwt: Optional[str]) -> bool:
     return False
 
 
+def _has_unexpired_raw_jwt() -> bool:
+    """Return True if the cache file contains a non-expired JWT, ignoring audience.
+
+    This is used to distinguish between "no JWT at all" and "JWT exists but
+    wrong environment" so that get_auth_status can avoid a refresh-token
+    fallback when the token is simply from a different PDD environment.
+    """
+    if not JWT_CACHE_FILE.exists():
+        return False
+    try:
+        with open(JWT_CACHE_FILE, "r") as f:
+            cache = json.load(f)
+        expires_at = cache.get("expires_at", 0)
+        if not isinstance(expires_at, (int, float)):
+            return False
+        if expires_at > time.time() + 300:
+            jwt = cache.get("id_token") or cache.get("jwt")
+            return bool(jwt)
+    except Exception:
+        pass
+    return False
+
+
 def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
     """
     Check JWT cache file for valid token.
@@ -301,13 +324,29 @@ def get_auth_status() -> Dict[str, Any]:
         - cached: bool - True if using cached JWT (vs refresh token)
         - expires_at: Optional[float] - JWT expiration timestamp if cached
     """
-    # First check JWT cache
+    # Peek at the raw file before the audience-aware check may delete it.
+    # This lets us distinguish "no JWT at all" from "JWT exists but wrong env".
+    had_raw_jwt = _has_unexpired_raw_jwt()
+
+    # First check JWT cache (audience-aware)
     cache_valid, expires_at = get_jwt_cache_info()
     if cache_valid:
         return {
             "authenticated": True,
             "cached": True,
             "expires_at": expires_at,
+        }
+
+    # If a JWT existed but was rejected due to audience mismatch, do NOT fall
+    # back to the refresh token.  The refresh token is environment-specific
+    # too and cannot produce a valid JWT for this environment, so reporting
+    # authenticated=True here would create a split-brain frontend state.
+    expected_aud = _get_expected_jwt_audience()
+    if expected_aud and had_raw_jwt:
+        return {
+            "authenticated": False,
+            "cached": False,
+            "expires_at": None,
         }
 
     # Check for refresh token in keyring

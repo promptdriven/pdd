@@ -73,3 +73,54 @@ def test_issue_1274_reproduction_auth_status_rejects_wrong_environment_cached_jw
         "expires_at": None,
     }
     assert auth_service.get_cached_jwt() is None
+
+
+def test_issue_1274_split_brain_wrong_audience_jwt_with_refresh_token(
+    monkeypatch,
+    tmp_path,
+):
+    """Auth status must return unauthenticated even when a refresh token exists
+    if the cached JWT has the wrong audience for the active environment.
+
+    Previously, get_auth_status() fell through to the refresh-token check after
+    rejecting the bad JWT, producing authenticated=True while get_cached_jwt()
+    returned None.  This is the split-brain state that made the UI look signed
+    in before billing/cloud calls redirected to signup.
+    """
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    # A refresh token exists — this is the case the earlier test did NOT cover.
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: ("prod_refresh_token_value", None),
+    )
+
+    cache_file = tmp_path / "jwt_cache"
+    now = int(time.time())
+    cache_file.write_text(
+        json.dumps(
+            {
+                "id_token": _unsigned_jwt(
+                    {
+                        "aud": "prompt-driven-development",
+                        "email": "signed-in@example.com",
+                        "exp": now + 3600,
+                    }
+                ),
+                "expires_at": now + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    status = auth_service.get_auth_status()
+
+    # Must not report authenticated just because a refresh token exists when
+    # the cached JWT belongs to a different environment.
+    assert status == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+    }

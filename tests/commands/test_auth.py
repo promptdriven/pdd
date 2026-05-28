@@ -48,21 +48,27 @@ def mock_dependencies():
          patch("pdd.commands.auth.get_auth_status") as mock_status, \
          patch("pdd.commands.auth.service_logout") as mock_logout, \
          patch("pdd.commands.auth.JWT_CACHE_FILE", new_callable=MagicMock) as mock_cache_file, \
+         patch("pdd.commands.auth.get_jwt_cache_info") as mock_get_jwt_cache_info, \
+         patch("pdd.commands.auth.get_cached_jwt") as mock_get_cached_jwt, \
          patch("pdd.commands.auth.AuthError", MockAuthError), \
          patch("pdd.commands.auth.NetworkError", MockNetworkError), \
          patch("pdd.commands.auth.TokenError", MockTokenError), \
          patch("pdd.commands.auth.UserCancelledError", MockUserCancelledError), \
          patch("pdd.commands.auth.RateLimitError", MockRateLimitError):
-        
+
         # Setup default behaviors
         mock_cache_file.parent.exists.return_value = True
         mock_cache_file.exists.return_value = False
-        
+        mock_get_jwt_cache_info.return_value = (False, None)
+        mock_get_cached_jwt.return_value = None
+
         yield {
             "get_jwt_token": mock_get_token,
             "get_auth_status": mock_status,
             "service_logout": mock_logout,
-            "JWT_CACHE_FILE": mock_cache_file
+            "JWT_CACHE_FILE": mock_cache_file,
+            "get_jwt_cache_info": mock_get_jwt_cache_info,
+            "get_cached_jwt": mock_get_cached_jwt,
         }
 
 @pytest.fixture
@@ -278,52 +284,42 @@ def test_logout_failure(runner, mock_dependencies):
 
 def test_token_raw_success(runner, mock_dependencies):
     """Test getting raw token."""
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
     future_time = time.time() + 3600
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "valid.token.sig",
-        "expires_at": future_time
-    })
-    
+    mock_dependencies["get_jwt_cache_info"].return_value = (True, future_time)
+    mock_dependencies["get_cached_jwt"].return_value = "valid.token.sig"
+
     result = runner.invoke(auth_group, ["token"])
-    
+
     assert result.exit_code == 0
     assert result.output.strip() == "valid.token.sig"
 
 def test_token_json_success(runner, mock_dependencies):
     """Test getting token in JSON format."""
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
     future_time = time.time() + 3600
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "valid.token.sig",
-        "expires_at": future_time
-    })
-    
+    mock_dependencies["get_jwt_cache_info"].return_value = (True, future_time)
+    mock_dependencies["get_cached_jwt"].return_value = "valid.token.sig"
+
     result = runner.invoke(auth_group, ["token", "--format", "json"])
-    
+
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["token"] == "valid.token.sig"
     assert data["expires_at"] == future_time
 
 def test_token_expired(runner, mock_dependencies):
-    """Test token command when token is expired."""
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
-    past_time = time.time() - 3600
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "expired.token.sig",
-        "expires_at": past_time
-    })
-    
+    """Test token command when token is expired (audience-aware check returns False)."""
+    # get_jwt_cache_info returns False when token is expired or wrong audience
+    mock_dependencies["get_jwt_cache_info"].return_value = (False, None)
+    mock_dependencies["get_cached_jwt"].return_value = None
+
     result = runner.invoke(auth_group, ["token"])
-    
+
     assert result.exit_code == 1
     assert "No valid token available" in result.output
 
 def test_token_no_cache(runner, mock_dependencies):
     """Test token command when no cache exists."""
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = False
-
+    # Defaults: get_jwt_cache_info returns (False, None), get_cached_jwt returns None
     result = runner.invoke(auth_group, ["token"])
 
     assert result.exit_code == 1

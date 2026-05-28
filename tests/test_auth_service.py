@@ -710,12 +710,40 @@ def test_get_auth_status_unauthenticated(mock_refresh_status, mock_get_jwt):
     """Should return unauthenticated if neither exists."""
     mock_get_jwt.return_value = (False, None)
     mock_refresh_status.return_value = (None, None)
-    
+
     status = auth_service.get_auth_status()
-    
+
     assert status['authenticated'] is False
     assert status['cached'] is False
     assert status['expires_at'] is None
+
+
+@patch('pdd.auth_service._get_expected_jwt_audience')
+@patch('pdd.auth_service._has_unexpired_raw_jwt')
+@patch('pdd.auth_service.get_jwt_cache_info')
+@patch('pdd.auth_service._get_refresh_token_status')
+def test_get_auth_status_wrong_audience_with_refresh_token_returns_unauthenticated(
+    mock_refresh_status, mock_get_jwt, mock_has_raw_jwt, mock_expected_aud
+):
+    """Wrong-audience JWT must not fall back to refresh token (split-brain fix).
+
+    Before the fix, get_auth_status() reported authenticated=True whenever a
+    refresh token existed, even though the cached JWT had been rejected for the
+    wrong environment.  This caused the frontend to show a signed-in state
+    while every JWT-gated API call failed.
+    """
+    mock_expected_aud.return_value = "prompt-driven-development-stg"
+    mock_has_raw_jwt.return_value = True   # JWT file existed before audience check deleted it
+    mock_get_jwt.return_value = (False, None)  # Audience-aware check rejected it
+    mock_refresh_status.return_value = ("prod_refresh_token", None)  # Refresh token present
+
+    status = auth_service.get_auth_status()
+
+    assert status['authenticated'] is False
+    assert status['cached'] is False
+    assert status['expires_at'] is None
+    # Refresh token must not be consulted when a wrong-audience JWT was detected
+    mock_refresh_status.assert_not_called()
 
 @patch('pdd.auth_service.get_jwt_cache_info')
 def test_get_auth_status_authenticates_with_legacy_server_auth_token(

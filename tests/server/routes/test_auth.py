@@ -324,6 +324,48 @@ class TestAuthStatus:
         assert result.expires_at is None
 
     @pytest.mark.asyncio
+    async def test_get_auth_status_wrong_audience_jwt_with_refresh_token_not_authenticated(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Status must stay unauthenticated even when a refresh token exists
+        if the cached JWT has the wrong audience (split-brain fix)."""
+        from pdd import auth_service
+        from pdd.server.routes.auth import get_auth_status, AuthStatus
+
+        monkeypatch.setenv("PDD_ENV", "staging")
+        monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+        monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+        cache_file = tmp_path / "jwt_cache"
+        now = int(time.time())
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "id_token": _unsigned_jwt(
+                        {
+                            "aud": "prompt-driven-development",
+                            "email": "prod-user@example.com",
+                            "exp": now + 3600,
+                        }
+                    ),
+                    "expires_at": now + 3600,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+        # Refresh token exists — this is the previously uncovered split-brain case.
+        with patch("pdd.server.routes.auth._has_refresh_token", return_value=True):
+            result = await get_auth_status()
+
+        assert isinstance(result, AuthStatus)
+        assert result.authenticated is False
+        assert result.cached is False
+        assert result.expires_at is None
+
+    @pytest.mark.asyncio
     async def test_get_jwt_token_rejects_nested_wrong_environment_cached_jwt(
         self,
         monkeypatch,
