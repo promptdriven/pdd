@@ -8914,3 +8914,145 @@ class TestComposeSyncSummaryTerminalReason:
         assert summary == (
             "No sync operations required; selected target is already synchronized."
         )
+
+
+# --- Issue #1200 Unit Tests ---
+
+def test_sync_orchestration_noop_fix_aborts_early(orchestration_fixture):
+    """Test that the orchestrator aborts early (after 2 consecutive no-op fixes)."""
+    from pdd.core.errors import clear_core_dump_errors, get_core_dump_errors
+    clear_core_dump_errors()
+    
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_fix = orchestration_fixture['fix_main']
+    
+    # Write the files to disk so test execution doesn't fail
+    pdd_paths = orchestration_fixture['get_pdd_file_paths'].return_value
+    from pathlib import Path
+    for key in ['code', 'example', 'test']:
+        p_path = Path(pdd_paths[key])
+        p_path.parent.mkdir(parents=True, exist_ok=True)
+        p_path.write_text("def dummy(): pass\n" if key != 'example' else "print('dummy')\n")
+        
+    # Decisions sequence: repeatedly ask for 'fix'
+    decisions = [
+        SyncDecision(operation='fix', reason='Failing 1', confidence=1.0),
+        SyncDecision(operation='fix', reason='Failing 2', confidence=1.0),
+        SyncDecision(operation='fix', reason='Failing 3', confidence=1.0),
+    ]
+    mock_determine.side_effect = decisions
+    
+    # Mock fix_main to return no-op result: success=True, cost 0.0, empty model
+    mock_fix.return_value = {'success': True, 'cost': 0.0, 'model': ''}
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is False
+    assert any("consecutive no-op fix operations" in err for err in result['errors'])
+    assert len(result['operations_completed']) == 2
+    
+    errs = get_core_dump_errors()
+    assert any(
+        e.get("type") == "LogicalFailure" and "consecutive no-op fix" in str(e.get("message")).lower()
+        for e in errs
+    ), errs
+
+
+def test_sync_orchestration_single_noop_then_real_fix(orchestration_fixture):
+    """Test that a single no-op fix followed by a real fix resets the counter and succeeds."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_fix = orchestration_fixture['fix_main']
+    
+    # Write the files to disk so test execution doesn't fail
+    pdd_paths = orchestration_fixture['get_pdd_file_paths'].return_value
+    from pathlib import Path
+    for key in ['code', 'example', 'test']:
+        p_path = Path(pdd_paths[key])
+        p_path.parent.mkdir(parents=True, exist_ok=True)
+        p_path.write_text("def dummy(): pass\n" if key != 'example' else "print('dummy')\n")
+
+    decisions = [
+        SyncDecision(operation='fix', reason='Failing 1', confidence=1.0),
+        SyncDecision(operation='fix', reason='Failing 2', confidence=1.0),
+        SyncDecision(operation='all_synced', reason='Done', confidence=1.0)
+    ]
+    mock_determine.side_effect = decisions
+    
+    # First is no-op, second is a real fix attempt
+    mock_fix.side_effect = [
+        {'success': True, 'cost': 0.0, 'model': ''},
+        {'success': True, 'cost': 0.02, 'model': 'gpt-4'}
+    ]
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is True
+    assert len(result['operations_completed']) == 2
+
+
+def test_sync_orchestration_noop_fix_total_cost_zero(orchestration_fixture):
+    """Test that consecutive no-op fixes result in total cost of zero."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_fix = orchestration_fixture['fix_main']
+    
+    # Write the files to disk so test execution doesn't fail
+    pdd_paths = orchestration_fixture['get_pdd_file_paths'].return_value
+    from pathlib import Path
+    for key in ['code', 'example', 'test']:
+        p_path = Path(pdd_paths[key])
+        p_path.parent.mkdir(parents=True, exist_ok=True)
+        p_path.write_text("def dummy(): pass\n" if key != 'example' else "print('dummy')\n")
+
+    decisions = [
+        SyncDecision(operation='fix', reason='Failing 1', confidence=1.0),
+        SyncDecision(operation='fix', reason='Failing 2', confidence=1.0),
+    ]
+    mock_determine.side_effect = decisions
+    mock_fix.return_value = {'success': True, 'cost': 0.0, 'model': ''}
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is False
+    assert result['total_cost'] == 0.0
+
+
+def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
+    """Test that skip_tests correctly bypasses execution and records skip:fix fingerprint."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    
+    decisions = [
+        SyncDecision(operation='fix', reason='Needs fix', confidence=1.0),
+        SyncDecision(operation='all_synced', reason='Done', confidence=1.0)
+    ]
+    mock_determine.side_effect = decisions
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True,
+        skip_tests=True
+    )
+    
+    assert result['success'] is True
+    # The fix operation should be skipped, so fix_main should NOT be called
+    orchestration_fixture['fix_main'].assert_not_called()
+    # Should save skip:fix fingerprint
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
+        "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
+    )

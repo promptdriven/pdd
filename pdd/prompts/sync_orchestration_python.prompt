@@ -258,7 +258,7 @@ Use `AtomicStateUpdate` context manager for consistent state writes:
 When `skip_verify` or `skip_tests` is set:
 - Log that the operation was skipped
 - Save fingerprint with 'skip:' prefix (e.g., 'skip:verify') to distinguish from actual execution
-- Cascading: `skip_tests` also skips `verify` and `crash`
+- Cascading: `skip_tests` also skips `verify`, `crash`, and `fix` operations
 - For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
 
 ### Operation Dispatch
@@ -368,6 +368,7 @@ Detect and break infinite loops with these limits:
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
 - Consecutive fix operations: Break after 5
+- Consecutive no-op fix operations: Track consecutive fix operations where no LLM is invoked (cost is 0.0 and model name is empty/none/unknown), and fail fast with LogicalFailure if it reaches 2
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
 - Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
 - Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)
