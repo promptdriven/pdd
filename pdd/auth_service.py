@@ -477,6 +477,15 @@ async def verify_auth() -> Dict[str, Any]:
         id_token = await firebase_auth._refresh_firebase_token(refresh_token)
 
         if id_token:
+            if not _cached_jwt_matches_expected_audience(id_token):
+                clear_refresh_token()
+                return {
+                    "valid": False,
+                    "error": "Refreshed token audience does not match current PDD environment",
+                    "needs_reauth": True,
+                    "username": None,
+                }
+
             _cache_jwt(id_token)
 
             # Extract username from new token

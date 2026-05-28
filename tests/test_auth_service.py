@@ -1103,6 +1103,55 @@ async def test_verify_auth_refresh_success(mock_get_refresh, mock_get_jwt):
 @pytest.mark.asyncio
 @patch('pdd.auth_service.get_jwt_cache_info')
 @patch('pdd.auth_service.get_refresh_token')
+async def test_issue_1274_verify_auth_rejects_refreshed_wrong_audience_jwt(
+    mock_get_refresh,
+    mock_get_jwt,
+    monkeypatch,
+):
+    """verify_auth must not cache or accept a refreshed JWT for another env."""
+    mock_get_jwt.return_value = (False, None)
+    mock_get_refresh.return_value = "valid_refresh_token"
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+
+    new_token = _unsigned_jwt(
+        {
+            "aud": "prompt-driven-development",
+            "email": "prod-user@example.com",
+        }
+    )
+
+    async def mock_refresh_firebase_token(refresh_token):
+        return new_token
+
+    with patch('pdd.get_jwt_token.FirebaseAuthenticator') as mock_firebase:
+        mock_instance = mock_firebase.return_value
+        mock_instance._refresh_firebase_token = mock_refresh_firebase_token
+
+        with patch('pdd.get_jwt_token._cache_jwt') as mock_cache:
+            with patch('pdd.auth_service.clear_refresh_token') as mock_clear_refresh:
+                mock_clear_refresh.return_value = (True, None)
+                with patch.dict(
+                    'os.environ',
+                    {'NEXT_PUBLIC_FIREBASE_API_KEY': 'test_api_key'},
+                    clear=False,
+                ):
+                    result = await auth_service.verify_auth()
+
+    assert result == {
+        "valid": False,
+        "error": "Refreshed token audience does not match current PDD environment",
+        "needs_reauth": True,
+        "username": None,
+    }
+    mock_cache.assert_not_called()
+    mock_clear_refresh.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch('pdd.auth_service.get_jwt_cache_info')
+@patch('pdd.auth_service.get_refresh_token')
 async def test_verify_auth_network_error(mock_get_refresh, mock_get_jwt):
     """Should return non-needs_reauth error on network failure."""
     mock_get_jwt.return_value = (False, None)
