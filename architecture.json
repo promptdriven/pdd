@@ -3930,23 +3930,28 @@
     }
   },
   {
-    "reason": "Generates unit tests for PDD-generated code modules.",
-    "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
+    "reason": "Generates unit tests for PDD-generated code modules with auth-aware test patterns.",
+    "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions. Prefers pattern-based pytest.raises(match=r'...') assertions over exact-string matches.",
     "dependencies": [],
     "priority": 110,
     "filename": "generate_test_LLM.prompt",
     "filepath": "prompts/generate_test_LLM.prompt",
     "tags": [
-      "config",
       "generation",
       "llm",
       "template",
       "testing"
     ],
     "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_test",
+            "signature": "(prompt_content: str, code_content: str, language: str)",
+            "returns": "str (test file content)"
+          }
+        ]
       }
     },
     "position": {
@@ -7128,22 +7133,27 @@
     }
   },
   {
-    "reason": "LLM prompt template for generating tests from example usage files.",
-    "description": "Generates tests based on intended behavior from a prompt and an example usage file, appending to existing tests if present.",
+    "reason": "Generates unit tests from example usage files with pattern-based exception assertions.",
+    "description": "Generates tests based on intended behavior from a prompt and an example usage file, appending to existing tests if present. Prefers pattern-based pytest.raises(match=r'...') assertions over exact-string matches.",
     "dependencies": [],
     "priority": 209,
     "filename": "generate_test_from_example_LLM.prompt",
     "filepath": "prompts/generate_test_from_example_LLM.prompt",
     "tags": [
-      "config",
       "llm",
       "template",
       "testing"
     ],
     "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_test_from_example",
+            "signature": "(prompt_content: str, example_content: str, language: str)",
+            "returns": "str (test file content)"
+          }
+        ]
       }
     },
     "position": {
