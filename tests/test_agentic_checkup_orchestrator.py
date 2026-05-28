@@ -309,6 +309,105 @@ class TestNoFixMode:
         assert success is True
         assert [c.kwargs["label"] for c in mock_run.call_args_list] == ["step7"]
 
+    # ------------------------------------------------------------------
+    # --no-fix --pr Step 5 status contract (issue #1212 round-12)
+    # ------------------------------------------------------------------
+
+    def _make_pr_nofix_patches(self, tmp_path, step5_output: str):
+        """Return context manager that runs --no-fix --pr with a given Step 5 output."""
+        from unittest.mock import patch as _patch
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+
+        def run_step(step_num, _name, _ctx, **_kw):
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.0, "fake")
+            if step_num == 5:
+                return (True, step5_output, 0.0, "fake")
+            return (True, f"out-{step_num}", 0.0, "fake")
+
+        return (
+            _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+            _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+            _patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)),
+            _patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
+            _patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=run_step),
+        )
+
+    def _run_pr_nofix(self, tmp_path, step5_output: str):
+        patches = self._make_pr_nofix_patches(tmp_path, step5_output)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            return run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+    def test_nofix_pr_step5_skipped_status_returns_failure(self, tmp_path):
+        """--no-fix --pr must fail when Step 5 reports status: skipped."""
+        step5_out = (
+            "No test suite found.\n"
+            "```failure_signal\n"
+            "status: skipped\n"
+            "exit_code: skipped\n"
+            "failing_ids: none\n"
+            "artifact_path: none\n"
+            "output: No tests found.\n"
+            "```\n"
+        )
+        success, msg, _cost, _model = self._run_pr_nofix(tmp_path, step5_out)
+        assert success is False
+        assert "skipped" in msg.lower()
+        assert "tests did not run" in msg.lower()
+
+    def test_nofix_pr_step5_logical_failure_returns_failure(self, tmp_path):
+        """--no-fix --pr must fail when Step 5 block says status: fail."""
+        step5_out = (
+            "Test suite failed.\n"
+            "```failure_signal\n"
+            "status: fail\n"
+            "exit_code: 1\n"
+            "failing_ids: test_foo\n"
+            "artifact_path: none\n"
+            "output: FAILED test_foo.\n"
+            "```\n"
+        )
+        success, msg, _cost, _model = self._run_pr_nofix(tmp_path, step5_out)
+        assert success is False
+        assert "test failure" in msg.lower()
+
+    def test_nofix_pr_step5_missing_block_returns_failure(self, tmp_path):
+        """--no-fix --pr must fail closed when failure_signal block is missing."""
+        step5_out = "Tests ran and some failed (prose only, no structured block)."
+        success, msg, _cost, _model = self._run_pr_nofix(tmp_path, step5_out)
+        assert success is False
+        assert "test failure" in msg.lower()
+        assert "missing or malformed" in msg.lower()
+
 
 # ---------------------------------------------------------------------------
 # Worktree Handling
@@ -750,7 +849,23 @@ class TestChangedFilesTracking:
 
         def capture_step(step_num, _name, context, **_kw):  # noqa: ANN001
             captured_contexts.append(dict(context))
-            output = ALL_ISSUES_FIXED if step_num == 7 else f"out-{step_num}"
+            if step_num == 7:
+                output = ALL_ISSUES_FIXED
+            elif step_num == 5:
+                # PR + no-fix path now applies the Step 5 logical-status
+                # contract; mock must include a valid failure_signal block.
+                output = (
+                    "All tests passed.\n"
+                    "```failure_signal\n"
+                    "status: pass\n"
+                    "exit_code: 0\n"
+                    "failing_ids: none\n"
+                    "artifact_path: none\n"
+                    "output: All tests passed.\n"
+                    "```\n"
+                )
+            else:
+                output = f"out-{step_num}"
             return (True, output, 0.0, "fake")
 
         def fake_format(*_args, **_kwargs):

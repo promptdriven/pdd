@@ -2630,6 +2630,48 @@ def _run_agentic_checkup_orchestrator_inner(
                     last_model_used,
                 )
 
+            if step_num == 5 and pr_mode:
+                # --no-fix --pr: apply the same Step 5 logical-status
+                # contract as the fix loop (issue #1212 round-12).
+                # skipped/failed/missing-block all mean we have no test
+                # evidence and must not continue to report a verified
+                # result via Step 7.  Non-PR no-fix runs are unaffected.
+                step5_stored = context.get("step5_output", "") or ""
+                _sig_fields, _sig_missing = _parse_failure_signal_block(step5_stored)
+                _status_val = str(_sig_fields.get("status", "")).strip().lower()
+                _block_missing = "__block__" in _sig_missing
+                _status_skipped = _status_val in _STEP5_SKIPPED_STATUSES
+                _status_pass = _status_val in {"pass", "ok", "success", "passed", "clean"}
+                _logical_failure = (
+                    _status_val in {"fail", "error", "failed", "failure"}
+                    or _block_missing
+                    or (not _status_pass and not _status_skipped)
+                )
+                if _status_skipped:
+                    return (
+                        False,
+                        "Step 5 reported status: skipped — tests did not run "
+                        "against the PR head. Refusing to report a verified "
+                        "result. Rerun pdd checkup --pr --no-fix once the test "
+                        "environment is healthy.",
+                        total_cost,
+                        last_model_used,
+                    )
+                if _logical_failure:
+                    _suffix = (
+                        " (failure_signal block missing or malformed)"
+                        if _block_missing
+                        else f" (status: {_status_val!r})"
+                    )
+                    return (
+                        False,
+                        f"Step 5 reported a test failure{_suffix}. "
+                        "Rerun pdd checkup --pr --no-fix after addressing the "
+                        "failures.",
+                        total_cost,
+                        last_model_used,
+                    )
+
         # Skip step 6 sub-steps.
         for sub_step in (6.1, 6.2, 6.3):
             if sub_step >= start_step:
