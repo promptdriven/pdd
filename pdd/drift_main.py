@@ -21,15 +21,19 @@ except ImportError:  # pragma: no cover
     resolve_test_output_paths = None  # type: ignore[assignment,misc]
 
 try:
-    from .gate_main import run_gate_policy
-except ModuleNotFoundError:  # pragma: no cover - optional in minimal installs
-    def run_gate_policy(*_args, **_kwargs):
+    from .gate_main import run_gate_policy as _run_gate_policy_impl
+
+    _GATE_POLICY_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover - optional until gate lands on main
+    _GATE_POLICY_AVAILABLE = False
+
+    def _run_gate_policy_impl(*_args, **_kwargs):
         class _Result:
-            passed = True
+            passed = False
 
         return _Result()
 
-_PASS_TOKENS = {"pass", "passed", "ok", "success", "clean", "not_applicable"}
+DEFAULT_MAX_COST_USD = 20.0
 _COST_RE = re.compile(r"(?:Total\s+)?Cost:\s*\$([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 
@@ -68,8 +72,11 @@ class DriftReport:
     behavior_unchanged: bool = True
     status: str = "stable"
     dry_run: bool = False
+    max_cost_usd: Optional[float] = None
     total_cost_usd: float = 0.0
     cost_budget_exceeded: bool = False
+    policy_check_skipped: bool = False
+    policy_check_unavailable: bool = False
 
     @property
     def passed(self) -> bool:
@@ -84,6 +91,7 @@ class DriftReport:
         stories_passed = sum(1 for snap in self.snapshots if snap.stories_passed)
         verify_passed = sum(1 for snap in self.snapshots if snap.verify_passed)
         policy_passed = sum(1 for snap in self.snapshots if snap.policy_passed)
+        completed_runs = len(self.snapshots)
         return {
             "devunit": self.devunit,
             "prompt_path": self.prompt_path,
@@ -97,10 +105,13 @@ class DriftReport:
             "behavior_unchanged": self.behavior_unchanged,
             "total_cost_usd": self.total_cost_usd,
             "cost_budget_exceeded": self.cost_budget_exceeded,
-            "tests": f"passed {tests_passed}/{self.runs}",
-            "stories": f"passed {stories_passed}/{self.runs}",
-            "verify": f"passed {verify_passed}/{self.runs}",
-            "policy": f"passed {policy_passed}/{self.runs}",
+            "policy_check_skipped": self.policy_check_skipped,
+            "policy_check_unavailable": self.policy_check_unavailable,
+            "max_cost_usd": self.max_cost_usd,
+            "tests": f"passed {tests_passed}/{completed_runs or self.runs}",
+            "stories": f"passed {stories_passed}/{completed_runs or self.runs}",
+            "verify": f"passed {verify_passed}/{completed_runs or self.runs}",
+            "policy": f"passed {policy_passed}/{completed_runs or self.runs}",
             "snapshots": [snap.as_dict() for snap in self.snapshots],
         }
 
@@ -347,12 +358,27 @@ def _run_stories_check(prompt_path: Path, project_root: Path) -> tuple[bool, flo
     return passed, cost
 
 
+def _run_policy_check(
+    project_root: Path,
+    manifest: Optional[ManifestView],
+    devunit: str,
+) -> tuple[bool, bool, bool]:
+    """Return ``(passed, skipped, unavailable)`` for policy evaluation."""
+    if not _policy_configured(project_root, manifest):
+        return True, True, False
+    if not _GATE_POLICY_AVAILABLE:
+        return False, False, True
+    return _run_gate_policy_impl(project_root, target=devunit).passed, False, False
+
+
 def _run_verify_check(
     prompt_path: Path,
     candidate: Path,
     code_path: Path,
     project_root: Path,
     work_dir: Path,
+    *,
+    verify_budget_usd: float,
 ) -> tuple[bool, float]:
     if resolve_test_output_paths is None:
         return True, 0.0
@@ -392,7 +418,7 @@ def _run_verify_check(
         "--max-attempts",
         "1",
         "--budget",
-        "5",
+        str(max(verify_budget_usd, 0.01)),
         "--no-agentic-fallback",
     ]
     completed = subprocess.run(
@@ -416,6 +442,7 @@ def _evaluate_candidate(
     devunit: str,
     sandbox_root: Path,
     work_dir: Path,
+    verify_budget_usd: float,
 ) -> tuple[RunSnapshot, float]:
     extra_cost = 0.0
     tests_ok = _run_pytest_for_candidate(
@@ -435,15 +462,17 @@ def _evaluate_candidate(
             code_path,
             project_root,
             work_dir,
+            verify_budget_usd=verify_budget_usd,
         )
         extra_cost += verify_cost
     else:
         verify_ok = True
 
-    if _policy_configured(project_root, manifest):
-        policy_ok = run_gate_policy(project_root, target=devunit).passed
-    else:
-        policy_ok = True
+    policy_ok, _policy_skipped, _policy_unavailable = _run_policy_check(
+        project_root,
+        manifest,
+        devunit,
+    )
 
     return (
         RunSnapshot(
@@ -480,6 +509,10 @@ def run_drift(
     if not code_path.is_file():
         raise FileNotFoundError(f"Code file not found: {code_path}")
 
+    effective_max_cost = max_cost_usd
+    if effective_max_cost is None and not dry_run:
+        effective_max_cost = DEFAULT_MAX_COST_USD
+
     baseline_bytes = code_path.read_bytes()
     baseline_api = _public_api(code_path)
     baseline_hash = hashlib.sha256(baseline_bytes).hexdigest()
@@ -489,6 +522,10 @@ def run_drift(
     candidate_apis: list[str] = []
     total_cost = 0.0
     cost_budget_exceeded = False
+    policy_check_skipped = not _policy_configured(project_root, manifest)
+    policy_check_unavailable = (
+        _policy_configured(project_root, manifest) and not _GATE_POLICY_AVAILABLE
+    )
 
     with tempfile.TemporaryDirectory(prefix="pdd-drift-") as temp_name:
         temp_root = Path(temp_name)
@@ -511,10 +548,15 @@ def run_drift(
                     project_root=project_root,
                 )
                 total_cost += run_cost
-                if max_cost_usd is not None and total_cost > max_cost_usd:
+                if effective_max_cost is not None and total_cost > effective_max_cost:
                     cost_budget_exceeded = True
                     break
 
+            remaining_budget = (
+                max(effective_max_cost - total_cost, 0.01)
+                if effective_max_cost is not None
+                else 5.0
+            )
             snapshot, eval_cost = _evaluate_candidate(
                 candidate,
                 prompt_path=prompt_path,
@@ -524,9 +566,10 @@ def run_drift(
                 devunit=devunit,
                 sandbox_root=sandbox_root,
                 work_dir=work_dir,
+                verify_budget_usd=remaining_budget,
             )
             total_cost += eval_cost
-            if max_cost_usd is not None and total_cost > max_cost_usd:
+            if effective_max_cost is not None and total_cost > effective_max_cost:
                 cost_budget_exceeded = True
                 break
 
@@ -572,6 +615,9 @@ def run_drift(
         behavior_unchanged=behavior_unchanged,
         status=status,
         dry_run=dry_run,
+        max_cost_usd=effective_max_cost,
         total_cost_usd=total_cost,
         cost_budget_exceeded=cost_budget_exceeded,
+        policy_check_skipped=policy_check_skipped,
+        policy_check_unavailable=policy_check_unavailable,
     )

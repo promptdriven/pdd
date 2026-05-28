@@ -18,17 +18,33 @@ pdd checkup drift <devunit> --max-cost 5.0
 - Regenerates each trial into an isolated temp path (does not overwrite the worktree code file).
 - Compares each candidate's public API and hash against the pre-run baseline artifact.
 - Runs discovered local pytest tests against sandboxed candidate copies.
-- Re-runs configured story and verify checks per candidate when evidence marks them as required.
-- Runs policy checks when policy/evidence is configured.
-- Stops regeneration when `--max-cost` is exceeded.
+- Re-runs configured story and verify checks when evidence marks them as required.
+- Runs policy checks when policy/evidence is configured (requires `pdd checkup gate` in the installed package).
+- Applies a default `--max-cost` budget for non-dry-run regeneration (override with `--max-cost`).
+
+## Behavioral Check Scope (important)
+
+| Check | What it evaluates |
+|-------|-------------------|
+| **Tests** | Sandbox copy of each regenerated candidate via local pytest |
+| **Stories** | Prompt↔story consistency for the dev unit prompt (live `detect --stories` scope); not a direct re-validation of regenerated code semantics |
+| **Verify** | Candidate code against its verification program (live `pdd verify` on temp copies) |
+| **Policy** | Project/dev-unit evidence policy via `pdd checkup gate` when available; **fails closed** if policy is configured but gate is not installed |
+
+## Cost Controls
+
+- Non-dry-run drift checks use a default max budget (`DEFAULT_MAX_COST_USD`, currently $20).
+- Pass `--max-cost` to tighten or raise the cap.
+- `--dry-run` skips regeneration and does not apply the regeneration budget default.
 
 ## Exit Semantics
 
-- `0`: Stable (public API unchanged and all configured checks pass on all runs)
-- `1`: Unstable (API drift or behavior/policy failure on any run)
+- `0`: Stable (public API unchanged vs baseline and all configured checks pass on all completed runs)
+- `1`: Unstable (API drift, behavioral failure, budget exceeded, or policy unavailable when configured)
 
 ## Notes
 
-- `--dry-run` skips regeneration and evaluates current artifact stability only.
+- `--dry-run` skips regeneration and evaluates the current baseline artifact only.
 - `--from-evidence` resolves prompt/code from manifest data and output paths.
 - Behavior drift is stricter than implementation drift: hash changes can be acceptable when behavior remains stable.
+- This command is distinct from `pdd/ci_drift_heal` (CI prompt/example auto-heal) and `pdd contracts drift` (contract/code conformance).

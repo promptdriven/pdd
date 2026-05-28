@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
-from pdd.drift_main import RunSnapshot, _public_api, run_drift
+from pdd.drift_main import (
+    DEFAULT_MAX_COST_USD,
+    RunSnapshot,
+    _public_api,
+    run_drift,
+)
 from pdd.evidence_store import sha256_file
 
 
@@ -194,6 +199,63 @@ def test_drift_max_cost_stops_regeneration(tmp_path: Path) -> None:
     assert report.cost_budget_exceeded
     assert report.status == "unstable"
     assert len(report.snapshots) == 0
+
+
+def test_drift_integration_real_eval_baseline_unchanged(tmp_path: Path) -> None:
+    """Exercise ``run_drift`` with only regeneration mocked; real candidate evaluation."""
+    _prompt, code = _write_fixture(tmp_path)
+    original = code.read_bytes()
+    stable_source = code.read_text(encoding="utf-8")
+
+    def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(stable_source, encoding="utf-8")
+        return 0.01
+
+    with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
+        report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
+
+    assert code.read_bytes() == original
+    assert report.status == "stable"
+    assert report.public_api_unchanged
+    assert len(report.snapshots) == 1
+    assert report.snapshots[0].tests_passed
+
+
+def test_drift_applies_default_max_cost_for_non_dry_run(tmp_path: Path) -> None:
+    _write_fixture(tmp_path)
+
+    with patch("pdd.drift_main._regenerate_code", return_value=0.0):
+        with patch("pdd.drift_main._evaluate_candidate") as mock_eval:
+            mock_eval.return_value = (
+                RunSnapshot(1, "a", ["def refund_payment"], True, True, True, True),
+                0.0,
+            )
+            report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
+
+    assert report.max_cost_usd == DEFAULT_MAX_COST_USD
+
+
+def test_drift_policy_fails_closed_when_gate_unavailable(tmp_path: Path) -> None:
+    _prompt, code = _write_fixture(tmp_path)
+    stable_source = code.read_text(encoding="utf-8")
+    (tmp_path / ".pdd").mkdir(parents=True)
+    (tmp_path / ".pdd" / "policy.yml").write_text("rules: []\n", encoding="utf-8")
+
+    def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(stable_source, encoding="utf-8")
+        return 0.0
+
+    with patch("pdd.drift_main._GATE_POLICY_AVAILABLE", False):
+        with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
+            report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
+
+    assert report.policy_check_unavailable
+    assert not report.policy_check_skipped
+    assert report.status == "unstable"
+    assert not report.behavior_unchanged
+    assert report.snapshots[0].policy_passed is False
 
 
 def test_public_api_detects_renamed_symbol(tmp_path: Path) -> None:

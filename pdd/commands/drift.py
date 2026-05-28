@@ -7,7 +7,7 @@ from typing import Optional
 
 import click
 
-from ..drift_main import run_drift
+from ..drift_main import DEFAULT_MAX_COST_USD, run_drift
 
 
 @click.command("drift")
@@ -38,7 +38,10 @@ from ..drift_main import run_drift
     "max_cost_usd",
     type=float,
     default=None,
-    help="Maximum USD budget for regeneration and behavioral checks.",
+    help=(
+        f"Maximum USD budget for regeneration and behavioral checks "
+        f"(default ${DEFAULT_MAX_COST_USD:.0f} for non-dry-run runs)."
+    ),
 )
 def drift_cmd(
     devunit: str,
@@ -52,13 +55,18 @@ def drift_cmd(
 ) -> None:
     """Check regeneration stability for a PDD dev unit.
 
-    Re-generates code (unless ``--dry-run``), compares public API and hashes,
-    and runs local tests when available.
+    Re-generates code into isolated temp paths (unless ``--dry-run``),
+    compares each candidate against the baseline artifact, and runs
+    configured behavioral checks. Policy requires ``pdd checkup gate`` on
+    the installed package when policy/evidence is configured.
     """
     if runs < 1:
         raise click.UsageError("--runs must be at least 1")
 
     project_root = Path.cwd()
+    effective_max_cost = max_cost_usd
+    if effective_max_cost is None and not dry_run:
+        effective_max_cost = DEFAULT_MAX_COST_USD
     try:
         report = run_drift(
             devunit,
@@ -68,7 +76,7 @@ def drift_cmd(
             from_evidence=Path(from_evidence) if from_evidence else None,
             code_file=Path(code_file) if code_file else None,
             dry_run=dry_run,
-            max_cost_usd=max_cost_usd,
+            max_cost_usd=effective_max_cost,
         )
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -83,6 +91,10 @@ def drift_cmd(
         click.echo(f"Stories: {payload['stories']}")
         click.echo(f"Verify: {payload['verify']}")
         click.echo(f"Policy: {payload['policy']}")
+        if payload.get("policy_check_unavailable"):
+            click.echo("Policy note: gate command unavailable; policy check failed closed.")
+        if payload.get("max_cost_usd") is not None:
+            click.echo(f"Max cost: ${payload['max_cost_usd']:.4f}")
         click.echo(f"Total cost: ${payload['total_cost_usd']:.4f}")
         click.echo("\nOutput drift:")
         api_status = "unchanged" if report.public_api_unchanged else "changed"
