@@ -262,7 +262,8 @@ example a free GitHub Copilot login outranking a `GEMINI_API_KEY` you set on
 purpose. To prevent that, when setup ends up with more than one usable provider
 — which includes always-available device-login providers like GitHub Copilot,
 so the prompt can appear even if you only set a single API key — it asks you to
-pick which provider(s) to keep and writes only those rows:
+pick which provider(s) to keep, then removes the unselected providers'
+PDD-managed rows (rows you hand-edited or added yourself are preserved):
 
 - **Default selection** excludes device-login providers (e.g. GitHub Copilot,
   which needs no API key) so a free login never silently outranks a key you
