@@ -1,9 +1,9 @@
 """Regression + integration tests for issue #1237.
 
 Locks in the prompt-contract fix that lets `pdd sync fix_error_loop` pass
-strict preflight: `pdd/prompts/fix_error_loop_python.prompt` must include
-source context for the existing public symbols declared by the prompt-local
-and architecture interfaces.
+strict preflight without forcing the prompt to self-include
+`pdd/fix_error_loop.py`. The validator should only reject partial
+self-includes that omit declared symbols.
 
 The unit-style tests check the live repo state. The integration tests
 exercise the cross-module flow agentic_sync -> architecture_include_validation
@@ -99,34 +99,17 @@ def _seed_fix_error_loop_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_fix_error_loop_prompt_self_includes_module_source() -> None:
-    """Prompt must carry source context for its declared public symbols.
-
-    Either a full `<include>pdd/fix_error_loop.py</include>` or per-symbol
-    `<include select="def:...">pdd/fix_error_loop.py</include>` lines for
-    every architecture-declared existing symbol satisfy strict preflight. A
-    revert that drops both would regress #1237.
-    """
+def test_fix_error_loop_prompt_does_not_self_include_module_source() -> None:
+    """The prompt does not need its generated output module as context."""
     assert PROMPT_PATH.is_file(), f"missing prompt: {PROMPT_PATH}"
     text = PROMPT_PATH.read_text(encoding="utf-8")
 
-    full_include = "<include>pdd/fix_error_loop.py</include>" in text
-    required_selects = {
-        "escape_brackets",
-        "cloud_fix_errors",
-        "run_pytest_on_file",
-        "format_log_for_output",
-        "fix_error_loop",
-    }
-    missing_selects = {
-        name for name in required_selects
-        if f'<include select="def:{name}">pdd/fix_error_loop.py</include>' not in text
-    }
-
-    assert full_include or not missing_selects, (
-        "fix_error_loop_python.prompt must self-include pdd/fix_error_loop.py "
-        "(full include, or per-symbol selects for all architecture-declared "
-        f"existing public symbols). Missing selects: {sorted(missing_selects)}"
+    assert not re.search(
+        r"<include\b[^>]*>pdd/fix_error_loop\.py</include>",
+        text,
+    ), (
+        "fix_error_loop_python.prompt should not need to self-include its "
+        "generated output module just to pass strict prompt-contract preflight."
     )
 
 
@@ -154,9 +137,9 @@ def test_strict_mode_triggers_and_preflight_passes_in_simulated_sync(
     """End-to-end: changed prompt + live module pass strict preflight.
 
     Exercises the agentic_sync -> architecture_include_validation handoff
-    that failed for #1230 before #1237 landed: strict mode kicks in
-    because the prompt has uncommitted changes, and validation finds the
-    self-include so no errors are produced.
+    that failed for #1230: strict mode kicks in because the prompt has
+    uncommitted changes, but a prompt with no output self-include remains
+    valid.
     """
     repo = _seed_fix_error_loop_repo(tmp_path)
     prompt = repo / "prompts" / "fix_error_loop_python.prompt"
@@ -168,40 +151,34 @@ def test_strict_mode_triggers_and_preflight_passes_in_simulated_sync(
 
     errors = _prompt_contract_errors_for_module("fix_error_loop", repo, repo)
     assert errors == [], (
-        "Cross-module preflight should report no errors when the prompt "
-        "self-includes pdd/fix_error_loop.py. Got: " + "\n".join(errors)
+        "Cross-module preflight should report no errors for a prompt with "
+        "no output self-include. Got: " + "\n".join(errors)
     )
 
 
-def test_removing_self_include_reproduces_issue_1237_dry_run_error(
+def test_partial_self_include_still_reports_missing_declared_symbols(
     tmp_path: Path,
 ) -> None:
-    """Inverse end-to-end: dropping the self-include reproduces the original
-    sync failure message exactly as reported in the issue.
-
-    Locks in that the cross-module pipeline (validator -> formatter) still
-    surfaces the symbols by name, so a future regression would block sync
-    with an actionable error rather than silently passing.
-    """
+    """Partial self-includes still need complete declared-symbol coverage."""
     repo = _seed_fix_error_loop_repo(tmp_path)
     prompt = repo / "prompts" / "fix_error_loop_python.prompt"
 
-    stripped = re.sub(
-        r"<include[^>]*>pdd/fix_error_loop\.py</include>\s*",
-        "",
-        prompt.read_text(encoding="utf-8"),
+    prompt.write_text(
+        prompt.read_text(encoding="utf-8")
+        + '\n<fix_error_loop><include select="def:cloud_fix_errors">'
+        "pdd/fix_error_loop.py</include></fix_error_loop>\n",
+        encoding="utf-8",
     )
-    prompt.write_text(stripped, encoding="utf-8")
 
     errors = _prompt_contract_errors_for_module("fix_error_loop", repo, repo)
-    assert errors, "Removing the self-include must trigger preflight errors."
+    assert errors, "Partial self-include must trigger preflight errors."
     joined = "\n".join(errors)
-    assert "cloud_fix_errors" in joined and "fix_error_loop" in joined
-    assert "includes no existing module source context" in joined
+    assert "fix_error_loop" in joined
+    assert "only includes source context for 1" in joined
 
     formatted = _format_prompt_contract_preflight_error("fix_error_loop", errors)
     assert formatted.startswith("fix_error_loop: prompt contract preflight failed:")
-    assert "missing cloud_fix_errors, fix_error_loop" in formatted
+    assert "missing fix_error_loop" in formatted
 
 
 def test_prompt_interface_symbols_match_live_module_definitions() -> None:
@@ -210,9 +187,8 @@ def test_prompt_interface_symbols_match_live_module_definitions() -> None:
 
     This is the cross-module invariant the issue depends on: if anyone
     renames/removes `cloud_fix_errors` or `fix_error_loop` from the module
-    without updating the prompt, strict preflight would block sync with a
-    misleading 'missing source context' message even when the include is
-    present. Catch that drift here.
+    without updating the prompt, sync would fail later with a misleading
+    architecture-conformance error. Catch that drift here.
     """
     prompt_text = PROMPT_PATH.read_text(encoding="utf-8")
     match = re.search(

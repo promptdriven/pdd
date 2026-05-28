@@ -147,13 +147,6 @@ def fix_error_loop(
     <python_env_detector>
         <include>context/python_env_detector_example.py</include>
     </python_env_detector>
-    <fix_error_loop>
-        <include select="def:escape_brackets">pdd/fix_error_loop.py</include>
-        <include select="def:cloud_fix_errors">pdd/fix_error_loop.py</include>
-        <include select="def:run_pytest_on_file">pdd/fix_error_loop.py</include>
-        <include select="def:format_log_for_output">pdd/fix_error_loop.py</include>
-        <include select="def:fix_error_loop">pdd/fix_error_loop.py</include>
-    </fix_error_loop>
 </internal_modules>
 
 <include optional>failure_classification_python.prompt</include>

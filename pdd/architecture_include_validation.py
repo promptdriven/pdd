@@ -560,7 +560,7 @@ def validate_prompt_contract_context(
     the existing implementation, leaving the LLM without enough context to
     preserve declared exports. A full self-include satisfies the contract. A
     partial self-include must select every declared symbol that already exists in
-    the output source file.
+    the output source file. Prompts without a self-include remain compatible.
     """
     prompt_path = Path(prompt_path)
     output_path = Path(output_path)
@@ -580,7 +580,6 @@ def validate_prompt_contract_context(
         return []
 
     prompt_interface = _prompt_interface(prompt_content)
-    prompt_declared_symbols = _interface_function_names(prompt_interface)
 
     declared_symbols: List[str] = []
     for interface in (
@@ -605,20 +604,6 @@ def validate_prompt_contract_context(
         if _include_matches_output(ref.path, output_path, project_root)
     ]
     if not self_includes:
-        prompt_declared_existing = [
-            symbol for symbol in prompt_declared_symbols if symbol in existing_symbol_set
-        ]
-        if require_prompt_local_source_context and prompt_declared_existing:
-            return [
-                (
-                    f"{prompt_path}: prompt-local interface declares "
-                    f"{len(prompt_declared_existing)} public symbols already present "
-                    f"in {output_path} but includes no existing module source context: "
-                    f"missing {', '.join(prompt_declared_existing)}. Use a full "
-                    "<include> of the existing module or select every declared "
-                    "existing public symbol."
-                )
-            ]
         return []
     if any(not ref.is_partial for ref in self_includes):
         return []
