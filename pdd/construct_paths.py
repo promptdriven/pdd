@@ -1054,14 +1054,20 @@ def construct_paths(
                 # prompt path directly resolves the same .pddrc whether the hint
                 # is a file or a directory — no explicit exists()/is_file() needed.
                 prompt_pddrc = _find_pddrc_file(Path(prompt_file_hint))
+        # Tracks whether we selected a subproject .pddrc that lives BELOW the run
+        # CWD. In that case relative output dirs must anchor at the subproject
+        # (config_base), not the CWD — otherwise sync/fix write outside it (#1211).
+        subproject_pddrc_below_cwd = False
         if prompt_pddrc is None:
             pddrc_path = cwd_pddrc
         elif cwd_pddrc is None:
             pddrc_path = prompt_pddrc
+            subproject_pddrc_below_cwd = True
         else:
             try:
                 prompt_pddrc.parent.resolve().relative_to(cwd_pddrc.parent.resolve())
                 pddrc_path = prompt_pddrc  # descendant — more specific subproject
+                subproject_pddrc_below_cwd = prompt_pddrc != cwd_pddrc
             except ValueError:
                 pddrc_path = cwd_pddrc    # unrelated tree — keep local .pddrc
         if pddrc_path:
@@ -1435,6 +1441,11 @@ def construct_paths(
         effective_path_resolution_mode = path_resolution_mode
         if effective_path_resolution_mode is None:
             effective_path_resolution_mode = "cwd" if command == "sync" else "config_base"
+        # Issue #1211: when the selected .pddrc is a subproject below the run CWD,
+        # "cwd" resolution would root relative output dirs at the parent CWD and
+        # write outside the subproject. Anchor them at the subproject .pddrc dir.
+        if effective_path_resolution_mode == "cwd" and subproject_pddrc_below_cwd:
+            effective_path_resolution_mode = "config_base"
 
         output_paths_str: Dict[str, str] = generate_output_paths(
             command=command,

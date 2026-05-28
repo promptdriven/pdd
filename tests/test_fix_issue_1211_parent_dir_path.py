@@ -350,3 +350,86 @@ def test_sync_get_meta_dir_accepts_project_root(tmp_path, monkeypatch):
         f"but got {result}. "
         "Bug: get_meta_dir ignores project_root and always returns CWD/.pdd/meta."
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 8 (Greg review, 2026-05-28): discovery path (get_pdd_file_paths) must
+# anchor subproject outputs at the subproject .pddrc, not the parent run CWD.
+#
+# Gap: the earlier construct_paths-only fix is bypassed by the sync discovery
+# path. get_pdd_file_paths() calls construct_paths(..., path_resolution_mode=
+# "cwd"), so relative .pddrc output dirs (generate_output_path / test_output_path
+# / example_output_path) resolved under the PARENT CWD even though construct_paths
+# now finds the subproject .pddrc. This test exercises the real discovery entry
+# point with a pdd_cloud-style subproject .pddrc, from a parent CWD.
+# ---------------------------------------------------------------------------
+
+def test_get_pdd_file_paths_anchors_outputs_at_subproject_from_parent_cwd(
+    tmp_path, monkeypatch
+):
+    """get_pdd_file_paths from a parent CWD must root outputs at the subproject.
+
+    Mirrors Greg's repro:
+      - CWD: parent repo root
+      - Subproject: extensions/github_pdd_app/ with its own .pddrc
+        (prompts_dir: prompts/src/routers, generate_output_path: src/routers/,
+         test_output_path: tests/, example_output_path: examples/)
+      - Prompt: extensions/github_pdd_app/prompts/src/routers/webhook_handlers_Python.prompt
+
+    Buggy result: code -> <parent>/src/routers/..., tests/examples under <parent>/.
+    Fixed result: every output path rooted at <parent>/extensions/github_pdd_app/.
+
+    Unlike the e2e test, this does NOT hand construct_paths an already-correct
+    code_file — it goes through the discovery path that feeds sync/fix_main.
+    """
+    subproject = tmp_path / "extensions" / "github_pdd_app"
+    prompts_dir = subproject / "prompts" / "src" / "routers"
+    prompts_dir.mkdir(parents=True)
+    (subproject / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: [\"**\"]\n"
+        "    defaults:\n"
+        "      default_language: \"python\"\n"
+        "      prompts_dir: \"prompts/src/routers\"\n"
+        "      generate_output_path: \"src/routers/\"\n"
+        "      test_output_path: \"tests/\"\n"
+        "      example_output_path: \"examples/\"\n"
+    )
+    (prompts_dir / "webhook_handlers_Python.prompt").write_text("prompt content")
+
+    # Run from the parent repo root, not the subproject.
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_determine_operation import get_pdd_file_paths
+    from pdd.operation_log import (
+        get_fingerprint_path,
+        get_run_report_path,
+        get_log_path,
+    )
+
+    result = get_pdd_file_paths(
+        "webhook_handlers",
+        "python",
+        prompts_dir="extensions/github_pdd_app/prompts/src/routers",
+    )
+
+    sub = subproject.resolve()
+    for key in ("code", "example", "test"):
+        resolved = Path(result[key]).resolve()
+        assert str(resolved).startswith(str(sub)), (
+            f"{key} path {resolved} must be rooted at the subproject {sub}, "
+            "not the parent CWD."
+        )
+    assert Path(result["code"]).resolve() == sub / "src" / "routers" / "webhook_handlers.py"
+    assert Path(result["test"]).resolve() == sub / "tests" / "test_webhook_handlers.py"
+    assert Path(result["example"]).resolve() == sub / "examples" / "webhook_handlers_example.py"
+
+    # Greg point 3: fingerprint/run-report/log helpers must anchor at the same
+    # subproject root once discovery returns subproject-rooted paths.
+    for helper in (get_fingerprint_path, get_run_report_path, get_log_path):
+        meta_path = helper("webhook_handlers", "python", paths=result).resolve()
+        assert str(meta_path).startswith(str(sub / ".pdd" / "meta")), (
+            f"{helper.__name__} returned {meta_path}, expected it under "
+            f"{sub / '.pdd' / 'meta'}."
+        )

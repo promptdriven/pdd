@@ -115,6 +115,15 @@
      is a descendant of the CWD result's directory (i.e., the prompt is inside a subproject).
      Otherwise it uses the CWD result. This avoids accidentally loading a repo-root `.pddrc` when
      the prompt file lives in an unrelated tree (e.g. a test fixture directory).
+   - Subproject path-resolution mode (issue #1211): when the selected `.pddrc` is a subproject that
+     lives BELOW the run CWD (the descendant case above, or when CWD has no `.pddrc` at all), an
+     effective `path_resolution_mode` of `"cwd"` is upgraded to `"config_base"`. Without this, relative
+     `.pddrc` output dirs (`generate_output_path`, `test_output_path`, `example_output_path`) would
+     resolve against the parent CWD and write outside the subproject — the discovery path used by
+     `sync`/`get_pdd_file_paths` forces `"cwd"`, so this override is what keeps `fix`/`sync` outputs
+     (and the fingerprint/run-report/log helpers that anchor off those paths) inside the subproject.
+     The override only flips `"cwd"`; it never touches an explicit `"config_base"`, so the unrelated-
+     fixture / `--context envonly` regression (where the CWD `.pddrc` is selected) is unaffected.
 
 6. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
    - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
