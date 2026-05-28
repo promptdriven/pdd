@@ -3,8 +3,6 @@
 import re
 import subprocess
 from pathlib import Path
-from importlib.metadata import version as metadata_version
-
 from click.testing import CliRunner
 
 import pdd
@@ -27,8 +25,8 @@ def test_package_version_is_well_formed_and_not_a_fallback():
 
 
 def test_cli_version_reports_distribution_metadata():
-    """`pdd --version` reports the installed pdd-cli version."""
-    expected = metadata_version("pdd-cli")
+    """`pdd --version` reports the runtime package version."""
+    expected = pdd.__version__
     result = CliRunner().invoke(cli_command, ["--version"])
     assert result.exit_code == 0
     assert f"version {expected}" in result.output
