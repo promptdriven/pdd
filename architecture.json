@@ -2499,24 +2499,43 @@
       "module": {
         "functions": [
           {
-            "name": "extract_skeleton",
-            "signature": "(source: str) -> str",
+            "name": "is_large",
+            "signature": "(code: str, unit_test: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "build_skeleton",
+            "signature": "(code: str) -> str",
             "returns": "str"
           },
           {
-            "name": "extract_function_slices",
-            "signature": "(source: str, function_names: list[str]) -> dict[str, str]",
-            "returns": "dict[str, str]"
-          },
-          {
-            "name": "extract_failing_functions",
-            "signature": "(traceback: str) -> list[str]",
+            "name": "extract_function_names_from_traceback",
+            "signature": "(error: str) -> list[str]",
             "returns": "list[str]"
           },
           {
-            "name": "reconstruct_source",
-            "signature": "(original: str, updated_slices: dict[str, str]) -> str",
+            "name": "prepare_focused_inputs",
+            "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]",
+            "returns": "Optional[FocusedInputs]"
+          },
+          {
+            "name": "reconstruct_code",
+            "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str",
             "returns": "str"
+          }
+        ],
+        "models": [
+          {
+            "name": "DiagnosisResult",
+            "fields": ["function_names: list[str]"]
+          },
+          {
+            "name": "FunctionSlice",
+            "fields": ["name: str", "qualname: str", "start_line: int", "end_line: int", "source: str", "indent: int"]
+          },
+          {
+            "name": "FocusedInputs",
+            "fields": ["focused_code: str", "focused_tests: str", "slices: list[FunctionSlice]"]
           }
         ]
       }
