@@ -301,3 +301,7 @@ github_token
 diff_base.txt
 modules.txt
 .loop/
+
+# Local PDD venv and debug artifacts
+pdd-env/
+error_log.txt

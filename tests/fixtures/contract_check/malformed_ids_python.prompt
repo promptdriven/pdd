@@ -1,0 +1,9 @@
+% Fixture: malformed_ids_python.prompt
+% IDs do not match R<N> or sequential N. patterns.
+% Expected: MALFORMED_ID errors.
+
+<contract_rules>
+RR-01: The system MUST reject unauthorized requests.
+R_002: The system MUST return a valid response on success.
+RULE_003: The system MUST NOT expose internal errors to clients.
+</contract_rules>

@@ -1,16 +1,13 @@
 """Project-level pytest configuration hooks."""
 
-import sys
-from pathlib import Path
-project_root = str(Path(__file__).resolve().parent.parent)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 import atexit
 import os
 import shutil
+import sys
 import tempfile
+from pathlib import Path
 from typing import Any
+from unittest import mock
 
 # =============================================================================
 # HOME isolation (MUST happen before ANY pdd.* import)
@@ -36,14 +33,44 @@ atexit.register(shutil.rmtree, _PYTEST_FAKE_HOME, ignore_errors=True)
 os.environ["HOME"] = _PYTEST_FAKE_HOME
 os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
 
-# Prevent outer agentic/checkup controls from changing test behavior. Tests that
-# cover these knobs set them explicitly with monkeypatch or patch.dict.
-for _PDD_ENV_VAR in ("PDD_AGENTIC_PROVIDER", "PDD_GOOGLE_CLI", "PDD_AUTO_UPDATE"):
-    os.environ.pop(_PDD_ENV_VAR, None)
-
 import pytest
 from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError
+
+
+class _MiniMocker:
+    """Small pytest-mock compatible subset used by this test suite."""
+
+    Mock = mock.Mock
+    MagicMock = mock.MagicMock
+
+    def __init__(self) -> None:
+        self._patchers: list[Any] = []
+
+    def patch(self, target: str, *args, **kwargs):
+        patcher = mock.patch(target, *args, **kwargs)
+        self._patchers.append(patcher)
+        return patcher.start()
+
+    def spy(self, obj: Any, attribute: str):
+        original = getattr(obj, attribute)
+        patcher = mock.patch.object(obj, attribute, wraps=original)
+        self._patchers.append(patcher)
+        return patcher.start()
+
+    def stopall(self) -> None:
+        while self._patchers:
+            self._patchers.pop().stop()
+
+
+@pytest.fixture
+def mocker():
+    """Fallback mocker fixture for environments without pytest-mock."""
+    helper = _MiniMocker()
+    try:
+        yield helper
+    finally:
+        helper.stopall()
 
 
 # Load environment variables from .env early in collection.
@@ -80,17 +107,6 @@ _E2E_FIX_ATTRS_TO_RESTORE = (
     "_run_step11_code_cleanup",
     "run_ci_validation_loop",
 )
-
-
-@pytest.fixture(autouse=True)
-def _normalize_cli_test_env(monkeypatch, request):
-    """Keep unit tests independent of developer shell/.env overrides.
-
-    Many CLI tests assert that ``auto_update()`` runs once per invocation.
-    Developers often export ``PDD_AUTO_UPDATE=false`` locally; force it on
-    for the test process unless a test explicitly patches the flag off.
-    """
-    monkeypatch.setenv("PDD_AUTO_UPDATE", "true")
 
 
 @pytest.fixture(autouse=True)
@@ -181,22 +197,9 @@ def preserve_git_work_tree():
 
 @pytest.fixture(autouse=True)
 def isolate_cloud_only_overrides(monkeypatch):
-    """Clear developer cloud-only env flags unless a test sets them.
-
-    PDD_QUIET is also cleared: it suppresses ``console.print`` in
-    ``pdd.preprocess`` and a handful of other modules. Tests that
-    exercise the ``pdd --quiet`` CLI (e.g. ``tests/test_quiet_flag.py``)
-    leak the flag globally because the CLI group callback writes
-    ``os.environ["PDD_QUIET"] = "1"`` and does not unwind it; subsequent
-    tests in the same pytest process that assert on stdout warnings
-    (e.g. ``test_preprocess.py::test_unresolved_include_*``) then see
-    no output and fail. The leak only surfaces when those tests land
-    in the same shard, which depends on bin-packing — exposed when
-    ``balance-chunks.py`` started splitting heavy files across chunks.
-    """
+    """Clear developer cloud-only env flags unless a test sets them."""
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
-    monkeypatch.delenv("PDD_QUIET", raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -95,6 +95,7 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
     "prompts/*_LLM.prompt",
     "templates/**",
     "data/*",
+    "schemas/*.schema.json",
     "docs/prompting_guide.md",
     "mcp_config.json",
     "*.zsh",
@@ -115,6 +116,19 @@ dev = [
     "build",
     "twine"
 ]
+
+# Optional defaults for `pdd checkup simplify` (multi-provider harness).
+# [tool.pdd.checkup.simplify]
+# max_files = 20
+# attempts = 3
+# focus = "focus on error handling"
+# engine = "claude"  # claude | codex | gemini | opencode | auto
+#
+# [tool.pdd.checkup.simplify.commands]
+# format = "ruff format"
+# lint = "ruff check"
+# typecheck = "mypy pdd"
+# test = "pytest -q"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

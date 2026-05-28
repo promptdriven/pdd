@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Any, Optional, List, Callable
 import fnmatch
 import logging
+import warnings
 
 import click
 import yaml
@@ -125,6 +126,69 @@ def _find_nearest_pddrc_for_file(
             break
     return None, None
 
+# Schema for .pddrc validation — see issue #1198.
+# Unknown keys at any level emit a UserWarning rather than being silently ignored.
+_PDDRC_ROOT_KEYS = {"version", "contexts"}
+_PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
+_PDDRC_DEFAULTS_KEYS = {
+    "generate_output_path",
+    "test_output_path",
+    "example_output_path",
+    "prompts_dir",
+    "default_language",
+    "target_coverage",
+    "strength",
+    "temperature",
+    "budget",
+    "max_attempts",
+    "outputs",
+}
+
+
+def _warn_unknown_pddrc_key(key: str, path: str) -> None:
+    """Emit the standard unknown-key warning for .pddrc (issue #1198)."""
+    warnings.warn(
+        f"WARNING: .pddrc contains unknown key '{key}' at path '{path}', ignored. "
+        f"Run 'pdd setup' to regenerate.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
+    """Validate that .pddrc contains only known keys.
+
+    Emits a UserWarning for each unknown key at the root, context, or
+    defaults levels. Does not raise; unknown keys are ignored but reported
+    so users can catch typos and stale config (issue #1198).
+    """
+    # Root level
+    for key in config.keys():
+        if key not in _PDDRC_ROOT_KEYS:
+            _warn_unknown_pddrc_key(key, key)
+
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return
+
+    for ctx_name, ctx_config in contexts.items():
+        if not isinstance(ctx_config, dict):
+            continue
+
+        # Context level
+        for key in ctx_config.keys():
+            if key not in _PDDRC_CONTEXT_KEYS:
+                _warn_unknown_pddrc_key(key, f"contexts.{ctx_name}.{key}")
+
+        # Defaults level
+        defaults = ctx_config.get("defaults", {})
+        if isinstance(defaults, dict):
+            for key in defaults.keys():
+                if key not in _PDDRC_DEFAULTS_KEYS:
+                    _warn_unknown_pddrc_key(
+                        key, f"contexts.{ctx_name}.defaults.{key}"
+                    )
+
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
     try:
@@ -137,7 +201,8 @@ def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
         # Validate basic structure
         if 'contexts' not in config:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
-        
+
+        _validate_pddrc_keys(config)
         return config
     except yaml.YAMLError as e:
         raise ValueError(f"YAML syntax error in .pddrc: {e}")
@@ -797,21 +862,38 @@ def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     return stem
 
 
-def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
+def _strip_language_suffix_with_subdir(
+    prompt_path: Path,
+    prompts_dir: Optional[str] = None,
+) -> str:
     """Strip language suffix from a prompt path, preserving subdirectory components.
 
     For nested prompts like ``prompts/commands/fix_python.prompt``, the
-    subdirectory relative to the ``prompts/`` root is part of the basename.
-    This function finds the ``prompts/`` ancestor directory and preserves
-    everything between it and the filename.
-
-    Falls back to :func:`_strip_language_suffix` (filename only) when the
-    path does not contain a ``prompts/`` component.
+    subdirectory relative to the configured prompts root is part of the
+    basename. When ``prompts_dir`` is supplied (typically from .pddrc), its
+    path segments are used as the anchor so a configured prompts root of
+    e.g. ``prompts/backend`` is treated as the root rather than the literal
+    ``prompts`` segment. Falls back to the literal ``prompts/`` anchor when
+    ``prompts_dir`` is not supplied or doesn't match the path.
     """
     stripped_name = _strip_language_suffix(prompt_path)
-
-    # Find the "prompts" directory in the path parts
     parts = prompt_path.parts
+
+    if prompts_dir:
+        normalized = str(prompts_dir).replace('\\', '/').rstrip('/')
+        dir_parts = tuple(p for p in normalized.split('/') if p and p != '.')
+        if dir_parts:
+            for start in range(len(parts) - len(dir_parts), -1, -1):
+                if start < 0:
+                    break
+                if tuple(parts[start:start + len(dir_parts)]) == dir_parts:
+                    anchor_end = start + len(dir_parts)
+                    subdir_parts = parts[anchor_end:-1]
+                    if subdir_parts:
+                        return str(Path(*subdir_parts) / stripped_name)
+                    return stripped_name
+
+    # Fall back to anchoring on the literal "prompts" segment
     try:
         prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
     except ValueError:
@@ -832,6 +914,7 @@ def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
 def _extract_basename(
     command: str,
     input_file_paths: Dict[str, Path],
+    prompts_dir: Optional[str] = None,
 ) -> str:
     """
     Deduce the project basename according to the rules explained in *Step A*.
@@ -842,7 +925,7 @@ def _extract_basename(
         if not prompt_path:
             raise ValueError("Could not determine prompt file for 'fix' command.")
 
-        prompt_basename = _strip_language_suffix(prompt_path)
+        prompt_basename = _strip_language_suffix_with_subdir(prompt_path, prompts_dir)
         
         unit_test_path = input_file_paths.get("unit_test_file")
         if not unit_test_path:
@@ -884,7 +967,7 @@ def _extract_basename(
     # General case: Use the primary prompt file
     prompt_path = _candidate_prompt_path(input_file_paths)
     if prompt_path:
-        return _strip_language_suffix_with_subdir(prompt_path)
+        return _strip_language_suffix_with_subdir(prompt_path, prompts_dir)
 
     # Fallback: If no prompt found (e.g., command only takes code files?),
     # use the first input file's stem. This requires input_file_paths not to be empty.
@@ -1022,8 +1105,36 @@ def construct_paths(
     original_context_config = {}  # Keep track of original context config for sync discovery
     
     try:
-        # Find and load .pddrc file
-        pddrc_path = _find_pddrc_file()
+        # Issue #1211: when invoked from a parent directory, prefer the .pddrc
+        # nearest the input prompt file — but only when that .pddrc is a
+        # descendant of the CWD-based one (i.e., a subproject within the same
+        # project tree). When the prompt comes from an unrelated tree (e.g. a
+        # fixture file), use the CWD-based .pddrc.
+        cwd_pddrc = _find_pddrc_file()
+        prompt_pddrc = None
+        if input_file_paths:
+            prompt_file_hint = input_file_paths.get("prompt_file")
+            if prompt_file_hint:
+                # _find_pddrc_file walks [start] + start.parents, so passing the
+                # prompt path directly resolves the same .pddrc whether the hint
+                # is a file or a directory — no explicit exists()/is_file() needed.
+                prompt_pddrc = _find_pddrc_file(Path(prompt_file_hint))
+        # Tracks whether we selected a subproject .pddrc that lives BELOW the run
+        # CWD. In that case relative output dirs must anchor at the subproject
+        # (config_base), not the CWD — otherwise sync/fix write outside it (#1211).
+        subproject_pddrc_below_cwd = False
+        if prompt_pddrc is None:
+            pddrc_path = cwd_pddrc
+        elif cwd_pddrc is None:
+            pddrc_path = prompt_pddrc
+            subproject_pddrc_below_cwd = True
+        else:
+            try:
+                prompt_pddrc.parent.resolve().relative_to(cwd_pddrc.parent.resolve())
+                pddrc_path = prompt_pddrc  # descendant — more specific subproject
+                subproject_pddrc_below_cwd = prompt_pddrc != cwd_pddrc
+            except ValueError:
+                pddrc_path = cwd_pddrc    # unrelated tree — keep local .pddrc
         if pddrc_path:
             pddrc_config = _load_pddrc_config(pddrc_path)
             
@@ -1259,7 +1370,11 @@ def construct_paths(
         if command in ("sync", "example", "test") and command_options.get("basename"):
             basename = command_options["basename"]
         else:
-            basename = _extract_basename(command, input_paths)
+            basename = _extract_basename(
+                command,
+                input_paths,
+                prompts_dir=resolved_config.get("prompts_dir"),
+            )
     except ValueError as exc:
          # Check if it's the specific error from the initial check (now done at start)
          # This try/except might not be needed if initial check is robust
@@ -1391,6 +1506,11 @@ def construct_paths(
         effective_path_resolution_mode = path_resolution_mode
         if effective_path_resolution_mode is None:
             effective_path_resolution_mode = "cwd" if command == "sync" else "config_base"
+        # Issue #1211: when the selected .pddrc is a subproject below the run CWD,
+        # "cwd" resolution would root relative output dirs at the parent CWD and
+        # write outside the subproject. Anchor them at the subproject .pddrc dir.
+        if effective_path_resolution_mode == "cwd" and subproject_pddrc_below_cwd:
+            effective_path_resolution_mode = "config_base"
 
         output_paths_str: Dict[str, str] = generate_output_paths(
             command=command,
