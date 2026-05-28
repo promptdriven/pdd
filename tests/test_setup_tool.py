@@ -67,6 +67,7 @@
 #   29. test_menu_invalid_option: "9" → "Invalid option" shown.
 
 import csv
+import json
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -699,13 +700,13 @@ def test_local_models_skipped(tmp_path, monkeypatch):
     assert "lm_studio" not in content
 
 
-def test_device_flow_models_included(tmp_path, monkeypatch):
-    """Empty api_key (device flow) models always included."""
-    combined = SIMPLE_REF_CSV + DEVICE_FLOW_CSV
+def test_device_flow_only_included_without_prompt(tmp_path, monkeypatch):
+    """When a device-flow provider is the ONLY thing available, it is written
+    with no provider-selection prompt (there is no choice to make)."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
-        ref_csv_rows=combined,
-        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        ref_csv_rows=DEVICE_FLOW_CSV,
+        env_keys={},
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
@@ -713,6 +714,242 @@ def test_device_flow_models_included(tmp_path, monkeypatch):
     assert user_csv.exists()
     content = user_csv.read_text()
     assert "copilot" in content.lower()
+    # No multi-provider choice → no selection prompt.
+    assert "pdd --local" not in output
+
+
+def test_device_flow_excluded_by_default_when_keyed_provider_present(tmp_path, monkeypatch):
+    """Issue #1202: a device-flow provider (e.g. GitHub Copilot, no api_key)
+    must NOT be silently written alongside a provider the user deliberately
+    configured with a key. With both present, accepting the default selection
+    (Enter) keeps only the keyed provider and drops the device-flow freebie."""
+    combined = SIMPLE_REF_CSV + DEVICE_FLOW_CSV
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=combined,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        create_pddrc=True,
+        # First "" = accept default provider selection (keyed providers only).
+        input_sequence=["", "", "", ""],
+    )
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    assert user_csv.exists()
+    content = user_csv.read_text()
+    assert "claude-sonnet" in content
+    assert "copilot" not in content.lower()
+
+
+def test_device_flow_included_when_explicitly_selected(tmp_path, monkeypatch):
+    """The device-flow provider can still be kept if the user explicitly asks
+    for everything ('a' = all). Selection is the 2nd prompt (after the
+    step-1 'Press Enter to continue')."""
+    combined = SIMPLE_REF_CSV + DEVICE_FLOW_CSV
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=combined,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        create_pddrc=True,
+        input_sequence=["", "a", "", ""],
+    )
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    content = user_csv.read_text()
+    assert "copilot" in content.lower()
+    assert "claude-sonnet" in content
+
+
+def test_multi_keyed_provider_selection_keeps_only_chosen(tmp_path, monkeypatch):
+    """Issue #1202 core: with credentials for two providers, selecting one
+    writes only that provider's rows so `pdd --local` cannot route elsewhere.
+    Providers are listed sorted; 'Anthropic' is #1, 'OpenAI' is #2. The
+    selection is the 2nd input (after the step-1 'Press Enter')."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "1", "", ""],
+    )
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    content = user_csv.read_text()
+    assert "claude-sonnet" in content
+    assert "gpt-4o" not in content
+
+
+def test_provider_selection_saved_to_sidecar(tmp_path, monkeypatch):
+    """Selecting a provider persists the choice to setup_preferences.json so a
+    later run can default to it (idempotency, issue #1202)."""
+    _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "1", "", ""],
+    )
+    pref = tmp_path / "home" / ".pdd" / "setup_preferences.json"
+    assert pref.exists()
+    data = json.loads(pref.read_text())
+    assert data["selected_providers"] == ["Anthropic"]
+
+
+def test_saved_selection_used_as_prompt_default(tmp_path, monkeypatch):
+    """A previously saved selection becomes the default, so accepting it (Enter)
+    keeps only the saved provider even though another key is still configured —
+    the unselected provider is not silently re-added on re-run."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["Anthropic"]})
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path",
+        lambda: pdd_dir / "llm_model.csv",
+    )
+    rows = [
+        {"provider": "Anthropic", "model": "claude-sonnet", "api_key": "ANTHROPIC_API_KEY"},
+        {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY"},
+    ]
+    # Enter (empty input) accepts the default, which must be the saved selection.
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+    selected = setup_tool._select_providers_to_keep(rows, ["Anthropic", "OpenAI"])
+    assert selected == ["Anthropic"]
+
+
+def test_stale_saved_selection_falls_back_to_non_device_default(tmp_path, monkeypatch):
+    """Codex review finding 2: a saved selection with no overlap with the
+    current providers must fall back to the non-device default, NOT to 'all'
+    (which would silently re-include a device-login provider)."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["A Provider That No Longer Exists"]})
+    )
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path",
+        lambda: pdd_dir / "llm_model.csv",
+    )
+    rows = [
+        {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY"},
+        {"provider": "GitHub Copilot", "model": "copilot/x", "api_key": ""},
+    ]
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # accept default
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+    selected = setup_tool._select_providers_to_keep(
+        rows, ["Anthropic", "GitHub Copilot"]
+    )
+    assert selected == ["Anthropic"]  # device-login Copilot excluded by default
+
+
+def test_eof_on_selection_uses_default(tmp_path, monkeypatch):
+    """Codex review finding 3: non-interactive/piped stdin (EOFError) must apply
+    the safe default rather than raising."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path",
+        lambda: pdd_dir / "llm_model.csv",
+    )
+
+    def _raise_eof(*a, **k):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _raise_eof)
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+    rows = [
+        {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY"},
+        {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY"},
+    ]
+    selected = setup_tool._select_providers_to_keep(rows, ["Anthropic", "OpenAI"])
+    assert selected == ["Anthropic", "OpenAI"]  # both keyed → default keeps both
+
+
+def test_local_and_custom_rows_preserved_through_curation(tmp_path, monkeypatch):
+    """Codex review finding 1: curation must not delete local models or
+    hand-edited custom rows. With a local ollama row plus configured Anthropic
+    and a device-login Copilot, selecting Anthropic keeps ollama (not curatable)
+    and drops only Copilot."""
+    ref = SIMPLE_REF_CSV + DEVICE_FLOW_CSV
+    user_rows = [
+        {"provider": "ollama", "model": "ollama/llama3", "api_key": "",
+         "base_url": "http://localhost:11434", "input": "0", "output": "0",
+         "coding_arena_elo": "", "max_reasoning_tokens": "",
+         "structured_output": "", "reasoning_type": "", "location": ""},
+    ]
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=ref,
+        user_csv_rows=user_rows,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        create_pddrc=True,
+        input_sequence=["", "1", "", ""],  # select Anthropic only
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "claude-sonnet" in content        # selected provider kept
+    assert "ollama/llama3" in content          # local row preserved (not curatable)
+    assert "copilot" not in content.lower()    # device-login dropped
+
+
+def test_curation_backs_up_previous_csv_before_dropping_rows(tmp_path, monkeypatch):
+    """Curation removes the rows of an unselected provider (provider-level, by
+    explicit user choice) but first snapshots the previous CSV to a timestamped
+    backup so the change is always recoverable. Here a custom OpenAI row is
+    dropped when the user selects Anthropic, but survives in the backup."""
+    user_rows = [
+        {"provider": "OpenAI", "model": "my-finetune-v9", "api_key": "OPENAI_API_KEY",
+         "base_url": "", "input": "5", "output": "15", "coding_arena_elo": "1234",
+         "max_reasoning_tokens": "", "structured_output": "", "reasoning_type": "",
+         "location": ""},
+    ]
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        user_csv_rows=user_rows,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "1", "", ""],  # select Anthropic only
+    )
+    pdd_dir = tmp_path / "home" / ".pdd"
+    content = (pdd_dir / "llm_model.csv").read_text()
+    assert "claude-sonnet" in content       # selected provider kept
+    assert "my-finetune-v9" not in content    # unselected provider dropped
+    assert "gpt-4o" not in content            # bundled OpenAI row dropped
+    # The dropped rows must be recoverable from a timestamped backup.
+    backups = list(pdd_dir.glob("llm_model.csv.backup.*"))
+    assert backups, "expected a backup before curation removed rows"
+    assert any("my-finetune-v9" in b.read_text() for b in backups)
+
+
+def test_invalid_selection_reprompts_instead_of_defaulting(tmp_path, monkeypatch):
+    """Codex review finding (round 4): unrecognized non-empty input must
+    re-prompt, not silently fall back to the default (a typo could otherwise
+    drop the provider the user meant to keep). Here 'xyz' is rejected and the
+    user then types '1' to select Anthropic."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test", "OPENAI_API_KEY": "sk-openai"},
+        create_pddrc=True,
+        input_sequence=["", "xyz", "1", "", ""],
+    )
+    content = (tmp_path / "home" / ".pdd" / "llm_model.csv").read_text()
+    assert "claude-sonnet" in content
+    assert "gpt-4o" not in content
+    assert "recognize" in output.lower()  # the re-prompt message was shown
+
+
+def test_single_provider_no_selection_prompt(tmp_path, monkeypatch):
+    """With only one configured provider there is no choice, so the selection
+    prompt must not appear and must not consume an input."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    assert "pdd --local" not in output
+    user_csv = tmp_path / "home" / ".pdd" / "llm_model.csv"
+    assert "claude-sonnet" in user_csv.read_text()
 
 
 # ===========================================================================

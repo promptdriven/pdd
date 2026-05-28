@@ -6,7 +6,9 @@ deterministic model configuration.
 from __future__ import annotations
 
 import getpass
+import json
 import os
+import re
 import sys
 import threading
 import time
@@ -75,6 +77,165 @@ def _print_step_banner(title: str) -> None:
 def _ref_csv_path() -> Path:
     """Path to the reference llm_model.csv that ships with the package."""
     return Path(__file__).resolve().parent / "data" / "llm_model.csv"
+
+
+def _provider_pref_path() -> Path:
+    """Sidecar storing the user's primary-provider selection, next to the user
+    CSV. Used so re-running `pdd setup` doesn't silently re-add providers the
+    user previously dropped (issue #1202)."""
+    from pdd.provider_manager import _get_user_csv_path
+    return _get_user_csv_path().parent / "setup_preferences.json"
+
+
+def _load_selected_providers() -> Optional[List[str]]:
+    """Return the saved primary-provider selection, or None if unset/unreadable.
+
+    A missing or corrupt file is treated as "no preference" — never fatal."""
+    path = _provider_pref_path()
+    if not path.exists():
+        return None
+    try:
+        # errors="replace" so invalid bytes never raise UnicodeDecodeError;
+        # any resulting non-JSON content is handled by the ValueError branch.
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    selected = data.get("selected_providers") if isinstance(data, dict) else None
+    if isinstance(selected, list) and all(isinstance(p, str) for p in selected):
+        return [p.strip() for p in selected if p.strip()]
+    return None
+
+
+def _save_selected_providers(providers: List[str]) -> None:
+    """Persist the primary-provider selection. Best-effort; a write failure is
+    logged but does not abort setup (the selection still applies this run)."""
+    path = _provider_pref_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"selected_providers": sorted(providers)}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        print(f"  {DIM}(could not save provider preference: {exc}){RESET}")
+
+
+def _select_providers_to_keep(
+    rows: List[Dict[str, str]],
+    curatable: List[str],
+) -> Optional[List[str]]:
+    """When the auto-configured models span more than one provider, ask the user
+    which provider(s) `pdd --local` should use, and return the chosen provider
+    names. Returns None when there is no choice to make (<2 curatable providers),
+    leaving the row set untouched.
+
+    Only ``curatable`` providers (those derived from the bundled reference CSV
+    for which the user has credentials) are offered and curated. Rows for any
+    NON-curatable provider — local models (ollama/lm_studio) and foreign /
+    hand-edited providers the user has no reference row or credential for — are
+    not listed here and are preserved by the caller. Note the curation is
+    provider-level: ALL rows of a curatable provider the user does not select
+    are removed (including hand-edited fine-tunes or custom base_urls under that
+    provider name), because the user is explicitly choosing which providers
+    `pdd --local` may use. The caller snapshots the prior CSV to a timestamped
+    backup before removing rows so the choice is recoverable.
+
+    Rationale (issue #1202): `pdd --local` auto-selects across every provider in
+    the CSV by cost/ELO, so leaving several providers in the file silently
+    routes a user who configured (say) a Gemini key to a higher-ranked or
+    free device-login provider (e.g. GitHub Copilot). Curating the CSV down to
+    the user's chosen provider(s) is the reliable fix — reordering rows does
+    not change selection.
+    """
+    providers = sorted({p.strip() for p in curatable if p.strip()})
+    if len(providers) < 2:
+        return None
+
+    # A provider is "device-login" (e.g. GitHub Copilot) when none of its rows
+    # carry an api_key. Those are excluded from the default selection so a free
+    # login does not silently outrank a key the user deliberately configured.
+    device_providers = {
+        p for p in providers
+        if all(
+            not (r.get("api_key") or "").strip()
+            for r in rows
+            if (r.get("provider") or "").strip() == p
+        )
+    }
+    # The non-device providers are the safe default — never default to a set
+    # that includes a free device login over a configured key. This default is
+    # intentionally MULTI-select (all keyed providers), not single: a user who
+    # deliberately configured two paid keys may legitimately want either, and
+    # the menu shows every default-kept provider (marked '*') with an explicit
+    # removal warning, so accepting it is an informed choice rather than the
+    # silent free-login routing that #1202 is about. Users who want a strict
+    # single-provider pin simply select one entry.
+    non_device_default = [p for p in providers if p not in device_providers]
+
+    saved = _load_selected_providers()
+    default = [p for p in providers if p in saved] if saved else list(non_device_default)
+    # A stale/foreign saved selection (no overlap with the current providers)
+    # must fall back to the non-device default, NOT to "all" — otherwise a
+    # device login silently re-enters the pin, reopening #1202. When every
+    # curatable provider is device-login (no key to protect), fall back to a
+    # single provider rather than all, so the default never spans providers.
+    if not default:
+        default = non_device_default or providers[:1]
+
+    row_counts = {
+        p: sum(1 for r in rows if (r.get("provider") or "").strip() == p)
+        for p in providers
+    }
+
+    print()
+    print("Multiple providers are configured. Which should `pdd --local` use?")
+    print(f"  {DIM}(--local picks across all listed providers by cost/ranking, "
+          f"so keep only the one(s) you want. Rows for providers you don't "
+          f"select are removed from your CSV — a backup is saved first.){RESET}")
+    for idx, prov in enumerate(providers, 1):
+        n = row_counts.get(prov, 0)
+        plural = "s" if n != 1 else ""
+        tag = f"  {DIM}(device login, no API key){RESET}" if prov in device_providers else ""
+        marker = "*" if prov in default else " "
+        print(f"   {marker} {idx}. {prov}  ({n} model{plural}){tag}")
+    print(f"  {DIM}Enter numbers (e.g. 1,2), 'a' for all, or press Enter for "
+          f"default [{', '.join(default)}].{RESET}")
+
+    # Re-prompt on unrecognized input so a typo never silently falls back to the
+    # default and drops a provider the user meant to keep. Only an empty line or
+    # EOF (non-interactive stdin) means "accept the default".
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            raw = input("Provider selection: ").strip()
+        except EOFError:
+            chosen = default
+            break
+        if not raw:
+            chosen = default
+            break
+        if raw.lower() in ("a", "all"):
+            chosen = list(providers)
+            break
+        picked: List[str] = []
+        for tok in re.split(r"[,\s]+", raw):
+            if tok.isdigit() and 1 <= int(tok) <= len(providers):
+                picked.append(providers[int(tok) - 1])
+        picked = list(dict.fromkeys(picked))  # dedupe, preserve order
+        if picked:
+            chosen = picked
+            break
+        if attempt < max_attempts - 1:
+            print(f"  {YELLOW}Didn't recognize '{raw}'. Enter the number(s) from "
+                  f"the list, 'a' for all, or press Enter for the default.{RESET}")
+    else:
+        # Exhausted attempts with only invalid input — apply the safe default.
+        print(f"  {DIM}No valid selection entered; using default "
+              f"[{', '.join(default)}].{RESET}")
+        chosen = default
+
+    _save_selected_providers(chosen)
+    return chosen
 
 
 def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
@@ -419,6 +580,49 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
             existing_models.add(m)
 
     combined = existing + new_rows
+    # Issue #1202: when several providers are configured, ask which the user
+    # actually wants `pdd --local` to use and curate the CSV down to those.
+    # Leaving every provider in the file lets cost/ELO auto-selection route to
+    # an unintended (often free device-login) provider. Only the reference-CSV
+    # providers the user has credentials for are curatable; local models and
+    # hand-edited custom rows are preserved untouched.
+    curatable = sorted({
+        (r.get("provider") or "").strip()
+        for r in configured_models
+        if (r.get("provider") or "").strip()
+    })
+    selected = _select_providers_to_keep(combined, curatable)
+    if selected is not None:
+        selected_set = set(selected)
+        curatable_set = set(curatable)
+        # Drop rows for curatable providers the user did not select. Local
+        # models and foreign providers (not curatable) are always kept. This is
+        # provider-level on purpose: the user explicitly chose which providers
+        # `pdd --local` should use, so an unselected provider's rows — bundled
+        # or hand-edited — should not remain and silently get auto-selected.
+        kept = [
+            r for r in combined
+            if (r.get("provider") or "").strip() in selected_set
+            or (r.get("provider") or "").strip() not in curatable_set
+        ]
+        # Safety net for the explicit-removal: if curation actually drops rows,
+        # snapshot the previous CSV to a timestamped backup (mirrors the
+        # existing ~/.pdd/llm_model.csv.backup.<ts> convention) so a mistaken
+        # selection is always recoverable.
+        if len(kept) != len(combined) and user_csv.exists():
+            try:
+                base = f"{user_csv.name}.backup.{int(time.time())}"
+                backup = user_csv.with_name(base)
+                # Avoid clobbering an existing backup written in the same second.
+                suffix = 1
+                while backup.exists():
+                    backup = user_csv.with_name(f"{base}-{suffix}")
+                    suffix += 1
+                backup.write_bytes(user_csv.read_bytes())
+                print(f"  {DIM}(previous model list backed up to {backup.name}){RESET}")
+            except OSError:
+                pass  # backup is best-effort; never block the curation write
+        combined = kept
     try:
         _write_csv_atomic(user_csv, combined)
     except Exception as e:
@@ -429,8 +633,13 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
         p = (r.get("provider") or "unknown").strip()
         provider_counts[p] = provider_counts.get(p, 0) + 1
 
-    if new_rows:
-        print(f"  {GREEN}✓ {len(new_rows)} new model(s) added to {user_csv}{RESET}")
+    # Count only the rows that actually survived curation, so the summary does
+    # not claim "N new model(s) added" for rows filtered out before the write.
+    written_models = {(r.get("model") or "").strip() for r in combined}
+    added_rows = [r for r in new_rows
+                  if (r.get("model") or "").strip() in written_models]
+    if added_rows:
+        print(f"  {GREEN}✓ {len(added_rows)} new model(s) added to {user_csv}{RESET}")
     else:
         if combined:
             print(f"  All matching models already present in {user_csv}.")
