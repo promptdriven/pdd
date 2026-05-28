@@ -943,11 +943,34 @@ def test_removal_declined_keeps_all_rows(tmp_path, monkeypatch):
     assert "will be removed" in output  # the removal was shown explicitly
 
 
-def test_menu_add_provider_syncs_saved_selection(tmp_path, monkeypatch):
-    """Codex full-review finding: the options-menu 'Add a provider' path writes
-    rows directly to the CSV. `_sync_provider_pref_to_csv` must update an
-    existing saved selection to include the newly added provider, so a later
-    setup run does not drop it."""
+def test_menu_added_provider_unioned_into_saved_selection(tmp_path, monkeypatch):
+    """A provider ADDED via the options menu is unioned into an existing saved
+    selection so a later setup run doesn't drop it (only the menu-added delta)."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "setup_preferences.json").write_text(
+        json.dumps({"selected_providers": ["Anthropic"]})
+    )
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_path.write_text("provider,model,api_key\nAnthropic,claude,ANTHROPIC_API_KEY\n")
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
+    )
+    before = setup_tool._keyed_providers_in_csv()
+    # Simulate the menu adding OpenAI.
+    csv_path.write_text(
+        "provider,model,api_key\nAnthropic,claude,ANTHROPIC_API_KEY\n"
+        "OpenAI,gpt-4o,OPENAI_API_KEY\n"
+    )
+    setup_tool._union_providers_into_pref(setup_tool._keyed_providers_in_csv() - before)
+    data = json.loads((pdd_dir / "setup_preferences.json").read_text())
+    assert data["selected_providers"] == ["Anthropic", "OpenAI"]
+
+
+def test_menu_sync_does_not_reabsorb_preserved_or_declined_rows(tmp_path, monkeypatch):
+    """Codex round-4 finding: opening the menu without adding anything must NOT
+    re-absorb providers the user curated away whose rows remain (declined
+    removal or preserved hand-edited row). The delta is empty → unchanged."""
     pdd_dir = tmp_path / ".pdd"
     pdd_dir.mkdir(parents=True)
     (pdd_dir / "setup_preferences.json").write_text(
@@ -955,27 +978,37 @@ def test_menu_add_provider_syncs_saved_selection(tmp_path, monkeypatch):
     )
     csv_path = pdd_dir / "llm_model.csv"
     csv_path.write_text(
-        "provider,model,api_key\n"
-        "Anthropic,claude,ANTHROPIC_API_KEY\n"
-        "OpenAI,gpt-4o,OPENAI_API_KEY\n"  # simulate menu having added OpenAI
+        "provider,model,api_key\nAnthropic,claude,ANTHROPIC_API_KEY\n"
+        "OpenAI,gpt-4o,OPENAI_API_KEY\n"  # present (declined removal), NOT menu-added
     )
     monkeypatch.setattr(
         "pdd.provider_manager._get_user_csv_path", lambda: csv_path
     )
-    setup_tool._sync_provider_pref_to_csv()
+    before = setup_tool._keyed_providers_in_csv()  # {Anthropic, OpenAI}
+    setup_tool._union_providers_into_pref(setup_tool._keyed_providers_in_csv() - before)  # adds nothing
     data = json.loads((pdd_dir / "setup_preferences.json").read_text())
-    assert data["selected_providers"] == ["Anthropic", "OpenAI"]
+    assert data["selected_providers"] == ["Anthropic"]  # OpenAI not re-absorbed
 
 
-def test_menu_sync_excludes_device_login_provider(tmp_path, monkeypatch):
-    """Codex full-review finding: the menu sync must NOT pull a device-login
-    provider (no api_key, e.g. Copilot) into the saved selection, or it would
-    become the default and bypass the device-login exclusion next run."""
+def test_union_does_not_create_sidecar_when_none_exists(tmp_path, monkeypatch):
+    """`_union_providers_into_pref` must not impose a curation policy on users
+    who never curated — it only updates an existing sidecar."""
     pdd_dir = tmp_path / ".pdd"
     pdd_dir.mkdir(parents=True)
-    (pdd_dir / "setup_preferences.json").write_text(
-        json.dumps({"selected_providers": ["Anthropic"]})
+    csv_path = pdd_dir / "llm_model.csv"
+    monkeypatch.setattr(
+        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
     )
+    setup_tool._union_providers_into_pref({"OpenAI"})
+    assert not (pdd_dir / "setup_preferences.json").exists()
+
+
+def test_keyed_providers_in_csv_excludes_device_login(tmp_path, monkeypatch):
+    """`_keyed_providers_in_csv` (source of the menu-add delta) excludes
+    device-login providers, so a device login never enters the saved
+    selection and bypasses the device-login exclusion next run."""
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(parents=True)
     csv_path = pdd_dir / "llm_model.csv"
     csv_path.write_text(
         "provider,model,api_key\n"
@@ -985,23 +1018,7 @@ def test_menu_sync_excludes_device_login_provider(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "pdd.provider_manager._get_user_csv_path", lambda: csv_path
     )
-    setup_tool._sync_provider_pref_to_csv()
-    data = json.loads((pdd_dir / "setup_preferences.json").read_text())
-    assert data["selected_providers"] == ["Anthropic"]  # Copilot NOT added
-
-
-def test_sync_does_not_create_sidecar_when_none_exists(tmp_path, monkeypatch):
-    """`_sync_provider_pref_to_csv` must not impose a curation policy on users
-    who never curated — it only updates an existing sidecar."""
-    pdd_dir = tmp_path / ".pdd"
-    pdd_dir.mkdir(parents=True)
-    csv_path = pdd_dir / "llm_model.csv"
-    csv_path.write_text("provider,model,api_key\nAnthropic,claude,ANTHROPIC_API_KEY\n")
-    monkeypatch.setattr(
-        "pdd.provider_manager._get_user_csv_path", lambda: csv_path
-    )
-    setup_tool._sync_provider_pref_to_csv()
-    assert not (pdd_dir / "setup_preferences.json").exists()
+    assert setup_tool._keyed_providers_in_csv() == {"Anthropic"}
 
 
 def test_invalid_selection_reprompts_instead_of_defaulting(tmp_path, monkeypatch):

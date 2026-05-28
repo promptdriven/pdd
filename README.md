@@ -259,9 +259,10 @@ The wizard can be re-run at any time to update keys, add providers, or reconfigu
 `pdd --local` selects a model from `~/.pdd/llm_model.csv` by cost/ranking, so if
 the file lists several providers it can route to one you didn't intend — for
 example a free GitHub Copilot login outranking a `GEMINI_API_KEY` you set on
-purpose. To prevent that, when setup finds credentials for more than one
-provider it prompts you to pick which provider(s) to keep and writes only those
-rows:
+purpose. To prevent that, when setup ends up with more than one usable provider
+— which includes always-available device-login providers like GitHub Copilot,
+so the prompt can appear even if you only set a single API key — it asks you to
+pick which provider(s) to keep and writes only those rows:
 
 - **Default selection** excludes device-login providers (e.g. GitHub Copilot,
   which needs no API key) so a free login never silently outranks a key you

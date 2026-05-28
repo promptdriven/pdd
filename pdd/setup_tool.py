@@ -120,42 +120,46 @@ def _save_selected_providers(providers: List[str]) -> None:
         print(f"  {DIM}(could not save provider preference: {exc}){RESET}")
 
 
-def _sync_provider_pref_to_csv() -> None:
-    """Re-align the saved provider selection with the providers currently in the
-    user CSV. Called after the options menu, whose "Add a provider" path writes
-    rows directly to `llm_model.csv`. Without this, a later `pdd setup` run would
-    default to the stale saved selection and could drop the provider the user
-    just added through the menu (#1202 review).
-
-    Only KEYED providers now present are unioned into the existing selection.
-    Device-login providers (no api_key, e.g. GitHub Copilot) are deliberately
-    NOT unioned in — `add_provider_from_registry` can leave rows behind even
-    when an auth step is skipped/failed, and a device login must never silently
-    become the saved default and bypass the device-login exclusion on the next
-    run. Only updates an EXISTING sidecar — it never creates a curation policy
-    the user didn't opt into."""
-    saved = _load_selected_providers()
-    if saved is None:
-        return
+def _keyed_providers_in_csv() -> set:
+    """Return the set of providers in the user CSV that have at least one row
+    with an api_key (i.e. credential-backed, not device-login). Used to detect
+    what the options menu added."""
     from pdd.provider_manager import _read_csv, _get_user_csv_path
     user_csv = _get_user_csv_path()
     if not user_csv.exists():
-        return
+        return set()
     try:
         rows = _read_csv(user_csv)
     except Exception:
-        return
+        return set()
     by_provider: Dict[str, List[Dict[str, str]]] = {}
     for r in rows:
         prov = (r.get("provider") or "").strip()
         if prov:
             by_provider.setdefault(prov, []).append(r)
-    keyed_now = {
+    return {
         prov for prov, prs in by_provider.items()
         if any((r.get("api_key") or "").strip() for r in prs)
     }
-    updated = sorted(set(saved) | keyed_now)
-    if updated and updated != sorted(saved):
+
+
+def _union_providers_into_pref(added: set) -> None:
+    """Union newly-added keyed providers into an EXISTING saved selection so the
+    options menu's "Add a provider" path isn't undone by curation on the next
+    `pdd setup` run (#1202 review). Only the providers `added` during the menu
+    are unioned — preserved hand-edited rows and rows kept after a declined
+    removal are NOT re-absorbed (that would reopen multi-provider routing the
+    user curated away). Device-login providers are excluded by construction
+    (``added`` comes from `_keyed_providers_in_csv`). No-op when nothing was
+    added or no sidecar exists (never creates a policy the user didn't opt
+    into)."""
+    if not added:
+        return
+    saved = _load_selected_providers()
+    if saved is None:
+        return
+    updated = sorted(set(saved) | set(added))
+    if updated != sorted(saved):
         _save_selected_providers(updated)
 
 
@@ -1156,17 +1160,20 @@ def run_setup() -> None:
             msg = "Setup incomplete. Use the menu to configure manually."
             _console.print(f"[yellow]{msg}[/yellow]")
             print(f"{YELLOW}{msg}{RESET}")
+            _before = _keyed_providers_in_csv()
             _run_options_menu()
-            # The menu's "Add a provider" path writes rows directly; keep the
-            # saved provider selection in sync so a later run won't drop them.
-            _sync_provider_pref_to_csv()
+            # Keep a curated selection in sync with providers ADDED via the menu
+            # (delta only), so a later run won't drop them — without re-absorbing
+            # providers the user curated away.
+            _union_providers_into_pref(_keyed_providers_in_csv() - _before)
             found_keys = _scan_for_api_keys_quiet()
         else:
             found_keys = context.get("found_keys", [])
             ans = input("Press Enter to finish, or 'm' for more options: ").strip()
             if ans:
+                _before = _keyed_providers_in_csv()
                 _run_options_menu()
-                _sync_provider_pref_to_csv()
+                _union_providers_into_pref(_keyed_providers_in_csv() - _before)
                 # Refresh: menu may have added a key
                 found_keys = _scan_for_api_keys_quiet()
 
