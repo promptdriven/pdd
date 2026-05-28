@@ -320,6 +320,24 @@ the provider to complete that login.
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
+#### Pinning a Provider
+
+When more than one local-mode provider is configured (e.g. both a `GEMINI_API_KEY`
+and a GitHub Copilot OAuth token), `--local` selects candidates in CSV order and
+may not pick the one you intended. Pin the provider explicitly with `--provider`
+or the `PDD_PROVIDER` environment variable:
+
+```bash
+pdd --local --provider gemini sync my_module
+# or
+PDD_PROVIDER=gemini pdd --local sync my_module
+```
+
+The value is a case-insensitive substring match against the CSV `provider` and
+`model` columns, so `gemini`, `google`, `anthropic`, `copilot`, etc. all work.
+If a pinned candidate fails with a model-not-supported error, PDD now cascades
+to the next matching row rather than aborting the run.
+
 PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
 
 - Support for multiple model providers (OpenAI, Anthropic, Google/Vertex AI, and more)
@@ -687,6 +705,7 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
+- `--provider TEXT`: Pin local-mode model selection to a single provider (case-insensitive substring match against the CSV `provider` / `model` columns, e.g. `gemini`, `anthropic`, `copilot`). Also accepts the `PDD_PROVIDER` environment variable. Has no effect when running in cloud mode.
 - `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
 - `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.

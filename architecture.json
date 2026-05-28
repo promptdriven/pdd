@@ -8993,7 +8993,7 @@
         "functions": [
           {
             "name": "cli",
-            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)",
+            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, provider, time, context_override, list_contexts, core_dump, keep_core_dumps)",
             "returns": "None"
           },
           {
