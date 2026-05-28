@@ -320,9 +320,33 @@ def _match_slices_to_traceback(
 # ---------------------------------------------------------------------------
 
 _PYTEST_FAILED = re.compile(
-    r'^(?:FAILED|ERROR)\s+[^\s:]+::([A-Za-z_][A-Za-z0-9_]*)',
+    r'^(?:FAILED|ERROR)\s+[^\s:]+::([A-Za-z_][A-Za-z0-9_]*)(?:::([A-Za-z_][A-Za-z0-9_]*))?',
     re.MULTILINE,
 )
+
+# Standard unittest/pytest setup and teardown method names always included when
+# a class is partially extracted so the extracted class remains self-contained.
+_SETUP_NAMES: frozenset[str] = frozenset({
+    "setUp", "tearDown", "setUpClass", "tearDownClass",
+    "setup_method", "teardown_method", "setup_class", "teardown_class",
+    "setup", "teardown",
+})
+
+
+def _has_fixture_decorator(decorators: list[ast.expr]) -> bool:
+    """Return True if any decorator is pytest.fixture or fixture."""
+    for d in decorators:
+        if isinstance(d, ast.Attribute) and d.attr == "fixture":
+            return True
+        if isinstance(d, ast.Name) and d.id == "fixture":
+            return True
+        if isinstance(d, ast.Call):
+            func = d.func
+            if (isinstance(func, ast.Attribute) and func.attr == "fixture") or (
+                isinstance(func, ast.Name) and func.id == "fixture"
+            ):
+                return True
+    return False
 
 
 def _extract_test_slices(error: str, unit_test: str) -> str:
@@ -333,12 +357,31 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
     to extract those top-level functions/classes plus module-level imports and
     fixture definitions.  Returns *unit_test* unchanged when extraction fails,
     produces no targets, or the result is not meaningfully smaller.
+
+    For ``Class::method`` node IDs, only the failing method (plus setup/teardown
+    and fixture methods) is extracted from the class, rather than the whole
+    class.  Falls back to the full class when precise extraction fails.
     """
     try:
-        target_names: list[str] = list(
-            dict.fromkeys(m.group(1) for m in _PYTEST_FAILED.finditer(error))
-        )
-        if not target_names:
+        # Parse failing targets.
+        # func_targets: top-level function names (or class names without a
+        #   specific method, e.g. a class-level ERROR).
+        # class_targets: class_name -> set of specific failing method names.
+        func_targets: set[str] = set()
+        class_targets: dict[str, set[str]] = {}
+
+        for m in _PYTEST_FAILED.finditer(error):
+            first, second = m.group(1), m.group(2)
+            if second:
+                # Class::method format — record the specific method.
+                if first not in class_targets:
+                    class_targets[first] = set()
+                class_targets[first].add(second)
+            else:
+                # Top-level function or class-only reference (e.g. collection error).
+                func_targets.add(first)
+
+        if not func_targets and not class_targets:
             return unit_test
 
         try:
@@ -362,19 +405,8 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                     node.decorator_list[0].lineno if node.decorator_list else node.lineno
                 )
                 chunk = "".join(lines[deco_start - 1 : node_end])
-                is_fixture = any(
-                    (isinstance(d, ast.Attribute) and d.attr == "fixture")
-                    or (isinstance(d, ast.Name) and d.id == "fixture")
-                    or (
-                        isinstance(d, ast.Call)
-                        and (
-                            (isinstance(d.func, ast.Attribute) and d.func.attr == "fixture")
-                            or (isinstance(d.func, ast.Name) and d.func.id == "fixture")
-                        )
-                    )
-                    for d in node.decorator_list
-                )
-                if node.name in target_names:
+                is_fixture = _has_fixture_decorator(node.decorator_list)
+                if node.name in func_targets:
                     test_parts.append(chunk)
                 elif is_fixture:
                     preamble_parts.append(chunk)
@@ -383,9 +415,42 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                 deco_start = (
                     node.decorator_list[0].lineno if node.decorator_list else node.lineno
                 )
-                chunk = "".join(lines[deco_start - 1 : node_end])
-                if node.name in target_names:
+                if node.name in func_targets:
+                    # Class-level failure (no specific method) — include whole class.
+                    chunk = "".join(lines[deco_start - 1 : node_end])
                     test_parts.append(chunk)
+                elif node.name in class_targets:
+                    method_targets = class_targets[node.name]
+                    # Try to extract only the targeted methods plus setup/teardown/fixtures.
+                    first_body_start = node.body[0].lineno if node.body else node_end + 1
+                    if node.body and getattr(node.body[0], "decorator_list", None):
+                        first_body_start = node.body[0].decorator_list[0].lineno
+                    class_header = "".join(lines[deco_start - 1 : first_body_start - 1])
+                    selected_methods: list[str] = []
+                    for child in node.body:
+                        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            continue
+                        child_end = getattr(child, "end_lineno", child.lineno)
+                        child_deco = (
+                            child.decorator_list[0].lineno
+                            if child.decorator_list
+                            else child.lineno
+                        )
+                        if (
+                            child.name in method_targets
+                            or child.name in _SETUP_NAMES
+                            or _has_fixture_decorator(child.decorator_list)
+                        ):
+                            selected_methods.append(
+                                "".join(lines[child_deco - 1 : child_end])
+                            )
+                    if selected_methods:
+                        class_text = class_header + "\n".join(selected_methods) + "\n"
+                        test_parts.append(class_text)
+                    else:
+                        # Fallback: include whole class.
+                        chunk = "".join(lines[deco_start - 1 : node_end])
+                        test_parts.append(chunk)
                 # Non-target helper classes are omitted.
 
         if not test_parts:

@@ -239,7 +239,7 @@ def cloud_fix_errors(
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
     """
-    del error_file, time
+    del error_file
     global requests
     if requests is None:
         try:
@@ -253,14 +253,17 @@ def cloud_fix_errors(
     if failure_classification:
         error = f"[PDD failure classification] {failure_classification}\n{error}"
     payload = {
-        "unit_test": unit_test,
+        "unitTest": unit_test,
         "code": code,
         "prompt": prompt,
-        "error": error,
+        "errors": error,
+        "language": get_language(code_file_ext) or "python",
         "strength": strength,
         "temperature": temperature,
-        "protect_tests": protect_tests,
-        "code_file_ext": code_file_ext,
+        "time": time,
+        "verbose": verbose,
+        "protectTests": protect_tests,
+        "codeFileExt": code_file_ext,
     }
     try:
         response = requests.post(
@@ -423,7 +426,12 @@ def fix_error_loop(
             else:
                 local_error_payload = f"[PDD failure classification] {classification}\n{output_log}" if classification else output_log
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                    target_test, target_code, prompt, local_error_payload, error_log_file, strength, temperature, verbose
+                    target_test, target_code, prompt, local_error_payload, error_log_file,
+                    strength=strength,
+                    temperature=temperature,
+                    time=time,
+                    verbose=verbose,
+                    protect_tests=protect_tests,
                 )
         except Exception as exc:
             if use_cloud:
@@ -452,7 +460,8 @@ def fix_error_loop(
         total_cost += cost
         if focused_inputs and update_code:
             fixed_code = reconstruct_code(code_content, fixed_code, focused_inputs.slices)
-        if focused_inputs and not update_test:
+        if focused_inputs:
+            # focused_tests is only a failing-test subset; never write the partial result back
             fixed_test = unit_test_content
         next_code = fixed_code if update_code else code_content
         next_test = fixed_test if update_test and not protect_tests else unit_test_content
