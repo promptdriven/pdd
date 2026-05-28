@@ -40,20 +40,14 @@ def _derive_git_aligned_version() -> str | None:
 
 
 def _load_package_version() -> str:
-    """Return a version aligned with current tag strategy."""
+    """Return a version aligned with current tag strategy when in a git checkout."""
     try:
         dist_version = _metadata_version("pdd-cli")
     except PackageNotFoundError:
         dist_version = "0.0.0+unknown"
 
     git_version = _derive_git_aligned_version()
-    if git_version is None:
-        return dist_version
-
-    # Prefer git-aligned version when installed metadata is stale for this checkout.
-    if dist_version != git_version:
-        return git_version
-    return dist_version
+    return git_version or dist_version
 
 
 __version__ = _load_package_version()

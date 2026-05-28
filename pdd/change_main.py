@@ -509,10 +509,13 @@ def change_main(
 
         # --- 5. User Story Validation (Optional) ---
         # CSV mode without an explicit output path writes individual prompt files
-        # to CWD; skip story validation in that scenario to avoid failing on a
-        # missing default prompts directory.
+        # to CWD; skip story validation to avoid failing on a missing prompts dir.
         skip_user_stories_for_csv_no_output = use_csv and output_path_obj is None
-        if (use_csv or success) and not ctx.obj.get("skip_user_stories", False) and not skip_user_stories_for_csv_no_output:
+        if (
+            (use_csv or success)
+            and not ctx.obj.get("skip_user_stories", False)
+            and not skip_user_stories_for_csv_no_output
+        ):
             prompts_dir = resolved_config.get("prompts_dir") or os.environ.get("PDD_PROMPTS_DIR") or "prompts"
             stories_dir = os.environ.get("PDD_USER_STORIES_DIR") or "user_stories"
             validation_prompt_files = None
