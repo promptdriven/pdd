@@ -1,7 +1,6 @@
 """Optional grounding policy checks for critical modules."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -24,9 +23,7 @@ class PolicyViolation(BaseModel):
 
 
 def _default_policy_path() -> Path:
-    pdd_path = os.environ.get("PDD_PATH")
-    if pdd_path:
-        return Path(pdd_path) / "grounding_policy.yaml"
+    """Prefer the project-local policy under .pdd/ regardless of PDD_PATH."""
     return Path.cwd() / ".pdd" / "grounding_policy.yaml"
 
 

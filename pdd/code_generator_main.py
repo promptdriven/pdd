@@ -34,6 +34,12 @@ from .architecture_sync import (
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
+from .grounding_provenance import (
+    build_grounding_metadata,
+    reviewed_from_decisions,
+    review_grounding_examples_interactive,
+    stash_grounding_overrides_on_ctx,
+)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -3100,7 +3106,10 @@ def code_generator_main(
             prompt_content = body
         else:
             prompt_content = raw_prompt_content
-        
+
+        if isinstance(ctx.obj, dict):
+            stash_grounding_overrides_on_ctx(ctx.obj, prompt_content)
+
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
         env_llm_raw = None
@@ -3687,7 +3696,16 @@ def code_generator_main(
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
-                    payload = {"promptContent": processed_prompt_for_cloud, "searchInput": prompt_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
+                    payload = {
+                        "promptContent": processed_prompt_for_cloud,
+                        "searchInput": prompt_content,
+                        "language": language,
+                        "strength": strength,
+                        "temperature": temperature,
+                        "verbose": verbose,
+                    }
+                    if cli_params.get("review_examples"):
+                        payload["reviewExamples"] = True
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
@@ -3701,17 +3719,28 @@ def code_generator_main(
 
                         # Extract example information from examplesUsed array (cloud returns this)
                         examples_used = response_data.get("examplesUsed", [])
-                        from .grounding_provenance import (
-                            build_grounding_metadata,
-                            extract_grounding_overrides,
+                        if cli_params.get("review_examples"):
+                            review_grounding_examples_interactive(
+                                examples_used,
+                                ctx.obj if isinstance(ctx.obj, dict) else None,
+                                force=force_overwrite,
+                                quiet=quiet,
+                            )
+                        overrides = (
+                            ctx.obj.get("grounding_overrides")
+                            if isinstance(ctx.obj, dict)
+                            else stash_grounding_overrides_on_ctx(
+                                ctx.obj if isinstance(ctx.obj, dict) else None,
+                                prompt_content,
+                            )
                         )
-
-                        overrides = extract_grounding_overrides(prompt_content)
                         grounding_meta = build_grounding_metadata(
                             mode="cloud",
                             examples_used=examples_used,
                             grounding_overrides=overrides,
-                            reviewed=bool(cli_params.get("grounding_review_decisions")),
+                            reviewed=reviewed_from_decisions(
+                                cli_params.get("grounding_review_decisions")
+                            ),
                         )
                         if ctx.obj is None:
                             ctx.obj = {}
@@ -4259,12 +4288,15 @@ def code_generator_main(
         raise click.UsageError(f"An unexpected error occurred: {e}")
 
     if isinstance(ctx.obj, dict) and "last_grounding" not in ctx.obj:
-        from .grounding_provenance import build_grounding_metadata, extract_grounding_overrides
-
+        overrides = ctx.obj.get("grounding_overrides") or stash_grounding_overrides_on_ctx(
+            ctx.obj, prompt_content
+        )
         ctx.obj["last_grounding"] = build_grounding_metadata(
             mode="unavailable",
-            grounding_overrides=extract_grounding_overrides(prompt_content),
-            reviewed=bool(cli_params.get("grounding_review_decisions")),
+            grounding_overrides=overrides,
+            reviewed=reviewed_from_decisions(
+                cli_params.get("grounding_review_decisions")
+            ),
         )
 
     return generated_code_content or "", was_incremental_operation, total_cost, model_name

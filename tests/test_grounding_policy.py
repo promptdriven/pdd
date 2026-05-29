@@ -14,22 +14,36 @@ def test_load_policy_missing_file_returns_defaults(tmp_path: Path) -> None:
   assert policy.require_pinned_examples_for == []
 
 
-def test_load_policy_parses_yaml(tmp_path: Path) -> None:
-  policy_file = tmp_path / ".pdd" / "grounding_policy.yaml"
-  policy_file.parent.mkdir(parents=True)
-  policy_file.write_text(
-      """
+def test_load_policy_prefers_project_dot_pdd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_PATH", str(tmp_path / "package"))
+    policy_file = tmp_path / ".pdd" / "grounding_policy.yaml"
+    policy_file.parent.mkdir(parents=True)
+    policy_file.write_text(
+        "grounding:\n  require_pinned_examples_for:\n    - auth\n",
+        encoding="utf-8",
+    )
+    policy = load_policy()
+    assert policy.require_pinned_examples_for == ["auth"]
+
+
+def test_load_policy_parses_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    policy_file = tmp_path / ".pdd" / "grounding_policy.yaml"
+    policy_file.parent.mkdir(parents=True)
+    policy_file.write_text(
+        """
 grounding:
   require_review_for_critical_modules: true
   require_pinned_examples_for:
     - auth
     - payments
 """,
-      encoding="utf-8",
-  )
-  policy = load_policy(str(policy_file))
-  assert policy.require_review_for_critical_modules is True
-  assert policy.require_pinned_examples_for == ["auth", "payments"]
+        encoding="utf-8",
+    )
+    policy = load_policy(str(policy_file))
+    assert policy.require_review_for_critical_modules is True
+    assert policy.require_pinned_examples_for == ["auth", "payments"]
 
 
 def test_check_review_required_violation() -> None:

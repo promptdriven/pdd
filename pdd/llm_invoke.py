@@ -27,6 +27,12 @@ try:
 except Exception:  # pragma: no cover
     _record_llm_pair = None  # type: ignore
 
+from .grounding_provenance import (
+    build_grounding_metadata,
+    resolve_grounding_overrides_for_invoke,
+    reviewed_from_click_ctx,
+)
+
 # Environment variable to control log level
 PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
 PRODUCTION_MODE = os.getenv("PDD_ENVIRONMENT") == "production"
@@ -852,6 +858,7 @@ def _llm_invoke_cloud(
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]],
     language: Optional[str],
     grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute llm_invoke via cloud endpoint.
 
@@ -956,19 +963,23 @@ def _llm_invoke_cloud(
                     # Return raw result if validation fails
                     pass
 
-            from pdd.grounding_provenance import build_grounding_metadata
-
             examples_used = data.get("examplesUsed")
+            resolved_overrides = resolve_grounding_overrides_for_invoke(
+                grounding_overrides, source_prompt
+            )
             try:
                 grounding = build_grounding_metadata(
                     mode="cloud",
                     examples_used=examples_used,
-                    grounding_overrides=grounding_overrides,
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(),
                 )
-            except Exception:
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("Grounding metadata extraction failed: %s", exc)
                 grounding = build_grounding_metadata(
                     mode="unavailable",
-                    grounding_overrides=grounding_overrides,
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(),
                 )
 
             if verbose and grounding.get("selected_examples"):
@@ -3324,6 +3335,7 @@ def llm_invoke(
     language: Optional[str] = None,
     use_cloud: Optional[bool] = None,
     grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -3392,13 +3404,16 @@ def llm_invoke(
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
 
-    from pdd.grounding_provenance import build_grounding_metadata
+    resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
+        grounding_overrides, source_prompt
+    )
 
     def _with_local_grounding(payload: Dict[str, Any]) -> Dict[str, Any]:
         if "grounding" not in payload:
             payload["grounding"] = build_grounding_metadata(
                 mode="unavailable",
-                grounding_overrides=grounding_overrides,
+                grounding_overrides=resolved_grounding_overrides,
+                reviewed=reviewed_from_click_ctx(),
             )
         return payload
 
@@ -3528,6 +3543,7 @@ def llm_invoke(
                 messages=messages,
                 language=language,
                 grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
             )
             # On success, replace the placeholder with the cloud-returned
             # modelName so the history reflects the actual model used.
