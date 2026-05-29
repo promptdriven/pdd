@@ -120,15 +120,21 @@ def _has_unexpired_raw_jwt() -> bool:
 
 
 def _has_unexpired_jwt_with_confirmed_audience_mismatch() -> bool:
-    """Return True only if the cache has an unexpired JWT whose audience is
-    decoded successfully and confirmed to differ from the expected environment
-    audience.
+    """Return True if the cache has a parseable JWT whose audience is confirmed
+    to differ from the expected environment audience, regardless of expiry.
 
-    Unlike _has_unexpired_raw_jwt(), this returns False when the JWT is
-    malformed or unparseable so that a corrupt cache does not incorrectly
-    trigger the audience-mismatch path in get_auth_status().  Malformed JWTs
-    should fall through to the refresh-token flow rather than causing it to be
-    cleared.
+    The expiry check has been intentionally removed: an expired JWT with a
+    wrong-environment audience is equally indicative of a mismatched refresh
+    token (the refresh token is environment-specific too and must not be used
+    in the current env).  Checking only unexpired tokens would let an expired
+    production JWT plus a production refresh token slip through to the
+    authenticated=True path while running staging, recreating the split-brain
+    this guard is meant to prevent.
+
+    Returns False when the JWT is malformed or unparseable so that a corrupt
+    cache does not incorrectly trigger the audience-mismatch path in
+    get_auth_status(). Malformed JWTs should fall through to the
+    refresh-token flow rather than causing it to be cleared.
     """
     expected_aud = _get_expected_jwt_audience()
     if not expected_aud:
@@ -140,18 +146,14 @@ def _has_unexpired_jwt_with_confirmed_audience_mismatch() -> bool:
     try:
         with open(JWT_CACHE_FILE, "r") as f:
             cache = json.load(f)
-        expires_at = cache.get("expires_at", 0)
-        if not isinstance(expires_at, (int, float)):
+        jwt = cache.get("id_token") or cache.get("jwt")
+        if not jwt:
             return False
-        if expires_at > time.time() + 300:
-            jwt = cache.get("id_token") or cache.get("jwt")
-            if not jwt:
-                return False
-            actual_aud = _get_jwt_audience(jwt)
-            # Only a confirmed mismatch: audience was parsed but belongs to a
-            # different environment.  If actual_aud is None the token is
-            # malformed; do not treat that as an audience mismatch.
-            return actual_aud is not None and actual_aud != expected_aud
+        actual_aud = _get_jwt_audience(jwt)
+        # Only a confirmed mismatch: audience was parsed but belongs to a
+        # different environment.  If actual_aud is None the token is
+        # malformed; do not treat that as an audience mismatch.
+        return actual_aud is not None and actual_aud != expected_aud
     except Exception:
         pass
 

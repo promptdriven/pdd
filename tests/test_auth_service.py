@@ -804,6 +804,55 @@ def test_get_auth_status_wrong_audience_invalidation_is_durable(monkeypatch, tmp
         "Second call must remain unauthenticated (durable invalidation)"
     )
 
+def test_get_auth_status_expired_wrong_audience_jwt_blocks_refresh_token(monkeypatch, tmp_path):
+    """An *expired* wrong-audience JWT must also block the refresh-token fallback.
+
+    Regression for the finding in round 3: the mismatch guard previously only
+    decoded the JWT audience when expires_at > time.time() + 300.  An expired
+    production JWT in the cache while running staging slipped through and caused
+    authenticated=True, cached=False (split-brain) because the refresh token was
+    checked without detecting the environment mismatch.
+    """
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("STAGING_PROJECT_ID", "prompt-driven-development-stg")
+    monkeypatch.delenv("PDD_JWT_EXPECTED_AUD", raising=False)
+
+    cache_file = tmp_path / "jwt_cache"
+    now = int(time.time())
+    # Write an *expired* JWT that belongs to production (wrong environment for staging)
+    cache_file.write_text(
+        json.dumps({
+            "id_token": _unsigned_jwt({
+                "aud": "prompt-driven-development",
+                "email": "prod-user@example.com",
+                "exp": now - 3600,   # already expired
+            }),
+            "expires_at": now - 3600,   # expired
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_service, "JWT_CACHE_FILE", cache_file)
+
+    refresh_cleared = []
+
+    def fake_clear_refresh():
+        refresh_cleared.append(True)
+        return (True, None)
+
+    monkeypatch.setattr(auth_service, "clear_refresh_token", fake_clear_refresh)
+    monkeypatch.setattr(
+        auth_service,
+        "_get_refresh_token_status",
+        lambda: ("prod_refresh_token", None),
+    )
+
+    status = auth_service.get_auth_status()
+
+    assert refresh_cleared, "clear_refresh_token must be called for an expired wrong-audience JWT"
+    assert status["authenticated"] is False, "Must not fall back to refresh token for wrong environment"
+    assert status["cached"] is False
+
+
 def test_get_auth_status_malformed_jwt_does_not_clear_refresh_token(monkeypatch, tmp_path):
     """Malformed/unparseable JWT must not trigger the audience-mismatch path.
 
