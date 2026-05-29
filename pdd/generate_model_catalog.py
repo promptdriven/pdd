@@ -85,6 +85,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
+    "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-6": 1561,            # [CODE] #1
     "claude-opus-4-5": 1469,            # [CODE] #6
     "claude-opus-4-1": 1389,            # [CODE] #20
@@ -97,6 +98,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "claude-3-5-sonnet": 1310,          # [EST]
     "claude-haiku-4-5": 1303,           # [CODE]
     # Dot-separated aliases
+    "claude-opus-4.8": 1575,
     "claude-opus-4.6": 1561,
     "claude-opus-4.5": 1469,
     "claude-opus-4.1": 1389,
@@ -327,6 +329,19 @@ _TIER_PATTERN = re.compile(r"^together-ai-[\d.]+b", re.IGNORECASE)
 
 # Models we never want in the catalog (sample spec, image-only, etc.)
 _SKIP_KEYS = {"sample_spec"}
+
+# Routes PDD intentionally DEFERS from the catalog pending live validation,
+# even if LiteLLM's registry happens to know the id. Without this guard a regen
+# on a LiteLLM build that ships one of these would re-introduce the exact route
+# the bundled CSV deliberately omits — e.g. azure_ai/claude-opus-4-8 rides the
+# legacy budget shape through AzureAIStudioConfig (OpenAI-based), which the
+# Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach and which
+# is unaudited for the adaptive-only Opus 4.7+/4.8 contract. Remove an entry
+# here once its provider/reasoning path is validated and the corresponding
+# CSV / _MANDATORY_MODEL_ROWS row is added with tests.
+_DEFERRED_MODEL_IDS = frozenset({
+    "azure_ai/claude-opus-4-8",
+})
 
 # Regex matching dated preview model names (after provider prefix is stripped).
 # Examples: gemini-2.5-flash-preview-04-17, gemini-2.5-pro-preview-06-05
@@ -566,7 +581,7 @@ def _has_region(model_id: str) -> bool:
 # legacy budget shape. Direct-Anthropic-provider routes enforce this;
 # Azure AI / Bedrock / Vertex relays do not yet (as of 2026-05-24) — keep
 # those on budget/effort until separately audited.
-_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7"}
+_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
 
 
 def _is_adaptive_anthropic_model(model_id: str, litellm_provider: str) -> bool:
@@ -1068,6 +1083,66 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     {
+        # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
+        # (pdd-opus) but is absent from litellm.model_cost until litellm
+        # ships it, so the litellm-driven build loop would drop it. Seed it
+        # here; the row is deduped automatically once litellm registers the
+        # model. Direct-Anthropic adaptive thinking only (legacy budget shape
+        # 400s on 4.8). ELO is resolved from STATIC_ELO_FALLBACK at build time.
+        "provider": "Anthropic",
+        "model": "claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 16000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+    },
+    {
+        # Opus 4.8 on AWS Bedrock (anthropic.claude-opus-4-8). Available at
+        # launch but absent from litellm.model_cost until litellm ships it, so
+        # seed it like the direct row to survive regen. Bedrock/Vertex relays
+        # are NOT on the direct-Anthropic adaptive enforcement path, so they
+        # keep reasoning_type="effort" (mirrors the opus-4-7 relay rows and
+        # _infer_reasoning_type for these providers); the litellm relay patch
+        # maps effort -> adaptive thinking server-side for the opus-4-8 alias.
+        "provider": "AWS Bedrock",
+        "model": "anthropic.claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        # Opus 4.8 on Google Vertex AI (vertex_ai/claude-opus-4-8). Same
+        # rationale as the Bedrock row above; mirrors the opus-4-7 Vertex row.
+        "provider": "Google Vertex AI",
+        "model": "vertex_ai/claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "global",
+    },
+    # Azure AI / Microsoft Foundry also surfaces Opus 4.8, and an
+    # azure_ai/claude-opus-4-7 sibling ships today — but it is intentionally
+    # deferred here pending validation, NOT omitted on a "not available" claim.
+    # Reason: Azure routes through AzureAIStudioConfig (OpenAI-based), which the
+    # Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach, so
+    # the 4-7 Azure row still rides the legacy budget shape (unaudited for the
+    # adaptive-only 4.7+/4.8 contract). Third-party aggregators (Perplexity,
+    # OpenRouter, GMI) similarly lag the direct launch. Add these rows once
+    # their reasoning shape is verified against the live relay.
+    {
         "provider": "Google Vertex AI",
         "model": "vertex_ai/gemini-3-flash-preview",
         "input": 0.5,
@@ -1205,6 +1280,11 @@ def build_rows(
     elo_source_counts: Dict[str, int] = defaultdict(int)
 
     for model_id, entry in litellm.model_cost.items():
+        # Skip routes PDD intentionally defers pending validation, even if
+        # LiteLLM's registry knows them (see _DEFERRED_MODEL_IDS). Checked first
+        # so the deferral holds regardless of how LiteLLM classifies the entry.
+        if model_id in _DEFERRED_MODEL_IDS:
+            continue
         # Only chat and responses modes (responses = OpenAI's newer API format)
         if entry.get("mode") not in ("chat", "responses"):
             continue
