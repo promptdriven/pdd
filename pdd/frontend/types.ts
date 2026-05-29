@@ -140,6 +140,7 @@ export interface ArchitectureModule {
   filename: string;
   filepath: string;
   tags?: string[];
+  group?: string;
   interface?: ArchitectureInterface;
   // Graph position (optional, saved when user drags nodes)
   position?: {

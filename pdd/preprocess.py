@@ -647,8 +647,14 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                                             output=extracted,
                                         )
                                     return extracted
-                                except Exception:
-                                    pass
+                                except Exception as inner_e:
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=f"[query_include failed: {inner_e}]",
+                                            query=fallback_query,
+                                            output=f"[query_include failed: {inner_e}]",
+                                        )
                             import warnings
                             warnings.warn(
                                 f"ContentSelector not importable for select=\"{selectors_str}\" "
@@ -671,8 +677,14 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                                             output=extracted,
                                         )
                                     return extracted
-                                except Exception:
-                                    pass
+                                except Exception as inner_e:
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=f"[query_include failed: {inner_e}]",
+                                            query=fallback_query,
+                                            output=f"[query_include failed: {inner_e}]",
+                                        )
                             import warnings
                             warnings.warn(
                                 f"ContentSelector failed for select=\"{selectors_str}\" "
