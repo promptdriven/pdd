@@ -401,6 +401,7 @@ def fix_error_loop(
     best_state: dict[str, Any] = {"fails": fails, "errs": errs, "warns": warns, "code": code_content, "test": unit_test_content, "iteration": 0}
     current_state = dict(best_state)
     consecutive_timeouts_without_improvement = 0
+    consecutive_assertion_logic_without_progress = 0
     if failure_aware_retries and classify_failure(output_log) == FailureKind.SYNTAX_IMPORT:
         last_syntax_signature = extract_failure_signature(output_log)
     else:
@@ -538,6 +539,18 @@ def fix_error_loop(
                     break
             else:
                 consecutive_timeouts_without_improvement = 0
+            if kind == FailureKind.ASSERTION_LOGIC:
+                old_total = int(best_state["fails"]) + int(best_state["errs"])
+                new_total = int(new_fails) + int(new_errs)
+                if new_total < old_total:
+                    consecutive_assertion_logic_without_progress = 0
+                else:
+                    consecutive_assertion_logic_without_progress += 1
+                if consecutive_assertion_logic_without_progress >= 3:
+                    console.print("[yellow]Assertion/logic failures stagnant after consecutive attempts. Consider raising strength/temperature, simplifying the prompt, or manual fixes.[/yellow]")
+                    break
+            else:
+                consecutive_assertion_logic_without_progress = 0
             if kind == FailureKind.SYNTAX_IMPORT:
                 sig = extract_failure_signature(new_log)
                 if attempt >= 1 and sig and sig == last_syntax_signature:

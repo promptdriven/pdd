@@ -1,3 +1,64 @@
+"""
+================================================================================
+TEST PLAN FOR FIX_ERROR_LOOP.PY
+================================================================================
+
+This test suite covers all behavioral rules, constraints, edge cases, and parameters
+of the `fix_error_loop` module in `pdd/fix_error_loop.py`.
+
+Requirements & Associated Test Functions:
+1. Iterative Fixing Logic
+   - test_successful_fix
+   - test_max_attempts_exceeded
+2. Failure-Aware Early Exit
+   - Timeout/flaky exit: test_early_exit_timeout_flaky (implicit or targeted)
+   - Syntax/import exit: test_early_exit_syntax_import (implicit or targeted)
+   - Assertion/logic stagnant exit: test_early_exit_assertion_logic_stagnant
+3. Statistics & Improvement Tracking
+   - test_already_passing
+   - test_successful_fix
+4. Structured XML Logging
+   - test_error_log_includes_model_name
+   - test_error_log_contains_analysis_and_model
+   - test_format_log_for_output
+5. Best State Recovery
+   - test_fix_error_loop_best_state_recovery
+   - test_z3_best_state_logic
+   - test_z3_best_iteration_logic
+6. Verification Step & Restoration
+   - test_verification_failure
+   - test_fix_error_loop_verification_fails_restores_backup
+7. Agentic Fallback Triggering
+   - Normal loop exhaustion: test_agentic_fallback_triggered
+   - Error during backup/file-read: test_backup_creation_error_triggers_agentic_fallback, test_file_read_error_triggers_agentic_fallback
+   - Initial test exception: test_initial_test_exception_triggers_agentic_fallback, test_initial_exception_triggers_agentic
+8. Non-Python Support
+   - test_non_python_triggers_agentic_fallback_success
+   - test_non_python_triggers_agentic_fallback_failure
+   - test_fix_error_loop_non_python_subprocess_has_cwd
+9. Cost & Budget Management
+   - test_fix_error_loop_budget_exceeded
+   - test_z3_budget_constraint
+10. Cloud Execution & Prepending
+    - test_cloud_fix_errors_success
+    - test_fix_error_loop_cloud_mode
+11. Output Contract
+    - test_fix_error_loop_initially_passing
+12. Result Normalization (2/3/4/5-tuples)
+    - test_normalize_agentic_result
+
+Code Path & Param Coverage:
+- Parameter forwarding: test_cloud_fix_errors_success, test_fix_error_loop_cloud_mode
+- Boolean parameters (verbose=True/False, agentic_fallback=True/False):
+  - test_already_passing (verbose=True, agentic_fallback=False)
+  - test_successful_fix (verbose=False, agentic_fallback=False)
+- Return shapes and type safety: test_normalize_agentic_result
+- Regression test for stagnant assertion/logic early exit:
+  - test_early_exit_assertion_logic_stagnant (verifies the early-exit bug fix/feature added in Step 2-3)
+
+================================================================================
+"""
+
 import os
 import shutil
 from pathlib import Path
@@ -254,7 +315,8 @@ def test_max_attempts_exceeded(setup_files):
                 max_attempts=3,           # max_attempts
                 budget=10.0,
                 error_log_file=str(files["error_log"]),
-                agentic_fallback=False
+                agentic_fallback=False,
+                failure_aware_retries=False
             )
 
     assert success is False
@@ -2405,3 +2467,90 @@ def test_fix_errors_receives_failure_classification_hint(
     assert "syntax" in classification.lower(), (
         f"Expected classification hint to mention 'syntax', got: {classification!r}"
     )
+def test_early_exit_assertion_logic_stagnant(setup_files):
+    """
+    Test that if assertion/logic failures are stagnant (no improvement in total fails+errors),
+    the loop exits early after 3 stagnant attempts when failure_aware_retries is True.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_run_pytest:
+        mock_run_pytest.side_effect = [
+            # Iteration 1
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # initial test fails
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails
+            # Iteration 2
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails (stagnant)
+            # Iteration 3
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails (stagnant)
+        ]
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                False, False, "", "", "No analysis", 0.0, "mock-model"
+            )
+
+            success, final_test, final_code, attempts, cost, model = fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=5,           # max_attempts is 5, but we should exit early
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False,
+                failure_aware_retries=True
+            )
+
+    assert success is False
+    # Exited early after 3 stagnant attempts
+    assert attempts == 3
+
+
+def test_assertion_logic_convergence_runs_to_completion(setup_files):
+    """
+    When total failures strictly decrease each iteration, the stagnant assertion
+    breaker must not fire, and the loop converges to success in 5 iterations.
+
+    This covers the source bug from issue #1230: a sequence of 5→4→3→2→1→0
+    wording mismatches converging without the breaker firing.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_run_pytest:
+        mock_run_pytest.side_effect = [
+            (5, 0, 0, "AssertionError: wording mismatch"),  # initial
+            (4, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 1
+            (3, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 2
+            (2, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 3
+            (1, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 4
+            (0, 0, 0, ""),                                  # post-fix iter 5 (success)
+        ]
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                True, True,
+                files["test_file"].read_text(),
+                files["code_file"].read_text(),
+                "analysis", 0.01, "mock-model",
+            )
+
+            success, _, _, attempts, _, _ = fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=5,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False,
+                failure_aware_retries=True,
+            )
+
+    assert success is True
+    assert attempts == 5
+    assert mock_fix.call_count == 5
