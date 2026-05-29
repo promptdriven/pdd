@@ -87,7 +87,7 @@ class ModelInfo(BaseModel):
     elo: int = Field(..., description="Coding arena ELO rating")
     context_limit: Optional[int] = Field(None, description="Maximum context window size in tokens (None if unknown)")
     max_thinking_tokens: int = Field(0, description="Maximum thinking/reasoning tokens (0 if not supported)")
-    reasoning_type: str = Field("none", description="Reasoning type: none, effort, or budget")
+    reasoning_type: str = Field("none", description="Reasoning type: none, effort, budget, or adaptive")
     structured_output: bool = Field(True, description="Whether the model supports structured output")
 
 
