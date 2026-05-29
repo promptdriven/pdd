@@ -526,6 +526,7 @@ def fix_error_loop(
             log_file.write(format_log_for_output(attempt, output_log, analysis, verification_output + "\n" + new_log, model_name))
         if new_fails == 0 and new_errs == 0:
             return True, next_test, next_code, total_attempts, total_cost, model_name
+        prev_total = int(current_state["fails"]) + int(current_state["errs"])
         current_state = {"fails": new_fails, "errs": new_errs, "warns": new_warns, "code": next_code, "test": next_test, "iteration": attempt}
         improved = _best_is_better(current_state, best_state)
         if improved:
@@ -540,9 +541,8 @@ def fix_error_loop(
             else:
                 consecutive_timeouts_without_improvement = 0
             if kind == FailureKind.ASSERTION_LOGIC:
-                old_total = int(best_state["fails"]) + int(best_state["errs"])
                 new_total = int(new_fails) + int(new_errs)
-                if new_total < old_total:
+                if new_total < prev_total:
                     consecutive_assertion_logic_without_progress = 0
                 else:
                     consecutive_assertion_logic_without_progress += 1
