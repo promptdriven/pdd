@@ -3556,6 +3556,38 @@ def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd
         return False
 
 
+# Tombstone body written when a state comment cannot be DELETEd. It must
+# NOT contain ``GITHUB_STATE_MARKER_START`` so that a subsequent
+# ``_find_state_comment`` / ``_find_all_state_comments`` no longer treats
+# it as live state.
+_GITHUB_STATE_CLEARED_TOMBSTONE = (
+    "<!-- PDD_WORKFLOW_STATE_CLEARED -->\n"
+    "_PDD workflow state was cleared. The original state comment could "
+    "not be deleted (the token may lack delete scope), so its body was "
+    "neutralised — this comment no longer carries resumable state and a "
+    "rerun will start fresh._"
+)
+
+
+def _github_edit_comment(
+    repo_owner: str, repo_name: str, comment_id: int, body: str, cwd: Path
+) -> bool:
+    """PATCH one issue comment body via ``gh api``. Best-effort, never raises."""
+    if not _find_cli_binary("gh"):
+        return False
+    try:
+        cmd = [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
+            "-X", "PATCH",
+            "-f", f"body={body}",
+        ]
+        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def github_save_state(
     repo_owner: str,
     repo_name: str,
@@ -3683,11 +3715,22 @@ def github_clear_state(
     if not ids:
         return True  # Already clear
 
-    all_deleted = True
+    all_cleared = True
     for cid in ids:
-        if not _github_delete_comment(repo_owner, repo_name, cid, cwd):
-            all_deleted = False
-    return all_deleted
+        if _github_delete_comment(repo_owner, repo_name, cid, cwd):
+            continue
+        # DELETE failed (e.g. the token lacks the delete-comment scope).
+        # A stale state comment left behind is loaded with PRIORITY over
+        # local state by ``load_workflow_state`` (issue #1212 round-17
+        # follow-up), so the next run would replay the stale cache and
+        # repeat the old refusal forever. Fall back to neutralising the
+        # body: strip the state marker so future loads no longer parse
+        # it as resumable state and the workflow reruns from scratch.
+        if not _github_edit_comment(
+            repo_owner, repo_name, cid, _GITHUB_STATE_CLEARED_TOMBSTONE, cwd
+        ):
+            all_cleared = False
+    return all_cleared
 
 def _should_use_github_state(use_github_state: bool) -> bool:
     if not use_github_state:
@@ -3866,22 +3909,35 @@ def clear_workflow_state(
     repo_owner: str,
     repo_name: str,
     use_github_state: bool = True
-) -> None:
+) -> bool:
     """
     Clears local and GitHub state.
+
+    Returns ``True`` when both the local file and (when enabled) the
+    GitHub state comment(s) were successfully cleared or neutralised, so
+    a subsequent ``load_workflow_state`` cannot replay stale cache.
+    Returns ``False`` when the remote clear could not be confirmed (the
+    GitHub comment could neither be deleted nor neutralised) — callers
+    that must guarantee a fresh rerun can react to the failure.
     """
     local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-    
+
+    local_ok = True
     # Clear Local
     if local_file.exists():
         try:
             os.remove(local_file)
         except Exception:
-            pass
+            local_ok = False
 
     # Clear GitHub
+    github_ok = True
     if _should_use_github_state(use_github_state):
-        github_clear_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
+        github_ok = github_clear_state(
+            repo_owner, repo_name, issue_number, workflow_type, cwd
+        )
+
+    return local_ok and github_ok
 
 
 # ---------------------------------------------------------------------------
