@@ -393,6 +393,7 @@ def fix_main(
                 protect_tests=protect_tests,
                 test_files=test_files,
                 failure_aware_retries=failure_aware_retries,
+                no_local_fallback=cloud_only,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)
