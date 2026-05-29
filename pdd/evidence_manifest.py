@@ -22,7 +22,7 @@ from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 1
 _NONDETERMINISTIC_TAG_RE = re.compile(
-    r"<(?:shell|web)\b|<include[^>]*(?:query|select)\s*=",
+    r"<(?:shell|web)\b|<include[^>]*\bquery\s*=",
     re.IGNORECASE,
 )
 _UNSUPPORTED_EXPANSION_RE = re.compile(
@@ -39,6 +39,15 @@ _INCLUDE_SELF_CLOSING_RE = re.compile(
 )
 _BACKTICK_INCLUDE_RE = re.compile(r"```<([^>]*?)>```", re.DOTALL)
 _CONTRACT_RULES_RE = re.compile(r"<contract_rules\b", re.IGNORECASE)
+
+
+def _has_active_tag(pattern: re.Pattern[str], content: str) -> bool:
+    """Return True only when *pattern* matches outside fenced/inline code spans."""
+    code_spans = _extract_code_spans(content)
+    for m in pattern.finditer(content):
+        if not _intersects_any_span(m.start(), m.end(), code_spans):
+            return True
+    return False
 
 
 @contextmanager
@@ -187,7 +196,9 @@ def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[
 
 def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[str]:
     """Hash of prompt text after the same deterministic include expansion as generation."""
-    if _UNSUPPORTED_EXPANSION_RE.search(content) or _NONDETERMINISTIC_TAG_RE.search(content):
+    if _has_active_tag(_UNSUPPORTED_EXPANSION_RE, content) or _has_active_tag(
+        _NONDETERMINISTIC_TAG_RE, content
+    ):
         return None
     try:
         with _project_cwd(project_root):
@@ -216,7 +227,7 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
             "uses_nondeterministic_tags": False,
         }
     content = path.read_text(encoding="utf-8")
-    nondeterministic = bool(_NONDETERMINISTIC_TAG_RE.search(content))
+    nondeterministic = _has_active_tag(_NONDETERMINISTIC_TAG_RE, content)
     return {
         "path": _display_path(path, project_root),
         "sha256": _sha256_bytes(content.encode("utf-8")),
