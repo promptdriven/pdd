@@ -276,12 +276,12 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               <div className="flex items-center gap-1">
                 <div className="w-12 sm:w-16 h-1.5 sm:h-2 bg-surface-700 rounded-full overflow-hidden">
                   <div
-                    className={`h-full transition-all ${getBarColor(currentMetrics.context_usage_percent)}`}
-                    style={{ width: `${Math.min(currentMetrics.context_usage_percent, 100)}%` }}
+                    className={`h-full transition-all ${getBarColor(currentMetrics.context_usage_percent ?? 0)}`}
+                    style={{ width: `${Math.min(currentMetrics.context_usage_percent ?? 0, 100)}%` }}
                   />
                 </div>
-                <span className={`text-xs sm:text-sm font-mono ${getUsageColor(currentMetrics.context_usage_percent)}`}>
-                  {currentMetrics.context_usage_percent.toFixed(0)}%
+                <span className={`text-xs sm:text-sm font-mono ${getUsageColor(currentMetrics.context_usage_percent ?? 0)}`}>
+                  {(currentMetrics.context_usage_percent ?? 0).toFixed(0)}%
                 </span>
               </div>
             </div>

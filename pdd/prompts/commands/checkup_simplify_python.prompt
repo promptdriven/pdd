@@ -1,0 +1,15 @@
+% Write `pdd/commands/checkup_simplify.py`, the Click wrapper for candidate simplify runs.
+
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>checkup_simplify_python.prompt</pdd-dependency>
+
+% Requirements
+- Provide the nested command reached through `pdd checkup simplify [PATH]`.
+- Options: `--apply`, `--since REF`, `--staged`, `--max-files INT`, `--attempts INT`, `--evidence`, `--verify`, and `--no-format`.
+- Reject simultaneous `--since` and `--staged`; enforce `--attempts >= 1`.
+- Without `--apply`, make clear that the command previews scope and never invokes Claude.
+- Pass the context `quiet` and `verbose` settings to `run_checkup_simplify`.
+- Render the core summary and total Claude cost, and exit nonzero when no safe candidate can be selected or verification fails.
+
+% Code output
+- Code: `pdd/commands/checkup_simplify.py`

@@ -10,6 +10,7 @@ pdd/_version.py
 .tmp/
 .agentic_prompt*
 .agentic_output_*.txt
+agentic_fix_instructions.txt
 .cloud-image-hash
 examples/temp_split_dir/
 sync_order.sh
@@ -301,3 +302,7 @@ github_token
 diff_base.txt
 modules.txt
 .loop/
+
+# Local PDD venv and debug artifacts
+pdd-env/
+error_log.txt

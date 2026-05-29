@@ -142,7 +142,6 @@ _PDDRC_DEFAULTS_KEYS = {
     "budget",
     "max_attempts",
     "outputs",
-    "auto_deps_csv_path",
 }
 
 
@@ -189,7 +188,6 @@ def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
                     _warn_unknown_pddrc_key(
                         key, f"contexts.{ctx_name}.defaults.{key}"
                     )
-
 
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
