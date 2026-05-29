@@ -111,7 +111,7 @@ def detect_change(
                 quiet=obj.get("quiet", False),
                 fail_fast=fail_fast,
                 include_llm_prompts=include_llm,
-                link_story_prompt_metadata=True,
+                cache_story_prompt_links=True,
             )
             if evidence:
                 write_evidence_manifest(

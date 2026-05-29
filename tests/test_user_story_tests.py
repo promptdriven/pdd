@@ -227,7 +227,7 @@ def test_user_story_tests_caches_story_prompt_links(tmp_path):
             prompts_dir=str(prompts_dir),
             stories_dir=str(stories_dir),
             quiet=True,
-            link_story_prompt_metadata=True,
+            cache_story_prompt_links=True,
         )
 
     assert passed is False
@@ -255,7 +255,7 @@ def test_user_story_tests_caches_story_prompt_links_when_detection_is_empty(tmp_
             prompts_dir=str(prompts_dir),
             stories_dir=str(stories_dir),
             quiet=True,
-            link_story_prompt_metadata=True,
+            cache_story_prompt_links=True,
         )
 
     assert passed is True

@@ -234,6 +234,8 @@ def _resolve_src_dir(prompts_dir: Path) -> Path:
 
 def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]:
     """Map a prompt file path to its corresponding source file path."""
+    prompt_path = prompt_path.resolve()
+    prompts_dir = prompts_dir.resolve()
     try:
         rel_path = prompt_path.relative_to(prompts_dir)
     except ValueError:
@@ -311,7 +313,7 @@ def _select_story_prompt_links(
     return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
-def cache_story_prompt_links(  # pylint: disable=too-many-locals,too-many-return-statements
+def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
     *,
     story_file: str,
     prompts_dir: Optional[str] = None,
@@ -648,7 +650,7 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
     )
 
 
-def generate_user_story(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     *,
     prompt_files: List[str],
     output: Optional[str] = None,
@@ -796,7 +798,7 @@ def generate_user_story(  # pylint: disable=too-many-locals,too-many-branches,to
     )
 
 
-def run_user_story_tests(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-name,too-many-locals,too-many-branches,too-many-statements
     *,
     prompts_dir: Optional[str] = None,
     stories_dir: Optional[str] = None,
@@ -809,7 +811,7 @@ def run_user_story_tests(  # pylint: disable=too-many-locals,too-many-branches,t
     quiet: bool = False,
     fail_fast: bool = False,
     include_llm_prompts: bool = False,
-    link_story_prompt_metadata: bool = False,
+    cache_story_prompt_links: bool = False,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
     Run user story tests by calling detect_change on each story.
@@ -891,7 +893,7 @@ def run_user_story_tests(  # pylint: disable=too-many-locals,too-many-branches,t
             "changes": changes_list,
         })
 
-        if link_story_prompt_metadata and not metadata_prompt_refs:
+        if cache_story_prompt_links and not metadata_prompt_refs:
             linked_prompt_paths, _ = _select_story_prompt_links(
                 story_content=story_content,
                 prompt_files=prompt_files,
@@ -917,7 +919,7 @@ def run_user_story_tests(  # pylint: disable=too-many-locals,too-many-branches,t
     return all_passed, results, total_cost, model_name
 
 
-def run_user_story_fix(  # pylint: disable=too-many-locals,too-many-branches
+def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
     *,
     ctx: object,
     story_file: str,
