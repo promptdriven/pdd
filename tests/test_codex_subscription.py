@@ -222,3 +222,74 @@ def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
     # Anthropic row is skipped (missing key in --force); chatgpt is the first
     # model that actually reaches litellm.completion.
     assert captured.get("model") == "chatgpt/gpt-5.3-codex"
+
+
+# --------------------------------------------------------------------------- #
+# Codex subscription FAMILY (first-class provider, like Anthropic) — issue #1269
+# --------------------------------------------------------------------------- #
+
+def _packaged_model_df():
+    """Load the bundled llm_model.csv exactly as llm_invoke does at runtime."""
+    import importlib.resources
+    import io as _io
+    csv_text = importlib.resources.files("pdd").joinpath("data/llm_model.csv").read_text()
+    return li._load_model_data.__wrapped__(None) if hasattr(li._load_model_data, "__wrapped__") else li._load_model_data(_packaged_csv_path())
+
+
+def _packaged_csv_path():
+    import importlib.resources
+    from pathlib import Path as _P
+    return _P(str(importlib.resources.files("pdd").joinpath("data/llm_model.csv")))
+
+
+def test_codex_family_present_in_packaged_csv():
+    """The subscription family the user's plan actually serves, ELO-mirrored to twins."""
+    df = li._load_model_data(_packaged_csv_path())
+    fam = df[df["provider"] == "OpenAI ChatGPT"]
+    by_model = {r["model"]: r for _, r in fam.iterrows()}
+    expected = {
+        "chatgpt/gpt-5.4": 1437,
+        "chatgpt/gpt-5.3-codex": 1407,
+        "chatgpt/gpt-5.2": 1404,
+        "chatgpt/gpt-5.3-codex-spark": 1400,
+    }
+    assert set(by_model) == set(expected), f"family mismatch: {sorted(by_model)}"
+    for model, elo in expected.items():
+        assert int(by_model[model]["coding_arena_elo"]) == elo
+        # subscription rows carry NO api_key (device-flow / codex login)
+        assert str(by_model[model]["api_key"] or "") == ""
+
+
+def test_chatgpt_and_openai_api_models_do_not_collide():
+    """Bare gpt-5.4 (OpenAI API key) and chatgpt/gpt-5.4 (subscription) must stay
+    distinct rows under distinct providers — litellm routes on the chatgpt/ prefix,
+    and the surrogate-base lookup must never collapse one into the other."""
+    df = li._load_model_data(_packaged_csv_path())
+    api = df[df["model"] == "gpt-5.4"]
+    sub = df[df["model"] == "chatgpt/gpt-5.4"]
+    assert not api.empty and not sub.empty
+    assert api.iloc[0]["provider"] == "OpenAI"
+    assert sub.iloc[0]["provider"] == "OpenAI ChatGPT"
+    # the API row requires a key; the subscription row does not
+    assert api.iloc[0]["api_key"] == "OPENAI_API_KEY"
+    assert str(sub.iloc[0]["api_key"] or "") == ""
+
+
+def test_codex_family_strength_orders_by_elo():
+    """Within the Codex family, high strength selects the top-ELO model (gpt-5.4),
+    mirroring Anthropic's haiku->opus spread. (Flat cost => ELO is the ordering key
+    at strength>=0.5; same behavior as the GitHub Copilot family.)"""
+    df = li._load_model_data(_packaged_csv_path())
+    fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
+    cands = li._select_model_candidates(0.8, "chatgpt/gpt-5.3-codex", fam)
+    assert cands[0]["model"] == "chatgpt/gpt-5.4", [c["model"] for c in cands]
+
+
+def test_anthropic_outranks_codex_so_default_unchanged():
+    """Promise to the user: Codex is opt-in, Anthropic stays the shipped default.
+    Guard it numerically so a future ELO bump to a codex row can't silently steal
+    the default-to-keep (which setup picks by highest ELO)."""
+    df = li._load_model_data(_packaged_csv_path())
+    amax = df[df["provider"] == "Anthropic"]["coding_arena_elo"].max()
+    cmax = df[df["provider"] == "OpenAI ChatGPT"]["coding_arena_elo"].max()
+    assert amax > cmax, f"Anthropic max {amax} must exceed Codex max {cmax}"

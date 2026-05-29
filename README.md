@@ -3784,3 +3784,5 @@ codex login
 ```
 
 PDD reads the resulting `~/.codex/auth.json` and routes fallback calls through the `chatgpt/gpt-5.3-codex` model on your subscription (flat-rate, no per-token API billing). This is for your own personal subscription only — do not share or pool a single subscription across users.
+
+**Available subscription models** (selectable via `PDD_MODEL_DEFAULT` or `pdd setup`): `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`, `chatgpt/gpt-5.3-codex-spark`. `--strength` picks a higher- or lower-ranked model within the family, just like the Anthropic models. Codex is opt-in; the shipped default engine is unchanged. (Exact models depend on what your ChatGPT plan serves.)
