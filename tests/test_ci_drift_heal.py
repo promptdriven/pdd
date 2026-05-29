@@ -3885,3 +3885,232 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
             "must remain so that tracked metadata/source updates are "
             f"still committed. Got: {[c[0][0] for c in add_calls]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1284: auto-heal must treat whitespace-only changes as a no-op.
+#
+# These tests run a REAL git repo (not a mocked `subprocess.run`) so they assert
+# observable post-`git` behavior. Step 5/6 verified empirically that both
+# `git diff --name-only` and `git diff -w --name-only` list whitespace-only
+# files; only `git diff -w --numstat` (path column) omits them. So these tests
+# fail on the current whitespace-blind code and pass once changed-file detection
+# becomes whitespace-aware.
+# ---------------------------------------------------------------------------
+
+
+class TestWhitespaceOnlyChangeDetection:
+    """Issue #1284 — whitespace-only commits must not be flagged as code changes."""
+
+    @staticmethod
+    def _init_git_repo(repo: Path) -> None:
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "issue-1284-test@example.com"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Issue 1284 Test"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    @staticmethod
+    def _commit_all(repo: Path, message: str) -> str:
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return rev.stdout.strip()
+
+    @pytest.fixture
+    def clean_git_env(self, monkeypatch):
+        """Drop ambient git env vars that would redirect git away from the temp repo.
+
+        ``_get_git_changed_files`` runs ``git`` relative to the current working
+        directory, so the tests ``chdir`` into the repo. If the environment has
+        ``GIT_DIR``/``GIT_WORK_TREE``/``GIT_INDEX_FILE`` set, git would ignore the
+        chdir and operate on the wrong repo.
+        """
+        for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            monkeypatch.delenv(var, raising=False)
+
+    # --- Test 1 (reproduction test migrated from Step 5) ------------------
+    def test_whitespace_only_change_is_not_reported_as_changed_file(
+        self, tmp_path, monkeypatch, clean_git_env
+    ):
+        """A whitespace-only edit must NOT appear in the changed-file set.
+
+        Reproduces issue #1284: a trailing-whitespace-only change to a tracked
+        file should be a no-op for drift detection. Because
+        ``_get_git_changed_files`` currently uses ``git diff --name-only``
+        (whitespace-blind), the file is incorrectly reported as changed, which
+        downstream reclassifies the module to an ``update`` operation and
+        triggers a spurious heal -> auto-heal failure.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_git_repo(repo)
+
+        code = repo / "module.py"
+        code.write_text("def f():\n    return 1\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base: clean code")
+
+        # Whitespace-only change: add trailing spaces to an existing line. No
+        # functional/code change is introduced (mirrors PR #1243's final commit).
+        code.write_text("def f():   \n    return 1\n", encoding="utf-8")
+        self._commit_all(repo, "chore: remove/add trailing whitespace")
+
+        monkeypatch.chdir(repo)
+        changed = _get_git_changed_files(base_sha)
+
+        assert "module.py" not in changed, (
+            "whitespace-only change must not be treated as a meaningful code change; "
+            f"got changed files: {sorted(changed)}"
+        )
+        assert changed == set(), (
+            "a whitespace-only commit should produce no meaningfully-changed files; "
+            f"got: {sorted(changed)}"
+        )
+
+    # --- Test 2 (reproduction control migrated from Step 5) ---------------
+    def test_functional_change_is_still_reported_as_changed_file(
+        self, tmp_path, monkeypatch, clean_git_env
+    ):
+        """Control: a real code change must still be detected (no regression).
+
+        Guards against an over-broad fix that drops genuine changes along with
+        whitespace-only ones. Passes both before and after the fix.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_git_repo(repo)
+
+        code = repo / "module.py"
+        code.write_text("def f():\n    return 1\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base: clean code")
+
+        code.write_text("def f():\n    return 2\n", encoding="utf-8")
+        self._commit_all(repo, "feat: change return value")
+
+        monkeypatch.chdir(repo)
+        changed = _get_git_changed_files(base_sha)
+
+        assert "module.py" in changed, (
+            f"a functional code change must be detected; got: {sorted(changed)}"
+        )
+
+    # --- Test 3 (reproduction control migrated from Step 5) ---------------
+    def test_mixed_whitespace_and_functional_change_is_reported(
+        self, tmp_path, monkeypatch, clean_git_env
+    ):
+        """Control: a file with BOTH whitespace and real changes must be reported.
+
+        Ignoring whitespace must not cause a file that also has substantive
+        changes to be dropped. Passes both before and after the fix.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_git_repo(repo)
+
+        code = repo / "module.py"
+        code.write_text("def f():\n    return 1\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base: clean code")
+
+        # Trailing whitespace on one line AND a real change on another.
+        code.write_text("def f():   \n    return 2\n", encoding="utf-8")
+        self._commit_all(repo, "feat: change value with stray whitespace")
+
+        monkeypatch.chdir(repo)
+        changed = _get_git_changed_files(base_sha)
+
+        assert "module.py" in changed, (
+            "a file with substantive changes must be reported even if it also has "
+            f"whitespace changes; got: {sorted(changed)}"
+        )
+
+    # --- Test 4 (caller-side: detect_drift must not reclassify to update) ---
+    def test_detect_drift_does_not_reclassify_whitespace_only_change(
+        self, tmp_path, monkeypatch, clean_git_env
+    ):
+        """End-to-end: a whitespace-only commit must NOT produce an ``update`` drift.
+
+        This exercises the auto-heal drift trigger path (``detect_drift``) against
+        the REAL ``_get_git_changed_files`` running on a temp repo whose only
+        change is whitespace-only to the module's code file. Module
+        discovery/identity/sync are patched (as ``TestDetectDriftWithDiffBase``
+        does) so a single module ``auth`` surfaces, but the changed-file detection
+        is left real.
+
+        Before the fix, ``code_in_changes`` becomes True, the ``auto-deps`` op is
+        reclassified to ``update``, and a spurious ``pdd update`` heal is produced
+        (the observable auto-heal failure). After the fix, the whitespace-only
+        commit yields no changed files, so neither code nor prompt changed and the
+        module is skipped — no prompt drift.
+        """
+        repo = tmp_path / "repo"
+        (repo / "pdd").mkdir(parents=True)
+        self._init_git_repo(repo)
+
+        code = repo / "pdd" / "auth.py"
+        code.write_text("def f():\n    return 1\n", encoding="utf-8")
+        base_sha = self._commit_all(repo, "base: clean code")
+
+        # Whitespace-only edit to the module's code file.
+        code.write_text("def f():   \n    return 1\n", encoding="utf-8")
+        self._commit_all(repo, "chore: trailing whitespace cleanup")
+
+        decision = MagicMock(
+            operation="auto-deps", reason="New prompt with dependencies detected"
+        )
+        files = [Path("prompts/auth_python.prompt")]
+
+        def fake_infer(path):
+            stem = Path(path).stem
+            parts = stem.rsplit("_", 1)
+            return parts[0], parts[1]
+
+        def fake_sync(basename, language, target_coverage, log_mode):
+            return decision
+
+        mock_paths = {
+            "code": Path("pdd/auth.py"),
+            "prompt": Path("prompts/auth_python.prompt"),
+        }
+
+        monkeypatch.chdir(repo)
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
+             patch(
+                 "pdd.sync_determine_operation.sync_determine_operation",
+                 side_effect=fake_sync,
+             ), \
+             patch(
+                 "pdd.sync_determine_operation.get_pdd_file_paths",
+                 return_value=mock_paths,
+             ):
+            # NOTE: _get_git_changed_files is intentionally NOT mocked here.
+            prompt_drifts, _example_drifts = detect_drift(
+                modules=["auth"], diff_base=base_sha
+            )
+
+        assert [d for d in prompt_drifts if d.operation == "update"] == [], (
+            "a whitespace-only commit must not be reclassified to an 'update' heal; "
+            f"got prompt drifts: {[(d.basename, d.operation) for d in prompt_drifts]}"
+        )

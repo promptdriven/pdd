@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 def _load_module():
@@ -263,3 +266,173 @@ def test_detect_excludes_package_main_shim(monkeypatch):
     )
 
     assert module.detect("origin/main...HEAD") == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #1284: the auto-heal module detector must ignore whitespace-only
+# changes. A whitespace-only edit to a PDD-prefixed file (pdd/, prompts/,
+# context/, tests/) must NOT flag a module for healing, or it triggers the
+# same spurious heal that blocks an approved, otherwise-green PR (#1243).
+#
+# These tests run a REAL git repo (not a mocked `_git_changed_files`) so they
+# assert observable post-`git` behavior. Step 5/6 verified that both
+# `git diff --name-only` and `git diff -w --name-only` list whitespace-only
+# files; only `git diff -w --numstat` (path column) omits them. So these tests
+# fail on the current whitespace-blind code and pass once detection is
+# whitespace-aware.
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo(repo: Path) -> None:
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "config", "user.email", "issue-1284-test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Issue 1284 Test"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _commit_all(repo: Path, message: str) -> str:
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "commit", "-m", message],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rev = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return rev.stdout.strip()
+
+
+@pytest.fixture
+def clean_git_env(monkeypatch):
+    """Drop ambient git env vars so git operates on the temp repo, not an ambient one."""
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(var, raising=False)
+
+
+# --- Test 5: scripts/ copy _git_changed_files (sibling source) -------------
+def test_scripts_git_changed_files_ignores_whitespace_only(
+    tmp_path, monkeypatch, clean_git_env
+):
+    """scripts/ copy: a whitespace-only edit to a PDD-prefixed file is not returned.
+
+    Includes a functional-change control so an over-broad fix that drops genuine
+    changes would fail. Reproduces issue #1284 for the auto-heal module-selection
+    gate's source-of-truth copy.
+    """
+    module = _load_module()
+
+    repo = tmp_path / "repo"
+    (repo / "pdd").mkdir(parents=True)
+    _init_git_repo(repo)
+
+    code = repo / "pdd" / "foo.py"
+    code.write_text("def f():\n    return 1\n", encoding="utf-8")
+    base_sha = _commit_all(repo, "base: clean code")
+
+    code.write_text("def f():   \n    return 1\n", encoding="utf-8")
+    _commit_all(repo, "chore: trailing whitespace cleanup")
+
+    monkeypatch.chdir(repo)
+    changed = module._git_changed_files(base_sha)
+
+    assert "pdd/foo.py" not in changed, (
+        "whitespace-only edit must not be reported as a changed PDD file; "
+        f"got: {sorted(changed)}"
+    )
+
+    # Control: a functional change must still be detected.
+    code.write_text("def f():\n    return 2\n", encoding="utf-8")
+    func_sha = _commit_all(repo, "feat: change return value")
+    changed_func = module._git_changed_files(base_sha)
+    assert "pdd/foo.py" in changed_func, (
+        f"a functional change must still be detected; got: {sorted(changed_func)}"
+    )
+    assert func_sha  # silence unused-var linters; sha proves the commit landed
+
+
+# --- Test 6: pdd/ mirror copy _git_changed_files (sibling mirror) ----------
+def test_pdd_mirror_git_changed_files_ignores_whitespace_only(
+    tmp_path, monkeypatch, clean_git_env
+):
+    """pdd/ byte-identical mirror: same whitespace-only no-op behavior.
+
+    Step 6 flagged that the pdd/ packaged copy and the scripts/ source must be
+    fixed together; a fix applied to only one copy would pass Test 5 but fail
+    here. This independently exercises the mirror's own code path.
+    """
+    import pdd.ci_detect_changed_modules as pkg_module
+
+    repo = tmp_path / "repo"
+    (repo / "pdd").mkdir(parents=True)
+    _init_git_repo(repo)
+
+    code = repo / "pdd" / "foo.py"
+    code.write_text("def f():\n    return 1\n", encoding="utf-8")
+    base_sha = _commit_all(repo, "base: clean code")
+
+    code.write_text("def f():   \n    return 1\n", encoding="utf-8")
+    _commit_all(repo, "chore: trailing whitespace cleanup")
+
+    monkeypatch.chdir(repo)
+    changed = pkg_module._git_changed_files(base_sha)
+
+    assert "pdd/foo.py" not in changed, (
+        "whitespace-only edit must not be reported by the pdd/ mirror copy; "
+        f"got: {sorted(changed)}"
+    )
+
+
+# --- Test 7: caller-side detect() module-selection gate --------------------
+def test_detect_flags_no_module_for_whitespace_only_change(
+    tmp_path, monkeypatch, clean_git_env
+):
+    """``detect()`` must return no modules for a whitespace-only commit.
+
+    This is the auto-heal module-selection entry point (distinct from
+    ``detect_drift``). Before the fix, a whitespace-only edit to ``pdd/foo.py``
+    flags ``foo`` for heal; after the fix it returns ``[]``. A functional-change
+    control asserts ``foo`` is still flagged when there is a real change.
+    """
+    module = _load_module()
+
+    repo = tmp_path / "repo"
+    (repo / "pdd").mkdir(parents=True)
+    _init_git_repo(repo)
+
+    code = repo / "pdd" / "foo.py"
+    code.write_text("def f():\n    return 1\n", encoding="utf-8")
+    base_sha = _commit_all(repo, "base: clean code")
+
+    code.write_text("def f():   \n    return 1\n", encoding="utf-8")
+    _commit_all(repo, "chore: trailing whitespace cleanup")
+
+    monkeypatch.chdir(repo)
+    assert module.detect(base_sha) == [], (
+        "a whitespace-only commit must flag no modules for auto-heal; "
+        f"got: {module.detect(base_sha)}"
+    )
+
+    # Control: a functional change must still flag the module.
+    code.write_text("def f():\n    return 2\n", encoding="utf-8")
+    _commit_all(repo, "feat: change return value")
+    assert "foo" in module.detect(base_sha), (
+        f"a functional change must flag the module; got: {module.detect(base_sha)}"
+    )
