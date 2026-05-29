@@ -6351,3 +6351,127 @@ class TestNumstatRenameParsing:
         assert "renamed.py" in per_path, per_path
         assert per_path["renamed.py"] == 1, per_path
         assert not any("=>" in key for key in per_path), per_path
+
+
+# ---------------------------------------------------------------------------
+# _setup_worktree — stale branch handling (issue #1281)
+# ---------------------------------------------------------------------------
+
+
+class TestSetupWorktreeStaleBranch:
+    """Regression tests for issue #1281: _setup_worktree must recover when a
+    prior interrupted run left a stale worktree that holds the checkup branch
+    checked out, causing _delete_branch to fail."""
+
+    def test_stale_branch_deletion_failure_does_not_hard_fail(self):
+        """When _delete_branch fails because the branch is checked out in a
+        stale/orphaned worktree, _setup_worktree must still succeed instead of
+        returning an error.
+
+        Bug: the return value of _delete_branch is ignored and has_branch is
+        unconditionally set to False, so the subsequent 'git worktree add -b'
+        fails with 'fatal: a branch named ... already exists'.
+
+        Fix: check the return value; on failure use an alternative strategy
+        (e.g. git worktree add --force) so the re-run succeeds.
+        """
+        def fake_run(cmd, **kwargs):
+            # Simulate git refusing 'worktree add -b' because the branch still
+            # exists (deletion was silently ignored on the buggy code path).
+            if list(cmd)[:4] == ["git", "worktree", "add", "-b"]:
+                raise subprocess.CalledProcessError(
+                    returncode=128,
+                    cmd=cmd,
+                    stderr=b"fatal: a branch named 'checkup/issue-1201' already exists\n",
+                )
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch("pdd.agentic_checkup_orchestrator._get_git_root") as mock_root, \
+             patch("pdd.agentic_checkup_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_checkup_orchestrator._branch_exists", return_value=True), \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._delete_branch",
+                 return_value=(
+                     False,
+                     "error: Cannot delete branch 'checkup/issue-1201' "
+                     "checked out at '/stale/path'\n",
+                 ),
+             ), \
+             patch("pdd.agentic_checkup_orchestrator.subprocess.run", side_effect=fake_run), \
+             patch("pdd.agentic_checkup_orchestrator._copy_uncommitted_changes"):
+
+            fake_root = Path("/tmp/fake-root")
+            mock_root.return_value = fake_root
+
+            from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+            wt_path, err = _setup_worktree(fake_root, 1201, quiet=True, resume_existing=False)
+
+        # Before fix: err = "Failed to create worktree: fatal: a branch named
+        #   'checkup/issue-1201' already exists" because has_branch was
+        #   unconditionally set to False and 'git worktree add -b' was attempted.
+        # After fix: deletion failure is detected; alternative strategy used;
+        #   err must be None.
+        assert err is None, (
+            f"Expected no error when branch deletion fails due to stale worktree, "
+            f"got: {err!r}"
+        )
+        assert wt_path is not None
+
+    def test_successful_deletion_still_creates_fresh_branch(self):
+        """When _delete_branch succeeds, a fresh branch must be created via
+        'git worktree add -b'.  Regression guard: the fix must not switch to
+        --force for runs where deletion worked normally."""
+        worktree_add_calls: list = []
+
+        def fake_run(cmd, **kwargs):
+            if list(cmd)[:3] == ["git", "worktree", "add"]:
+                worktree_add_calls.append(list(cmd))
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch("pdd.agentic_checkup_orchestrator._get_git_root") as mock_root, \
+             patch("pdd.agentic_checkup_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_checkup_orchestrator._branch_exists", return_value=True), \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._delete_branch",
+                 return_value=(True, ""),
+             ), \
+             patch("pdd.agentic_checkup_orchestrator.subprocess.run", side_effect=fake_run), \
+             patch("pdd.agentic_checkup_orchestrator._copy_uncommitted_changes"):
+
+            fake_root = Path("/tmp/fake-root")
+            mock_root.return_value = fake_root
+
+            from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+            wt_path, err = _setup_worktree(fake_root, 42, quiet=True, resume_existing=False)
+
+        assert err is None, f"Expected no error but got: {err!r}"
+        assert wt_path is not None
+        assert any("-b" in call for call in worktree_add_calls), (
+            "Expected 'git worktree add -b' for a clean re-run where deletion "
+            f"succeeded, but got: {worktree_add_calls}"
+        )
+
+    def test_resume_path_skips_deletion(self):
+        """With resume_existing=True the branch must not be deleted.
+        Regression guard: the fix must not accidentally delete branches on
+        resume runs."""
+        with patch("pdd.agentic_checkup_orchestrator._get_git_root") as mock_root, \
+             patch("pdd.agentic_checkup_orchestrator._worktree_exists", return_value=False), \
+             patch("pdd.agentic_checkup_orchestrator._branch_exists", return_value=True), \
+             patch("pdd.agentic_checkup_orchestrator._delete_branch") as mock_delete, \
+             patch("pdd.agentic_checkup_orchestrator.subprocess.run") as mock_run, \
+             patch("pdd.agentic_checkup_orchestrator._copy_uncommitted_changes"):
+
+            fake_root = Path("/tmp/fake-root")
+            mock_root.return_value = fake_root
+            mock_run.return_value = MagicMock(returncode=0, stderr=b"")
+
+            from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+            wt_path, err = _setup_worktree(fake_root, 42, quiet=True, resume_existing=True)
+
+        assert err is None, f"Expected no error on resume but got: {err!r}"
+        assert wt_path is not None
+        mock_delete.assert_not_called()

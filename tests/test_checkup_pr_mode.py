@@ -5372,3 +5372,118 @@ class TestPrHeadAdvanceAutoRerun:
         # No restart budget consumed — fail-closed is not a lease event.
         assert _load_persisted_refresh_count(tmp_path, 200) == 0
         assert not self._refresh_counter_path(tmp_path, 200).exists()
+
+
+# ---------------------------------------------------------------------------
+# _setup_pr_worktree — stale branch handling (issue #1281, PR-mode sibling)
+# ---------------------------------------------------------------------------
+
+
+# Scope addition: covers expansion item
+# "pdd/agentic_checkup_orchestrator.py:994 _setup_pr_worktree PR-mode
+# _delete_branch return ignored" identified by Step 6 as a sibling bug.
+class TestSetupPrWorktreeStaleBranch:
+    """Regression tests for the PR-mode sibling of issue #1281:
+    _setup_pr_worktree must recover when _delete_branch fails because a stale
+    worktree has the checkup/pr-* branch checked out."""
+
+    def test_stale_branch_deletion_failure_does_not_hard_fail(self, tmp_path: Path) -> None:
+        """When _delete_branch fails (branch locked by stale worktree), the
+        subsequent 'git worktree add' must still succeed.
+
+        Bug: the return value of _delete_branch is ignored, so 'git worktree
+        add' is called without --force and fails with 'fatal: ... is already
+        checked out at ...'.
+
+        Fix: check the return value; on failure use git worktree add --force
+        (or equivalent) so the re-run succeeds.
+        """
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        def fake_run(cmd, **kwargs):
+            cmd_list = list(cmd)
+            # git worktree add without --force fails because branch is still
+            # registered in the stale/orphaned worktree.
+            if (cmd_list[:3] == ["git", "worktree", "add"] and
+                    "--force" not in cmd_list and
+                    "-b" not in cmd_list):
+                raise subprocess.CalledProcessError(
+                    returncode=128,
+                    cmd=cmd,
+                    stderr=b"fatal: 'checkup/pr-77-abc' is already checked out "
+                           b"at '/stale/path'\n",
+                )
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._delete_branch",
+            return_value=(
+                False,
+                "error: Cannot delete branch 'checkup/pr-77-abc' "
+                "checked out at '/stale/path'\n",
+            ),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=tmp_path,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+                resume_existing=False,
+            )
+
+        # Before fix: err = "Failed to create PR worktree: fatal: '...' is
+        #   already checked out at ..." because deletion failure was ignored.
+        # After fix: alternative strategy (--force) used; err must be None.
+        assert err is None, (
+            f"Expected no error when PR branch deletion fails due to stale "
+            f"worktree, got: {err!r}"
+        )
+        assert wt_path is not None
+
+    def test_successful_deletion_still_uses_normal_worktree_add(self, tmp_path: Path) -> None:
+        """When _delete_branch succeeds, the normal 'git worktree add' path is
+        taken.  Regression guard: the fix must not apply --force universally."""
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        worktree_add_calls: list = []
+
+        def fake_run(cmd, **kwargs):
+            if list(cmd)[:3] == ["git", "worktree", "add"]:
+                worktree_add_calls.append(list(cmd))
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._delete_branch",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=tmp_path,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+                resume_existing=False,
+            )
+
+        assert err is None, f"Expected no error but got: {err!r}"
+        assert wt_path is not None
+        # Deletion was attempted (branch existed, not resuming)
+        # and the worktree-add succeeded without needing --force.
+        assert worktree_add_calls, "Expected at least one 'git worktree add' call"
