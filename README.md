@@ -1888,6 +1888,8 @@ Options:
 - `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
 - `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
 
+When the prompt contains a `contract_rules` section, unit test generation uses those rule IDs for planning: `MUST` rules should receive behavioral tests, `MUST NOT` rules should receive negative tests when fixtures allow, and generated test names or comments should reference the relevant rule ID where practical. If a rule cannot be exercised with the available fixtures, the generated test file should include a TODO or skipped-test reason instead of silently omitting the rule.
+
 #### Story Mode
 
 Generate or update user stories and link them to touched prompts.

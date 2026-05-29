@@ -3,6 +3,7 @@ Tests for the `cmd_test_main` function, which handles CLI commands for test gene
 """
 import json
 import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 import pytest
 import click
@@ -34,6 +35,7 @@ CLOUD_GENERATE_TEST_URL = CloudConfig.get_endpoint_url("generateTest")
 DEFAULT_MOCK_GENERATED_TEST = "def test_sample():\n    assert True"
 DEFAULT_MOCK_COST = 0.01
 DEFAULT_MOCK_MODEL_NAME = "cloud_model"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -66,6 +68,110 @@ def mock_files_fixture():
         "existing_tests": ["fake_existing_tests.py"],  # Now a list to support multiple test files
         "coverage_report": "fake_coverage_report.xml",
     }
+
+
+def test_context_test_prompt_instructs_contract_rule_test_planning():
+    """
+    The project-wide test context must make contract rule IDs an explicit
+    test-planning surface while preserving isolation and merge guidance.
+    """
+    context_prompt = (REPO_ROOT / "context" / "test.prompt").read_text(encoding="utf-8")
+
+    assert "contract_rules" in context_prompt
+    assert "Read every rule ID" in context_prompt
+    assert "behavioral test for each MUST rule" in context_prompt
+    assert "negative test for each MUST NOT rule" in context_prompt
+    assert "test_R2_rejects_over_refund" in context_prompt
+    assert "skipped test or TODO comment that names the rule ID" in context_prompt
+    assert "Preserve existing accumulated tests" in context_prompt
+    assert "Tests must mock ALL external service boundaries" in context_prompt
+    assert "Generated tests MUST be isolated" in context_prompt
+
+
+def test_generate_test_llm_prompts_reference_contract_rule_planning():
+    """Legacy and example-based test templates must steer LLMs to contract_rules."""
+    repo_root = REPO_ROOT
+    legacy_paths = (
+        "pdd/prompts/generate_test_LLM.prompt",
+        "pdd/prompts/generate_test_from_example_LLM.prompt",
+    )
+    for relative_path in legacy_paths:
+        prompt_text = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert "contract_rules" in prompt_text
+        assert "context/test.prompt" in prompt_text
+
+    agentic_prompt = (
+        repo_root / "pdd/prompts/agentic_test_generate_LLM.prompt"
+    ).read_text(encoding="utf-8")
+    assert "contract_rules" in agentic_prompt
+    assert "MUST NOT" in agentic_prompt
+
+
+def test_cmd_test_main_forwards_contract_rules_and_merge_preserves_tests(
+    mock_ctx_fixture,
+    tmp_path,
+):
+    """
+    Contract-aware generation depends on the module prompt reaching the
+    generator intact. In merge mode, accumulated tests must be preserved
+    and new contract-ID-visible tests appended.
+    """
+    fixture_dir = REPO_ROOT / "tests" / "fixtures" / "test_generation"
+    prompt_path = fixture_dir / "refund_policy_python.prompt"
+    code_path = fixture_dir / "refund_policy.py"
+    existing_test_path = tmp_path / "test_refund_policy.py"
+    existing_test_path.write_text(
+        "def test_existing_accumulated_refund_case():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    generated_tests = (
+        "def test_R1_approves_valid_refund():\n"
+        "    assert validate_refund(1000, 500) == \"approved\"\n\n"
+        "def test_R2_rejects_over_refund():\n"
+        "    assert validate_refund(1000, 1500) == \"rejected\"\n"
+    )
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "prompt_file": prompt_path.read_text(encoding="utf-8"),
+                "code_file": code_path.read_text(encoding="utf-8"),
+            },
+            {"output": str(tmp_path / "unused_output.py")},
+            "python",
+        )
+        mock_generate_test.return_value = (generated_tests, 0.05, "model_v1")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=str(prompt_path),
+            code_file=str(code_path),
+            output=str(tmp_path / "unused_output.py"),
+            language=None,
+            coverage_report=None,
+            existing_tests=[str(existing_test_path)],
+            target_coverage=None,
+            merge=True,
+        )
+
+    assert result[0] == generated_tests
+    sent_prompt = mock_generate_test.call_args.kwargs["prompt"]
+    assert "<contract_rules>" in sent_prompt
+    assert "R1:" in sent_prompt
+    assert "R2:" in sent_prompt
+    assert "MUST NOT approve" in sent_prompt
+
+    sent_existing_tests = mock_generate_test.call_args.kwargs["existing_tests"]
+    assert "test_existing_accumulated_refund_case" in sent_existing_tests
+
+    merged_content = existing_test_path.read_text(encoding="utf-8")
+    assert "test_existing_accumulated_refund_case" in merged_content
+    assert "test_R1_approves_valid_refund" in merged_content
+    assert "test_R2_rejects_over_refund" in merged_content
 
 
 # pylint: disable=redefined-outer-name
