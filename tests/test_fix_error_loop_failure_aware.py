@@ -129,7 +129,7 @@ def test_failure_aware_disabled_allows_multiple_syntax_attempts(
 @patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
 @patch("pdd.fix_error_loop.run_pytest_on_file")
 def test_failure_aware_assertion_stagnant_exits_early(mock_pytest, mock_fix, setup_files):
-    """Stagnant assertion/logic failures exit after 2 attempts when failure-aware is enabled."""
+    """Stagnant assertion/logic failures exit after 3 attempts when failure-aware is enabled."""
     files = setup_files
     mock_pytest.return_value = (1, 0, 0, ASSERT_OUTPUT)
     mock_fix.return_value = (
@@ -157,8 +157,8 @@ def test_failure_aware_assertion_stagnant_exits_early(mock_pytest, mock_fix, set
         failure_aware_retries=True,
     )
 
-    assert attempts == 2
-    assert mock_fix.call_count == 2
+    assert attempts == 3
+    assert mock_fix.call_count == 3
 
 
 @patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
