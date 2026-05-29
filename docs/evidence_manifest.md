@@ -29,13 +29,15 @@ stable lookup for downstream automation.
 
 ## Contents
 
-Schema version 1 records:
+Schema version 2 records:
 
 - command, timestamp, PDD version, model, temperature, and reported cost
 - prompt and generated-output SHA-256 hashes when their paths are available
 - deterministic local include hashes found directly in the prompt
 - contract coverage status when the prompt has contract rules
 - available validation outcomes and references to existing logs
+- `generation.grounding` provenance (added in schema v2; see "Grounding
+  Provenance" below). Older manifests emitted with schema v1 omit this object.
 
 `expanded_sha256` is the SHA-256 of the prompt after `pdd.preprocess` with
 `recursive=True` and `double_curly_brackets=False` (the same deterministic
@@ -48,6 +50,46 @@ expansion, `expanded_sha256` is `null` rather than a guessed value.
 Missing stories or contracts are reported as `not_applicable`; they do not make
 an otherwise successful command fail. The schema is packaged at
 `pdd/schemas/evidence_manifest.schema.json`.
+
+### Grounding Provenance
+
+Each manifest also records a `generation.grounding` object describing which
+few-shot examples (if any) were injected by PDD Cloud grounding, plus any
+`<pin>` / `<exclude>` overrides and whether a reviewer was involved:
+
+```json
+"generation": {
+  "grounding": {
+    "mode": "cloud",
+    "selected_examples": [
+      {
+        "module": "refund_payment",
+        "prompt_sha256": "…",
+        "code_sha256": "…",
+        "similarity": 0.91,
+        "source": "cloud-history"
+      }
+    ],
+    "pinned": ["refund_payment"],
+    "excluded": ["legacy_refund_module"],
+    "reviewed": true
+  }
+}
+```
+
+- `mode` is one of `cloud`, `local`, or `unavailable`. Local / no-cloud runs
+  record `unavailable` rather than failing.
+- `selected_examples[].prompt_sha256` / `code_sha256` / `similarity` / `source`
+  are populated when the cloud reports them; missing fields are omitted rather
+  than guessed.
+- `reviewed` is `true` only when `--review-examples` was supplied AND the
+  reviewer recorded a decision for the run.
+- The legacy top-level `grounding_examples` array is preserved for backward
+  compatibility and mirrors `generation.grounding.selected_examples` when
+  present.
+
+See `docs/grounding_policy.md` for the optional CI policy that consumes this
+provenance (`.pdd/grounding_policy.yaml`, future `pdd gate` integration).
 
 ## Verification
 
