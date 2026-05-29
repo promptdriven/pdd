@@ -2188,7 +2188,8 @@ requires_cloud_e2e = pytest.mark.skipif(
 
 @pytest.mark.e2e
 @requires_cloud_e2e
-def test_fix_main_cloud_e2e_non_loop(tmp_path, capsys):
+@pytest.mark.timeout(900)
+def test_fix_main_cloud_e2e_non_loop(tmp_path, capsys, monkeypatch):
     """
     E2E test that fix_main (non-loop mode) successfully uses cloud execution.
     This test requires valid cloud credentials and makes real API calls.
@@ -2202,6 +2203,15 @@ def test_fix_main_cloud_e2e_non_loop(tmp_path, capsys):
 
     # Set PDD_CLOUD_ONLY to prevent silent fallback to local
     os.environ['PDD_CLOUD_ONLY'] = '1'
+
+    # Bound the cloud request read timeout under this test's
+    # @pytest.mark.timeout(900) override; see test_fix_main_cloud_e2e_loop for the
+    # full rationale. A real cold-start fixCode fix (cloud function cold start +
+    # an LLM fix at strength 0.25) legitimately takes ~240s and was observed to
+    # exceed 240s, so a too-tight read timeout cuts the request off right before
+    # it completes. 600s gives that real work ample headroom while still raising
+    # requests.exceptions.Timeout (-> fast fail) well under the 900s per-test budget.
+    monkeypatch.setenv('PDD_CLOUD_TIMEOUT', '600')
 
     try:
         # Create test files in tmp_path
@@ -2296,7 +2306,8 @@ FAILED test_sum_list.py::test_sum_list - AssertionError: assert 6 == 10
 
 @pytest.mark.e2e
 @requires_cloud_e2e
-def test_fix_main_cloud_e2e_loop(tmp_path, capsys):
+@pytest.mark.timeout(900)
+def test_fix_main_cloud_e2e_loop(tmp_path, capsys, monkeypatch):
     """
     E2E test that fix_main (loop mode) successfully uses hybrid cloud execution.
     This test requires valid cloud credentials and makes real API calls.
@@ -2310,6 +2321,23 @@ def test_fix_main_cloud_e2e_loop(tmp_path, capsys):
 
     # Set PDD_CLOUD_ONLY to prevent silent fallback to local
     os.environ['PDD_CLOUD_ONLY'] = '1'
+
+    # Bound the cloud request read timeout under this test's
+    # @pytest.mark.timeout(900) override. Two competing constraints:
+    #   1. The read timeout must be LARGER than a real cold-start fixCode fix.
+    #      A genuine hybrid fix (Cloud Function cold start + an LLM fix at
+    #      strength 0.25) was observed to take ~240s and to exceed it, so a
+    #      too-tight cap (e.g. the earlier 240s) cuts the request off right
+    #      before fixCode returns success, and the test never sees the
+    #      "Cloud fix completed" cloud-success line.
+    #   2. It must be SMALLER than the per-test @pytest.mark.timeout(900) so a
+    #      genuinely stalled fixCode request raises requests.exceptions.Timeout
+    #      -> RuntimeError("Cloud fix timed out ...") (fix_error_loop.py) and is
+    #      handled within max_attempts, instead of hanging in ssl.py read until
+    #      pytest-timeout fires.
+    # 600s satisfies both: ample headroom for real cold-start work, fast-fail
+    # well under the 900s budget. monkeypatch auto-restores the env var at teardown.
+    monkeypatch.setenv('PDD_CLOUD_TIMEOUT', '600')
 
     try:
         # Create test files in tmp_path
