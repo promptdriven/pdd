@@ -2471,7 +2471,7 @@
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)",
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2484,7 +2484,7 @@
   },
   {
     "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets.",
-    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names.",
+    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names OR when fast-path names match no product-code slices (e.g. assertion-only failures where only test functions appear in the traceback).",
     "dependencies": [
       "llm_invoke_python.prompt"
     ],

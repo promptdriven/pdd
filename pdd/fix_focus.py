@@ -562,8 +562,10 @@ def prepare_focused_inputs(
 
         # Fast-path: try to identify targets from the traceback directly.
         target_names = extract_function_names_from_traceback(error)
+        phase1_ran = False
 
         if not target_names:
+            phase1_ran = True
             # Phase 1: diagnose via skeleton + lightweight LLM.
             target_names = _diagnose_broken_functions(
                 code=code,
@@ -586,6 +588,21 @@ def prepare_focused_inputs(
         # Use traceback line numbers to disambiguate same-named methods across
         # different classes before falling back to simple name matching.
         matched = _match_slices_to_traceback(all_slices, error, target_names)
+        if not matched and not phase1_ran:
+            # Fast-path names (e.g. test_* functions only) matched nothing in
+            # product code.  Run Phase 1 diagnosis before giving up.
+            target_names = _diagnose_broken_functions(
+                code=code,
+                error=error,
+                strength=strength,
+                temperature=temperature,
+                time=time,
+                verbose=verbose,
+                language=language,
+            )
+            if target_names:
+                matched = _match_slices_to_traceback(all_slices, error, target_names)
+
         if not matched:
             return None
 

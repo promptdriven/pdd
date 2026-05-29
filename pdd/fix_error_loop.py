@@ -331,6 +331,7 @@ def fix_error_loop(
     use_cloud: bool = False,
     test_files: list[str] | None = None,
     failure_aware_retries: bool = True,
+    no_local_fallback: bool = False,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -446,6 +447,10 @@ def fix_error_loop(
                 )
         except Exception as exc:
             if use_cloud:
+                if no_local_fallback:
+                    with open(error_log_file, "a", encoding="utf-8") as log_file:
+                        log_file.write(format_log_for_output(attempt, output_log, f"Cloud fix failed (no local fallback): {exc}", ""))
+                    break
                 try:
                     update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                         unit_test=target_test,
