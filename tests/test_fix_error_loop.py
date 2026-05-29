@@ -1919,7 +1919,7 @@ def test_fix_error_loop_non_python_subprocess_has_cwd(
 def test_early_exit_assertion_logic_stagnant(setup_files):
     """
     Test that if assertion/logic failures are stagnant (no improvement in total fails+errors),
-    the loop exits early after 2 stagnant attempts when failure_aware_retries is True.
+    the loop exits early after 3 stagnant attempts when failure_aware_retries is True.
     """
     files = setup_files
 
@@ -1929,6 +1929,8 @@ def test_early_exit_assertion_logic_stagnant(setup_files):
             (1, 0, 0, "AssertionError: expected 5 but got 4"), # initial test fails
             (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails
             # Iteration 2
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails (stagnant)
+            # Iteration 3
             (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails (stagnant)
         ]
         with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
@@ -1952,8 +1954,8 @@ def test_early_exit_assertion_logic_stagnant(setup_files):
             )
 
     assert success is False
-    # Exited early after 2 stagnant attempts
-    assert attempts == 2
+    # Exited early after 3 stagnant attempts
+    assert attempts == 3
 
 
 def test_assertion_logic_convergence_runs_to_completion(setup_files):

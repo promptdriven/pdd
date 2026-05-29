@@ -897,7 +897,7 @@ def fix_error_loop(unit_test_file: str,
                     assertion_logic_streak += 1
                 else:
                     assertion_logic_streak = 0
-                if assertion_logic_streak >= 2:
+                if assertion_logic_streak >= 3:
                     rprint(
                         "[yellow]Stopping after "
                         f"{fix_attempts} attempt(s): assertion/logic failures are stagnant. "
