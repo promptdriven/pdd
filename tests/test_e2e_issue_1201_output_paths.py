@@ -169,10 +169,10 @@ contexts:
 
             # 1. Verify get_pdd_file_paths was indeed called and returned correct paths
             mock_get_paths.assert_called_once()
-            
+
             # 2. Verify that sync_orchestration returned successfully
             assert result["success"] is True
-            
+
             # 3. Verify final_state paths returned by sync_orchestration
             final_state = result["final_state"]
             code_path = Path(final_state["code"]["path"])
