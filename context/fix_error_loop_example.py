@@ -17,7 +17,7 @@ from rich.console import Console
 # Ensure the pdd package is in the python path
 # This allows importing from pdd.fix_error_loop even if running this script directly
 current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parents[1]  # Adjust based on file depth
+project_root = current_dir.parent  # Adjust based on file depth
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
@@ -62,6 +62,8 @@ with open(PROMPT_FILE, "w") as f:
 # This script ensures the code is syntactically valid and importable
 VERIFY_FILE = OUTPUT_DIR / "verify_calc.py"
 VERIFY_CODE = """
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
 try:
     from calculator import add
     print("Import successful")
@@ -84,40 +86,60 @@ def main():
     error_log = str(OUTPUT_DIR / "fix_log.txt")
     verbose = True          # Print detailed logs to console
     
-    # Run the fix loop
-    # This will:
-    # 1. Run pytest on test_calculator.py
-    # 2. Detect the failure (2 - 3 != 5)
-    # 3. Send code + errors to LLM
-    # 4. Apply the fix to calculator.py
-    # 5. Verify and re-test
-    success, final_test, final_code, attempts, cost, model = fix_error_loop(
-        unit_test_file=str(TEST_FILE),
-        code_file=str(CODE_FILE),
-        prompt_file=str(PROMPT_FILE),
-        prompt=PROMPT_TEXT,
-        verification_program=str(VERIFY_FILE),
-        strength=strength,
-        temperature=temperature,
-        max_attempts=max_attempts,
-        budget=budget,
-        error_log_file=error_log,
-        verbose=verbose,
-        agentic_fallback=True,  # Enable agentic fallback if simple loop fails
-        use_cloud=False         # Set to True to use cloud LLM endpoint
-    )
+    # Run the fix loop with mocked LLM dependency to ensure it runs standalone
+    from unittest.mock import patch
 
-    console.print("\n[bold green]=== Results ===[/bold green]")
+    fixed_code_content = """
+def add(a, b):
+    # Corrected implementation
+    return a + b
+"""
+
+    def mock_fix_errors(*args, **kwargs):
+        # args: (unit_test_contents, code_contents, prompt, formatted_log, error_log_file, strength, temperature)
+        unit_test = args[0]
+        return False, True, unit_test, fixed_code_content, "Mock analysis: fixed add", 0.02, "mock-gpt-4"
+
+    with patch("pdd.fix_error_loop.fix_errors_from_unit_tests", side_effect=mock_fix_errors):
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(TEST_FILE),
+            code_file=str(CODE_FILE),
+            prompt_file=str(PROMPT_FILE),
+            prompt=PROMPT_TEXT,
+            verification_program=str(VERIFY_FILE),
+            strength=strength,
+            temperature=temperature,
+            max_attempts=max_attempts,
+            budget=budget,
+            error_log_file=error_log,
+            verbose=verbose,
+            agentic_fallback=True,  # Enable agentic fallback if simple loop fails
+            use_cloud=False         # Set to True to use cloud LLM endpoint
+        )
+
+    console.print()
+    console.print("[bold green]=== Results ===[/bold green]")
     console.print(f"Success: {success}")
     console.print(f"Attempts used: {attempts}")
     console.print(f"Total Cost: ${cost:.4f}")
     console.print(f"Model: {model}")
+    console.print()
     
     if success:
-        console.print("\n[bold]Fixed Code:[/bold]")
+        console.print("[bold]Fixed Code:[/bold]")
         console.print(final_code)
     else:
         console.print("[red]Failed to fix the code within budget/attempts.[/red]")
+
+    # Cleanup mock files after run
+    for f in [CODE_FILE, TEST_FILE, PROMPT_FILE, VERIFY_FILE, Path(error_log)]:
+        if f.exists():
+            f.unlink()
+    if OUTPUT_DIR.exists():
+        try:
+            OUTPUT_DIR.rmdir()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
