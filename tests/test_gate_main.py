@@ -436,3 +436,24 @@ def test_checkup_gate_without_target_empty_project(
     assert result.exit_code == 1
     assert "No evidence manifests found" in result.output
     assert "Usage:" not in result.output
+
+
+def test_top_level_cli_has_no_gate_command() -> None:
+    """``pdd --help`` must not register a top-level ``gate`` command."""
+    from pdd import cli
+
+    assert "gate" not in cli.cli.commands
+
+
+def test_checkup_gate_help_shows_gate_options() -> None:
+    """``pdd checkup gate --help`` renders gate-specific options."""
+    from click.testing import CliRunner
+
+    from pdd import cli
+
+    result = CliRunner().invoke(cli.cli, ["checkup", "gate", "--help"])
+    assert result.exit_code == 0
+    assert "pdd checkup gate" in result.output
+    assert "--policy" in result.output
+    assert "--json" in result.output
+    assert "evidence" in result.output.lower()
