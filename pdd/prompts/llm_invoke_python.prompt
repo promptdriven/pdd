@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)", "returns": "Dict[str, Any]"},
+      {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None)", "returns": "Dict[str, Any]"},
       {"name": "setup_file_logging", "signature": "(log_file_path=None)", "returns": "None"},
       {"name": "set_verbose_logging", "signature": "(verbose=False)", "returns": "None"},
       {"name": "set_quiet_logging", "signature": "()", "returns": "None"}
@@ -82,6 +82,7 @@
         messages: Optional[Union[List[Dict], List[List[Dict]]]] = None,
         language: Optional[str] = None,
         use_cloud: Optional[bool] = None,
+        grounding_overrides: Optional[Dict[str, List[str]]] = None,
     ) -> Dict[str, Any]
 
 % Inputs:
@@ -97,6 +98,7 @@
     - 'messages': Pre-formatted messages (ignores prompt/input_json if provided).
     - 'language': Language hint (e.g., "python", "javascript"). Skip Python-specific validation when not "python" or None.
     - 'use_cloud': None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
+    - 'grounding_overrides': Optional dict carrying `<pin>` / `<exclude>` slugs that the caller (typically the preprocessor) extracted from the source prompt text BEFORE preprocessing stripped the tags. Shape: `{"pinned": List[str], "excluded": List[str]}`. Both keys are optional; missing keys default to `[]`. `llm_invoke` MUST NOT attempt to re-parse `<pin>` / `<exclude>` from the (already-preprocessed) `prompt` string — the tags are gone by the time the prompt reaches this function. This kwarg is the only audit channel for pin/exclude provenance on the call boundary.
 
 % Output (dictionary):
     - 'result': String or Pydantic object (or list if batch mode).
@@ -104,6 +106,7 @@
     - 'model_name': Name of the selected model.
     - 'thinking_output': Reasoning output if available.
     - 'finish_reason': Provider completion reason when available. For litellm.completion/batch_completion, use the LiteLLM callback's `completion_response.choices[0].finish_reason`; for OpenAI Responses API, use the response status (for example "completed"). Return None when unavailable.
+    - 'grounding': Optional dict describing grounding provenance for this call (see "Grounding Provenance" below). Always present when cloud execution was attempted; may be `{"mode": "unavailable", ...}` on local-only paths.
     - 'attempted_models': Chronological list[str] of every model name that was attempted during this `llm_invoke` call, in the order attempted, ending with the successful model. Includes (1) any cloud attempt that recoverably failed via `CloudFallbackError` / `CloudInvocationError` and fell back to local, recorded as the cloud-routed model name (e.g. `"cloud:<base_model>"` or the cloud-reported model when known), and (2) every local candidate model that was tried, whether it succeeded or was skipped due to context-window overflow, schema validation failure, or other fallback-eligible errors. For a single-attempt successful call this is a one-element list containing the successful model. The successful model is always the LAST entry and equals `model_name`. Never empty on success; always present in the return dict.
 
 % Model Selection:
@@ -283,7 +286,14 @@
       - On InsufficientCreditsError: Re-raise (no fallback).
       - On CloudInvocationError: Print warning, fall back to local.
     - Cloud request payload: prompt, inputJson, messages, strength, temperature, time, verbose, outputSchema, useBatchMode, language.
-    - Cloud response: {result, totalCost, modelName, thinkingOutput}.
+    - Cloud response: {result, totalCost, modelName, thinkingOutput, optionally examplesUsed}.
+
+% Grounding Provenance:
+    - When the cloud response includes an `examplesUsed` (or equivalent) array describing the few-shot examples the cloud injected, surface a `grounding` key on the returned dictionary so downstream evidence-manifest writers can record selection provenance. Shape:
+      `{"mode": "cloud" | "local" | "unavailable", "selected_examples": [{"module": str, "prompt_sha256": Optional[str], "code_sha256": Optional[str], "similarity": Optional[float], "source": Optional[str]}], "pinned": [str], "excluded": [str]}`.
+    - Populate `pinned`/`excluded` from the `grounding_overrides` kwarg (`{"pinned": [...], "excluded": [...]}`). The preprocessor strips `<pin>` / `<exclude>` tags before the prompt reaches `llm_invoke`, so re-parsing the prompt text would silently produce empty lists. The caller (preprocessor / generate command) MUST collect these slugs from the source prompt and pass them through `grounding_overrides`. When `grounding_overrides` is None or missing keys, default to `[]`. Omit `selected_examples` fields that are not available; never invent SHA-256 hashes or similarity scores.
+    - Local (no-cloud) path: include `grounding={"mode": "unavailable", "selected_examples": [], "pinned": [...], "excluded": [...]}` rather than omitting the key (`pinned`/`excluded` still sourced from `grounding_overrides`), so the evidence manifest records "grounding not available" instead of silently dropping the field.
+    - Never raise from grounding-metadata extraction — wrap in a best-effort try/except and degrade to `mode: "unavailable"` on extraction failure.
 
 % Cloud API Documentation:
    <cloud_api_documentation>
