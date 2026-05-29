@@ -344,6 +344,8 @@ DEFAULT_RETRY_DELAY: float = 5.0
 MAX_RETRY_DELAY: float = 120.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
+CLAUDE_CODE_MODE_ENV: str = "PDD_CLAUDE_CODE_MODE"
+CLAUDE_CODE_INTERACTIVE_MODE: str = "interactive"
 # Issue #1232: max newlines allowed in a leading-"Error:" provider error response.
 # Genuine terse provider errors have 0-2 newlines (single status line, or
 # "Error: ...\nDetails: ..."). Multi-paragraph findings docs have many more
@@ -537,6 +539,69 @@ def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
         "(if set in env), or run `codex logout` / remove `~/.codex/auth.json` "
         "(picked up by `_has_codex_auth_file` since Issue #813 round-6)."
     )
+
+
+def _extract_codex_jsonl_error(stdout: str) -> str:
+    """Extract the most useful error message from Codex JSON/JSONL stdout."""
+    if not stdout:
+        return ""
+
+    def _message_from_value(value: Any) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, dict):
+            for key in ("message", "detail", "reason", "error", "output", "result"):
+                msg = _message_from_value(value.get(key))
+                if msg:
+                    return msg
+        if isinstance(value, list):
+            for item in value:
+                msg = _message_from_value(item)
+                if msg:
+                    return msg
+        return ""
+
+    def _message_from_event(event: Any) -> str:
+        if not isinstance(event, dict):
+            return ""
+
+        event_type = str(event.get("type") or "").lower()
+        has_error_signal = (
+            "error" in event_type
+            or "failed" in event_type
+            or bool(event.get("is_error"))
+            or "error" in event
+        )
+        if not has_error_signal:
+            return ""
+
+        for key in ("error", "message", "detail", "reason", "output", "result"):
+            msg = _message_from_value(event.get(key))
+            if msg:
+                return msg
+        return ""
+
+    terminal_error = ""
+    last_error = ""
+    for raw_line in stdout.splitlines() or [stdout]:
+        line = raw_line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = _message_from_event(event)
+        if msg:
+            last_error = msg
+            event_type = str(event.get("type") or "").lower() if isinstance(event, dict) else ""
+            if event_type in {"turn.failed", "task.failed", "session.failed"}:
+                terminal_error = msg
+    return (terminal_error or last_error)[:MAX_ERROR_SNIPPET_LENGTH]
+
+
+def _is_codex_stdin_notice(text: str) -> bool:
+    return text.strip().startswith("Reading additional input from stdin")
 
 
 # Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
@@ -2230,15 +2295,17 @@ def run_agentic_task(
                 if success:
                     stripped_output = output.strip()
                     output_length = len(stripped_output)
-                    # Antigravity (`agy --print`) does not expose usage stats, so
-                    # successful responses always return cost=0.0. Short but
+                    # Some subscription-channel CLIs do not expose usage stats,
+                    # so successful responses always return cost=0.0. Short but
                     # legitimate answers like "4", "Done", or "OK" would otherwise
                     # be demoted to false positives by the zero-cost gate. Empty
-                    # stdout and the explicit "Error:" / "Authentication required."
-                    # exit-0 failure modes are already converted to success=False
-                    # in _run_with_provider's agy branch, so they never reach here.
+                    # output and explicit error signals are still rejected before
+                    # this bypass can mark them valid.
                     provider_lacks_cost_reporting = (
                         provider == "google" and _get_google_cli_name() == "agy"
+                    ) or (
+                        provider == "anthropic"
+                        and _claude_code_interactive_enabled()
                     )
                     is_false_positive = (
                         output_length == 0 or  # Empty output is always a false positive
@@ -2246,7 +2313,7 @@ def run_agentic_task(
                             not provider_lacks_cost_reporting
                             and cost == 0.0
                             and output_length < MIN_VALID_OUTPUT_LENGTH
-                        ) or  # Zero cost with short output (skipped for agy: no usage reporting)
+                        ) or  # Zero cost with short output (skipped for CLIs with no usage reporting)
                         (
                             cost > 0.0
                             and stripped_output.startswith("Error:")
@@ -2766,6 +2833,485 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
     return result
 
 
+def _claude_code_interactive_enabled(env: Optional[Dict[str, str]] = None) -> bool:
+    """Return True when Anthropic provider should use interactive Claude Code."""
+    if env is None:
+        env = os.environ
+    return (
+        (env.get(CLAUDE_CODE_MODE_ENV) or "").strip().lower()
+        == CLAUDE_CODE_INTERACTIVE_MODE
+    )
+
+
+def _write_claude_reply_mcp_server(server_path: Path) -> None:
+    """Write a tiny stdio MCP server exposing the ``pdd_reply`` tool."""
+    server_path.write_text(
+        r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+REPLY_PATH = os.environ["PDD_INTERACTIVE_REPLY_PATH"]
+EXPECTED_JOB_ID = os.environ["PDD_INTERACTIVE_JOB_ID"]
+
+
+def respond(request_id, result=None, error=None):
+    message = {"jsonrpc": "2.0", "id": request_id}
+    if error is not None:
+        message["error"] = error
+    else:
+        message["result"] = result if result is not None else {}
+    sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def write_reply(arguments):
+    job_id = str(arguments.get("job_id") or "")
+    if job_id != EXPECTED_JOB_ID:
+        raise ValueError("job_id does not match this PDD task")
+    text = arguments.get("text")
+    if text is None:
+        text = ""
+    payload = {
+        "job_id": job_id,
+        "success": bool(arguments.get("success")),
+        "text": str(text),
+    }
+    if arguments.get("cost_usd") is not None:
+        payload["cost_usd"] = arguments.get("cost_usd")
+    if arguments.get("model") is not None:
+        payload["model"] = str(arguments.get("model"))
+    tmp_path = REPLY_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True)
+    os.replace(tmp_path, REPLY_PATH)
+
+
+TOOLS = [{
+    "name": "pdd_reply",
+    "description": "Return the final PDD agentic task result to the caller.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "success": {"type": "boolean"},
+            "text": {"type": "string"},
+            "cost_usd": {"type": "number"},
+            "model": {"type": "string"},
+        },
+        "required": ["job_id", "success", "text"],
+        "additionalProperties": False,
+    },
+}]
+
+
+for raw_line in sys.stdin:
+    raw_line = raw_line.strip()
+    if not raw_line:
+        continue
+    try:
+        request = json.loads(raw_line)
+    except json.JSONDecodeError:
+        continue
+    method = request.get("method")
+    request_id = request.get("id")
+    if method == "initialize":
+        respond(request_id, {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "pdd-reply", "version": "0.1.0"},
+        })
+    elif method == "tools/list":
+        respond(request_id, {"tools": TOOLS})
+    elif method == "tools/call":
+        try:
+            params = request.get("params") or {}
+            if params.get("name") != "pdd_reply":
+                raise ValueError("unknown tool")
+            write_reply(params.get("arguments") or {})
+            respond(request_id, {
+                "content": [{"type": "text", "text": "PDD reply recorded."}],
+                "isError": False,
+            })
+        except Exception as exc:
+            respond(request_id, {
+                "content": [{"type": "text", "text": str(exc)}],
+                "isError": True,
+            })
+    elif method == "ping":
+        respond(request_id, {})
+    elif method in {"notifications/initialized", "notifications/cancelled"}:
+        continue
+    elif request_id is not None:
+        respond(request_id, {})
+''',
+        encoding="utf-8",
+    )
+
+
+def _write_claude_interactive_mcp_config(
+    config_path: Path,
+    server_path: Path,
+    reply_path: Path,
+    job_id: str,
+) -> None:
+    """Write a Claude Code MCP config for the temporary PDD reply server."""
+    config = {
+        "mcpServers": {
+            "pdd": {
+                "command": sys.executable,
+                "args": [str(server_path)],
+                "env": {
+                    "PDD_INTERACTIVE_REPLY_PATH": str(reply_path),
+                    "PDD_INTERACTIVE_JOB_ID": job_id,
+                },
+            }
+        }
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+
+def _build_claude_interactive_command(
+    *,
+    cli_path: str,
+    prompt_path: Path,
+    config_path: Path,
+    job_id: str,
+    session_id: str,
+    env: Dict[str, str],
+    use_playwright: bool = False,
+) -> List[str]:
+    """Build the Claude Code interactive command without ``-p`` / JSON mode."""
+    cmd = [
+        cli_path,
+        "--session-id", session_id,
+        "--mcp-config", str(config_path),
+        "--strict-mcp-config",
+    ]
+    if use_playwright:
+        cmd.extend([
+            "--allowedTools",
+            "Bash,Read,Write,mcp__pdd__pdd_reply",
+        ])
+    else:
+        cmd.append("--dangerously-skip-permissions")
+
+    claude_model = env.get("CLAUDE_MODEL")
+    if claude_model:
+        cmd.extend(["--model", claude_model])
+
+    cmd.append(
+        f"Read the file {prompt_path.name} for your full instructions and execute them. "
+        f"When finished, call the MCP tool pdd_reply with job_id={job_id!r}, "
+        "success=true or false, and text set to the final response for PDD. "
+        "Do not stop until pdd_reply succeeds."
+    )
+    return cmd
+
+
+def _find_claude_interactive_session_file(
+    session_id: str,
+    env: Dict[str, str],
+    wait_seconds: float = 2.0,
+) -> Optional[Path]:
+    """Locate Claude Code's JSONL transcript for the given session."""
+    home = Path(env.get("HOME") or str(Path.home()))
+    projects_dir = home / ".claude" / "projects"
+    if not projects_dir.exists():
+        return None
+
+    deadline = time.time() + max(0.0, wait_seconds)
+    while True:
+        matches = list(projects_dir.rglob(f"{session_id}.jsonl"))
+        if matches:
+            return matches[0]
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.1)
+
+
+def _estimate_claude_interactive_session_cost(
+    session_id: str,
+    env: Dict[str, str],
+) -> Tuple[float, Optional[str]]:
+    """Estimate interactive Claude cost from the persisted session transcript."""
+    session_file = _find_claude_interactive_session_file(session_id, env)
+    if session_file is None:
+        return 0.0, None
+
+    per_request_usage: Dict[str, Dict[str, Any]] = {}
+    latest_model: Optional[str] = None
+    try:
+        raw_lines = session_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0.0, None
+
+    for raw_line in raw_lines:
+        try:
+            item = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if item.get("type") != "assistant":
+            continue
+
+        request_id = item.get("requestId")
+        message = item.get("message") or {}
+        model = message.get("model") or item.get("advisorModel")
+        if isinstance(model, str) and model:
+            latest_model = model
+
+        # Claude writes multiple assistant rows per request (e.g. thinking,
+        # tool_use, final text) with the same requestId and usage totals.
+        # Count each request exactly once to avoid double-charging.
+        if not request_id or request_id in per_request_usage:
+            continue
+
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        per_request_usage[request_id] = {
+            "model": model,
+            "usage": usage,
+        }
+
+    if not per_request_usage:
+        return 0.0, latest_model
+
+    usage_keys = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    )
+    usage_by_model: Dict[str, Dict[str, int]] = {}
+    for record in per_request_usage.values():
+        model_name = str(record.get("model") or latest_model or "claude-sonnet")
+        usage = record.get("usage") or {}
+        bucket = usage_by_model.setdefault(
+            model_name,
+            {key: 0 for key in usage_keys},
+        )
+        for key in usage_keys:
+            try:
+                bucket[key] += int(usage.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+    total_cost = 0.0
+    for model_name, usage in usage_by_model.items():
+        total_cost += _calculate_anthropic_cost(
+            {
+                "usage": usage,
+                "modelUsage": {model_name: {}},
+            }
+        )
+
+    return total_cost, latest_model
+
+
+def _terminate_process_group(proc: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, OSError):
+        try:
+            proc.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            pass
+
+
+def _parse_claude_interactive_reply(
+    reply_path: Path,
+    job_id: str,
+) -> Tuple[bool, str, float, Optional[str]]:
+    try:
+        data = json.loads(reply_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"Invalid Claude interactive reply: {exc}", 0.0, None
+
+    if str(data.get("job_id") or "") != job_id:
+        return False, "Claude interactive reply job_id mismatch", 0.0, None
+
+    text = data.get("text")
+    if text is None:
+        text = ""
+    elif not isinstance(text, str):
+        text = json.dumps(text, ensure_ascii=True)
+
+    try:
+        cost = float(data.get("cost_usd") or 0.0)
+    except (TypeError, ValueError):
+        cost = 0.0
+
+    model = data.get("model")
+    if not isinstance(model, str) or not model:
+        model = None
+
+    return bool(data.get("success")), text, cost, model
+
+
+def _claude_interactive_needs_trust_confirmation(output_tail: str) -> bool:
+    """Detect Claude Code's interactive workspace trust prompt."""
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output_tail)
+    cleaned = re.sub(r"\x1b[@-Z\\-_]", "", cleaned)
+    lowered = cleaned.lower()
+    return all(
+        token in lowered
+        for token in ("quick", "safety", "check", "trust", "folder", "enter", "confirm")
+    )
+
+
+def _run_interactive_pty_until_reply(
+    cmd: List[str],
+    *,
+    cwd: Path,
+    env: Dict[str, str],
+    timeout: float,
+    reply_path: Path,
+    job_id: str,
+) -> Tuple[bool, str, float, Optional[str]]:
+    """Run an interactive CLI under a PTY until the MCP reply file appears."""
+    try:
+        import pty
+        import select
+    except ImportError:
+        return False, "Claude Code interactive mode requires POSIX PTY support", 0.0, None
+
+    master_fd, slave_fd = pty.openpty()
+    output_chunks: List[str] = []
+    proc: Optional[subprocess.Popen] = None
+    trust_confirmed = False
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            start_new_session=True,
+            text=False,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+        deadline = time.time() + timeout
+
+        while True:
+            if reply_path.exists():
+                parsed = _parse_claude_interactive_reply(reply_path, job_id)
+                _terminate_process_group(proc, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    _terminate_process_group(proc, signal.SIGKILL)
+                    proc.wait(timeout=5)
+                return parsed
+
+            if proc.poll() is not None:
+                break
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                _terminate_process_group(proc, signal.SIGKILL)
+                proc.wait(timeout=5)
+                tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+                return False, f"Claude interactive mode timed out. Output tail: {tail}", 0.0, None
+
+            readable, _, _ = select.select([master_fd], [], [], min(0.2, remaining))
+            if master_fd in readable:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    decoded = chunk.decode("utf-8", errors="replace")
+                    output_chunks.append(decoded)
+                    if not trust_confirmed:
+                        output_tail = "".join(output_chunks)[-4000:]
+                        if _claude_interactive_needs_trust_confirmation(output_tail):
+                            os.write(master_fd, b"\r")
+                            trust_confirmed = True
+
+        if reply_path.exists():
+            return _parse_claude_interactive_reply(reply_path, job_id)
+
+        tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+        returncode = proc.returncode if proc is not None else None
+        return (
+            False,
+            f"Claude interactive mode exited without pdd_reply "
+            f"(exit={returncode}). Output tail: {tail}",
+            0.0,
+            None,
+        )
+    except Exception as exc:
+        if proc is not None and proc.poll() is None:
+            _terminate_process_group(proc, signal.SIGKILL)
+        return False, f"Claude interactive mode failed: {exc}", 0.0, None
+    finally:
+        if slave_fd != -1:
+            try:
+                os.close(slave_fd)
+            except OSError:
+                pass
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+
+def _run_claude_interactive_with_mcp(
+    *,
+    cli_path: str,
+    prompt_path: Path,
+    cwd: Path,
+    timeout: float,
+    env: Dict[str, str],
+    use_playwright: bool = False,
+) -> Tuple[bool, str, float, Optional[str]]:
+    """Run Claude Code interactively and collect its result through MCP."""
+    if os.name != "posix":
+        return False, "Claude Code interactive mode requires a POSIX platform", 0.0, None
+
+    job_id = uuid.uuid4().hex
+    session_id = str(uuid.uuid4())
+    with tempfile.TemporaryDirectory(prefix="pdd-claude-interactive-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        server_path = tmp_path / "pdd_reply_mcp_server.py"
+        config_path = tmp_path / "mcp_config.json"
+        reply_path = tmp_path / "reply.json"
+        _write_claude_reply_mcp_server(server_path)
+        _write_claude_interactive_mcp_config(
+            config_path,
+            server_path,
+            reply_path,
+            job_id,
+        )
+        cmd = _build_claude_interactive_command(
+            cli_path=cli_path,
+            prompt_path=prompt_path,
+            config_path=config_path,
+            job_id=job_id,
+            session_id=session_id,
+            env=env,
+            use_playwright=use_playwright,
+        )
+        success, text, cost, model = _run_interactive_pty_until_reply(
+            cmd,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            reply_path=reply_path,
+            job_id=job_id,
+        )
+        session_cost, session_model = _estimate_claude_interactive_session_cost(
+            session_id,
+            env,
+        )
+        if session_cost > 0.0 or cost == 0.0:
+            cost = session_cost
+        return success, text, cost, model or session_model or env.get("CLAUDE_MODEL")
+
+
 def _run_with_provider(
     provider: str,
     prompt_path: Path,
@@ -2867,6 +3413,22 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
+        if _claude_code_interactive_enabled(env):
+            if reasoning_effort and not quiet:
+                console.print(
+                    f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but PDD's "
+                    "Claude Code interactive bridge does not map it to a CLI flag; "
+                    "applies to llm_invoke steps only, not this subprocess.[/dim]"
+                )
+            return _run_claude_interactive_with_mcp(
+                cli_path=cli_path,
+                prompt_path=prompt_path,
+                cwd=cwd,
+                timeout=timeout,
+                env=env,
+                use_playwright=use_playwright,
+            )
+
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
@@ -2982,16 +3544,17 @@ def _run_with_provider(
             effective_codex_effort = None
         if effective_codex_effort:
             cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
+        # Codex --model is a top-level flag; keep it before the subcommand so
+        # the final "-" remains the explicit stdin prompt operand.
+        codex_model = env.get("CODEX_MODEL")
+        if codex_model:
+            cmd.extend(["--model", codex_model])
         cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,
             "--json",
             "-"
         ])
-        # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
-        codex_model = env.get("CODEX_MODEL")
-        if codex_model:
-            cmd.extend(["--model", codex_model])
     elif provider == "opencode":
         # OpenCode is a multi-provider routing CLI: a single binary that
         # delegates to whichever backend (Anthropic, OpenAI, GitHub Copilot,
@@ -3068,8 +3631,8 @@ def _run_with_provider(
         return False, str(e), 0.0, None
 
     if result.returncode != 0:
-        error_detail = result.stderr or result.stdout[:500]
         if provider == "openai":
+            stdout_error = _extract_codex_jsonl_error(result.stdout or "")
             combined_error = "\n".join(
                 part for part in [
                     result.stderr or "",
@@ -3080,6 +3643,14 @@ def _run_with_provider(
             codex_auth_message = _codex_auth_failure_message(combined_error)
             if codex_auth_message:
                 return False, codex_auth_message, 0.0, None
+            if stdout_error:
+                return False, f"Exit code {result.returncode}: {stdout_error}", 0.0, None
+            if result.stderr and not _is_codex_stdin_notice(result.stderr):
+                error_detail = result.stderr
+            else:
+                error_detail = (result.stdout or result.stderr or "")[:MAX_ERROR_SNIPPET_LENGTH]
+            return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
+        error_detail = result.stderr or result.stdout[:500]
         return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
 
     # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
