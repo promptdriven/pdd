@@ -206,7 +206,7 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
 7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
-8. **fix**: Resolve test failures
+8. **fix**: Resolve test failures (unless `--skip-tests`)
 9. **update**: Back-propagate learnings to prompt
 
 Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`
