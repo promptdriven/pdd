@@ -915,6 +915,147 @@ def _merge_interface_signatures(
     merged_interface['module']['functions'] = merged_functions
     return merged_interface, warnings
 
+
+def _extract_contract_summary(
+    prompt_path: Path,
+    project_root: Path,
+) -> Dict[str, Any]:
+    """Extract contract metadata and evidence status for one prompt module."""
+    from .contract_ir import extract_sections, parse_prompt_contracts, rule_ids_from_covers
+    from .evidence_manifest import _sha256_file
+    from .user_story_tests import (
+        _parse_story_prompt_metadata,
+        _read_story,
+        discover_story_files,
+    )
+
+    empty_summary: Dict[str, Any] = {
+        "rules": [],
+        "critical": [],
+        "stories": [],
+        "capabilities": [],
+        "coverage_status": "none",
+        "evidence_status": "missing",
+        "waived": [],
+    }
+
+    try:
+        ir = parse_prompt_contracts(prompt_path)
+        rules = [r.raw_id.upper() for r in ir.rules if r.raw_id != "(unnumbered)"]
+        critical = [
+            r.raw_id.upper()
+            for r in ir.rules
+            if r.raw_id != "(unnumbered)" and "CRITICAL" in r.block.upper()
+        ]
+
+        capabilities: List[str] = []
+        if "capabilities" in ir.sections:
+            capabilities = [
+                line.strip().lstrip("-* ").strip()
+                for line in ir.sections["capabilities"].splitlines()
+                if line.strip().lstrip("-* ").strip()
+            ]
+
+        prompt_name = prompt_path.name
+        stories_dir = project_root / "user_stories"
+        story_files = discover_story_files(str(stories_dir)) if stories_dir.is_dir() else []
+
+        linked_stories: List[str] = []
+        covered_rule_ids: set[str] = set()
+
+        for story_path in story_files:
+            try:
+                content = _read_story(story_path)
+                linked_prompts = _parse_story_prompt_metadata(content)
+                is_linked = any(
+                    p.lower() == prompt_name.lower()
+                    or p.lower() == prompt_path.relative_to(project_root).as_posix().lower()
+                    for p in linked_prompts
+                )
+
+                story_sections = extract_sections(content)
+                story_rules: set[str] = set()
+                if "covers" in story_sections:
+                    story_rules = rule_ids_from_covers(story_sections["covers"], prompt_name)
+
+                if is_linked or story_rules:
+                    linked_stories.append(str(story_path.relative_to(project_root)))
+                    covered_rule_ids.update(story_rules)
+            except (OSError, ValueError):
+                continue
+
+        evidence_status = "missing"
+        coverage_status = "none"
+        latest_evidence_path = (
+            project_root / ".pdd" / "evidence" / "devunits" / f"{prompt_path.stem}.latest.json"
+        )
+
+        if latest_evidence_path.exists():
+            try:
+                manifest = json.loads(latest_evidence_path.read_text(encoding="utf-8"))
+                manifest_prompt_sha = manifest.get("prompt", {}).get("sha256")
+                actual_prompt_sha = _sha256_file(prompt_path)
+                if manifest_prompt_sha == actual_prompt_sha:
+                    evidence_status = "fresh"
+                else:
+                    evidence_status = "stale"
+
+                manifest_contracts = manifest.get("contracts", {})
+                if manifest_contracts.get("status") == "available":
+                    manifest_rules = manifest_contracts.get("rules", {})
+                    all_covered = True
+                    for rid in rules:
+                        rule_status = manifest_rules.get(rid, {})
+                        if not rule_status.get("stories") and not rule_status.get("tests"):
+                            all_covered = False
+                            break
+                    if all_covered and rules:
+                        coverage_status = "full"
+                    elif any(
+                        manifest_rules.get(rid, {}).get("stories")
+                        or manifest_rules.get(rid, {}).get("tests")
+                        for rid in rules
+                    ):
+                        coverage_status = "partial"
+            except (OSError, json.JSONDecodeError, TypeError):
+                evidence_status = "error"
+
+        if coverage_status == "none" and rules:
+            if covered_rule_ids >= set(rules):
+                coverage_status = "story-only"
+            elif covered_rule_ids:
+                coverage_status = "partial"
+
+        return {
+            "rules": rules,
+            "critical": critical,
+            "stories": sorted(set(linked_stories)),
+            "capabilities": capabilities,
+            "coverage_status": coverage_status,
+            "evidence_status": evidence_status,
+            "waived": [w.raw_id.upper() for w in ir.waivers],
+        }
+    except Exception as exc:  # pylint: disable=broad-except
+        summary = dict(empty_summary)
+        summary["coverage_status"] = "error"
+        summary["evidence_status"] = "error"
+        summary["error"] = str(exc)
+        return summary
+
+
+def _contract_summary_is_empty(summary: Dict[str, Any]) -> bool:
+    """True when the summary carries no contract, story, or evidence signal."""
+    return (
+        not summary.get("rules")
+        and not summary.get("critical")
+        and not summary.get("stories")
+        and not summary.get("capabilities")
+        and not summary.get("waived")
+        and summary.get("coverage_status") in (None, "none")
+        and summary.get("evidence_status") in (None, "missing")
+    )
+
+
 def update_architecture_from_prompt(
     prompt_filename: str,
     prompts_dir: Path = PROMPTS_DIR,
@@ -1087,7 +1228,22 @@ def update_architecture_from_prompt(
                 module_entry['dependencies'] = tag_dependencies
                 updated = True
 
-        # 6. Write back to architecture.json (if updated and not dry run)
+        project_root = find_project_root(prompts_dir)
+        new_summary = _extract_contract_summary(prompt_path, project_root)
+        old_summary = module_entry.get("contract_summary")
+        summary_changed = old_summary != new_summary
+        should_persist_summary = (
+            old_summary is not None or not _contract_summary_is_empty(new_summary)
+        )
+        if summary_changed and should_persist_summary:
+            changes["contract_summary"] = {"old": old_summary, "new": new_summary}
+            if _contract_summary_is_empty(new_summary):
+                module_entry.pop("contract_summary", None)
+            else:
+                module_entry["contract_summary"] = new_summary
+            updated = True
+
+        # 7. Write back to architecture.json (if updated and not dry run)
         if updated and not dry_run:
             arch_data[module_index] = module_entry
             raw_on_disk = json.loads(architecture_path.read_text(encoding='utf-8'))
@@ -1110,7 +1266,8 @@ def update_architecture_from_prompt(
             'updated': updated,
             'changes': changes,
             'error': None,
-            'warnings': warnings
+            'warnings': warnings,
+            'contract_summary': module_entry.get("contract_summary"),
         }
 
     except Exception as e:
@@ -1118,7 +1275,8 @@ def update_architecture_from_prompt(
             'success': False,
             'updated': False,
             'changes': {},
-            'error': f'Unexpected error: {str(e)}'
+            'error': f'Unexpected error: {str(e)}',
+            'contract_summary': None,
         }
 
 
@@ -1207,7 +1365,8 @@ def sync_all_prompts_to_architecture(
             'success': result['success'],
             'updated': result['updated'],
             'changes': result['changes'],
-            'error': result.get('error')
+            'error': result.get('error'),
+            'contract_summary': result.get('contract_summary'),
         })
 
     return {

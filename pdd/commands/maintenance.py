@@ -476,9 +476,46 @@ def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> 
     )
     click.echo(summary)
 
+    total_rules = 0
+    total_stories = 0
+    has_contracts = False
+    for entry in result.get("results", []):
+        summary_data = entry.get("contract_summary")
+        if summary_data:
+            has_contracts = True
+            total_rules += len(summary_data.get("rules", []))
+            total_stories += len(summary_data.get("stories", []))
+
+    if has_contracts:
+        click.echo(
+            f"Total contracts: {total_rules} rules, {total_stories} stories "
+            "across synced modules."
+        )
+
     for entry in result.get("results", []):
         if entry.get("updated"):
             click.echo(f"UPDATED {entry['filename']}")
+            summary_data = entry.get("contract_summary")
+            if summary_data:
+                click.echo(
+                    f"  Contracts: {len(summary_data.get('rules', []))} rules, "
+                    f"{len(summary_data.get('stories', []))} stories"
+                )
+                ev_status = summary_data.get("evidence_status")
+                if ev_status == "stale":
+                    click.echo(
+                        click.style(
+                            f"  Warning: evidence is stale for {entry['filename']}",
+                            fg="yellow",
+                        )
+                    )
+                elif ev_status == "missing":
+                    click.echo(
+                        click.style(
+                            f"  Warning: evidence is missing for {entry['filename']}",
+                            fg="red",
+                        )
+                    )
         elif not entry.get("success"):
             click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
 
