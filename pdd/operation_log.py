@@ -277,6 +277,7 @@ def load_operation_log(
     basename: str,
     language: str,
     paths: Optional[Dict[str, Any]] = None,
+    project_root: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """
     Load all log entries for a module.
@@ -287,11 +288,15 @@ def load_operation_log(
         paths: Optional path hints (Issue #1211) so the log file is
             resolved under the subproject's .pdd/meta when run CWD lives
             above the subproject.
+        project_root: Optional explicit project root (Issue #1252 Gap 1)
+            that short-circuits auto-detection. Forwarded to
+            ``get_log_path`` — accepting it without threading it through
+            would be a regression.
 
     Returns:
         List of log entries (dictionaries).
     """
-    log_path = get_log_path(basename, language, paths=paths)
+    log_path = get_log_path(basename, language, project_root=project_root, paths=paths)
     entries = []
     
     if log_path.exists():
@@ -319,6 +324,7 @@ def append_log_entry(
     language: str,
     entry: Dict[str, Any],
     paths: Optional[Dict[str, Any]] = None,
+    project_root: Optional[Path] = None,
 ) -> None:
     """
     Append a single entry to the module's sync log.
@@ -329,8 +335,11 @@ def append_log_entry(
         entry: Dictionary of data to log.
         paths: Optional path hints (issue #1211); when given, the log file
             is anchored at the subproject's .pdd/meta even if cwd is above it.
+        project_root: Optional explicit project root (Issue #1252 Gap 1).
+            Forwarded to ``get_log_path``; accepting it without threading it
+            through would be a regression.
     """
-    log_path = get_log_path(basename, language, paths=paths)
+    log_path = get_log_path(basename, language, project_root=project_root, paths=paths)
     
     # Ensure standard fields exist
     if "timestamp" not in entry:
@@ -409,12 +418,16 @@ def log_event(
     details: Any,
     invocation_mode: str = "manual",
     paths: Optional[Dict[str, Any]] = None,
+    project_root: Optional[Path] = None,
 ) -> None:
     """
     Log a special event to the sync log.
 
     `paths` (Issue #1211) routes the entry through the subproject's
     .pdd/meta when run CWD lives above the subproject.
+
+    `project_root` (Issue #1252 Gap 1): when provided, short-circuits
+    auto-detection. Forwarded to ``append_log_entry``.
     """
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -423,7 +436,7 @@ def log_event(
         "details": details,
         "invocation_mode": invocation_mode
     }
-    append_log_entry(basename, language, entry, paths=paths)
+    append_log_entry(basename, language, entry, paths=paths, project_root=project_root)
 
 
 def save_fingerprint(
@@ -432,7 +445,8 @@ def save_fingerprint(
     operation: str,
     paths: Optional[Dict[str, Path]] = None,
     cost: float = 0.0,
-    model: str = "unknown"
+    model: str = "unknown",
+    project_root: Optional[Path] = None,
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
@@ -440,6 +454,12 @@ def save_fingerprint(
     Writes the full Fingerprint dataclass format compatible with read_fingerprint()
     in sync_determine_operation.py. This ensures manual commands (generate, example)
     don't break sync's fingerprint tracking.
+
+    `project_root` (Issue #1252 Gap 1): when provided, anchor the write on
+    that root rather than CWD. Both ``paths`` and ``project_root`` are
+    forwarded explicitly to ``get_fingerprint_path`` and to the internal
+    ``read_fingerprint`` so reads/writes share an anchor — accepting
+    ``project_root`` without threading it through would be a regression.
     """
     from dataclasses import asdict
     from datetime import timezone
@@ -458,10 +478,10 @@ def save_fingerprint(
             logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
             paths = {}
 
-    path = get_fingerprint_path(basename, language, paths=paths)
+    path = get_fingerprint_path(basename, language, project_root=project_root, paths=paths)
 
     # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language, paths=paths)
+    prev_fp = read_fingerprint(basename, language, paths=paths, project_root=project_root)
     stored_deps = prev_fp.include_deps if prev_fp else None
     current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
 
@@ -491,12 +511,15 @@ def save_run_report(
     language: str,
     report_data: Dict[str, Any],
     paths: Optional[Dict[str, Any]] = None,
+    project_root: Optional[Path] = None,
 ) -> None:
     """
     Save a run report (test results) to the state file.
     `paths` (issue #1211) routes the file under the subproject meta dir.
+    `project_root` (Issue #1252 Gap 1) short-circuits auto-detection;
+    forwarded explicitly to ``get_run_report_path``.
     """
-    path = get_run_report_path(basename, language, paths=paths)
+    path = get_run_report_path(basename, language, project_root=project_root, paths=paths)
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(report_data, f, indent=2)
@@ -509,11 +532,15 @@ def clear_run_report(
     basename: str,
     language: str,
     paths: Optional[Dict[str, Any]] = None,
+    project_root: Optional[Path] = None,
 ) -> None:
     """
     Remove an existing run report if it exists.
+
+    `project_root` (Issue #1252 Gap 1) short-circuits auto-detection;
+    forwarded explicitly to ``get_run_report_path``.
     """
-    path = get_run_report_path(basename, language, paths=paths)
+    path = get_run_report_path(basename, language, project_root=project_root, paths=paths)
     if path.exists():
         try:
             os.remove(path)
@@ -525,9 +552,16 @@ def _clear_run_report_before_fingerprint(
     basename: str,
     language: str,
     paths: Optional[Dict[str, Any]] = None,
+    project_root: Optional[Path] = None,
 ) -> bool:
-    """Clear stale run report and verify it is gone before fingerprint update."""
-    path = get_run_report_path(basename, language, paths=paths)
+    """Clear stale run report and verify it is gone before fingerprint update.
+
+    `project_root` (Issue #1252 Gap 1) short-circuits auto-detection;
+    forwarded explicitly to ``get_run_report_path`` and ``clear_run_report``
+    so the existence-check after unlink anchors on the same .pdd/meta as
+    the prior delete.
+    """
+    path = get_run_report_path(basename, language, project_root=project_root, paths=paths)
     console = Console()
 
     try:
@@ -539,7 +573,7 @@ def _clear_run_report_before_fingerprint(
         )
         return False
 
-    clear_run_report(basename, language, paths=paths)
+    clear_run_report(basename, language, paths=paths, project_root=project_root)
     if not had_run_report:
         return True
 
@@ -591,9 +625,22 @@ def log_operation(
             # the subproject's .pdd/meta even when the user invoked the
             # command from above the subproject root.
             log_paths: Optional[Dict[str, Any]] = None
+            # Issue #1252 Gap 1: derive an explicit project_root from the
+            # prompt path so first-run writes (where derived output files
+            # don't yet exist) still anchor on the subproject's .pddrc
+            # rather than the run CWD. Without this, the paths-based
+            # auto-detection silently falls back to CWD whenever the
+            # prompt is the only existing file in `paths`.
+            log_project_root: Optional[Path] = None
             if prompt_file:
                 basename, language = infer_module_identity(prompt_file)
                 log_paths = {"prompt": prompt_file}
+                try:
+                    log_project_root = _detect_project_root_from_paths(log_paths)
+                    if log_project_root is None:
+                        log_project_root = _detect_project_root(Path(prompt_file))
+                except Exception:
+                    log_project_root = None
 
             entry = create_manual_log_entry(operation=operation)
             start_time = time.time()
@@ -621,7 +668,10 @@ def log_operation(
 
                 update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
                 if basename and language:
-                    append_log_entry(basename, language, entry, paths=log_paths)
+                    append_log_entry(
+                        basename, language, entry,
+                        paths=log_paths, project_root=log_project_root,
+                    )
                     if success:
                         fingerprint_allowed = True
                         # Clear the stale run report only after the command
@@ -633,7 +683,8 @@ def log_operation(
                         # (issue #1057).
                         if clears_run_report:
                             fingerprint_allowed = _clear_run_report_before_fingerprint(
-                                basename, language, paths=log_paths
+                                basename, language,
+                                paths=log_paths, project_root=log_project_root,
                             )
                         if updates_fingerprint and fingerprint_allowed:
                             save_fingerprint(
@@ -641,10 +692,14 @@ def log_operation(
                                 language,
                                 operation=operation,
                                 paths=log_paths,
+                                project_root=log_project_root,
                                 cost=cost,
                                 model=model,
                             )
                         if updates_run_report and isinstance(result, dict):
-                            save_run_report(basename, language, result, paths=log_paths)
+                            save_run_report(
+                                basename, language, result,
+                                paths=log_paths, project_root=log_project_root,
+                            )
         return wrapper
     return decorator

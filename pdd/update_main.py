@@ -36,6 +36,18 @@ from .sync_determine_operation import calculate_sha256, extract_include_deps, re
 from .validate_prompt_includes import sanitize_prompt_output
 from . import DEFAULT_TIME
 
+# Issue #1252 Gap 1, Req. 11 (update_main_python.prompt): re-export the
+# project-root detection helpers from pdd.operation_log so that tests can
+# monkeypatch them at the `pdd.update_main` module level and so that
+# `pdd fix` and the post-update fingerprint finalization can derive a
+# .pddrc-anchored project_root from the prompt path without
+# round-tripping through `from .operation_log import ...` at each call
+# site.
+from .operation_log import (
+    _detect_project_root,
+    _detect_project_root_from_paths,
+)
+
 # Config/data files that should not get prompts in repo-scan mode.
 # Users can still target these explicitly with single-file mode.
 _SKIP_EXTENSIONS = {
@@ -1169,9 +1181,22 @@ def _finalize_single_file_fingerprint(
     # parent metadata while writing the fresh fingerprint to the subproject,
     # leaving stale subproject _run.json beside it.
     update_paths = {"prompt": Path(prompt_path), "code": Path(code_path)}
+    # Issue #1252 Gap 1 / Req. 15: compute the project_root ONCE from the
+    # prompt path (via the re-exported helpers — patchable from tests) and
+    # pass it through to both the clear and the fingerprint save so the
+    # post-update finalization anchors on the prompt's .pddrc ancestor.
+    # Without this, a `pdd update` invoked from above the subproject silently
+    # falls back to CWD when only the prompt file exists yet.
+    try:
+        target_project_root = _detect_project_root_from_paths(update_paths)
+        if target_project_root is None:
+            target_project_root = _detect_project_root(Path(prompt_path))
+    except Exception:
+        target_project_root = None
     try:
         fingerprint_allowed = _clear_run_report_before_fingerprint(
-            basename, language, paths=update_paths
+            basename, language,
+            paths=update_paths, project_root=target_project_root,
         )
     except Exception as exc:
         # Defensive: surrounding pattern in this function treats metadata
@@ -1192,6 +1217,7 @@ def _finalize_single_file_fingerprint(
             language,
             operation="update",
             paths=update_paths,
+            project_root=target_project_root,
             cost=cost,
             model=model,
         )
@@ -1400,6 +1426,19 @@ def update_main(
                                 "prompt": Path(prompt_path),
                                 "code": Path(code_path),
                             }
+                            # Issue #1252 Gap 1 / repo-mode bullet: compute
+                            # pair_project_root ONCE per pair so the
+                            # get_run_report_path existence-check, the
+                            # clear_run_report unlink, and the subsequent
+                            # save_fingerprint write all anchor on the same
+                            # .pdd/meta — preventing a "cleared parent /
+                            # wrote subproject" mismatch.
+                            try:
+                                pair_project_root = _detect_project_root_from_paths(_update_paths)
+                                if pair_project_root is None:
+                                    pair_project_root = _detect_project_root(Path(prompt_path))
+                            except Exception:
+                                pair_project_root = None
                             # Clear stale run report first so it can't outlive
                             # the prompt/code pair it described. Best-effort:
                             # never fail the update because of metadata I/O,
@@ -1408,7 +1447,8 @@ def update_main(
                             # still describe the pre-mutation files.
                             try:
                                 _stale_report_path = get_run_report_path(
-                                    basename, language, paths=_update_paths
+                                    basename, language,
+                                    paths=_update_paths, project_root=pair_project_root,
                                 )
                             except Exception:
                                 _stale_report_path = None
@@ -1417,7 +1457,10 @@ def update_main(
                                 and _stale_report_path.exists()
                             )
                             try:
-                                clear_run_report(basename, language, paths=_update_paths)
+                                clear_run_report(
+                                    basename, language,
+                                    paths=_update_paths, project_root=pair_project_root,
+                                )
                             except Exception as exc:
                                 if not quiet:
                                     rprint(
@@ -1456,6 +1499,7 @@ def update_main(
                                         basename, language,
                                         operation="update",
                                         paths=_update_paths,
+                                        project_root=pair_project_root,
                                         cost=result.get("cost", 0.0),
                                         model=result.get("model", "unknown"),
                                     )
