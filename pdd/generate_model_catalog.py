@@ -330,6 +330,19 @@ _TIER_PATTERN = re.compile(r"^together-ai-[\d.]+b", re.IGNORECASE)
 # Models we never want in the catalog (sample spec, image-only, etc.)
 _SKIP_KEYS = {"sample_spec"}
 
+# Routes PDD intentionally DEFERS from the catalog pending live validation,
+# even if LiteLLM's registry happens to know the id. Without this guard a regen
+# on a LiteLLM build that ships one of these would re-introduce the exact route
+# the bundled CSV deliberately omits — e.g. azure_ai/claude-opus-4-8 rides the
+# legacy budget shape through AzureAIStudioConfig (OpenAI-based), which the
+# Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach and which
+# is unaudited for the adaptive-only Opus 4.7+/4.8 contract. Remove an entry
+# here once its provider/reasoning path is validated and the corresponding
+# CSV / _MANDATORY_MODEL_ROWS row is added with tests.
+_DEFERRED_MODEL_IDS = frozenset({
+    "azure_ai/claude-opus-4-8",
+})
+
 # Regex matching dated preview model names (after provider prefix is stripped).
 # Examples: gemini-2.5-flash-preview-04-17, gemini-2.5-pro-preview-06-05
 _DATED_PREVIEW = re.compile(
@@ -1267,6 +1280,11 @@ def build_rows(
     elo_source_counts: Dict[str, int] = defaultdict(int)
 
     for model_id, entry in litellm.model_cost.items():
+        # Skip routes PDD intentionally defers pending validation, even if
+        # LiteLLM's registry knows them (see _DEFERRED_MODEL_IDS). Checked first
+        # so the deferral holds regardless of how LiteLLM classifies the entry.
+        if model_id in _DEFERRED_MODEL_IDS:
+            continue
         # Only chat and responses modes (responses = OpenAI's newer API format)
         if entry.get("mode") not in ("chat", "responses"):
             continue

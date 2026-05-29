@@ -509,3 +509,38 @@ def test_infer_reasoning_type_returns_effort_for_opus_48_bedrock_and_vertex():
     entry = {"supports_reasoning": True}
     assert gmc._infer_reasoning_type("anthropic.claude-opus-4-8", "bedrock", entry) == "effort"
     assert gmc._infer_reasoning_type("vertex_ai/claude-opus-4-8", "vertex_ai", entry) == "effort"
+
+
+def test_azure_opus_48_is_deferred_even_when_litellm_knows_it(monkeypatch):
+    """Azure AI / Foundry Opus 4.8 is intentionally deferred pending validation
+    (it rides the legacy budget shape via AzureAIStudioConfig, which the adaptive
+    relay patches don't reach). The deferral must be ENFORCED by the generator,
+    not just documented: even when LiteLLM's registry ships azure_ai/claude-opus-4-8,
+    a regen must omit it so the generator never diverges from the committed CSV
+    (which deliberately has no Azure 4.8 row)."""
+    import litellm
+
+    fake_id = "azure_ai/claude-opus-4-8"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        fake_id,
+        {
+            "mode": "chat",
+            "litellm_provider": "azure_ai",
+            "input_cost_per_token": 5e-6,
+            "output_cost_per_token": 25e-6,
+            "max_tokens": 128000,
+            "max_input_tokens": 200000,
+            "supports_reasoning": True,
+        },
+    )
+    # Sanity: the fake entry is actually visible to the build loop.
+    assert fake_id in litellm.model_cost
+
+    rows = gmc.build_rows(refresh_elo=False)
+    assert all(r.get("model") != fake_id for r in rows), (
+        "azure_ai/claude-opus-4-8 is deferred pending validation and must not be "
+        "emitted by a regen even when LiteLLM knows the id"
+    )
+    # The direct-Anthropic 4.8 row must still be present (deferral is scoped).
+    assert any(r.get("model") == "claude-opus-4-8" for r in rows)
