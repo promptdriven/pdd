@@ -268,6 +268,56 @@ def test_user_story_tests_caches_story_prompt_links_when_detection_is_empty(tmp_
     assert "two_python.prompt" in updated_story
 
 
+def test_run_user_story_tests_accepts_deprecated_link_story_prompt_metadata(tmp_path):
+    """PR #820: link_story_prompt_metadata remains a deprecated alias for main API."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    (prompts_dir / "one_python.prompt").write_text("prompt one", encoding="utf-8")
+    story = stories_dir / "story__deprecated_kwarg.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.1, "gpt-test")
+        with pytest.warns(DeprecationWarning, match="link_story_prompt_metadata"):
+            passed, results, cost, model = run_user_story_tests(
+                prompts_dir=str(prompts_dir),
+                stories_dir=str(stories_dir),
+                quiet=True,
+                link_story_prompt_metadata=True,
+            )
+
+    assert passed is True
+    assert results[0]["passed"] is True
+    assert "<!-- pdd-story-prompts:" in story.read_text(encoding="utf-8")
+
+
+def test_run_user_story_tests_cache_kwarg_wins_over_deprecated_alias(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    (prompts_dir / "one_python.prompt").write_text("prompt one", encoding="utf-8")
+    story = stories_dir / "story__kwarg_precedence.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.0, "")
+        with pytest.warns(DeprecationWarning):
+            run_user_story_tests(
+                prompts_dir=str(prompts_dir),
+                stories_dir=str(stories_dir),
+                quiet=True,
+                cache_story_prompt_links=True,
+                link_story_prompt_metadata=False,
+            )
+
+    assert "<!-- pdd-story-prompts:" in story.read_text(encoding="utf-8")
+
+
 def test_cache_story_prompt_links_updates_metadata(tmp_path):
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"

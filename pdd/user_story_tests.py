@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -812,12 +813,26 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     fail_fast: bool = False,
     include_llm_prompts: bool = False,
     cache_story_prompt_links: bool = False,
+    link_story_prompt_metadata: Optional[bool] = None,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
     Run user story tests by calling detect_change on each story.
 
     A story passes if detect_change returns an empty changes_list.
+
+    ``link_story_prompt_metadata`` is a deprecated alias for
+    ``cache_story_prompt_links`` (main API). When both are passed,
+    ``cache_story_prompt_links`` wins if it is true.
     """
+    if link_story_prompt_metadata is not None:
+        warnings.warn(
+            "link_story_prompt_metadata is deprecated; use cache_story_prompt_links",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not cache_story_prompt_links:
+            cache_story_prompt_links = link_story_prompt_metadata
+
     prompt_files = prompt_files or discover_prompt_files(
         prompts_dir, include_llm=include_llm_prompts
     )

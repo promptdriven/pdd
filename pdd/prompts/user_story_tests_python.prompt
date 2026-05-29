@@ -36,6 +36,8 @@ the guide may say `## Forbidden Outcomes` — same intent).
 - `run_user_story_tests`, `cache_story_prompt_links`, and `run_user_story_fix` must not
   require the new sections. Legacy minimal stories must still pass when `detect_change`
   returns no changes.
+- Keep the public keyword `cache_story_prompt_links` on `run_user_story_tests`.
+  `link_story_prompt_metadata` may exist only as a deprecated alias (warn + map).
 
 % Inputs and Outputs
 - `run_user_story_tests(...) -> Tuple[bool, List[Dict[str, object]], float, str]`
@@ -105,6 +107,9 @@ the guide may say `## Forbidden Outcomes` — same intent).
 
 % Verification
 ```bash
-pytest -q tests/test_user_story_tests.py tests/test_contract_check.py::TestRealPromptLegacySafety::test_bundled_prompts_no_errors
+pytest -q tests/test_user_story_tests.py tests/test_contract_check.py tests/test_coverage_contracts.py tests/commands/test_analysis.py
+pytest -q tests/test_contract_check.py::TestRealPromptLegacySafety::test_bundled_prompts_no_errors
 pylint pdd/user_story_tests.py
 ```
+Public helpers use module-level `# pylint: disable=too-many-arguments` (and related)
+on their definitions; the pylint command above should exit 0.
