@@ -47,6 +47,42 @@ def _write_pytest_package_fixture(project: Path) -> tuple[Path, Path]:
     return prompt, code
 
 
+def _write_pytest_local_import_fixture(project: Path) -> tuple[Path, Path]:
+    """Project where the module under test imports another local package module."""
+    prompt, code = _write_pytest_package_fixture(project)
+    helper = project / "pdd" / "helper.py"
+    helper.write_text(
+        "def adjust(amount: int) -> int:\n    return amount + 1\n",
+        encoding="utf-8",
+    )
+    code.write_text(
+        "from pdd.helper import adjust\n\n"
+        "def refund_payment(amount: int) -> int:\n    return adjust(amount)\n",
+        encoding="utf-8",
+    )
+    test_file = project / "tests" / "test_refund_payment.py"
+    test_file.write_text(
+        "from pdd.refund_payment import refund_payment\n\n"
+        "def test_refund_payment_uses_helper() -> None:\n"
+        "    assert refund_payment(5) == 6\n",
+        encoding="utf-8",
+    )
+    return prompt, code
+
+
+def test_pytest_for_candidate_supports_local_package_imports(tmp_path: Path) -> None:
+    """Stable candidates that import sibling project modules must still pass pytest."""
+    _write_pytest_local_import_fixture(tmp_path)
+    code = tmp_path / "pdd" / "refund_payment.py"
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    stable_candidate = tmp_path / "stable_candidate.py"
+    stable_candidate.write_text(code.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert _run_pytest_for_candidate(stable_candidate, code, tmp_path, sandbox) is True
+
+
 def test_pytest_for_candidate_exercises_candidate_not_baseline(tmp_path: Path) -> None:
     """Broken candidate must fail even when baseline module on disk still passes."""
     _write_pytest_package_fixture(tmp_path)

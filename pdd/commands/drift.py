@@ -57,8 +57,9 @@ def drift_cmd(
 
     Re-generates code into isolated temp paths (unless ``--dry-run``),
     compares each candidate against the baseline artifact, and runs
-    configured behavioral checks. Policy requires ``pdd checkup gate`` on
-    the installed package when policy/evidence is configured.
+    configured behavioral checks. Policy runs only when a policy file or
+    explicit policy/gate validation is configured (ordinary evidence alone
+    does not enable it).
     """
     if runs < 1:
         raise click.UsageError("--runs must be at least 1")

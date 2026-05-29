@@ -290,18 +290,46 @@ def _candidate_relative_path(code_path: Path, project_root: Path) -> Path:
         return Path(code_path.name)
 
 
-def _ensure_package_inits(overlay_root: Path, module_path: Path) -> None:
-    """Add empty ``__init__.py`` files so package imports resolve under ``overlay_root``."""
-    try:
-        rel = module_path.relative_to(overlay_root)
-    except ValueError:
-        return
-    current = overlay_root
-    for part in rel.parts[:-1]:
-        current = current / part
-        init_file = current / "__init__.py"
-        if not init_file.exists():
-            init_file.write_text("", encoding="utf-8")
+def _ignore_cache_dir(_directory: str, names: list[str]) -> set[str]:
+    return {name for name in names if name == "__pycache__"}
+
+
+def _copy_project_subtree(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination, ignore=_ignore_cache_dir)
+
+
+def _copy_test_support_files(
+    project_root: Path,
+    overlay_root: Path,
+    test_paths: list[Path],
+) -> Path:
+    """Mirror discovered tests, local helpers, and ``conftest.py`` files into the overlay."""
+    overlay_tests = overlay_root / "tests"
+    for test_path in test_paths:
+        rel_test = test_path.relative_to(project_root)
+        dest_test = overlay_root / rel_test
+        dest_test.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(test_path, dest_test)
+        for helper in test_path.parent.glob("*.py"):
+            if helper.name == test_path.name or helper.name.startswith("test_"):
+                continue
+            rel_helper = helper.relative_to(project_root)
+            dest_helper = overlay_root / rel_helper
+            dest_helper.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(helper, dest_helper)
+
+    project_tests = project_root / "tests"
+    if project_tests.is_dir():
+        for conftest in project_tests.rglob("conftest.py"):
+            rel_conftest = conftest.relative_to(project_root)
+            dest_conftest = overlay_root / rel_conftest
+            dest_conftest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(conftest, dest_conftest)
+
+    return overlay_tests
 
 
 def _build_pytest_overlay(
@@ -310,22 +338,23 @@ def _build_pytest_overlay(
     project_root: Path,
     overlay_root: Path,
 ) -> Optional[Path]:
-    """Build an isolated tree with the candidate module and copied tests."""
+    """Build an overlay with project package deps and the candidate replacing baseline."""
     rel = _candidate_relative_path(code_path, project_root)
+    package_rel = rel.parent
+    if package_rel != Path("."):
+        source_package = project_root / package_rel
+        if source_package.is_dir():
+            _copy_project_subtree(source_package, overlay_root / package_rel)
+
     module_dest = overlay_root / rel
     module_dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(candidate, module_dest)
-    _ensure_package_inits(overlay_root, module_dest)
 
     tests = _discover_tests(code_path, project_root)
     if not tests:
         return None
 
-    overlay_tests = overlay_root / "tests"
-    overlay_tests.mkdir(parents=True, exist_ok=True)
-    for test_path in tests:
-        shutil.copy2(test_path, overlay_tests / test_path.name)
-    return overlay_tests
+    return _copy_test_support_files(project_root, overlay_root, tests)
 
 
 def _run_pytest_for_candidate(
