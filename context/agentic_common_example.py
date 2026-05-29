@@ -1,14 +1,39 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 # Import the functions from the agentic_common module
 from pdd.agentic_common import (
     get_agent_provider_preference,
     get_available_agents,
     detect_control_token,
+    post_pr_comment,
     substitute_template_variables
 )
+
+
+def example_post_pr_comment():
+    """Show the PR comment helper used by CI validation."""
+    print("4. PR Comment Helper")
+    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_common.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        posted = post_pr_comment(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            pr_number=42,
+            body="CI validation exhausted retries; lint is still failing.",
+            cwd=Path.cwd(),
+        )
+    print(f"PR comment posted: {posted}\n")
+
 
 def main():
     print("--- Agentic Common Examples ---\n")
@@ -61,6 +86,8 @@ def main():
     match_continue = detect_control_token(failure_output, "CONTINUE_CYCLE")
     if match_continue:
         print(f"Continue token found in text! Match tier: {match_continue.tier}, Pattern used: {match_continue.pattern}")
+
+    example_post_pr_comment()
 
 if __name__ == "__main__":
     main()
