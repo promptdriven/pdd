@@ -2903,12 +2903,20 @@ pdd checkup --no-fix https://github.com/myorg/myrepo/issues/42
 # With extra timeout for large projects
 pdd checkup --timeout-adder 120 https://github.com/myorg/myrepo/issues/42
 
-# Run full checkup against an existing PR and push fixes to that PR
+# Review an existing PR on its own merits (no issue) and push fixes to that PR
+pdd checkup --pr https://github.com/myorg/myrepo/pull/123
+
+# Run full checkup against an existing PR and verify it resolves a specific issue
 pdd checkup \
   --pr https://github.com/myorg/myrepo/pull/123 \
   --issue https://github.com/myorg/myrepo/issues/42
 
-# Verify an existing PR without applying fixes
+# Verify an existing PR (on its own merits) without applying fixes
+pdd checkup \
+  --no-fix \
+  --pr https://github.com/myorg/myrepo/pull/123
+
+# Verify an existing PR against its source issue without applying fixes
 pdd checkup \
   --no-fix \
   --pr https://github.com/myorg/myrepo/pull/123 \

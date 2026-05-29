@@ -1,4 +1,5 @@
 <include>context/python_preamble.prompt</include>
+<pdd-reason>Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).</pdd-reason>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
@@ -6,7 +7,7 @@
 Write the `pdd/agentic_checkup.py` module.
 
 % Role & Scope
-Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetches issue content and comments, loads project context (architecture.json, .pddrc), then dispatches to the multi-step orchestrator that explores the project, identifies problems, and optionally fixes them.
+Entry point for the agentic checkup workflow. Accepts an optional GitHub issue URL, fetches issue content and comments when one is given, loads project context (architecture.json, .pddrc), then dispatches to the multi-step orchestrator that explores the project, identifies problems, and optionally fixes them. In PR mode `issue_url` may be `None`, in which case the PR is reviewed on its own merits and no issue is fetched.
 
 % Requirements
 1. Function: `run_agentic_checkup(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, review_only: bool = False, reviewers: str = "codex,claude", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]`
@@ -44,6 +45,7 @@ Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetche
 
 % Error Handling
 - Return `(False, "GitHub CLI (gh) not found...", 0.0, "")` if `gh` command not available
+- The next three issue-related errors apply ONLY when `issue_url` is provided; when `issue_url` is `None` there is no issue to parse or fetch and these checks are skipped:
 - Return `(False, "Invalid GitHub issue URL: {url}", 0.0, "")` if URL parsing fails
 - Return `(False, "Failed to fetch issue: {error}", 0.0, "")` if GitHub API fails
 - Return `(False, "Failed to parse issue JSON", 0.0, "")` if response is not valid JSON
