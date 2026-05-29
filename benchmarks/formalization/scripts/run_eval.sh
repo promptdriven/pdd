@@ -10,6 +10,20 @@ python benchmarks/formalization/pipelines/run_experiment.py \
   --output-dir benchmarks/formalization/experiments/ci_smoke
 echo "==> M1 headline"
 jq -r '.headline' benchmarks/formalization/experiments/ci_smoke/summary.json
+echo "==> M2 generation economics (harness-only, no LLM)"
+python benchmarks/formalization/pipelines/run_generation_benchmark.py \
+  --harness-only \
+  --skip-formalize \
+  --m1-dir benchmarks/formalization/experiments/ci_smoke \
+  --output-dir benchmarks/formalization/experiments/ci_m2_smoke \
+  --tasks email_validator
+echo "==> M3 drift (dry-run, no LLM)"
+python benchmarks/formalization/pipelines/run_drift_benchmark.py \
+  --dry-run \
+  --m2-dir benchmarks/formalization/experiments/ci_m2_smoke \
+  --m1-dir benchmarks/formalization/experiments/ci_smoke \
+  --output-dir benchmarks/formalization/experiments/ci_m3_smoke \
+  --tasks email_validator
 echo "==> v0.3 static harness + report"
 python benchmarks/formalization/run_benchmark.py --report
 echo "==> v0.3 headline"

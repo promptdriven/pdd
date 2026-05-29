@@ -16,6 +16,11 @@ def business_value_block() -> dict[str, Any]:
         "m1_lever": "prompt_checkability_before_generation",
         "m2_lever": "generation_rounds_tokens_cost_to_acceptable_code",
         "m3_lever": "regeneration_drift_vs_oracle",
+        "evaluation_modes": {
+            "oracle": "tier_gold hand-written pytest (independent of prompt)",
+            "non_oracle": "pdd test generated pytest (self-consistency from prompt)",
+            "story_oracle": "#820 ## Oracle / ## Non-Oracle story template blocks",
+        },
         "doc": "benchmarks/formalization/BUSINESS_VALUE.md",
     }
 
@@ -34,6 +39,7 @@ def economics_placeholders(*, milestone: int, reason: str) -> dict[str, Any]:
         "wall_clock_s": None,
         "generated_test_pass_rate": None,
         "oracle_test_pass_rate": None,
+        "non_oracle_test_pass_rate": None,
         "rounds_to_acceptable": None,
     }
     if milestone < 3:
@@ -80,4 +86,59 @@ def economics_delta_placeholder() -> dict[str, Any]:
         "delta_wall_clock_s": None,
         "delta_oracle_pass_rate": None,
         "reason": "Run pipelines/run_generation_benchmark.py (M2) to populate",
+    }
+
+
+def _num(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def economics_delta_from_arms(a0: dict[str, Any], a1: dict[str, Any]) -> dict[str, Any]:
+    """Compute M2 economics deltas between A0 and A1 arms."""
+
+    def _delta(key: str) -> Optional[float]:
+        left = _num(a0.get(key))
+        right = _num(a1.get(key))
+        if left is None or right is None:
+            return None
+        return round(right - left, 6)
+
+    return {
+        "delta_generation_rounds": _delta("generation_rounds"),
+        "delta_fix_rounds": _delta("fix_rounds"),
+        "delta_cost_usd": _delta("cost_usd"),
+        "delta_wall_clock_s": _delta("wall_clock_s"),
+        "delta_generated_test_pass_rate": _delta("generated_test_pass_rate"),
+        "delta_oracle_test_pass_rate": _delta("oracle_test_pass_rate"),
+        "delta_non_oracle_test_pass_rate": _delta("non_oracle_test_pass_rate"),
+        "delta_oracle_pass_rate": _delta("oracle_test_pass_rate"),
+        "delta_rounds_to_acceptable": _delta("rounds_to_acceptable"),
+        "a0_oracle_pass_rate": a0.get("oracle_test_pass_rate"),
+        "a1_oracle_pass_rate": a1.get("oracle_test_pass_rate"),
+        "a0_non_oracle_pass_rate": a0.get("non_oracle_test_pass_rate"),
+        "a1_non_oracle_pass_rate": a1.get("non_oracle_test_pass_rate"),
+    }
+
+
+def evaluation_modes_summary(economics: dict[str, Any]) -> dict[str, Any]:
+    """Structured oracle vs non-oracle view for M2 reporting."""
+    oracle_rate = economics.get("oracle_test_pass_rate")
+    non_oracle_rate = economics.get("non_oracle_test_pass_rate")
+    if non_oracle_rate is None:
+        non_oracle_rate = economics.get("generated_test_pass_rate")
+    return {
+        "oracle": {
+            "pass_rate": oracle_rate,
+            "source": "tier_gold",
+            "description": "Hand-written independent oracle tests",
+        },
+        "non_oracle": {
+            "pass_rate": non_oracle_rate,
+            "source": "pdd_test_generated",
+            "description": "Tests generated from the same prompt (self-consistency)",
+        },
     }

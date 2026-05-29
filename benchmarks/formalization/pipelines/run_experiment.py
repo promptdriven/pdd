@@ -23,6 +23,7 @@ if str(_PIPELINE_DIR) not in sys.path:
 
 import formalize_a1  # noqa: E402
 import prompt_metrics  # noqa: E402
+import story_metrics  # noqa: E402
 from economics import business_value_block  # noqa: E402
 
 EXPERIMENT_VERSION = "m1_v1"
@@ -100,6 +101,7 @@ def run_experiment(
             "not native pdd checkup formalize --apply."
         ),
         "business_value": business_value_block(),
+        "story_template_issue": 820,
         "tasks": [],
     }
 
@@ -112,7 +114,14 @@ def run_experiment(
         a1_path = task_dir / "A1.prompt"
         commands_log = task_dir / "commands.jsonl"
 
-        a0_metrics = prompt_metrics.collect_prompt_metrics(a0_path)
+        stories_dir = None
+        if entry.get("stories_dir"):
+            stories_dir = (corpus_root / entry["stories_dir"]).resolve()
+
+        a0_metrics = prompt_metrics.collect_prompt_metrics(
+            a0_path,
+            stories_dir=stories_dir,
+        )
         a0_metrics["prompt_sha256"] = _sha256(a0_path)
         a0_metrics["arm"] = "A0"
 
@@ -137,7 +146,10 @@ def run_experiment(
                         f"Exceeded --max-cost-usd {max_cost_usd} at task {task_id}"
                     )
 
-        a1_metrics = prompt_metrics.collect_prompt_metrics(a1_path)
+        a1_metrics = prompt_metrics.collect_prompt_metrics(
+            a1_path,
+            stories_dir=stories_dir,
+        )
         a1_metrics["prompt_sha256"] = _sha256(a1_path)
         a1_metrics["arm"] = "A1"
         a1_metrics["formalize_script_version"] = formalize_a1.SCRIPT_VERSION
@@ -152,6 +164,24 @@ def run_experiment(
         )
 
         deltas = prompt_metrics.delta_metrics(a0_metrics, a1_metrics)
+
+        story_from_a0 = story_metrics.seed_story_from_prompt(
+            prompt_path=a0_path,
+            output_dir=task_dir / "stories_from_a0",
+            slug=f"{task_id}_a0",
+        )
+        story_from_a1 = story_metrics.seed_story_from_prompt(
+            prompt_path=a1_path,
+            output_dir=task_dir / "stories_from_a1",
+            slug=f"{task_id}_a1",
+        )
+        corpus_stories = (
+            story_metrics.collect_stories_dir_stats(stories_dir)
+            if stories_dir
+            else None
+        )
+        story_delta = story_metrics.compare_story_arms(story_from_a0, story_from_a1)
+
         task_result = {
             "task_id": task_id,
             "tier": entry.get("tier"),
@@ -162,6 +192,13 @@ def run_experiment(
             "a1": a1_metrics,
             "delta": deltas,
             "formalize_manifest": formalize_manifest,
+            "story_template": {
+                "issue": 820,
+                "corpus_stories": corpus_stories,
+                "seeded_from_a0": story_from_a0,
+                "seeded_from_a1": story_from_a1,
+                "delta": story_delta,
+            },
         }
         (task_dir / "result.json").write_text(
             json.dumps(task_result, indent=2) + "\n",
@@ -197,6 +234,12 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
         for t in task_results
         if (t["delta"].get("delta_lint_warnings") or 0) < 0
     )
+    story_oracle_improved = sum(
+        1
+        for t in task_results
+        if (t.get("story_template") or {}).get("delta", {}).get("delta_covers_bullets", 0)
+        and (t["story_template"]["delta"]["delta_covers_bullets"] or 0) > 0
+    )
     headlines: list[str] = []
     for task in task_results:
         tid = task["task_id"]
@@ -221,6 +264,7 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
         "tasks_gained_vocabulary": gained_vocab,
         "tasks_gained_contract_rules": gained_rules,
         "tasks_lint_warnings_improved": lint_improved,
+        "tasks_story_covers_improved": story_oracle_improved,
         "headline": "; ".join(headlines),
         "tasks": [
             {
@@ -236,6 +280,12 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
                 .get("checkability", {})
                 .get("lint_warnings_reduced"),
                 "economics_m2": t["delta"].get("economics"),
+                "story_covers_delta": (t.get("story_template") or {})
+                .get("delta", {})
+                .get("delta_covers_bullets"),
+                "corpus_stories_with_oracle": (
+                    (t.get("story_template") or {}).get("corpus_stories") or {}
+                ).get("stories_with_oracle"),
             }
             for t in task_results
         ],
@@ -262,6 +312,18 @@ def _write_report_md(path: Path, summary: dict[str, Any], manifest: dict[str, An
         f"gained vocabulary: {summary['tasks_gained_vocabulary']} · "
         f"gained contract rules: {summary['tasks_gained_contract_rules']} · "
         f"lint improved: {summary['tasks_lint_warnings_improved']}",
+        "",
+        "## Story template (#820) — Oracle vs Non-Oracle",
+        "",
+        "Each gold task ships hand-authored stories with `## Oracle` and `## Non-Oracle` "
+        "blocks. M1 also seeds canonical stories from A0 and A1 prompts to compare "
+        "`## Covers` growth after formalization.",
+        "",
+        f"**Tasks with more Covers after A1→story seed:** "
+        f"{summary.get('tasks_story_covers_improved', 0)}",
+        "",
+        "M2 compares **oracle** (tier_gold pytest) vs **non-oracle** (pdd test pytest) "
+        "pass rates per arm — see `run_generation_benchmark.py`.",
         "",
         "| Task | A0 lint | A1 lint | A0 rules | A1 rules | A1 vocab | A1 rules |",
         "|------|---------|---------|----------|----------|----------|----------|",

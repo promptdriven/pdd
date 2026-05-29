@@ -1,6 +1,13 @@
 # M2 pipeline roadmap — generation economics
 
-Planned command (not implemented in M1):
+Implemented (M2/M3):
+
+```bash
+python benchmarks/formalization/pipelines/run_generation_benchmark.py --harness-only ...
+python benchmarks/formalization/pipelines/run_drift_benchmark.py --dry-run ...
+```
+
+Original planned command:
 
 ```bash
 python benchmarks/formalization/pipelines/run_generation_benchmark.py \
