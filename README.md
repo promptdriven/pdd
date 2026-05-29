@@ -250,11 +250,42 @@ The setup wizard runs these steps:
   1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config.
   2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
-  4. Optionally creates a `.pddrc` project config
-  5. Tests the first available model with a real LLM call 
-  6. Prints a structured summary (CLIs, keys, models, test result)
+  4. If you have credentials for **more than one** provider, asks which provider(s) `pdd --local` should use, then removes the unselected providers' PDD-managed rows from `~/.pdd/llm_model.csv` (rows you hand-edited or added yourself are preserved — see below)
+  5. Optionally creates a `.pddrc` project config
+  6. Tests a model from your selected provider with a real LLM call
+  7. Prints a structured summary (CLIs, keys, models, test result)
 
 The wizard can be re-run at any time to update keys, add providers, or reconfigure settings.
+
+#### Choosing your local provider
+
+`pdd --local` selects a model from `~/.pdd/llm_model.csv` by cost/ranking, so if
+the file lists several providers it can route to one you didn't intend — for
+example a free GitHub Copilot login outranking a `GEMINI_API_KEY` you set on
+purpose. To prevent that, when setup ends up with more than one usable provider
+— which includes always-available device-login providers like GitHub Copilot,
+so the prompt can appear even if you only set a single API key — it asks you to
+pick which provider(s) to keep, then removes the unselected providers'
+PDD-managed rows (rows you hand-edited or added yourself are preserved):
+
+- **Default selection** excludes device-login providers (e.g. GitHub Copilot,
+  which needs no API key) so a free login never silently outranks a key you
+  configured. Select them explicitly to keep them.
+- **Local models** (Ollama, LM Studio) and any **hand-edited/custom rows** for
+  providers you don't configure are never offered for removal and are left
+  untouched.
+- Before removing any rows, setup **lists exactly what will be removed and asks
+  you to confirm**, and snapshots the previous file to
+  `~/.pdd/llm_model.csv.backup.<timestamp>` so the change is always reversible.
+- Your choice is saved to `~/.pdd/setup_preferences.json`. Re-running setup
+  re-uses it without re-asking and without re-adding the providers you dropped
+  (so a later run stays quiet — no repeated prompt, no Copilot churn). It only
+  adds new models for the providers you already chose.
+
+To use a different provider later, delete `~/.pdd/setup_preferences.json` and
+re-run `pdd setup` to pick a new selection (or edit `~/.pdd/llm_model.csv`
+directly). Adding a provider through the setup options menu also updates your
+saved selection.
 
 > **Important:** After setup completes, source the API environment file so your keys take effect in the current terminal session:
 > ```bash
@@ -315,8 +346,11 @@ export PROVIDER_API_KEY=your_api_key_here
 ```
 
 Some local-mode providers do not use API keys. GitHub Copilot models
-authenticate through LiteLLM's OAuth device flow; run `pdd setup` and choose
-the provider to complete that login.
+authenticate through LiteLLM's OAuth device flow; run `pdd setup`, then choose
+**Add a provider** from the options menu and pick GitHub Copilot to complete
+that device login. (The provider-selection prompt described above only decides
+which already-configured providers `pdd --local` uses — it does not perform the
+OAuth login.)
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
@@ -2764,6 +2798,14 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
 
+`pdd checkup simplify` is a local subcommand for candidate cleanup rather than
+a PR review gate. By default it calls Claude Code's bundled `/simplify` skill; use
+`--engine codex|gemini|opencode|auto` to run the same workflow through PDD's
+agentic providers instead. It operates over selected
+changed files. With `--attempts N`, PDD runs independent isolated candidates
+from the same input and copies back the smallest candidate that passes
+`--verify` by changed-file count; see [docs/checkup_simplify.md](docs/checkup_simplify.md).
+
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
@@ -2791,7 +2833,7 @@ Options:
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
 - `--continue-on-reviewer-limit`: Report provider, rate, context-window, timeout, auth, network, sandbox, permission, and non-zero-exit reviewer failures as `degraded` instead of `failed`. Degraded reviewers are still not clean unless a configured fallback reviewer completes successfully and takes over as the active reviewer.
 - `--fallback-reviewer-on-failure`: When the primary reviewer ends in `failed` or `missing` (not `degraded`), run a second review pass using the fixer's identity as a fallback reviewer. On a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, while the primary's original failure detail is preserved in the `### Reviewer Diagnostics` subsection of the final report with a `superseded_by_fallback` marker. Off by default to preserve existing CI expectations.
-- `--no-gates`: Disable the deterministic local gates (`git diff --check` against the PR range, `prettier --check`, `npx --no-install tsc --noEmit`, a non-mutating Python syntax check via the builtin `compile()`, `ruff check`/`black --check`/`mypy`) that otherwise run before any `clean` verdict in `--review-loop`. The Python syntax gate routes through `compile()` rather than `python -m py_compile` so it never writes `__pycache__/*.pyc` into the worktree; the TypeScript gate uses `--no-install` so it never hits the npm registry. Gate subprocesses resolve `git` and tool binaries through a sanitized PATH so a PR cannot provide worktree-local shims via `PATH=.:$PATH`. Default: gates are enabled. The flag exists only as a diagnostic/emergency escape hatch — under normal operation a failing gate must block the PR from being declared clean even when the LLM reviewer says clean. Issue #1092.
+- `--no-gates`: Disable the deterministic local gates (`git diff --check` against the PR range, `prettier --check`, `npx --no-install tsc --noEmit`, a non-mutating Python syntax check via the builtin `compile()`, `ruff check`/`ruff format --check`/`black --check`/`mypy`) that otherwise run before any `clean` verdict in `--review-loop`. **`ruff format --check`** is opt-in: it fires only when **either** `[tool.ruff.format]` is declared in `pyproject.toml`, **or** a literal `ruff format` / `ruff-format` reference appears in `.pre-commit-config.yaml`, `cloudbuild-*-ci.yaml`, or `.github/workflows/*.{yml,yaml}` (canonical pre-commit hook id matches the hyphenated form). Touched CI files are excluded from the signal scan to defend against PR-poisoned opt-in. The Python syntax gate routes through `compile()` rather than `python -m py_compile` so it never writes `__pycache__/*.pyc` into the worktree; the TypeScript gate uses `--no-install` so it never hits the npm registry. Gate subprocesses resolve `git` and tool binaries through a sanitized PATH so a PR cannot provide worktree-local shims via `PATH=.:$PATH`. Default: gates are enabled. The flag exists only as a diagnostic/emergency escape hatch — under normal operation a failing gate must block the PR from being declared clean even when the LLM reviewer says clean. Issue #1092.
 - `--gate-timeout FLOAT`: Per-gate timeout in seconds (default: 60). Applies to every discovered gate; the runner kills the subprocess and surfaces the gate as a `runner-error` blocker finding when the timeout fires.
 - `--gate-allow GATE`: Repeatable allowlist token forwarded to `discover_gates` as `extra_allow`. Reserved for future versions to opt extra gate names into the discovery set; the current default discovery is allowlist-only and the argument is accepted but does not widen it. Useful primarily as a forward-compat plumbing hook for CI configurations.
 
@@ -2874,6 +2916,9 @@ pdd checkup \
   --issue https://github.com/myorg/myrepo/issues/42 \
   --review-loop \
   --review-only
+
+# Sample Claude Code /simplify candidates from a branch diff and apply a verified winner
+pdd checkup simplify --since origin/main --apply --attempts 3 --verify --evidence
 ```
 
 ### 18. connect

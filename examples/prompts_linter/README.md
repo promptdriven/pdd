@@ -154,7 +154,6 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 90.0
-      auto_deps_csv_path: "project_dependencies.csv"
 
   cli:
     paths: ["*cli*"]
@@ -163,7 +162,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 
   backend:
     paths: ["*backend*", "*api*"]
@@ -172,7 +170,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 
   frontend:
     paths: ["*frontend*", "*streamlit*"]
@@ -181,7 +178,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 
   default:
     defaults:
@@ -189,7 +185,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 ```
 
 Create directory structure:
