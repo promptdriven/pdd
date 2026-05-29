@@ -305,7 +305,7 @@ def _truncate_issue_context(text: str, limit: int) -> str:
 
 
 def run_agentic_checkup(
-    issue_url: str,
+    issue_url: Optional[str] = None,
     *,
     verbose: bool = False,
     quiet: bool = False,
@@ -340,16 +340,20 @@ def run_agentic_checkup(
     """Run agentic checkup workflow from a GitHub issue URL.
 
     Args:
-        issue_url: GitHub issue URL describing what to check.
+        issue_url: GitHub issue URL describing what to check. Optional in PR
+            mode (``pr_url`` set): when ``None``, the PR is reviewed on its
+            own merits and the issue-alignment gate is skipped (#1292).
         verbose: Enable detailed logging.
         quiet: Suppress standard output.
         no_fix: Report only, don't apply fixes.
         timeout_adder: Additional seconds to add to each step timeout.
         use_github_state: Whether to persist state to GitHub comments.
         cwd: Project working directory to use when loading local context.
-        pr_url: When set, verify this existing PR against ``issue_url`` instead
-            of creating a new branch/PR. Step 8 (create_pr) is skipped and the
-            worktree is based on the PR's head branch.
+        pr_url: When set, review this existing PR instead of creating a new
+            branch/PR. With ``issue_url`` provided, the PR is verified against
+            that issue; with ``issue_url`` omitted (#1292), the PR is reviewed
+            on its own merits. Step 8 (create_pr) is skipped and the worktree
+            is based on the PR's head branch.
         review_loop: When true in PR mode, run the primary-reviewer/fixer
             loop instead of the legacy single-pass checkup path.
         review_only: When true with ``review_loop``, run only the primary
@@ -376,14 +380,9 @@ def run_agentic_checkup(
             "",
         )
 
-    # 2. Parse URL
-    parsed = _parse_issue_url(issue_url)
-    if not parsed:
-        return False, f"Invalid GitHub issue URL: {issue_url}", 0.0, ""
-
-    owner, repo, issue_number = parsed
-
-    # Parse PR URL once up-front so invalid PR mode fails before any API calls.
+    # 2. Parse PR URL up-front (when in PR mode) so an invalid PR fails before
+    #    any issue work, and so a no-issue run can alias its comment/state
+    #    thread to the PR (GitHub treats PRs as issues for the comments API).
     pr_owner: Optional[str] = None
     pr_repo: Optional[str] = None
     pr_number: Optional[int] = None
@@ -393,33 +392,60 @@ def run_agentic_checkup(
             return False, f"Invalid GitHub PR URL: {pr_url}", 0.0, ""
         pr_owner, pr_repo, pr_number = pr_parsed
 
-    if not quiet:
-        console.print(f"[bold]Fetching issue #{issue_number} from {owner}/{repo}...[/bold]")
+    # 3. Resolve the source issue. The issue is OPTIONAL in PR mode (#1292):
+    #    with no issue the PR is reviewed on its own merits, the issue fetch
+    #    is skipped, and the issue context stays empty (never the literal
+    #    "None") so the step prompts do merit review.
+    has_issue = issue_url is not None
+    if has_issue:
+        parsed = _parse_issue_url(issue_url)
+        if not parsed:
+            return False, f"Invalid GitHub issue URL: {issue_url}", 0.0, ""
 
-    # 3. Fetch issue content
-    success, issue_json = _run_gh_command(
-        ["api", f"repos/{owner}/{repo}/issues/{issue_number}"]
-    )
-    if not success:
-        return False, f"Failed to fetch issue: {issue_json}", 0.0, ""
+        owner, repo, issue_number = parsed
 
-    try:
-        issue_data = json.loads(issue_json)
-    except json.JSONDecodeError:
-        return False, "Failed to parse issue JSON", 0.0, ""
+        if not quiet:
+            console.print(
+                f"[bold]Fetching issue #{issue_number} from {owner}/{repo}...[/bold]"
+            )
 
-    raw_title = issue_data.get("title", "")
-    body = issue_data.get("body", "") or ""
+        success, issue_json = _run_gh_command(
+            ["api", f"repos/{owner}/{repo}/issues/{issue_number}"]
+        )
+        if not success:
+            return False, f"Failed to fetch issue: {issue_json}", 0.0, ""
 
-    # Fetch comments for full context
-    comments_url = issue_data.get("comments_url", "")
-    comments_text = _fetch_comments(comments_url) if comments_url else ""
+        try:
+            issue_data = json.loads(issue_json)
+        except json.JSONDecodeError:
+            return False, "Failed to parse issue JSON", 0.0, ""
 
-    raw_full_content = (
-        f"Title: {raw_title}\n"
-        f"Description:\n{body}\n\n"
-        f"Comments:\n{comments_text}"
-    )
+        raw_title = issue_data.get("title", "")
+        body = issue_data.get("body", "") or ""
+
+        # Fetch comments for full context
+        comments_url = issue_data.get("comments_url", "")
+        comments_text = _fetch_comments(comments_url) if comments_url else ""
+
+        raw_full_content = (
+            f"Title: {raw_title}\n"
+            f"Description:\n{body}\n\n"
+            f"Comments:\n{comments_text}"
+        )
+        effective_issue_url = issue_url
+    else:
+        # No issue: the comment/state thread is the PR itself.
+        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
+            return (
+                False,
+                "No issue URL and no PR URL provided; nothing to check.",
+                0.0,
+                "",
+            )
+        owner, repo, issue_number = pr_owner, pr_repo, pr_number
+        raw_title = ""
+        raw_full_content = ""
+        effective_issue_url = ""
 
     # Escape braces so .format() doesn't choke on user content
     title = _escape_format_braces(raw_title)
@@ -441,7 +467,15 @@ def run_agentic_checkup(
         console.print("[bold]Running agentic checkup...[/bold]")
 
     if review_loop:
-        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
+        if (
+            not has_issue
+            or pr_url is None
+            or pr_owner is None
+            or pr_repo is None
+            or pr_number is None
+        ):
+            # Review-loop is issue-coupled; review-loop-without-issue is a
+            # deferred follow-up (#1292).
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
         loop_issue_content = _truncate_issue_context(raw_full_content, 60000)
         loop_architecture = _truncate_context(raw_arch_json_str, 40000)
@@ -495,7 +529,7 @@ def run_agentic_checkup(
     # 5. Invoke orchestrator
     try:
         orch_success, orch_message, orch_cost, orch_model = run_agentic_checkup_orchestrator(
-            issue_url=issue_url,
+            issue_url=effective_issue_url,
             issue_content=full_content,
             repo_owner=owner,
             repo_name=repo,

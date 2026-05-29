@@ -14,6 +14,7 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Source issue provided: {has_issue}  (when `false` in PR mode, there is NO source issue — review the PR on its own merits; `{issue_url}`/`<issue_content>` are intentionally empty and `{issue_number}` is the PR number used only as the comment thread)
 - Project Root: {project_root}
 - Report-only mode (no fixes): {no_fix}
 - PR-verification mode: {pr_mode}
@@ -92,7 +93,9 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 
    - **Issue mode** (default; `pr_mode` = `false`): "Did the fixes applied in Steps 6.1–6.3 resolve the issue described in `<issue_content>`, with no new regressions?" Set `success` true if yes, false otherwise.
 
-   - **PR mode** (`pr_mode` = `true`): "Does the current PR worktree for `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow runs inside the PR worktree (NOT the issue-author's HEAD). When fix mode is enabled, Steps 6.1-6.3 may have applied local checkup fixes that are not pushed until after Step 7. Your verdict must evaluate the current worktree state, including those local fixes, because this is the exact tree that will be committed and pushed back to the same PR if verification passes. If `<pr_push_output>` says the push rebased onto an updated PR head, this is a post-push verification pass and you must verify that final rebased worktree head. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR worktree's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
+   - **PR mode WITH a source issue** (`pr_mode` = `true` AND `has_issue` = `true`): "Does the current PR worktree for `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow runs inside the PR worktree (NOT the issue-author's HEAD). When fix mode is enabled, Steps 6.1-6.3 may have applied local checkup fixes that are not pushed until after Step 7. Your verdict must evaluate the current worktree state, including those local fixes, because this is the exact tree that will be committed and pushed back to the same PR if verification passes. If `<pr_push_output>` says the push rebased onto an updated PR head, this is a post-push verification pass and you must verify that final rebased worktree head. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR worktree's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
+
+   - **PR mode WITHOUT a source issue** (`pr_mode` = `true` AND `has_issue` = `false`): "Is the current PR worktree for `{pr_url}` correct and high-quality on its own merits?" There is no issue to align to — do NOT invent one, and do NOT treat the empty `{issue_url}`/`<issue_content>` as a defect. Review the PR diff for correctness, regressions, error handling, security, and adequate test coverage, using full project context (architecture, `.pddrc`). Evaluate the current worktree state including any local checkup fixes (the same tree that will be pushed). OMIT `issue_aligned` from the JSON (or set it to `null`) — the alignment gate does not apply. The verdict rests on code findings alone: clean → ship, unfixed critical findings → fail.
 
 5. **Generate the final JSON report**
 
@@ -119,10 +122,11 @@ The JSON report MUST be the LAST thing you output, on its own, wrapped in a mark
 }}
 ```
 
-In **issue mode**, omit `issue_aligned` (or set it to `null`) — it only applies when verifying an existing PR.
-In **PR mode**, `issue_aligned` is REQUIRED.
+In **issue mode**, omit `issue_aligned` (or set it to `null`) — it only applies when verifying an existing PR against a source issue.
+In **PR mode WITH a source issue** (`has_issue` = `true`), `issue_aligned` is REQUIRED.
+In **PR mode WITHOUT a source issue** (`has_issue` = `false`), omit `issue_aligned` (or set it to `null`) — there is nothing to align to; the verdict is code findings only.
 
-Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff. In PR mode with `PR test scope` = `full`, do not set `"success": true` if the full suite was skipped or timed out; either cite an authoritative full-suite/CI result or set `"success": false` with a partial-verification finding. In PR mode with `PR test scope` = `targeted`, the final report MUST explicitly label verification as targeted in the markdown summary and the JSON `message` (e.g., "Verification scope: targeted — full suite not run") so downstream consumers do not mistake targeted coverage for full-suite coverage.
+Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode WITH an issue) `issue_aligned` is true AND no critical findings remain in the PR's diff, or (PR mode WITHOUT an issue) no critical findings remain in the PR's diff. In PR mode with `PR test scope` = `full`, do not set `"success": true` if the full suite was skipped or timed out; either cite an authoritative full-suite/CI result or set `"success": false` with a partial-verification finding. In PR mode with `PR test scope` = `targeted`, the final report MUST explicitly label verification as targeted in the markdown summary and the JSON `message` (e.g., "Verification scope: targeted — full suite not run") so downstream consumers do not mistake targeted coverage for full-suite coverage.
 Set `"success": false` otherwise.
 
 6. **Prepare the final summary** — route by mode:
@@ -161,7 +165,7 @@ Your markdown summary should follow this format:
 [PR mode only — state explicitly: "full suite" or "targeted (full suite not run)"]
 
 ### Issue Alignment
-[PR mode only — omit in issue mode]
+[PR mode WITH a source issue only — omit in issue mode and in PR mode with no source issue (has_issue = false)]
 [issue_aligned: true/false — and one sentence explaining whether the PR addresses the issue's intent]
 
 ### Issues Summary
