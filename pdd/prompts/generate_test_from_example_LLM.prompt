@@ -58,6 +58,9 @@
         - What functions/classes are exposed
         - How they are called (parameters, return values)
     2. SECOND: Analyze the prompt that describes the intended functionality and edge cases.
+        - If prompt_that_generated_code contains a contract_rules section, apply the contract-rule test planning rules from context/test.prompt before selecting test cases.
+        - When one test covers multiple rules, make every covered rule ID visible in the test name, parametrization ID, or a local comment.
+        - If a rule cannot be tested with available fixtures, add a rule-linked TODO or skip reason instead of omitting the rule.
     3. THIRD: For each edge case explain whether it is better to do the test using Z3 formal verification or unit tests.
     4. FOURTH: Develop a detailed test plan that will ensure the intended functionality is correct. This should involve both Z3 formal verification and unit tests.
     5. FIFTH: Write the test file with:
