@@ -1,6 +1,8 @@
 import pytest
 import json
 import os
+import subprocess
+import sys
 from unittest.mock import patch, MagicMock, ANY, call
 from pathlib import Path
 
@@ -15,11 +17,19 @@ from pdd.agentic_common import (
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _build_claude_interactive_command,
+    _claude_code_interactive_enabled,
+    _claude_interactive_needs_trust_confirmation,
+    _estimate_claude_interactive_session_cost,
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
+    _parse_claude_interactive_reply,
+    _run_claude_interactive_with_mcp,
+    _run_interactive_pty_until_reply,
     _run_with_provider,
     _log_agentic_interaction,
+    _write_claude_reply_mcp_server,
     ANTHROPIC_PRICING_BY_FAMILY,
     GEMINI_PRICING_BY_FAMILY,
     CODEX_PRICING,
@@ -406,6 +416,333 @@ def test_anthropic_provider_pipes_prompt_via_stdin(mock_cwd, mock_env, mock_load
     # Prompt content must be passed via subprocess input= parameter
     assert kwargs.get("input") is not None
     assert instruction in kwargs["input"]
+
+
+def test_claude_code_interactive_flag_parser():
+    assert _claude_code_interactive_enabled({"PDD_CLAUDE_CODE_MODE": "interactive"})
+    assert _claude_code_interactive_enabled({"PDD_CLAUDE_CODE_MODE": " Interactive "})
+    assert not _claude_code_interactive_enabled({})
+    assert not _claude_code_interactive_enabled({"PDD_CLAUDE_CODE_MODE": "print"})
+
+
+def test_build_claude_interactive_command_bypasses_print_mode(tmp_path):
+    cmd = _build_claude_interactive_command(
+        cli_path="/bin/claude",
+        prompt_path=tmp_path / ".agentic_prompt_test.txt",
+        config_path=tmp_path / "mcp_config.json",
+        job_id="job-123",
+        session_id="11111111-2222-4333-8444-555555555555",
+        env={"CLAUDE_MODEL": "haiku"},
+    )
+
+    assert cmd[0] == "/bin/claude"
+    assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-4333-8444-555555555555"
+    assert "-p" not in cmd
+    assert "--print" not in cmd
+    assert "--output-format" not in cmd
+    assert "--mcp-config" in cmd
+    assert "--strict-mcp-config" in cmd
+    assert "--dangerously-skip-permissions" in cmd
+    assert cmd[cmd.index("--model") + 1] == "haiku"
+    assert "pdd_reply" in cmd[-1]
+    assert "job-123" in cmd[-1]
+
+
+def test_claude_interactive_detects_workspace_trust_prompt():
+    trust_prompt = (
+        "Quick safety check: Is this a project you created or one you trust?\n"
+        "1. Yes, I trust this folder\n"
+        "Enter to confirm"
+    )
+    assert _claude_interactive_needs_trust_confirmation(trust_prompt)
+    ansi_prompt = (
+        "Quick\x1b[8Gsafety\x1b[15Gcheck:\n"
+        "1. Yes, I\x1b[14Gtrust\x1b[20Gthis\x1b[25Gfolder\n"
+        "Enter\x1b[8Gto\x1b[11Gconfirm"
+    )
+    assert _claude_interactive_needs_trust_confirmation(ansi_prompt)
+    assert not _claude_interactive_needs_trust_confirmation("Claude response text")
+
+
+def test_run_with_provider_interactive_uses_mcp_bridge_not_subprocess_run(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_path.write_text("Do work", encoding="utf-8")
+    mock_env["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    mock_shutil_which.return_value = "/bin/claude"
+
+    with patch(
+        "pdd.agentic_common._run_claude_interactive_with_mcp",
+        return_value=(True, "PDD_INTERACTIVE_OK", 0.0, "claude-haiku"),
+    ) as mock_interactive:
+        success, output, cost, model = _run_with_provider(
+            "anthropic",
+            prompt_path,
+            mock_cwd,
+            timeout=123,
+        )
+
+    assert success
+    assert output == "PDD_INTERACTIVE_OK"
+    assert cost == 0.0
+    assert model == "claude-haiku"
+    mock_subprocess.assert_not_called()
+    kwargs = mock_interactive.call_args.kwargs
+    assert kwargs["cli_path"] == "/bin/claude"
+    assert kwargs["prompt_path"] == prompt_path
+    assert kwargs["cwd"] == mock_cwd
+    assert kwargs["timeout"] == 123
+    assert kwargs["env"]["PDD_CLAUDE_CODE_MODE"] == "interactive"
+
+
+def test_run_agentic_task_accepts_short_zero_cost_interactive_reply(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    mock_env["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    mock_shutil_which.return_value = "/bin/claude"
+
+    with patch(
+        "pdd.agentic_common._run_claude_interactive_with_mcp",
+        return_value=(True, "OK", 0.0, "claude-haiku"),
+    ):
+        success, output, cost, provider = run_agentic_task("Do work", mock_cwd)
+
+    assert success
+    assert output == "OK"
+    assert cost == 0.0
+    assert provider == "anthropic"
+    mock_subprocess.assert_not_called()
+
+
+def test_parse_claude_interactive_reply_validates_job_id(tmp_path):
+    reply_path = tmp_path / "reply.json"
+    reply_path.write_text(
+        json.dumps({
+            "job_id": "job-1",
+            "success": True,
+            "text": "done",
+            "cost_usd": 0,
+            "model": "claude-haiku",
+        }),
+        encoding="utf-8",
+    )
+
+    assert _parse_claude_interactive_reply(reply_path, "job-1") == (
+        True,
+        "done",
+        0.0,
+        "claude-haiku",
+    )
+
+    success, text, cost, model = _parse_claude_interactive_reply(reply_path, "other")
+    assert not success
+    assert "job_id mismatch" in text
+    assert cost == 0.0
+    assert model is None
+
+
+def test_claude_reply_mcp_server_records_tool_call(tmp_path):
+    server_path = tmp_path / "server.py"
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-mcp"
+    _write_claude_reply_mcp_server(server_path)
+
+    env = {
+        **os.environ,
+        "PDD_INTERACTIVE_REPLY_PATH": str(reply_path),
+        "PDD_INTERACTIVE_JOB_ID": job_id,
+    }
+    proc = subprocess.Popen(
+        [sys.executable, str(server_path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {},
+        }) + "\n")
+        proc.stdin.flush()
+        init_response = json.loads(proc.stdout.readline())
+        assert init_response["result"]["capabilities"]["tools"] == {}
+
+        proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "pdd_reply",
+                "arguments": {
+                    "job_id": job_id,
+                    "success": True,
+                    "text": "done",
+                    "cost_usd": 0,
+                },
+            },
+        }) + "\n")
+        proc.stdin.flush()
+        call_response = json.loads(proc.stdout.readline())
+        assert call_response["result"]["isError"] is False
+        assert json.loads(reply_path.read_text(encoding="utf-8")) == {
+            "job_id": job_id,
+            "success": True,
+            "text": "done",
+            "cost_usd": 0,
+        }
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+def test_interactive_pty_runner_waits_for_reply_file(tmp_path):
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-pty"
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "reply = pathlib.Path(sys.argv[1])\n"
+        "job_id = sys.argv[2]\n"
+        "print('starting interactive session')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.1)\n"
+        "reply.write_text(json.dumps({'job_id': job_id, 'success': True, 'text': 'OK'}), encoding='utf-8')\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(reply_path), job_id],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout=5,
+        reply_path=reply_path,
+        job_id=job_id,
+    )
+
+    assert success
+    assert text == "OK"
+    assert cost == 0.0
+    assert model is None
+
+
+def test_estimate_claude_interactive_session_cost_dedupes_request_ids(tmp_path):
+    home = tmp_path / "home"
+    session_id = "11111111-2222-4333-8444-555555555555"
+    session_path = (
+        home
+        / ".claude"
+        / "projects"
+        / "demo"
+        / f"{session_id}.jsonl"
+    )
+    session_path.parent.mkdir(parents=True)
+    request_1_usage = {
+        "input_tokens": 2223,
+        "cache_creation_input_tokens": 24991,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 128,
+    }
+    request_2_usage = {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 2360,
+        "cache_read_input_tokens": 24991,
+        "output_tokens": 12,
+    }
+    lines = [
+        {
+            "type": "assistant",
+            "requestId": "req-1",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": request_1_usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "requestId": "req-1",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": request_1_usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "requestId": "req-2",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": request_2_usage,
+            },
+        },
+    ]
+    session_path.write_text(
+        "\n".join(json.dumps(line) for line in lines),
+        encoding="utf-8",
+    )
+
+    cost, model = _estimate_claude_interactive_session_cost(
+        session_id,
+        {"HOME": str(home)},
+    )
+
+    expected_cost = _calculate_anthropic_cost(
+        {
+            "usage": {
+                "input_tokens": request_1_usage["input_tokens"] + request_2_usage["input_tokens"],
+                "output_tokens": request_1_usage["output_tokens"] + request_2_usage["output_tokens"],
+                "cache_read_input_tokens": request_1_usage["cache_read_input_tokens"] + request_2_usage["cache_read_input_tokens"],
+                "cache_creation_input_tokens": request_1_usage["cache_creation_input_tokens"] + request_2_usage["cache_creation_input_tokens"],
+            },
+            "modelUsage": {"claude-opus-4-8": {}},
+        }
+    )
+    assert cost == pytest.approx(expected_cost)
+    assert model == "claude-opus-4-8"
+
+
+def test_run_claude_interactive_with_mcp_uses_session_usage_cost(tmp_path):
+    prompt_path = tmp_path / ".agentic_prompt_test.txt"
+    prompt_path.write_text("Do work", encoding="utf-8")
+
+    with patch("pdd.agentic_common.uuid.uuid4") as mock_uuid, patch(
+        "pdd.agentic_common._run_interactive_pty_until_reply",
+        return_value=(True, "done", 0.0, None),
+    ) as mock_runner, patch(
+        "pdd.agentic_common._estimate_claude_interactive_session_cost",
+        return_value=(0.123, "claude-haiku-4-5-20251001"),
+    ) as mock_session_cost:
+        mock_uuid.side_effect = [
+            type("U", (), {"hex": "job123"})(),
+            "11111111-2222-4333-8444-555555555555",
+        ]
+        success, text, cost, model = _run_claude_interactive_with_mcp(
+            cli_path="/bin/claude",
+            prompt_path=prompt_path,
+            cwd=tmp_path,
+            timeout=30,
+            env={"HOME": str(tmp_path)},
+        )
+
+    assert success is True
+    assert text == "done"
+    assert cost == pytest.approx(0.123)
+    assert model == "claude-haiku-4-5-20251001"
+    cmd = mock_runner.call_args.args[0]
+    assert "--session-id" in cmd
+    assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-4333-8444-555555555555"
+    mock_session_cost.assert_called_once_with(
+        "11111111-2222-4333-8444-555555555555",
+        {"HOME": str(tmp_path)},
+    )
 
 
 def test_google_provider_delivers_prompt_via_positional_arg(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
