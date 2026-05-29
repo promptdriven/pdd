@@ -1,10 +1,13 @@
 """Tests for pdd.fix_focus public helpers."""
+import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
 from pdd.fix_focus import (
     FunctionSlice,
+    _diagnose_broken_functions,
     _extract_test_slices,
     _format_slice_for_llm,
     _get_all_functions,
@@ -12,6 +15,7 @@ from pdd.fix_focus import (
     build_skeleton,
     extract_function_names_from_traceback,
     is_large,
+    prepare_focused_inputs,
     reconstruct_code,
 )
 
@@ -270,6 +274,104 @@ def test_extract_test_slices_preserves_fixture_with_parens():
     assert "test_noop" not in result
 
 
+def test_extract_test_slices_class_method_keeps_context_without_unrelated_tests():
+    """Regression: method-level node ids should not include an entire large class."""
+    test_file = textwrap.dedent("""\
+        import pytest
+
+        CASES = [1, 2, 3]
+
+        def helper(value):
+            return value + 1
+
+        class Params:
+            base = 10
+
+        class TestBig:
+            scale = 2
+
+            def setUp(self):
+                self.params = Params()
+
+            def helper_method(self, value):
+                return helper(value) * self.scale
+
+            def test_failing(self):
+                assert self.helper_method(CASES[0]) == 4
+
+            def test_passing_one(self):
+                assert True
+
+            def test_passing_two(self):
+                assert True
+    """)
+    error_log = "FAILED tests/test_big.py::TestBig::test_failing - AssertionError\n"
+
+    result = _extract_test_slices(error_log, test_file)
+
+    assert "CASES = [1, 2, 3]" in result
+    assert "def helper(" in result
+    assert "class Params:" in result
+    assert "class TestBig:" in result
+    assert "def setUp(" in result
+    assert "def helper_method(" in result
+    assert "def test_failing(" in result
+    assert "test_passing_one" not in result
+    assert "test_passing_two" not in result
+
+
+def test_extract_test_slices_includes_referenced_test_base_context():
+    """Regression: sliced classes must keep referenced helper/base classes."""
+    test_file = textwrap.dedent("""\
+        import pytest
+
+        class TestBase:
+            __test__ = False
+
+            def assert_ok(self, value):
+                assert value == "ok"
+
+        class TestFeature(TestBase):
+            def test_failing(self):
+                self.assert_ok("bad")
+
+            def test_passing(self):
+                assert True
+    """)
+    error_log = "FAILED tests/test_feature.py::TestFeature::test_failing - AssertionError\n"
+
+    result = _extract_test_slices(error_log, test_file)
+
+    assert "class TestBase:" in result
+    assert "__test__ = False" in result
+    assert "def assert_ok(" in result
+    assert "class TestFeature(TestBase):" in result
+    assert "def test_failing(" in result
+    assert "def test_passing(" not in result
+
+
+def test_extract_test_slices_falls_back_when_support_context_too_large():
+    """Avoid returning an incomplete-looking tiny slice when context dominates."""
+    helper_methods = "\n".join(
+        f"    def helper_{idx}(self):\n        return {idx}"
+        for idx in range(20)
+    )
+    test_file = textwrap.dedent(f"""\
+        class TestBase:
+            __test__ = False
+{helper_methods}
+
+        class TestFeature(TestBase):
+            def test_failing(self):
+                assert self.helper_19() == 0
+    """)
+    error_log = "FAILED tests/test_feature.py::TestFeature::test_failing - AssertionError\n"
+
+    result = _extract_test_slices(error_log, test_file)
+
+    assert result == test_file
+
+
 # ---------------------------------------------------------------------------
 # reconstruct_code – top-level function
 # ---------------------------------------------------------------------------
@@ -473,3 +575,104 @@ def test_match_slices_by_qualname():
     matched = _match_slices_to_traceback(all_slices, "", ["A.run"])
     assert len(matched) == 1
     assert matched[0].qualname == "A.run"
+
+
+def test_prepare_focused_inputs_runs_phase1_when_traceback_only_names_test(monkeypatch):
+    """
+    Regression: assertion failures often put only the failing test function in
+    the traceback. If that fast-path name is not in product code, Phase 1 must
+    run instead of abandoning focused repair.
+    """
+    code = textwrap.dedent("""\
+        def target():
+            return 0
+    """) + ("\n# filler\n" * 501)
+    unit_test = textwrap.dedent("""\
+        from module import target
+
+        def test_target():
+            assert target() == 1
+    """)
+    error = textwrap.dedent("""\
+        FAILED tests/test_module.py::test_target - AssertionError
+        Traceback (most recent call last):
+          File "tests/test_module.py", line 4, in test_target
+            assert target() == 1
+        AssertionError
+    """)
+    calls = []
+
+    def fake_diagnose(**kwargs):
+        calls.append(kwargs)
+        return ["target"]
+
+    monkeypatch.setattr("pdd.fix_focus._diagnose_broken_functions", fake_diagnose)
+
+    focused = prepare_focused_inputs(
+        code,
+        unit_test,
+        error,
+        strength=0.6,
+        temperature=0.2,
+        time=0.7,
+        verbose=True,
+        language="python",
+    )
+
+    assert calls, "Phase 1 diagnosis should run when fast-path names only match tests"
+    assert focused is not None
+    assert "def target()" in focused.focused_code
+    assert focused.slices[0].name == "target"
+
+
+def test_diagnose_broken_functions_skips_llm_when_code_has_syntax_error(monkeypatch):
+    """
+    Syntax-broken large files cannot be skeletonized safely; Phase 1 should
+    fall back without sending the unchanged full file to the LLM.
+    """
+    calls = []
+
+    def fake_llm_invoke(**kwargs):
+        calls.append(kwargs)
+        return {"result": None}
+
+    monkeypatch.setattr("pdd.llm_invoke.llm_invoke", fake_llm_invoke)
+
+    result = _diagnose_broken_functions(
+        code="def broken(:\n    pass\n",
+        error="SyntaxError: invalid syntax",
+        strength=0.6,
+        temperature=0.0,
+        time=0.5,
+    )
+
+    assert result == []
+    assert calls == []
+
+
+def test_fix_focus_prompt_and_architecture_require_phase1_when_fast_path_misses_product_code():
+    """
+    Regression: PDD regenerates source from prompt and architecture metadata.
+    Both must preserve the Phase 1 fallback when traceback names do not match
+    product-code slices, otherwise assertion-only failures can lose focused repair.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    prompt_text = (repo_root / "pdd/prompts/fix_focus_python.prompt").read_text(encoding="utf-8")
+    architecture = json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))
+    fix_focus_entry = next(
+        entry for entry in architecture if entry.get("filename") == "fix_focus_python.prompt"
+    )
+
+    required_prompt_phrases = [
+        "fast-path targets do not match product-code slices",
+        "fast-path names are found but do not match any product-code slices",
+        "it must run Phase 1 once before returning `None`",
+    ]
+    for phrase in required_prompt_phrases:
+        assert phrase in prompt_text
+
+    architecture_contract = (
+        fix_focus_entry.get("reason", "") + "\n" + fix_focus_entry.get("description", "")
+    )
+    assert "fast-path targets do not match product-code slices" in architecture_contract
+    assert "fast-path names match no product-code slices" in architecture_contract

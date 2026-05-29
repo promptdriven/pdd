@@ -2483,8 +2483,8 @@
     }
   },
   {
-    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets.",
-    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names OR when fast-path names match no product-code slices (e.g. assertion-only failures where only test functions appear in the traceback).",
+    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets or when fast-path targets do not match product-code slices.",
+    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, focused test slicing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names OR when fast-path names match no product-code slices (e.g. assertion-only failures where only test functions appear in the traceback), but skips that LLM call and returns [] when ast.parse(code) raises SyntaxError so syntax-broken large files fall back instead of sending an unchanged full source payload. Focused test slicing preserves setup/teardown, fixtures, class attributes, non-test helper methods, and referenced non-collecting top-level support definitions such as TestBase; it falls back to the full test file when the dependency-preserving slice is not meaningfully smaller.",
     "dependencies": [
       "llm_invoke_python.prompt"
     ],
@@ -2548,8 +2548,8 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "reason": "CLI entry point for the fix command; single-pass cloud/local modes use fix_focus for large dev units and auto-submit short-circuits in cloud executors with a bounded Device Flow JWT call.",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",

@@ -349,6 +349,69 @@ def _has_fixture_decorator(decorators: list[ast.expr]) -> bool:
     return False
 
 
+def _is_noncollecting_test_class(node: ast.ClassDef) -> bool:
+    """Return True when a Test* class is likely support context, not tests."""
+    has_test_method = any(
+        isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and child.name.startswith("test_")
+        for child in node.body
+    )
+    if not has_test_method:
+        return True
+    for child in node.body:
+        if not isinstance(child, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "__test__" for t in child.targets):
+            continue
+        if isinstance(child.value, ast.Constant) and child.value.value is False:
+            return True
+    return False
+
+
+def _defined_names(source: str) -> set[str]:
+    """Return top-level names defined by imports, assignments, defs, and classes."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            else:
+                targets = [node.target]
+            for target in targets:
+                for child in ast.walk(target):
+                    if isinstance(child, ast.Name):
+                        names.add(child.id)
+    return names
+
+
+def _loaded_names(source: str) -> set[str]:
+    """Return names loaded by *source*."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    return {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+
+
 def _extract_test_slices(error: str, unit_test: str) -> str:
     """
     Extract only the failing test functions/classes from *unit_test*.
@@ -392,6 +455,11 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
         lines = unit_test.splitlines(keepends=True)
         preamble_parts: list[str] = []
         test_parts: list[str] = []
+        support_defs: dict[str, str] = {}
+
+        def remember_support(name: str, chunk: str) -> None:
+            if name not in support_defs:
+                support_defs[name] = chunk
 
         for node in tree.body:
             node_end = getattr(node, "end_lineno", node.lineno)
@@ -418,6 +486,8 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                     # Include fixtures and module-level helper functions so that
                     # selected tests can call them without NameError.
                     preamble_parts.append(chunk)
+                else:
+                    remember_support(node.name, chunk)
 
             elif isinstance(node, ast.ClassDef):
                 deco_start = (
@@ -472,9 +542,11 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                     # Non-target class: include as preamble if it looks like a helper/data
                     # class (name does not start with "Test") so that failing tests can
                     # reference it without NameError (e.g. `class Case`, `class Params`).
+                    chunk = "".join(lines[deco_start - 1 : node_end])
                     if not node.name.startswith("Test"):
-                        chunk = "".join(lines[deco_start - 1 : node_end])
                         preamble_parts.append(chunk)
+                    elif _is_noncollecting_test_class(node):
+                        remember_support(node.name, chunk)
 
         if not test_parts:
             return unit_test
@@ -482,6 +554,28 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
         preamble = "".join(preamble_parts).rstrip("\n")
         body = "\n\n".join(t.rstrip("\n") for t in test_parts)
         result = f"{preamble}\n\n{body}\n" if preamble else f"{body}\n"
+
+        # If the minimized slice still references top-level helpers from the
+        # original test module, add only those support definitions. This prevents
+        # focused prompts like `class TestFeature(TestBase): ...` from omitting
+        # `TestBase`, while avoiding unrelated collected test classes.
+        added_support: set[str] = set()
+        while True:
+            missing = [
+                name for name in sorted(_loaded_names(result) - _defined_names(result))
+                if name in support_defs and name not in added_support
+            ]
+            if not missing:
+                break
+            additions = []
+            for name in missing:
+                additions.append(support_defs[name].rstrip("\n"))
+                added_support.add(name)
+            if preamble:
+                preamble = preamble + "\n\n" + "\n\n".join(additions)
+            else:
+                preamble = "\n\n".join(additions)
+            result = f"{preamble}\n\n{body}\n"
 
         # Only use the extracted version if it is meaningfully smaller.
         if len(result) >= 0.9 * len(unit_test):
@@ -514,6 +608,11 @@ def _diagnose_broken_functions(
     """
     try:
         from .llm_invoke import llm_invoke  # local import to avoid circular deps
+
+        try:
+            ast.parse(code)
+        except SyntaxError:
+            return []
 
         skeleton = build_skeleton(code)
         # Trim very long error logs to keep the diagnosis call cheap.

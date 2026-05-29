@@ -424,7 +424,16 @@ def fix_error_loop(
         focused_inputs: Optional[FocusedInputs] = None
         if is_large(code_content, unit_test_content):
             try:
-                focused_inputs = prepare_focused_inputs(code_content, unit_test_content, output_log, strength, temperature, time, verbose, "python")
+                focused_inputs = prepare_focused_inputs(
+                    code_content,
+                    unit_test_content,
+                    output_log,
+                    strength,
+                    temperature,
+                    time,
+                    verbose,
+                    "python",
+                )
             except Exception:
                 focused_inputs = None
         target_code = focused_inputs.focused_code if focused_inputs else code_content
@@ -434,7 +443,18 @@ def fix_error_loop(
         try:
             if use_cloud:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
-                    target_test, target_code, prompt, output_log, error_log_file, strength, temperature, verbose, time, ext, effective_protect_tests, classification
+                    target_test,
+                    target_code,
+                    prompt,
+                    output_log,
+                    error_log_file,
+                    strength,
+                    temperature,
+                    verbose,
+                    time,
+                    ext,
+                    effective_protect_tests,
+                    classification,
                 )
             else:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
@@ -444,6 +464,7 @@ def fix_error_loop(
                     time=time,
                     verbose=verbose,
                     protect_tests=effective_protect_tests,
+                    language="python",
                     failure_classification=classification,
                 )
         except Exception as exc:
@@ -465,6 +486,7 @@ def fix_error_loop(
                         time=time,
                         verbose=verbose,
                         protect_tests=effective_protect_tests,
+                        language="python",
                         failure_classification=classification,
                     )
                 except Exception as local_exc:

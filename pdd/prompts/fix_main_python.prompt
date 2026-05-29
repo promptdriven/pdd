@@ -13,6 +13,9 @@
 <pdd.core.fix_error_loop>
     <include select="class:IterationResult,def:fix_error_loop,def:extract_test_results">context/change/16/fix_error_loop.py</include>
 </pdd.core.fix_error_loop>
+<pdd.core.fix_focus>
+    <include optional mode="interface">pdd/fix_focus.py</include>
+</pdd.core.fix_focus>
 <pdd.core.fix_unit_tests>
     <include select="def:fix_errors_from_unit_tests">context/change/10/initial_fix_errors_from_unit_tests.py</include>
 </pdd.core.fix_unit_tests>
@@ -76,15 +79,17 @@ Return `Tuple[bool, str, str, int, float, str]`:
 5. Single-pass cloud mode:
    - Authenticate with `CloudConfig.get_jwt_token(verbose=verbose)`.
    - POST to `CloudConfig.get_endpoint_url("fixCode")` with timeout `get_cloud_timeout()`.
-   - Payload includes `unitTest`, `code`, `prompt`, `errors`, `language`, `strength`, `temperature`, `time` (defaulting to `0.25` when unset), and `verbose`.
+   - Payload includes `unitTest`, `code`, `prompt`, `errors`, `language`, `strength`, `temperature`, `time` (defaulting to `0.25` when unset), `verbose`, and `protectTests`.
+   - Focused-repair path (large dev units): before building the payload, if `is_large(code_content, unit_test_content)`, call `prepare_focused_inputs` to obtain sliced failing-test and code subsets. Send those slices as `unitTest` / `code`, set `protectTests` to `protect_tests or bool(focused_inputs)`, and store `focused_inputs.slices` for reconstruction.
    - Parse `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, and `modelName`.
-   - If the cloud result contains candidate fixes, validate them locally with `run_pytest_on_file` before reporting success.
+   - If focused repair was used and the cloud result includes updated code, reconstruct the full code with `reconstruct_code(original_code, fixedCode, focused_inputs.slices)` before validation, saving, or returning.
+   - If the cloud result contains candidate fixes, validate them locally with `run_pytest_on_file` before reporting success. In focused-repair mode, validate against the full original test file, never against returned sliced test content.
    - Fall back to local fixing on recoverable auth/network/timeout/5xx/invalid-JSON/no-fixed-code cases.
    - Raise `click.UsageError` instead of falling back for non-recoverable cases: 400, 401, 402, 403, or any cloud-only failure.
 
 6. Single-pass local mode:
    - Call `fix_errors_from_unit_tests` with processed `input_strings` for `unit_test`, `code`, `prompt`, and `error`.
-   - Pass `error_file=output_file_paths.get("output_results")`, `strength`, `temperature`, `time`, `verbose`, and `protect_tests`.
+   - Pass `error_file=output_file_paths.get("output_results")`, `strength`, `temperature`, `time`, `verbose`, and `protect_tests or bool(focused_inputs)` when focused repair is active.
    - Set `attempts = 1`.
    - Do not trust `updateUnitTest` / `updateCode` alone; if either file changed, validate with `run_pytest_on_file` using temp files. If nothing changed, `success=False`.
    - Focused-repair path (large dev units): if `is_large(code_content, unit_test_content)`, call `prepare_focused_inputs` to obtain sliced failing-test and code subsets. Pass the slices as `unit_test` / `code` to the LLM call. After the call, reconstruct the full code with `reconstruct_code(code_content, fixed_code, focused_inputs.slices)`. Never use the returned sliced test content as the final test file; validate the fixed code against the full original test file with `run_pytest_on_file`. Always pass `protect_tests=True` (or equivalent `effective_protect_tests = protect_tests or bool(focused_inputs)`) to the LLM when focused slices are in use, so the model cannot return a test-only fix that would be silently discarded.
