@@ -2733,6 +2733,32 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         # ``pdd setup`` will have the token file present and proceed
         # normally. Caller is _ensure_api_key in llm_invoke.py.
         model_name = str(model_info.get('model', ''))
+        if model_name.startswith("chatgpt/"):
+            # chatgpt/ models authenticate with a ChatGPT subscription via the
+            # codex login token (issue #1269). Bridge the codex auth.json into
+            # the shape litellm's chatgpt provider expects and apply the
+            # empty-output workaround; skip cleanly in --force when no token
+            # exists so litellm never hangs on an interactive device login.
+            from pdd.codex_subscription import (
+                apply_litellm_chatgpt_output_patch,
+                bridge_codex_auth_for_litellm,
+            )
+            apply_litellm_chatgpt_output_patch()
+            if bridge_codex_auth_for_litellm():
+                if verbose:
+                    logger.info(f"[INFO] Using ChatGPT subscription auth for {model_name}.")
+                return True
+            if os.environ.get('PDD_FORCE'):
+                logger.warning(
+                    f"Skipping {model_name}: no ChatGPT subscription token found "
+                    "(run `codex login`) and running in --force mode."
+                )
+                return False
+            logger.warning(
+                f"No ChatGPT subscription token found for {model_name}; litellm may "
+                "prompt for device-flow authentication. Run `codex login` to avoid this."
+            )
+            return True
         if model_name.startswith("github_copilot/"):
             token_dir = Path(os.environ.get(
                 'GITHUB_COPILOT_TOKEN_DIR',
@@ -3781,6 +3807,7 @@ def llm_invoke(
             provider_lower_for_model = provider.lower()
             is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
             is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
+            is_chatgpt_subscription = str(model_name_litellm).lower().startswith("chatgpt/")
             if is_lm_studio:
                 # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
                 if not litellm_kwargs.get("base_url"):
@@ -3893,6 +3920,31 @@ def llm_invoke(
                         if verbose:
                             logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
 
+                    # ChatGPT subscription backend ignores response_format/json_schema
+                    # (it returns prose), so enforce the schema in-band and drop the
+                    # ignored response_format. Mirrors the Groq handling above. (#1269)
+                    if is_chatgpt_subscription:
+                        from pdd.codex_subscription import build_chatgpt_schema_instruction
+                        _schema_dict = None
+                        if output_pydantic:
+                            _schema_dict = output_pydantic.model_json_schema()
+                        elif output_schema:
+                            _schema_dict = output_schema
+                        litellm_kwargs.pop("response_format", None)
+                        if _schema_dict is not None:
+                            _instruction = build_chatgpt_schema_instruction(_schema_dict)
+                            _messages_list = litellm_kwargs.get("messages", [])
+                            if (
+                                _messages_list
+                                and isinstance(_messages_list[0], dict)
+                                and _messages_list[0].get("role") == "system"
+                            ):
+                                _messages_list[0]["content"] += _instruction
+                            elif _messages_list and isinstance(_messages_list[0], dict):
+                                _messages_list.insert(0, {"role": "system", "content": _instruction})
+                            litellm_kwargs["messages"] = _messages_list
+                            if verbose:
+                                logger.info("[INFO] ChatGPT subscription structured output via schema-in-prompt")
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:

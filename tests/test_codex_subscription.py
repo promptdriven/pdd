@@ -1,0 +1,224 @@
+"""Tests for the ChatGPT/Codex subscription fallback (issue #1269).
+
+Covers the two seams the feature dies at if wrong:
+  * reachability — a `chatgpt/` CSV row is actually reached by the candidate
+    loop when ``ANTHROPIC_API_KEY`` is unavailable, and
+  * the credential gate / auth bridge / structured-output coercion behave.
+
+All LLM calls are mocked — no real network/LLM access.
+"""
+
+import json
+import os
+from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
+import pytest
+
+import pdd.codex_subscription as cs
+import pdd.llm_invoke as li
+
+
+# --------------------------------------------------------------------------- #
+# codex_subscription module: flatten / bridge / detect
+# --------------------------------------------------------------------------- #
+
+def _nested_auth(access="acc-tok-AAAAAAAAAA", refresh="ref-tok", acct="uuid-1"):
+    return {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": "sk-ignored",
+        "tokens": {
+            "id_token": "id-jwt",
+            "access_token": access,
+            "refresh_token": refresh,
+            "account_id": acct,
+        },
+        "last_refresh": "2026-05-29T00:00:00Z",
+    }
+
+
+def test_flatten_nested_codex_tokens():
+    flat = cs._flatten_codex_tokens(_nested_auth())
+    assert flat == {
+        "access_token": "acc-tok-AAAAAAAAAA",
+        "refresh_token": "ref-tok",
+        "id_token": "id-jwt",
+        "account_id": "uuid-1",
+    }
+
+
+def test_flatten_accepts_already_flat_shape():
+    flat = cs._flatten_codex_tokens({"access_token": "x" * 12, "account_id": "a"})
+    assert flat["access_token"] == "x" * 12
+
+
+def test_flatten_returns_none_without_access_token():
+    assert cs._flatten_codex_tokens({"tokens": {"refresh_token": "r"}}) is None
+    assert cs._flatten_codex_tokens({}) is None
+    assert cs._flatten_codex_tokens("nope") is None
+
+
+@pytest.fixture
+def codex_env(tmp_path, monkeypatch):
+    """Isolated CODEX_HOME + bridged dir; clears any inherited CHATGPT_TOKEN_DIR."""
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    bridged = tmp_path / "bridged"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", str(bridged))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    return codex_home, bridged
+
+
+def test_bridge_writes_flattened_auth_and_sets_env(codex_env):
+    codex_home, bridged = codex_env
+    (codex_home / "auth.json").write_text(json.dumps(_nested_auth()))
+
+    assert cs.bridge_codex_auth_for_litellm() is True
+    staged = bridged / "auth.json"
+    assert staged.is_file()
+    data = json.loads(staged.read_text())
+    assert data["access_token"] == "acc-tok-AAAAAAAAAA"
+    assert "tokens" not in data  # flattened
+    assert os.environ["CHATGPT_TOKEN_DIR"] == str(bridged)
+    # 0600 perms on the secret file
+    assert (staged.stat().st_mode & 0o077) == 0
+
+
+def test_bridge_returns_false_when_no_codex_token(codex_env):
+    assert cs.bridge_codex_auth_for_litellm() is False
+
+
+def test_bridge_refreshes_when_source_rotates(codex_env):
+    codex_home, bridged = codex_env
+    src = codex_home / "auth.json"
+    src.write_text(json.dumps(_nested_auth(access="old-token-1")))
+    assert cs.bridge_codex_auth_for_litellm() is True
+    assert json.loads((bridged / "auth.json").read_text())["access_token"] == "old-token-1"
+
+    # Rotate the source with a strictly newer mtime; bridge must re-stage.
+    src.write_text(json.dumps(_nested_auth(access="new-token-2")))
+    os.utime(src, (10**10, 10**10))
+    assert cs.bridge_codex_auth_for_litellm() is True
+    assert json.loads((bridged / "auth.json").read_text())["access_token"] == "new-token-2"
+
+
+def test_bridge_respects_user_supplied_token_dir(tmp_path, monkeypatch):
+    user_dir = tmp_path / "userchatgpt"
+    user_dir.mkdir()
+    (user_dir / "auth.json").write_text(json.dumps({"access_token": "u" * 12}))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(user_dir))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    assert cs.bridge_codex_auth_for_litellm() is True
+    # User dir untouched / still authoritative.
+    assert os.environ["CHATGPT_TOKEN_DIR"] == str(user_dir)
+
+
+def test_has_codex_subscription_auth(codex_env):
+    codex_home, _ = codex_env
+    assert cs.has_codex_subscription_auth() is False
+    (codex_home / "auth.json").write_text(json.dumps(_nested_auth()))
+    assert cs.has_codex_subscription_auth() is True
+
+
+def test_is_chatgpt_subscription_model():
+    assert cs.is_chatgpt_subscription_model("chatgpt/gpt-5.3-codex")
+    assert not cs.is_chatgpt_subscription_model("claude-sonnet-4-6")
+    assert not cs.is_chatgpt_subscription_model(None)
+
+
+def test_schema_instruction_contains_json_and_only_directive():
+    instr = cs.build_chatgpt_schema_instruction({"type": "object", "properties": {}})
+    assert "JSON" in instr
+    assert "ONLY" in instr
+    assert '"type": "object"' in instr
+
+
+# --------------------------------------------------------------------------- #
+# _ensure_api_key: chatgpt/ credential gate
+# --------------------------------------------------------------------------- #
+
+def _chatgpt_row():
+    return {"model": "chatgpt/gpt-5.3-codex", "api_key": "", "provider": "OpenAI ChatGPT"}
+
+
+def test_ensure_api_key_chatgpt_ok_when_bridge_succeeds(monkeypatch):
+    monkeypatch.setenv("PDD_FORCE", "1")
+    with patch.object(li, "_ensure_api_key", wraps=li._ensure_api_key):
+        with patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True):
+            assert li._ensure_api_key(_chatgpt_row(), {}, False) is True
+
+
+def test_ensure_api_key_chatgpt_skipped_in_force_without_auth(monkeypatch):
+    monkeypatch.setenv("PDD_FORCE", "1")
+    with patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=False):
+        assert li._ensure_api_key(_chatgpt_row(), {}, False) is False
+
+
+def test_ensure_api_key_chatgpt_allowed_interactively_without_auth(monkeypatch):
+    monkeypatch.delenv("PDD_FORCE", raising=False)
+    with patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=False):
+        # Interactive: allow litellm to attempt its own device-flow login.
+        assert li._ensure_api_key(_chatgpt_row(), {}, False) is True
+
+
+# --------------------------------------------------------------------------- #
+# Reachability: ANTHROPIC unavailable -> candidate loop reaches chatgpt row
+# --------------------------------------------------------------------------- #
+
+def _fake_model_df():
+    """Mimic _load_model_data output: an Anthropic row + the chatgpt row."""
+    rows = [
+        {
+            "provider": "Anthropic", "model": "claude-sonnet-4-6",
+            "input": 3.0, "output": 15.0, "coding_arena_elo": 1525,
+            "base_url": "", "api_key": "ANTHROPIC_API_KEY",
+            "max_reasoning_tokens": 0, "structured_output": True,
+            "reasoning_type": "none", "location": "",
+        },
+        {
+            "provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex",
+            "input": 0.0, "output": 0.0, "coding_arena_elo": 1407,
+            "base_url": "", "api_key": "",
+            "max_reasoning_tokens": 0, "structured_output": True,
+            "reasoning_type": "none", "location": "",
+        },
+    ]
+    df = pd.DataFrame(rows)
+    df["avg_cost"] = (df["input"] + df["output"]) / 2
+    df["structured_output"] = df["structured_output"].astype(bool)
+    return df
+
+
+def test_chatgpt_row_present_in_candidates():
+    cands = li._select_model_candidates(0.5, "claude-sonnet-4-6", _fake_model_df())
+    models = [c["model"] for c in cands]
+    assert "chatgpt/gpt-5.3-codex" in models
+
+
+def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
+    """The load-bearing test: no ANTHROPIC_API_KEY, --force -> chatgpt is invoked."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured["model"] = kwargs.get("model")
+        raise RuntimeError("STOP_AFTER_CAPTURE")
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        try:
+            li.llm_invoke(prompt="hi {x}", input_json={"x": "there"}, strength=0.5, verbose=False)
+        except Exception:
+            pass
+
+    # Anthropic row is skipped (missing key in --force); chatgpt is the first
+    # model that actually reaches litellm.completion.
+    assert captured.get("model") == "chatgpt/gpt-5.3-codex"

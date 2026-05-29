@@ -3774,3 +3774,13 @@ As you become more familiar with PDD, you can compose richer workflows by chaini
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
 Keep prompts as source; regenerate with PDD.
+
+### Using a ChatGPT/Codex subscription as a fallback
+
+If you have a ChatGPT subscription, PDD can use it for LLM calls when no API key is available (for example when `ANTHROPIC_API_KEY` is unset or rate-limited). Authenticate once with the Codex CLI:
+
+```bash
+codex login
+```
+
+PDD reads the resulting `~/.codex/auth.json` and routes fallback calls through the `chatgpt/gpt-5.3-codex` model on your subscription (flat-rate, no per-token API billing). This is for your own personal subscription only — do not share or pool a single subscription across users.
