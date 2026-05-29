@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from pdd.load_prompt_template import load_prompt_template
+from pdd.preprocess import preprocess
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _TEMPLATE_NAMES = ("generate_test_LLM", "generate_test_from_example_LLM")
@@ -40,9 +43,6 @@ def test_generate_test_templates_preprocess_contract_rule_context(
     generate_test_LLM previously had ``<include>s module`` prose that falsely
     paired with the real closing tag and blocked expansion.
     """
-    from pdd.load_prompt_template import load_prompt_template
-    from pdd.preprocess import preprocess
-
     preprocessed = preprocess(
         load_prompt_template(template_name),
         recursive=False,

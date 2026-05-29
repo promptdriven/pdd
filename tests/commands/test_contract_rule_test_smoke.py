@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+import pdd
 from pdd import cli
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,18 +30,11 @@ def _contract_rule_generated_tests() -> str:
 
 @pytest.fixture(autouse=True)
 def _set_pdd_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pdd
-
+    """Pin PDD_PATH to the packaged prompts tree under this repository."""
     monkeypatch.setenv("PDD_PATH", str(Path(pdd.__file__).parent))
 
 
-@pytest.fixture
-def runner() -> CliRunner:
-    return CliRunner()
-
-
 def test_pdd_test_merge_smoke_contract_rule_ids(
-    runner: CliRunner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -75,6 +69,7 @@ def test_pdd_test_merge_smoke_contract_rule_ids(
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key-for-smoke-testing")
 
     generated = _contract_rule_generated_tests()
+    runner = CliRunner()
 
     with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
         mock_generate_test.return_value = (generated, 0.05, "smoke-model")
