@@ -392,3 +392,155 @@ def test_infer_max_reasoning_tokens_returns_128000_for_other_anthropic_models():
     """Budget-mode default for non-adaptive Anthropic rows."""
     entry = {"supports_reasoning": True}
     assert gmc._infer_max_reasoning_tokens("claude-sonnet-4-6", "anthropic", entry) == 128000
+
+
+# ==============================================================================
+# Claude Opus 4.8 — same adaptive-thinking contract as 4.7 (released 2026-05-28).
+# 4.8 is adaptive-thinking-only: thinking={"type":"adaptive"} + effort; the
+# legacy thinking.type="enabled" budget shape 400s. Because 4.8 is brand new it
+# has no live arena ELO yet, so it relies on a STATIC_ELO_FALLBACK seed to
+# survive the documented catalog regen.
+# ==============================================================================
+
+
+def test_infer_reasoning_type_returns_adaptive_for_opus_48_anthropic():
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("claude-opus-4-8", "anthropic", entry) == "adaptive"
+
+
+def test_infer_reasoning_type_returns_budget_for_opus_48_azure_ai():
+    """Azure AI relay isn't audited for adaptive shape yet — keep at budget."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-8", "azure_ai", entry) == "budget"
+
+
+def test_infer_max_reasoning_tokens_returns_16000_for_opus_48_anthropic():
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_max_reasoning_tokens("claude-opus-4-8", "anthropic", entry) == 16000
+
+
+def test_opus_48_static_elo_seed_clears_cutoff():
+    """No live arena entry yet → a STATIC_ELO_FALLBACK seed must resolve the
+    ELO above ELO_CUTOFF (the property we depend on; the source label may
+    change to 'arena' once the model is listed live)."""
+    elo, _source = gmc._get_elo("claude-opus-4-8", {})
+    assert elo >= gmc.ELO_CUTOFF
+
+
+def test_opus_48_is_seeded_when_litellm_unaware():
+    """litellm.model_cost has no claude-opus-4-8 entry until litellm ships it,
+    so the litellm-driven build loop would drop the row. It must be carried by
+    _MANDATORY_MODEL_ROWS and survive _mandatory_rows_missing_from (ELO from the
+    static seed clears the cutoff), with reasoning_type='adaptive'."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    by_model = {r["model"]: r for r in seeded}
+    assert "claude-opus-4-8" in by_model, (
+        "claude-opus-4-8 must be seeded when litellm is unaware of it"
+    )
+    row = by_model["claude-opus-4-8"]
+    assert row["reasoning_type"] == "adaptive"
+    assert row["api_key"] == "ANTHROPIC_API_KEY"
+    assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
+def test_opus_48_mandatory_row_deduped_once_litellm_knows_it():
+    """When the catalog already contains a claude-opus-4-8 row (e.g. once
+    litellm registers it), the mandatory seed must not duplicate it."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[{"model": "claude-opus-4-8"}],
+        arena_index={},
+        elo_source_counts=defaultdict(int),
+    )
+    assert all(r["model"] != "claude-opus-4-8" for r in seeded)
+
+
+def test_opus_48_bedrock_and_vertex_relays_seeded_when_litellm_unaware():
+    """Opus 4.8 is available on Bedrock/Vertex at launch, but litellm doesn't
+    ship those ids yet, so they must be carried by _MANDATORY_MODEL_ROWS too.
+    Relays are NOT on the direct-Anthropic adaptive enforcement path, so they
+    seed reasoning_type='effort' (mirroring the opus-4-7 relay rows), and their
+    ELO must clear the cutoff via the static-prefix fallback."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    by_model = {r["model"]: r for r in seeded}
+
+    bedrock = by_model.get("anthropic.claude-opus-4-8")
+    assert bedrock is not None, "Bedrock opus-4-8 must be seeded"
+    assert bedrock["reasoning_type"] == "effort"
+    assert bedrock["api_key"] == "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME"
+    assert bedrock["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+    vertex = by_model.get("vertex_ai/claude-opus-4-8")
+    assert vertex is not None, "Vertex opus-4-8 must be seeded"
+    assert vertex["reasoning_type"] == "effort"
+    assert vertex["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
+def test_opus_48_relays_deduped_once_litellm_knows_them():
+    """Once litellm registers the relay ids, the mandatory seed must not
+    duplicate them."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[
+            {"model": "anthropic.claude-opus-4-8"},
+            {"model": "vertex_ai/claude-opus-4-8"},
+        ],
+        arena_index={},
+        elo_source_counts=defaultdict(int),
+    )
+    seeded_models = {r["model"] for r in seeded}
+    assert "anthropic.claude-opus-4-8" not in seeded_models
+    assert "vertex_ai/claude-opus-4-8" not in seeded_models
+
+
+def test_infer_reasoning_type_returns_effort_for_opus_48_bedrock_and_vertex():
+    """Relay Opus 4.8 stays on 'effort' (not adaptive) — only direct-Anthropic
+    is on the adaptive enforcement path."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("anthropic.claude-opus-4-8", "bedrock", entry) == "effort"
+    assert gmc._infer_reasoning_type("vertex_ai/claude-opus-4-8", "vertex_ai", entry) == "effort"
+
+
+def test_azure_opus_48_is_deferred_even_when_litellm_knows_it(monkeypatch):
+    """Azure AI / Foundry Opus 4.8 is intentionally deferred pending validation
+    (it rides the legacy budget shape via AzureAIStudioConfig, which the adaptive
+    relay patches don't reach). The deferral must be ENFORCED by the generator,
+    not just documented: even when LiteLLM's registry ships azure_ai/claude-opus-4-8,
+    a regen must omit it so the generator never diverges from the committed CSV
+    (which deliberately has no Azure 4.8 row)."""
+    import litellm
+
+    fake_id = "azure_ai/claude-opus-4-8"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        fake_id,
+        {
+            "mode": "chat",
+            "litellm_provider": "azure_ai",
+            "input_cost_per_token": 5e-6,
+            "output_cost_per_token": 25e-6,
+            "max_tokens": 128000,
+            "max_input_tokens": 200000,
+            "supports_reasoning": True,
+        },
+    )
+    # Sanity: the fake entry is actually visible to the build loop.
+    assert fake_id in litellm.model_cost
+
+    rows = gmc.build_rows(refresh_elo=False)
+    assert all(r.get("model") != fake_id for r in rows), (
+        "azure_ai/claude-opus-4-8 is deferred pending validation and must not be "
+        "emitted by a regen even when LiteLLM knows the id"
+    )
+    # The direct-Anthropic 4.8 row must still be present (deferral is scoped).
+    assert any(r.get("model") == "claude-opus-4-8" for r in rows)
