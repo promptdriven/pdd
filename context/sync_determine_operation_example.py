@@ -1,85 +1,83 @@
 """
-Example demonstrating how to use the sync_determine_operation module to analyze
-a Prompt-Driven Development (PDD) unit's state and determine the next required operation.
+Example demonstrating how to use the sync_determine_operation module.
+This script sets up a minimal project structure with a prompt file
+and uses the module to determine the next PDD operation.
 """
 
 import os
-import json
+import sys
+import shutil
 from pathlib import Path
+import json
 
-# Import the main decision-making function from the PDD module
+# Import the function from the module
 from pdd.sync_determine_operation import sync_determine_operation
 
-
-def setup_mock_project() -> Path:
-    """Sets up a mock project structure in the output directory."""
-    # Create the base output directory for the example
-    base_dir = Path("./output/sync_demo").resolve()
-    base_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create a prompts directory
-    prompts_dir = base_dir / "prompts"
-    prompts_dir.mkdir(exist_ok=True)
-
-    # Create a mock prompt file for a "calculator" module
-    prompt_file = prompts_dir / "calculator_python.prompt"
-    prompt_content = """
-    # Calculator Module
-    Write a simple calculator class with add and subtract methods.
-    """
-    prompt_file.write_text(prompt_content.strip(), encoding="utf-8")
-
-    # Create the .pdd metadata directory structure
-    meta_dir = base_dir / ".pdd" / "meta"
+def main():
+    print("--- sync_determine_operation example ---")
+    
+    # 1. Set up a dummy project structure in the ./output directory
+    output_dir = Path("./output")
+    prompts_dir = output_dir / "prompts"
+    meta_dir = output_dir / ".pdd" / "meta"
+    
+    # Clean up existing output if any
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+        
+    prompts_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
-
-    return base_dir
-
-
-def main() -> None:
-    # 1. Setup a dummy project environment
-    project_root = setup_mock_project()
-    print(f"Set up mock project at: {project_root}")
-
-    # 2. Change working directory to the mock project root
-    # to simulate running the CLI from the project root.
-    original_cwd = os.getcwd()
-    os.chdir(project_root)
-
-    try:
-        # 3. Define the parameters for the PDD unit we are analyzing
-        basename = "calculator"
-        language = "python"
-        target_coverage = 90.0  # Desired test coverage percentage
-
-        print(f"\nAnalyzing PDD unit: '{basename}' ({language})")
-        print("This unit has a prompt file but no generated code, tests, or examples yet.")
-
-        # 4. Call sync_determine_operation in read_only mode to get the decision
-        # read_only=True ensures we don't accidentally mutate state while just analyzing
-        decision = sync_determine_operation(
-            basename=basename,
-            language=language,
-            target_coverage=target_coverage,
-            prompts_dir="prompts",
-            read_only=True
-        )
-
-        # 5. Output the resulting decision
-        print("\n--- Sync Decision ---")
-        print(f"Next Operation : {decision.operation}")
-        print(f"Reason         : {decision.reason}")
-        print(f"Confidence     : {decision.confidence:.2f}")
-        print(f"Estimated Cost : ${decision.estimated_cost:.2f}")
-
-        if decision.details:
-            print("\nDecision Details:")
-            print(json.dumps(decision.details, indent=2))
-
-    finally:
-        # Restore the original working directory
-        os.chdir(original_cwd)
-
+    
+    basename = "hello_world"
+    language = "python"
+    
+    # Create a simple prompt file
+    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
+    prompt_file.write_text(
+        "Write a simple hello world function in Python.\n", 
+        encoding="utf-8"
+    )
+    
+    print(f"Created dummy prompt at: {prompt_file}")
+    
+    # 2. Run sync_determine_operation on the new unit
+    # Since there's no code, example, or fingerprint yet, it should recommend 'generate'
+    print("\nAnalyzing state for new module...")
+    
+    decision = sync_determine_operation(
+        basename=basename,
+        language=language,
+        target_coverage=80.0,
+        prompts_dir=str(prompts_dir),
+        log_mode=True  # log_mode=True skips file locking for read-only analysis
+    )
+    
+    print(f"Recommended Operation: {decision.operation}")
+    print(f"Reason: {decision.reason}")
+    print(f"Confidence: {decision.confidence:.2f}")
+    if decision.details:
+        print(f"Details: {json.dumps(decision.details, indent=2)}")
+        
+    # 3. Simulate code generation to see how the decision changes
+    print("\nSimulating code generation (creating code file)...")
+    code_file = output_dir / f"{basename}.py"
+    code_file.write_text("def hello():\n    print('Hello World!')\n", encoding="utf-8")
+    
+    # We also need to simulate a fingerprint so it knows the code matches the prompt
+    # For this example, we'll just show the decision when code exists but no fingerprint
+    # The module will see a missing fingerprint and suggest generating one (or regenerating)
+    decision_after_code = sync_determine_operation(
+        basename=basename,
+        language=language,
+        target_coverage=80.0,
+        prompts_dir=str(prompts_dir),
+        log_mode=True
+    )
+    
+    print(f"Recommended Operation (after code exists but no meta): {decision_after_code.operation}")
+    print(f"Reason: {decision_after_code.reason}")
+    
+    print("\nExample complete.")
 
 if __name__ == "__main__":
     main()
