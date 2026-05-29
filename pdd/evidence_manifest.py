@@ -21,7 +21,10 @@ from .preprocess import (
 from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 1
-_NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
+_NONDETERMINISTIC_TAG_RE = re.compile(
+    r"<(?:shell|web)\b|<include[^>]*(?:query|select)\s*=",
+    re.IGNORECASE,
+)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
     re.IGNORECASE,

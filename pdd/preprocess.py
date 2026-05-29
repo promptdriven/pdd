@@ -878,6 +878,14 @@ def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[A
         except Exception as e:
             console.print(f"[bold red]Error executing shell command:[/bold red] {str(e)}")
             _dbg(f"Shell execution exception: {e}")
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_shell(
+                    command=command,
+                    stdout="",
+                    stderr=str(e),
+                    exit_code=-1,
+                    timeout=timeout_arg,
+                )
             return f"[Shell execution error: {str(e)}]"
     code_spans = _extract_code_spans(text)
     def replace_shell_with_spans(match):
