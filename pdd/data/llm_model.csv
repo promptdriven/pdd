@@ -1,4 +1,5 @@
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+AWS Bedrock,anthropic.claude-opus-4-8,5.0,25.0,1575,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
 AWS Bedrock,anthropic.claude-opus-4-7,5.0,25.0,1565,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
 AWS Bedrock,anthropic.claude-sonnet-4-6,3.0,15.0,1525,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
 AWS Bedrock,zai.glm-4.7,0.6,2.2,1440,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
@@ -54,6 +55,7 @@ Google Gemini,gemini/gemini-3.1-pro-preview,2.0,12.0,1456,,GEMINI_API_KEY,0,True
 Google Gemini,gemini/gemini-3.1-pro-preview-customtools,2.0,12.0,1456,,GEMINI_API_KEY,0,True,effort,
 Google Gemini,gemini/gemini-3-flash-preview,0.5,3.0,1437,,GEMINI_API_KEY,0,True,effort,
 Google Gemini,gemini/gemini-2.5-flash,0.3,2.5,1300,,GEMINI_API_KEY,0,True,effort,
+Google Vertex AI,vertex_ai/claude-opus-4-8,5.0,25.0,1575,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
 Google Vertex AI,vertex_ai/claude-opus-4-7,5.0,25.0,1565,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
 Google Vertex AI,vertex_ai/claude-sonnet-4-6,3.0,15.0,1525,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
 Google Vertex AI,gemini-3.1-pro-preview,2.0,12.0,1456,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global

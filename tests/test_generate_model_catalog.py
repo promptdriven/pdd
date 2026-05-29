@@ -458,3 +458,54 @@ def test_opus_48_mandatory_row_deduped_once_litellm_knows_it():
         elo_source_counts=defaultdict(int),
     )
     assert all(r["model"] != "claude-opus-4-8" for r in seeded)
+
+
+def test_opus_48_bedrock_and_vertex_relays_seeded_when_litellm_unaware():
+    """Opus 4.8 is available on Bedrock/Vertex at launch, but litellm doesn't
+    ship those ids yet, so they must be carried by _MANDATORY_MODEL_ROWS too.
+    Relays are NOT on the direct-Anthropic adaptive enforcement path, so they
+    seed reasoning_type='effort' (mirroring the opus-4-7 relay rows), and their
+    ELO must clear the cutoff via the static-prefix fallback."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    by_model = {r["model"]: r for r in seeded}
+
+    bedrock = by_model.get("anthropic.claude-opus-4-8")
+    assert bedrock is not None, "Bedrock opus-4-8 must be seeded"
+    assert bedrock["reasoning_type"] == "effort"
+    assert bedrock["api_key"] == "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME"
+    assert bedrock["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+    vertex = by_model.get("vertex_ai/claude-opus-4-8")
+    assert vertex is not None, "Vertex opus-4-8 must be seeded"
+    assert vertex["reasoning_type"] == "effort"
+    assert vertex["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
+def test_opus_48_relays_deduped_once_litellm_knows_them():
+    """Once litellm registers the relay ids, the mandatory seed must not
+    duplicate them."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[
+            {"model": "anthropic.claude-opus-4-8"},
+            {"model": "vertex_ai/claude-opus-4-8"},
+        ],
+        arena_index={},
+        elo_source_counts=defaultdict(int),
+    )
+    seeded_models = {r["model"] for r in seeded}
+    assert "anthropic.claude-opus-4-8" not in seeded_models
+    assert "vertex_ai/claude-opus-4-8" not in seeded_models
+
+
+def test_infer_reasoning_type_returns_effort_for_opus_48_bedrock_and_vertex():
+    """Relay Opus 4.8 stays on 'effort' (not adaptive) — only direct-Anthropic
+    is on the adaptive enforcement path."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type("anthropic.claude-opus-4-8", "bedrock", entry) == "effort"
+    assert gmc._infer_reasoning_type("vertex_ai/claude-opus-4-8", "vertex_ai", entry) == "effort"

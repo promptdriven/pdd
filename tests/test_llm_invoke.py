@@ -5630,6 +5630,14 @@ class TestSetModelRateMap:
         ) == "openai"
         assert llm_mod._litellm_provider_for_csv_model("bare", None) == "openai"
 
+    def test_provider_for_bare_bedrock_model_maps_to_bedrock(self, llm_mod):
+        # Bedrock ids are bare with dots ("anthropic.claude-opus-4-8") — no "/"
+        # prefix to route on — so they must map from the CSV provider column,
+        # not fall through to the "openai" default.
+        assert llm_mod._litellm_provider_for_csv_model(
+            "anthropic.claude-opus-4-8", "AWS Bedrock"
+        ) == "bedrock"
+
     def test_set_model_rate_map_populates_provider_map(self, llm_mod):
         import pandas as pd
         df = pd.DataFrame({
@@ -5657,6 +5665,24 @@ class TestSetModelRateMap:
         llm_mod._set_model_rate_map(df)
         _model, provider, *_ = litellm.get_llm_provider(fake)
         assert provider == "anthropic"
+
+    def test_registers_bare_bedrock_dotted_model_under_bedrock_provider(self, llm_mod):
+        import pandas as pd
+        import litellm
+        # Bedrock ids are bare with dots (no "/"). A litellm-unknown one must
+        # register as provider="bedrock", not the historical "openai" default —
+        # this pins the dotted-id path the "AWS Bedrock" map entry exists for.
+        fake = "anthropic.pdd-regtest-bedrock-zzz"
+        assert fake not in (getattr(litellm, "model_cost", {}) or {})
+        df = pd.DataFrame({
+            "model": [fake],
+            "provider": ["AWS Bedrock"],
+            "input": [5.0],
+            "output": [25.0],
+        })
+        llm_mod._set_model_rate_map(df)
+        _model, provider, *_ = litellm.get_llm_provider(fake)
+        assert provider == "bedrock"
 
 
 # ============================================================================
@@ -7460,9 +7486,11 @@ def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
 def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
     """claude-opus-4-8 (released 2026-05-28) uses the same adaptive-only
     contract as 4.7: the legacy thinking.type="enabled" shape 400s on it.
-    The opus patch must extend to 4.8 across hyphen/dot/relay-prefixed naming
-    so map_openai_params emits thinking.type=adaptive + output_config.effort
-    instead of the legacy enabled shape (regression net for the catalog row)."""
+    This covers the DIRECT AnthropicConfig path (via _map_thinking_kwargs):
+    map_openai_params must emit thinking.type=adaptive + output_config.effort
+    instead of the legacy enabled shape, across hyphen/dot naming. The actual
+    Bedrock Converse and Vertex relay transform classes are covered by the
+    dedicated 4.8 relay tests below."""
     for model in (
         "claude-opus-4-8",
         "claude-opus-4.8",
@@ -7554,6 +7582,35 @@ def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
         assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
 
 
+def test_bedrock_converse_adapter_opus_48_emits_adaptive_shape():
+    """Same as the 4-7 Converse test for claude-opus-4-8. The Bedrock relay
+    row this PR adds (anthropic.claude-opus-4-8, reasoning_type='effort')
+    relies on the Converse wrap rewriting the effort hint into adaptive
+    thinking — the relay alias tuple must include the 4-8 variants, or the
+    effort hint is dropped and the call sends the wrong shape. RED before the
+    relay-alias fix, GREEN after; this is the net that would have caught it."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-opus-4-8",
+        "bedrock/converse/anthropic.claude-opus-4-8",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
+
+
 def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
     """When the caller already supplied thinking={type: adaptive, ...}, the
     wrap must preserve their richer payload (e.g. display=summarized) and
@@ -7610,6 +7667,36 @@ def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_47():
         model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert body.get("thinking") == {"type": "adaptive"}, body
+    assert body.get("output_config") == {"effort": "high"}, body
+
+
+def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_48():
+    """Same as the 4-7 Vertex test for claude-opus-4-8. The Vertex relay row
+    this PR adds (vertex_ai/claude-opus-4-8) requires output_config.effort to
+    survive transform_request alongside thinking.type=adaptive (Vertex 400s
+    otherwise). The relay alias tuple must include the 4-8 variants. RED before
+    the relay-alias fix, GREEN after."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    body = cfg.transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
         litellm_params={},
         headers={},
     )

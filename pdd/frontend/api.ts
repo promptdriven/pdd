@@ -129,7 +129,10 @@ export interface CostEstimate {
 export interface TokenMetrics {
   token_count: number;
   context_limit: number;
-  context_usage_percent: number;
+  // Nullable: the backend returns null for models litellm doesn't know yet
+  // (e.g. a freshly-released Opus before litellm ships its id). Consumers must
+  // guard before calling number methods like toFixed().
+  context_usage_percent: number | null;
   cost_estimate: CostEstimate | null;
 }
 

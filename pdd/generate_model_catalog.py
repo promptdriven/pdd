@@ -1088,6 +1088,48 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "location": "",
     },
     {
+        # Opus 4.8 on AWS Bedrock (anthropic.claude-opus-4-8). Available at
+        # launch but absent from litellm.model_cost until litellm ships it, so
+        # seed it like the direct row to survive regen. Bedrock/Vertex relays
+        # are NOT on the direct-Anthropic adaptive enforcement path, so they
+        # keep reasoning_type="effort" (mirrors the opus-4-7 relay rows and
+        # _infer_reasoning_type for these providers); the litellm relay patch
+        # maps effort -> adaptive thinking server-side for the opus-4-8 alias.
+        "provider": "AWS Bedrock",
+        "model": "anthropic.claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        # Opus 4.8 on Google Vertex AI (vertex_ai/claude-opus-4-8). Same
+        # rationale as the Bedrock row above; mirrors the opus-4-7 Vertex row.
+        "provider": "Google Vertex AI",
+        "model": "vertex_ai/claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "global",
+    },
+    # Azure AI / Microsoft Foundry also surfaces Opus 4.8, and an
+    # azure_ai/claude-opus-4-7 sibling ships today — but it is intentionally
+    # deferred here pending validation, NOT omitted on a "not available" claim.
+    # Reason: Azure routes through AzureAIStudioConfig (OpenAI-based), which the
+    # Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach, so
+    # the 4-7 Azure row still rides the legacy budget shape (unaudited for the
+    # adaptive-only 4.7+/4.8 contract). Third-party aggregators (Perplexity,
+    # OpenRouter, GMI) similarly lag the direct launch. Add these rows once
+    # their reasoning shape is verified against the live relay.
+    {
         "provider": "Google Vertex AI",
         "model": "vertex_ai/gemini-3-flash-preview",
         "input": 0.5,
