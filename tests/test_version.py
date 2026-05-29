@@ -8,7 +8,7 @@ from click.testing import CliRunner
 import pdd
 from pdd.core.cli import cli as cli_command
 
-_PEP440_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:\.(?:dev|rc|a|b|post)\d+)?$")
+_PEP440_VERSION = re.compile(r"^\d+\.\d+(?:\.\d+)?(?:\.(?:dev|rc|a|b|post)\d+)?$")
 _SCM_FALLBACKS = {"0.0.0", "0.0.0+unknown"}
 _SEMVER_TAG = re.compile(r"^\d+\.\d+\.\d+$")
 
