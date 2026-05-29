@@ -2914,12 +2914,14 @@ def _build_claude_interactive_command(
     prompt_path: Path,
     config_path: Path,
     job_id: str,
+    session_id: str,
     env: Dict[str, str],
     use_playwright: bool = False,
 ) -> List[str]:
     """Build the Claude Code interactive command without ``-p`` / JSON mode."""
     cmd = [
         cli_path,
+        "--session-id", session_id,
         "--mcp-config", str(config_path),
         "--strict-mcp-config",
     ]
@@ -2942,6 +2944,106 @@ def _build_claude_interactive_command(
         "Do not stop until pdd_reply succeeds."
     )
     return cmd
+
+
+def _find_claude_interactive_session_file(
+    session_id: str,
+    env: Dict[str, str],
+    wait_seconds: float = 2.0,
+) -> Optional[Path]:
+    """Locate Claude Code's JSONL transcript for the given session."""
+    home = Path(env.get("HOME") or str(Path.home()))
+    projects_dir = home / ".claude" / "projects"
+    if not projects_dir.exists():
+        return None
+
+    deadline = time.time() + max(0.0, wait_seconds)
+    while True:
+        matches = list(projects_dir.rglob(f"{session_id}.jsonl"))
+        if matches:
+            return matches[0]
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.1)
+
+
+def _estimate_claude_interactive_session_cost(
+    session_id: str,
+    env: Dict[str, str],
+) -> Tuple[float, Optional[str]]:
+    """Estimate interactive Claude cost from the persisted session transcript."""
+    session_file = _find_claude_interactive_session_file(session_id, env)
+    if session_file is None:
+        return 0.0, None
+
+    per_request_usage: Dict[str, Dict[str, Any]] = {}
+    latest_model: Optional[str] = None
+    try:
+        raw_lines = session_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0.0, None
+
+    for raw_line in raw_lines:
+        try:
+            item = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if item.get("type") != "assistant":
+            continue
+
+        request_id = item.get("requestId")
+        message = item.get("message") or {}
+        model = message.get("model") or item.get("advisorModel")
+        if isinstance(model, str) and model:
+            latest_model = model
+
+        # Claude writes multiple assistant rows per request (e.g. thinking,
+        # tool_use, final text) with the same requestId and usage totals.
+        # Count each request exactly once to avoid double-charging.
+        if not request_id or request_id in per_request_usage:
+            continue
+
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        per_request_usage[request_id] = {
+            "model": model,
+            "usage": usage,
+        }
+
+    if not per_request_usage:
+        return 0.0, latest_model
+
+    usage_keys = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    )
+    usage_by_model: Dict[str, Dict[str, int]] = {}
+    for record in per_request_usage.values():
+        model_name = str(record.get("model") or latest_model or "claude-sonnet")
+        usage = record.get("usage") or {}
+        bucket = usage_by_model.setdefault(
+            model_name,
+            {key: 0 for key in usage_keys},
+        )
+        for key in usage_keys:
+            try:
+                bucket[key] += int(usage.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+    total_cost = 0.0
+    for model_name, usage in usage_by_model.items():
+        total_cost += _calculate_anthropic_cost(
+            {
+                "usage": usage,
+                "modelUsage": {model_name: {}},
+            }
+        )
+
+    return total_cost, latest_model
 
 
 def _terminate_process_group(proc: subprocess.Popen, sig: int) -> None:
@@ -3108,6 +3210,7 @@ def _run_claude_interactive_with_mcp(
         return False, "Claude Code interactive mode requires a POSIX platform", 0.0, None
 
     job_id = uuid.uuid4().hex
+    session_id = str(uuid.uuid4())
     with tempfile.TemporaryDirectory(prefix="pdd-claude-interactive-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         server_path = tmp_path / "pdd_reply_mcp_server.py"
@@ -3125,6 +3228,7 @@ def _run_claude_interactive_with_mcp(
             prompt_path=prompt_path,
             config_path=config_path,
             job_id=job_id,
+            session_id=session_id,
             env=env,
             use_playwright=use_playwright,
         )
@@ -3136,7 +3240,13 @@ def _run_claude_interactive_with_mcp(
             reply_path=reply_path,
             job_id=job_id,
         )
-        return success, text, cost, model or env.get("CLAUDE_MODEL")
+        session_cost, session_model = _estimate_claude_interactive_session_cost(
+            session_id,
+            env,
+        )
+        if session_cost > 0.0 or cost == 0.0:
+            cost = session_cost
+        return success, text, cost, model or session_model or env.get("CLAUDE_MODEL")
 
 
 def _run_with_provider(

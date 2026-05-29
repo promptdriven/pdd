@@ -20,10 +20,12 @@ from pdd.agentic_common import (
     _build_claude_interactive_command,
     _claude_code_interactive_enabled,
     _claude_interactive_needs_trust_confirmation,
+    _estimate_claude_interactive_session_cost,
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
     _parse_claude_interactive_reply,
+    _run_claude_interactive_with_mcp,
     _run_interactive_pty_until_reply,
     _run_with_provider,
     _log_agentic_interaction,
@@ -429,10 +431,12 @@ def test_build_claude_interactive_command_bypasses_print_mode(tmp_path):
         prompt_path=tmp_path / ".agentic_prompt_test.txt",
         config_path=tmp_path / "mcp_config.json",
         job_id="job-123",
+        session_id="11111111-2222-4333-8444-555555555555",
         env={"CLAUDE_MODEL": "haiku"},
     )
 
     assert cmd[0] == "/bin/claude"
+    assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-4333-8444-555555555555"
     assert "-p" not in cmd
     assert "--print" not in cmd
     assert "--output-format" not in cmd
@@ -629,6 +633,116 @@ def test_interactive_pty_runner_waits_for_reply_file(tmp_path):
     assert text == "OK"
     assert cost == 0.0
     assert model is None
+
+
+def test_estimate_claude_interactive_session_cost_dedupes_request_ids(tmp_path):
+    home = tmp_path / "home"
+    session_id = "11111111-2222-4333-8444-555555555555"
+    session_path = (
+        home
+        / ".claude"
+        / "projects"
+        / "demo"
+        / f"{session_id}.jsonl"
+    )
+    session_path.parent.mkdir(parents=True)
+    request_1_usage = {
+        "input_tokens": 2223,
+        "cache_creation_input_tokens": 24991,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 128,
+    }
+    request_2_usage = {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 2360,
+        "cache_read_input_tokens": 24991,
+        "output_tokens": 12,
+    }
+    lines = [
+        {
+            "type": "assistant",
+            "requestId": "req-1",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": request_1_usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "requestId": "req-1",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": request_1_usage,
+            },
+        },
+        {
+            "type": "assistant",
+            "requestId": "req-2",
+            "message": {
+                "model": "claude-opus-4-8",
+                "usage": request_2_usage,
+            },
+        },
+    ]
+    session_path.write_text(
+        "\n".join(json.dumps(line) for line in lines),
+        encoding="utf-8",
+    )
+
+    cost, model = _estimate_claude_interactive_session_cost(
+        session_id,
+        {"HOME": str(home)},
+    )
+
+    expected_cost = _calculate_anthropic_cost(
+        {
+            "usage": {
+                "input_tokens": request_1_usage["input_tokens"] + request_2_usage["input_tokens"],
+                "output_tokens": request_1_usage["output_tokens"] + request_2_usage["output_tokens"],
+                "cache_read_input_tokens": request_1_usage["cache_read_input_tokens"] + request_2_usage["cache_read_input_tokens"],
+                "cache_creation_input_tokens": request_1_usage["cache_creation_input_tokens"] + request_2_usage["cache_creation_input_tokens"],
+            },
+            "modelUsage": {"claude-opus-4-8": {}},
+        }
+    )
+    assert cost == pytest.approx(expected_cost)
+    assert model == "claude-opus-4-8"
+
+
+def test_run_claude_interactive_with_mcp_uses_session_usage_cost(tmp_path):
+    prompt_path = tmp_path / ".agentic_prompt_test.txt"
+    prompt_path.write_text("Do work", encoding="utf-8")
+
+    with patch("pdd.agentic_common.uuid.uuid4") as mock_uuid, patch(
+        "pdd.agentic_common._run_interactive_pty_until_reply",
+        return_value=(True, "done", 0.0, None),
+    ) as mock_runner, patch(
+        "pdd.agentic_common._estimate_claude_interactive_session_cost",
+        return_value=(0.123, "claude-haiku-4-5-20251001"),
+    ) as mock_session_cost:
+        mock_uuid.side_effect = [
+            type("U", (), {"hex": "job123"})(),
+            "11111111-2222-4333-8444-555555555555",
+        ]
+        success, text, cost, model = _run_claude_interactive_with_mcp(
+            cli_path="/bin/claude",
+            prompt_path=prompt_path,
+            cwd=tmp_path,
+            timeout=30,
+            env={"HOME": str(tmp_path)},
+        )
+
+    assert success is True
+    assert text == "done"
+    assert cost == pytest.approx(0.123)
+    assert model == "claude-haiku-4-5-20251001"
+    cmd = mock_runner.call_args.args[0]
+    assert "--session-id" in cmd
+    assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-4333-8444-555555555555"
+    mock_session_cost.assert_called_once_with(
+        "11111111-2222-4333-8444-555555555555",
+        {"HOME": str(tmp_path)},
+    )
 
 
 def test_google_provider_delivers_prompt_via_positional_arg(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
