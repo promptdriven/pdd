@@ -1249,6 +1249,47 @@ def _mandatory_rows_missing_from(
     return missing
 
 
+# Issue #1269: the ChatGPT/Codex SUBSCRIPTION family is hand-managed. It is
+# billed by a flat-rate ChatGPT plan (not per-token API keys) and is not present
+# in ``litellm.model_cost`` in a curatable form, so it is intentionally skipped
+# by ``_SKIP_PROVIDER_ROOTS`` during generation and instead PRESERVED here — the
+# same survival mechanism used for local-runner rows (#1269). ELOs mirror the
+# API twins; empty api_key marks device-flow (codex login) auth, like the
+# github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
+_CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.4", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1437", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1407", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.2", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1404", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex-spark",
+     "input": "0.0", "output": "0.0", "coding_arena_elo": "1400", "base_url": "",
+     "api_key": "", "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+]
+
+
+def _merge_chatgpt_subscription_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Append the hand-managed ChatGPT subscription rows, model-keyed deduped.
+
+    Mirrors the local-runner preserve path so a catalog regeneration never drops
+    the subscription fallback (issue #1269).
+    """
+    have = {r.get("model") for r in rows}
+    merged = list(rows)
+    for sub in _CHATGPT_SUBSCRIPTION_ROWS:
+        if sub["model"] not in have:
+            merged.append(dict(sub))
+    return merged
+
+
 def build_rows(
     refresh_elo: bool = False,
     existing_catalog: Optional[Path] = None,
@@ -1587,6 +1628,9 @@ def build_rows(
 
     # Sort: provider ascending, then ELO descending within each provider
     rows.sort(key=lambda r: (r["provider"], -r["coding_arena_elo"], r["model"]))
+    # Issue #1269: preserve the hand-managed ChatGPT subscription family,
+    # intentionally skipped during litellm-derived generation above.
+    rows = _merge_chatgpt_subscription_rows(rows)
     return rows
 
 

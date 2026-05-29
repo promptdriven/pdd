@@ -293,3 +293,65 @@ def test_anthropic_outranks_codex_so_default_unchanged():
     amax = df[df["provider"] == "Anthropic"]["coding_arena_elo"].max()
     cmax = df[df["provider"] == "OpenAI ChatGPT"]["coding_arena_elo"].max()
     assert amax > cmax, f"Anthropic max {amax} must exceed Codex max {cmax}"
+
+
+def test_chatgpt_structured_never_sends_response_format(monkeypatch):
+    """P1b: chatgpt/ structured calls must never send response_format — not the
+    initial call (popped) nor the retry/repair calls (the subscription backend
+    ignores it; schema is enforced in-prompt). Force non-JSON so retry/repair fire,
+    then assert response_format is absent from every recorded completion call."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    from pydantic import BaseModel
+
+    class Cap(BaseModel):
+        country: str
+        capital: str
+
+    df = pd.DataFrame([{
+        "provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex",
+        "input": 0.0, "output": 0.0, "coding_arena_elo": 1407, "base_url": "",
+        "api_key": "", "max_reasoning_tokens": 0, "structured_output": True,
+        "reasoning_type": "none", "location": "",
+    }])
+    df["avg_cost"] = 0.0
+    df["structured_output"] = df["structured_output"].astype(bool)
+
+    seen = []
+
+    def fake_completion(**kwargs):
+        seen.append("response_format" in kwargs)
+        msg = type("M", (), {"content": "definitely not json", "role": "assistant"})()
+        choice = type("C", (), {"message": msg, "finish_reason": "stop"})()
+        usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10})()
+        return type("R", (), {"choices": [choice], "usage": usage})()
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=df), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        try:
+            li.llm_invoke(prompt="info about {c}", input_json={"c": "France"},
+                          strength=0.5, output_pydantic=Cap, verbose=False)
+        except Exception:
+            pass
+
+    assert seen, "litellm.completion was never called"
+    assert not any(seen), f"chatgpt/ call(s) sent response_format: {seen}"
+
+
+def test_catalog_generator_preserves_chatgpt_family():
+    """P1a: a catalog refresh must NOT drop the ChatGPT subscription rows. The
+    generator skips chatgpt/* during litellm-derived generation, so it must
+    re-merge the hand-managed family before returning."""
+    import pdd.generate_model_catalog as gmc
+    merged = gmc._merge_chatgpt_subscription_rows([{"model": "anthropic/claude", "provider": "Anthropic"}])
+    cg = sorted(r["model"] for r in merged if str(r["model"]).startswith("chatgpt/"))
+    assert cg == ["chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex",
+                  "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4"], cg
+    again = gmc._merge_chatgpt_subscription_rows(merged)
+    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 4
+    elos = {r["model"]: r["coding_arena_elo"] for r in again if str(r["model"]).startswith("chatgpt/")}
+    assert elos["chatgpt/gpt-5.4"] == "1437"
+    assert elos["chatgpt/gpt-5.3-codex"] == "1407"

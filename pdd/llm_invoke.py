@@ -4470,7 +4470,7 @@ def llm_invoke(
                                             "model": model_name_litellm,
                                             "messages": retry_messages,
                                             "temperature": current_temperature,
-                                            "response_format": response_format,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
                                             "timeout": LLM_CALL_TIMEOUT,
                                             **time_kwargs,
                                             **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
@@ -4541,7 +4541,7 @@ def llm_invoke(
                                             "model": model_name_litellm,
                                             "messages": retry_messages,
                                             "temperature": current_temperature,
-                                            "response_format": response_format,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
                                             "timeout": LLM_CALL_TIMEOUT,
                                             **time_kwargs,
                                             **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
@@ -4811,7 +4811,7 @@ def llm_invoke(
                                                 "model": model_name_litellm,
                                                 "messages": retry_messages,
                                                 "temperature": current_temperature,
-                                                "response_format": response_format,
+                                                **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
                                                 "timeout": LLM_CALL_TIMEOUT,
                                                 **time_kwargs,
                                                 **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
