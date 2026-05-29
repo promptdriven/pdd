@@ -1,0 +1,34 @@
+% Google Gemini / Antigravity CLI profile for a Claude-Code-/simplify-equivalent cleanup pass.
+% Reference-only today: `pdd checkup simplify` does not invoke Gemini yet.
+
+<include>checkup_simplify_workflow_LLM.prompt</include>
+
+<gemini>
+## Prerequisites
+- `gemini` or `agy` CLI on PATH (PDD discovers both via `agentic_common`).
+- Valid Google/Gemini credentials per your installation (API key or OAuth).
+
+## Suggested invocation pattern (manual / future PDD wiring)
+Legacy Gemini CLI example inside the candidate worktree:
+
+```bash
+cd "$CANDIDATE_WORKTREE"
+printf '%s\n' "Simplify only these files: pdd/foo.py pdd/bar.py" \
+  | gemini --yolo --output-format json
+```
+
+Antigravity (`agy`) builds may prefer piping the full workflow prompt on stdin:
+
+```bash
+cd "$CANDIDATE_WORKTREE"
+agy --dangerously-skip-permissions --print < /path/to/simplify_prompt.txt
+```
+
+## Model selection
+- `GEMINI_MODEL` may be documented for future wiring; many Gemini CLI builds ignore model flags.
+- Treat stdout as the agent summary; parse JSON only when the CLI actually emits JSON.
+
+## Parity notes
+- Scope, conservatism, and verification expectations are identical to Claude simplify.
+- PDD verification (`ruff`, `mypy`, `pytest`) still runs in the candidate worktree after the agent pass.
+</gemini>
