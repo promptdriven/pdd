@@ -702,6 +702,13 @@ Story prompt linkage:
 
 Template:
 - See `user_stories/story__template.md` for a starter format.
+
+Contract coverage:
+- User stories are **example-level coverage** for named contract rules in prompts.
+  Document rule IDs under each story's `## Covers` section (for example `R1` or
+  `prompts/module_python.prompt#R2`). See `docs/coverage_contracts.md` and
+  `docs/contract_check.md`.
+
 ## Global Options
 
 These options can be used with any command:
