@@ -963,7 +963,9 @@ If multiple development language prompt files exist for the same basename, sync 
 - **Configuration Hierarchy**: CLI options > .pddrc context > environment variables > defaults
 - **Multi-language Support**: Automatically processes all language variants of a basename
 - **Intelligent Path Resolution**: Uses sophisticated directory management for complex project structures
-- **Architecture-Aware Outputs**: When `architecture.json` provides an explicit `filepath` for a prompt entry, sync uses that code output path instead of flattening to `.pddrc` defaults
+- **Architecture-Aware Outputs**: When `architecture.json` provides an explicit `filepath` for a prompt entry, sync honors it according to whether that `filepath` includes a directory component:
+  - If `filepath` includes a directory (e.g. `backend/api/widget.py`), that explicit directory structure wins and is preserved as-is — `.pddrc` output paths are not applied to it.
+  - If `filepath` is a bare filename at the project root (e.g. `widget.py`), the filename is preserved but its parent directory is taken from `.pddrc` `generate_output_path`. This makes the code path resolve consistently with `example_output_path` and `test_output_path`, which are always sourced from `.pddrc` defaults (Issue #1201). When no `generate_output_path` is configured, the bare filename resolves at the project root as before.
 - Context-specific settings include output paths, default language, model parameters, coverage targets, and budgets
 
 **Workflow Logic**:
