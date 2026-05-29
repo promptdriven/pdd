@@ -1017,6 +1017,16 @@ Validation is **lenient**:
 - `<pdd>...</pdd>`: Human-only comments (removed by preprocessor, never reach LLM)
 - Unlike `<pdd>...</pdd>` comments, `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` are not human-only comments. The standard prompt preprocessor does not remove them, so they may be visible during generation and are also consumed by architecture sync.
 
+### `contract_summary` in architecture.json
+
+When you run `pdd sync-architecture`, each module entry may include a generated
+`contract_summary` object (see `pdd/schemas/architecture_contract_summary.schema.json`).
+It is derived from `<contract_rules>`, linked user stories, test coverage, and the
+latest `.pdd/evidence/devunits/<prompt_stem>.latest.json` manifest. Fields include
+`rules`, `critical`, `stories`, `capabilities`, `coverage_status`, `evidence_status`,
+`waived`, `unchecked`, and optional `rules_detail`. Legacy prompts without contract
+sections are left unchanged.
+
 ### Example: Complete Prompt with Metadata Tags
 
 See `docs/examples/prompt_with_metadata.prompt` for a full example showing all three metadata tags in context.

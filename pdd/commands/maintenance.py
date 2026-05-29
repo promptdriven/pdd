@@ -509,11 +509,18 @@ def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> 
                             fg="yellow",
                         )
                     )
-                elif ev_status == "missing":
+                elif ev_status == "missing" and summary_data.get("rules"):
                     click.echo(
                         click.style(
                             f"  Warning: evidence is missing for {entry['filename']}",
                             fg="red",
+                        )
+                    )
+                elif ev_status == "error":
+                    click.echo(
+                        click.style(
+                            f"  Warning: evidence status error for {entry['filename']}",
+                            fg="yellow",
                         )
                     )
         elif not entry.get("success"):
