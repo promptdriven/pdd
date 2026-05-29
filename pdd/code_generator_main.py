@@ -3701,6 +3701,23 @@ def code_generator_main(
 
                         # Extract example information from examplesUsed array (cloud returns this)
                         examples_used = response_data.get("examplesUsed", [])
+                        from .grounding_provenance import (
+                            build_grounding_metadata,
+                            extract_grounding_overrides,
+                        )
+
+                        overrides = extract_grounding_overrides(prompt_content)
+                        grounding_meta = build_grounding_metadata(
+                            mode="cloud",
+                            examples_used=examples_used,
+                            grounding_overrides=overrides,
+                            reviewed=bool(cli_params.get("grounding_review_decisions")),
+                        )
+                        if ctx.obj is None:
+                            ctx.obj = {}
+                        if isinstance(ctx.obj, dict):
+                            ctx.obj["last_grounding"] = grounding_meta
+
                         if examples_used:
                             selected_example_id = examples_used[0].get("id")
                             selected_example_title = examples_used[0].get("title")
@@ -3733,6 +3750,10 @@ def code_generator_main(
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
                              else:
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             if grounding_meta.get("selected_examples"):
+                                 console.print("[cyan]Grounding examples selected:[/cyan]")
+                                 for example in grounding_meta["selected_examples"]:
+                                     console.print(f"  - {example.get('module', 'unknown')}")
                     except requests.exceptions.Timeout:
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
@@ -4236,5 +4257,14 @@ def code_generator_main(
             console.print(traceback.format_exc())
 
         raise click.UsageError(f"An unexpected error occurred: {e}")
-        
+
+    if isinstance(ctx.obj, dict) and "last_grounding" not in ctx.obj:
+        from .grounding_provenance import build_grounding_metadata, extract_grounding_overrides
+
+        ctx.obj["last_grounding"] = build_grounding_metadata(
+            mode="unavailable",
+            grounding_overrides=extract_grounding_overrides(prompt_content),
+            reviewed=bool(cli_params.get("grounding_review_decisions")),
+        )
+
     return generated_code_content or "", was_incremental_operation, total_cost, model_name

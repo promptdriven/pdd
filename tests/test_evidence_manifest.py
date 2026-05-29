@@ -10,7 +10,9 @@ import jsonschema
 import pytest
 
 from pdd.evidence_manifest import (
+    SCHEMA_VERSION,
     _preprocessed_expanded_sha256,
+    grounding_kwargs_from_ctx,
     validation_from_sync,
     write_evidence_manifest,
 )
@@ -70,8 +72,57 @@ def test_writes_schema_valid_run_and_latest_manifest(tmp_path: Path) -> None:
     )
     assert manifest["outputs"] == [{"path": "src/refund.py", "sha256": _hash(output)}]
     assert manifest["contracts"]["status"] == "not_applicable"
+    assert manifest["schema_version"] == SCHEMA_VERSION == 2
+    grounding = manifest["generation"]["grounding"]
+    assert grounding["mode"] == "unavailable"
+    assert grounding["selected_examples"] == []
+    assert grounding["reviewed"] is False
+    assert manifest["generation"]["grounding_examples"] == []
     latest = tmp_path / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
     assert json.loads(latest.read_text(encoding="utf-8")) == manifest
+
+
+def test_write_evidence_manifest_serializes_cloud_grounding(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompts" / "payments_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("Generate payments.\n", encoding="utf-8")
+
+    grounding = {
+        "mode": "cloud",
+        "selected_examples": [
+            {
+                "module": "payments",
+                "prompt_sha256": "abc123",
+                "similarity": 0.9,
+                "source": "cloud-history",
+            }
+        ],
+        "pinned": ["payments"],
+        "excluded": ["legacy_payments"],
+        "reviewed": True,
+    }
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+        grounding=grounding,
+        reviewed=True,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=manifest, schema=_schema())
+    assert manifest["generation"]["grounding"] == grounding
+    assert manifest["generation"]["grounding_examples"] == grounding["selected_examples"]
+
+
+def test_grounding_kwargs_from_ctx_merges_review_decisions() -> None:
+    kwargs = grounding_kwargs_from_ctx(
+        {
+            "last_grounding": {"mode": "cloud", "selected_examples": [], "pinned": [], "excluded": []},
+            "grounding_review_decisions": [{"module": "auth", "decision": "accept"}],
+        }
+    )
+    assert kwargs["reviewed"] is True
+    assert kwargs["grounding"]["mode"] == "cloud"
 
 
 def test_output_hash_changes_with_output_content(tmp_path: Path) -> None:
