@@ -90,9 +90,13 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 
 4. **Frame the verdict by mode** — this is the question Step 7 actually answers:
 
+   **Issue-presence test (apply before choosing a PR-mode branch):** treat the issue as ABSENT when `{issue_url}` is empty, whitespace-only, or the literal string `None`/`null` (these are how a `None` issue renders through `.format()`), AND `<issue_content>` is empty/absent. Treat the issue as PRESENT only when `{issue_url}` is a real, non-empty GitHub URL. Do not treat the literal text `None` as a valid issue URL.
+
    - **Issue mode** (default; `pr_mode` = `false`): "Did the fixes applied in Steps 6.1–6.3 resolve the issue described in `<issue_content>`, with no new regressions?" Set `success` true if yes, false otherwise.
 
-   - **PR mode** (`pr_mode` = `true`): "Does the current PR worktree for `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow runs inside the PR worktree (NOT the issue-author's HEAD). When fix mode is enabled, Steps 6.1-6.3 may have applied local checkup fixes that are not pushed until after Step 7. Your verdict must evaluate the current worktree state, including those local fixes, because this is the exact tree that will be committed and pushed back to the same PR if verification passes. If `<pr_push_output>` says the push rebased onto an updated PR head, this is a post-push verification pass and you must verify that final rebased worktree head. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR worktree's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
+   - **PR mode WITH an issue** (`pr_mode` = `true` and the issue is PRESENT per the test above): "Does the current PR worktree for `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow runs inside the PR worktree (NOT the issue-author's HEAD). When fix mode is enabled, Steps 6.1-6.3 may have applied local checkup fixes that are not pushed until after Step 7. Your verdict must evaluate the current worktree state, including those local fixes, because this is the exact tree that will be committed and pushed back to the same PR if verification passes. If `<pr_push_output>` says the push rebased onto an updated PR head, this is a post-push verification pass and you must verify that final rebased worktree head. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR worktree's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
+
+   - **PR mode WITHOUT an issue** (`pr_mode` = `true` and the issue is ABSENT per the test above — including when `{issue_url}` renders as empty or the literal `None`): "Is the current PR worktree for `{pr_url}` correct and high-quality on its own merits?" There is no issue to align against, so review the PR diff itself — correctness, regressions, build/test health, and quality. Do NOT emit `issue_aligned` (omit it or set it to `null`); there is no alignment gate. The verdict is code findings only: clean → ship, findings → fix. All other PR-mode rules (verify the worktree state including local fixes, honour `<pr_push_output>` rebase notes) are unchanged.
 
 5. **Generate the final JSON report**
 
@@ -119,10 +123,11 @@ The JSON report MUST be the LAST thing you output, on its own, wrapped in a mark
 }}
 ```
 
-In **issue mode**, omit `issue_aligned` (or set it to `null`) — it only applies when verifying an existing PR.
-In **PR mode**, `issue_aligned` is REQUIRED.
+In **issue mode**, omit `issue_aligned` (or set it to `null`) — it only applies when verifying an existing PR against an issue.
+In **PR mode WITH an issue**, `issue_aligned` is REQUIRED.
+In **PR mode WITHOUT an issue**, omit `issue_aligned` (or set it to `null`) — there is no issue to align against; the verdict is based on code findings only.
 
-Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff. In PR mode with `PR test scope` = `full`, do not set `"success": true` if the full suite was skipped or timed out; either cite an authoritative full-suite/CI result or set `"success": false` with a partial-verification finding. In PR mode with `PR test scope` = `targeted`, the final report MUST explicitly label verification as targeted in the markdown summary and the JSON `message` (e.g., "Verification scope: targeted — full suite not run") so downstream consumers do not mistake targeted coverage for full-suite coverage.
+Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode with an issue) `issue_aligned` is true AND no critical findings remain in the PR's diff, or (PR mode without an issue) no critical findings remain in the PR's diff. In PR mode with `PR test scope` = `full`, do not set `"success": true` if the full suite was skipped or timed out; either cite an authoritative full-suite/CI result or set `"success": false` with a partial-verification finding. In PR mode with `PR test scope` = `targeted`, the final report MUST explicitly label verification as targeted in the markdown summary and the JSON `message` (e.g., "Verification scope: targeted — full suite not run") so downstream consumers do not mistake targeted coverage for full-suite coverage.
 Set `"success": false` otherwise.
 
 6. **Prepare the final summary** — route by mode:
@@ -161,7 +166,7 @@ Your markdown summary should follow this format:
 [PR mode only — state explicitly: "full suite" or "targeted (full suite not run)"]
 
 ### Issue Alignment
-[PR mode only — omit in issue mode]
+[PR mode WITH an issue only — omit in issue mode and in PR mode without an issue]
 [issue_aligned: true/false — and one sentence explaining whether the PR addresses the issue's intent]
 
 ### Issues Summary
@@ -182,4 +187,4 @@ Your markdown summary should follow this format:
 - In issue mode, post your findings as a GitHub comment before outputting the JSON
 - In PR mode, do NOT post GitHub comments from Step 7; output the markdown summary and JSON only
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
-- **Exit signal**: If the required verification for the active mode passes AND the build succeeds with no remaining issues, you MUST include the exact text "All Issues Fixed" in your output. In issue mode, required verification means ALL tests pass (unit + integration + e2e). In PR mode, required verification means PR-scoped tests plus any required regression/e2e/contract tests pass, and either the full suite/CI is clean or the report truthfully states that verification was targeted only. If any required test fails, build issues remain, or full-suite evidence is required but missing, do NOT output "All Issues Fixed" — instead clearly list remaining issues so the next iteration can fix them
+- **Exit signal**: If the required verification for the active mode passes AND the build succeeds with no remaining issues, you MUST include the exact text "All Issues Fixed" in your output. In issue mode, required verification means ALL tests pass (unit + integration + e2e). In PR mode, required verification means PR-scoped tests plus any required regression/e2e/contract tests pass, and either the full suite/CI is clean or the report truthfully states that verification was targeted only; when an issue IS provided, `issue_aligned` must also be true, but when no issue is provided the exit signal depends on code findings only (no alignment requirement). If any required test fails, build issues remain, or full-suite evidence is required but missing, do NOT output "All Issues Fixed" — instead clearly list remaining issues so the next iteration can fix them
