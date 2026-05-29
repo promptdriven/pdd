@@ -1,0 +1,19 @@
+<pdd-reason>Applies simple refund policy contract rules for generated-test traceability.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "validate_refund", "signature": "(charge_amount: int, refund_amount: int) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<contract_rules>
+R1: The system MUST approve a refund amount that is positive and less than or equal to the original charge amount.
+R2: The system MUST NOT approve a refund amount that exceeds the original charge amount.
+</contract_rules>
+
+Implement validate_refund for integer cent amounts.
