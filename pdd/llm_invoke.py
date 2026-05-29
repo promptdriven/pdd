@@ -880,10 +880,16 @@ def _llm_invoke_cloud(
         raise CloudFallbackError("Could not authenticate with cloud")
 
     # Prepare payload
+    # Coerce a None ``time`` to the documented default (0.25). The cloud
+    # llm_invoke endpoint parses this with float(data.get("time", 0.25)), where
+    # the default only applies when the key is ABSENT — a present-but-null value
+    # reaches float(None) and 500s with "Internal server error during LLM
+    # invocation". This mirrors the existing guard in fix_error_loop.py's
+    # cloud_fix_errors payload.
     payload: Dict[str, Any] = {
         "strength": strength,
         "temperature": temperature,
-        "time": time,
+        "time": time if time is not None else 0.25,
         "verbose": verbose,
         "useBatchMode": use_batch_mode,
     }
