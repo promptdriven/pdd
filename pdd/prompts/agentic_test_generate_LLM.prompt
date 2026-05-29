@@ -35,6 +35,18 @@ The PROMPT FILE is the source of truth. Tests verify that code conforms to the s
 3. **Generate Tests**
    - Create the test file at the specified output path with the CORRECT extension for the language
    - Follow the project's existing test patterns and conventions
+   - CONTRACT RULE TEST PLANNING: When the prompt contains a `contract_rules` section:
+     - Read every rule ID before writing or extending tests.
+     - Generate at least one behavioral test for each MUST rule when the available
+       code and fixtures make the rule observable.
+     - Generate at least one negative test for each MUST NOT rule when the
+       forbidden behavior is observable.
+     - Name tests with the rule ID when practical, or add a short comment naming
+       the rule ID when the test name would become unclear.
+       Example: `test_R2_rejects_over_refund`
+     - If a rule cannot be tested with the available fixtures, emit a skipped test
+       or TODO comment that names the rule ID and explains the missing fixture.
+     - Preserve existing accumulated tests, especially in merge or append mode.
    - Write comprehensive tests covering:
      - Normal functionality as described in the prompt
      - Edge cases
