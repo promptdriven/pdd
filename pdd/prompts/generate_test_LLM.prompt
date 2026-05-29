@@ -122,6 +122,8 @@
         - Identify the EXACT return values and behavior
         - Identify any error conditions or edge cases
     2. SECOND: Analyze the prompt that generated the code to understand the intended functionality and edge cases.
+        - If prompt_that_generated_code contains a contract_rules section, apply the contract-rule test planning rules from context/test.prompt before selecting test cases.
+        - Make rule traceability visible in test names, parametrization IDs, comments, docstrings, TODOs, or skip reasons.
     3. THIRD: Classify each target behavior as either:
         - FORMAL_CANDIDATE: pure, deterministic, finite-state logic that can be encoded faithfully
         - RUNTIME_TEST_ONLY: filesystem behavior, imports, framework wiring, network, auth providers, time, randomness, or anything that depends on environment interaction
