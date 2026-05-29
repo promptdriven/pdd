@@ -2,7 +2,8 @@
 
 Benchmark for [issue #1273](https://github.com/promptdriven/pdd/issues/1273) / epic [#833](https://github.com/promptdriven/pdd/issues/833).
 
-**M1 claim:** formalization improves **prompt checkability** (not code correctness or regen stability).
+**M1 claim:** formalization improves **prompt checkability** — the upstream lever for
+lower generation cost and fewer fix loops (see [BUSINESS_VALUE.md](BUSINESS_VALUE.md)).
 
 | Milestone | Name | Status |
 |-----------|------|--------|
@@ -10,7 +11,9 @@ Benchmark for [issue #1273](https://github.com/promptdriven/pdd/issues/1273) / e
 | M2 | Formalized Prompt Generation Benchmark | Planned |
 | M3 | Formalized Prompt Regeneration Stability Benchmark | Planned |
 
-**Plan:** [PLAN.md](PLAN.md) · **Evaluation:** [EVALUATION.md](EVALUATION.md) · **Epic mapping:** [EPIC833.md](EPIC833.md)
+**Plan:** [PLAN.md](PLAN.md) · **Business value:** [BUSINESS_VALUE.md](BUSINESS_VALUE.md) ·
+**Evaluation:** [EVALUATION.md](EVALUATION.md) · **Epic mapping:** [EPIC833.md](EPIC833.md) ·
+**M2 roadmap:** [pipelines/M2_ROADMAP.md](pipelines/M2_ROADMAP.md)
 
 ## Quick eval — Milestone 1 (deterministic)
 

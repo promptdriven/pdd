@@ -6,6 +6,7 @@
   "required": ["milestone", "claim", "task_count", "tasks", "headline"],
   "properties": {
     "milestone": { "type": "integer", "const": 1 },
+    "business_hypothesis": { "type": "string" },
     "claim": { "type": "string" },
     "task_count": { "type": "integer", "minimum": 0 },
     "tasks_gained_vocabulary": { "type": "integer" },
@@ -25,9 +26,7 @@
         "a0_lint_warnings",
         "a1_lint_warnings",
         "a0_contract_rule_count",
-        "a1_contract_rule_count",
-        "regen_runs",
-        "behavior_stability"
+        "a1_contract_rule_count"
       ],
       "properties": {
         "task_id": { "type": "string" },
@@ -38,8 +37,18 @@
         "a0_has_vocabulary": { "type": "boolean" },
         "a1_has_vocabulary": { "type": "boolean" },
         "a1_has_contract_rules": { "type": "boolean" },
-        "regen_runs": { "type": ["integer", "null"] },
-        "behavior_stability": { "type": ["number", "null"] }
+        "lint_warnings_reduced": { "type": ["boolean", "null"] },
+        "economics_m2": { "$ref": "#/$defs/economics_placeholder" }
+      }
+    },
+    "economics_placeholder": {
+      "type": "object",
+      "properties": {
+        "delta_generation_rounds": { "type": ["number", "null"] },
+        "delta_cost_usd": { "type": ["number", "null"] },
+        "delta_tokens": { "type": ["number", "null"] },
+        "delta_oracle_pass_rate": { "type": ["number", "null"] },
+        "reason": { "type": "string" }
       }
     }
   }

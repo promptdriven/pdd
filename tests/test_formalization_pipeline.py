@@ -39,6 +39,30 @@ def test_formalize_a1_dry_run(tmp_path: Path) -> None:
     assert json.loads(proc.stdout)["dry_run"] is True
 
 
+def test_business_value_in_experiment_manifest(tmp_path: Path) -> None:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BENCHMARK_ROOT / "pipelines" / "run_experiment.py"),
+            "--output-dir",
+            str(tmp_path),
+            "--tasks",
+            "hello_fn",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
+    assert "business_value" in manifest
+    assert "hypothesis" in manifest["business_value"]
+    task = manifest["tasks"][0]
+    assert task["a0"]["economics"]["generation_rounds"] is None
+    assert task["delta"]["economics"]["delta_cost_usd"] is None
+
+
 def test_run_experiment_smoke(tmp_path: Path) -> None:
     proc = subprocess.run(
         [sys.executable, str(BENCHMARK_ROOT / "pipelines" / "run_experiment.py"),

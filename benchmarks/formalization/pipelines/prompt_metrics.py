@@ -9,6 +9,7 @@ from pdd.coverage_contracts import build_coverage
 from pdd.prompt_lint import scan_prompt
 
 import writeback  # noqa: F401 — same package
+from economics import economics_placeholders  # noqa: E402
 
 
 def collect_prompt_metrics(
@@ -51,9 +52,10 @@ def collect_prompt_metrics(
         "unchecked_rule_count": summary.get("unchecked", 0),
         "formalization_records": len(ir.formalizations),
         "formal_candidate_rules": formal_candidates,
-        "regen_runs": None,
-        "behavior_stability": None,
-        "stability_reason": "Not measured until Milestone 3 (regen/drift)",
+        "economics": economics_placeholders(
+            milestone=1,
+            reason="Generation economics measured in M2 (run_generation_benchmark.py)",
+        ),
     }
 
 
@@ -67,6 +69,8 @@ def delta_metrics(a0: dict[str, Any], a1: dict[str, Any]) -> dict[str, Any]:
             return right - left
         return None
 
+    from economics import checkability_improvement, economics_delta_placeholder  # noqa: E402
+
     return {
         "delta_lint_warnings": _delta("lint_warnings"),
         "delta_lint_errors": _delta("lint_errors"),
@@ -76,4 +80,6 @@ def delta_metrics(a0: dict[str, Any], a1: dict[str, Any]) -> dict[str, Any]:
         "gained_contract_rules": (not a0.get("has_contract_rules")) and bool(
             a1.get("has_contract_rules")
         ),
+        "checkability": checkability_improvement(a0, a1),
+        "economics": economics_delta_placeholder(),
     }

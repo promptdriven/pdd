@@ -23,6 +23,7 @@ if str(_PIPELINE_DIR) not in sys.path:
 
 import formalize_a1  # noqa: E402
 import prompt_metrics  # noqa: E402
+from economics import business_value_block  # noqa: E402
 
 EXPERIMENT_VERSION = "m1_v1"
 DEFAULT_OUTPUT = _BENCHMARK_ROOT / "experiments" / "latest"
@@ -98,6 +99,7 @@ def run_experiment(
             "A1 produced by benchmark-local formalize_a1.py (formalize_script_v1), "
             "not native pdd checkup formalize --apply."
         ),
+        "business_value": business_value_block(),
         "tasks": [],
     }
 
@@ -209,9 +211,11 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "milestone": 1,
+        "business_hypothesis": business_value_block()["hypothesis"],
         "claim": (
-            "M1 measures prompt checkability (vocabulary, contract rules, lint). "
-            "It does not measure generated code correctness (M2) or regen stability (M3)."
+            "M1 measures the upstream business lever: prompt checkability before "
+            "generation spend. M2 connects to generation rounds, tokens, and cost. "
+            "M3 connects to regeneration drift."
         ),
         "task_count": n,
         "tasks_gained_vocabulary": gained_vocab,
@@ -228,8 +232,10 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
                 "a0_has_vocabulary": t["a0"]["has_vocabulary"],
                 "a1_has_vocabulary": t["a1"]["has_vocabulary"],
                 "a1_has_contract_rules": t["a1"]["has_contract_rules"],
-                "regen_runs": None,
-                "behavior_stability": None,
+                "lint_warnings_reduced": t["delta"]
+                .get("checkability", {})
+                .get("lint_warnings_reduced"),
+                "economics_m2": t["delta"].get("economics"),
             }
             for t in task_results
         ],
@@ -240,6 +246,15 @@ def _write_report_md(path: Path, summary: dict[str, Any], manifest: dict[str, An
     """Write human-readable M1 report."""
     lines = [
         "# A0→A1 Prompt Formalization Benchmark — Milestone 1 Report",
+        "",
+        "## Business value (M1 scope)",
+        "",
+        f"**Hypothesis:** {summary.get('business_hypothesis', '')}",
+        "",
+        "M1 measures whether formalization improves prompt checkability *before* "
+        "generation spend. It does **not** yet report generation rounds, token cost, "
+        "or oracle pass rate — see `benchmarks/formalization/BUSINESS_VALUE.md` and "
+        "`benchmarks/formalization/pipelines/M2_ROADMAP.md`.",
         "",
         f"**Claim scope:** {summary['claim']}",
         "",

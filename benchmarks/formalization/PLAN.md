@@ -19,6 +19,29 @@ Issue: [#1273](https://github.com/promptdriven/pdd/issues/1273) · Epic [#833](h
 
 M1 does **not** claim code correctness or same-behavior-each-generation.
 
+See **[BUSINESS_VALUE.md](BUSINESS_VALUE.md)** for the full business case and hypothesis.
+
+---
+
+## Business value
+
+This benchmark makes PDD's business value measurable: better prompts should reduce wasted
+generation loops, lower token spend, and make AI-generated software easier to trust.
+
+**Core hypothesis:**
+
+> A structured A1 prompt should need fewer PDD generate / fix / verify rounds than a vague
+> A0 prompt to reach acceptable behavior.
+
+| Milestone | Business lever |
+|-----------|----------------|
+| **M1** | Prompt checkability before generation (lint, vocabulary, contract rules, audit log) |
+| **M2** | Generation economics: rounds, tokens, cost, wall-clock, oracle vs generated pass rate |
+| **M3** | Regeneration drift and behavioral stability vs oracle |
+
+Pipeline placeholders for M2/M3 live in `pipelines/economics.py` and are emitted as
+`null` in M1 `result.json` until `run_generation_benchmark.py` (M2) lands.
+
 ---
 
 ## Quick start
