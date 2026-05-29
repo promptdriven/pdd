@@ -306,15 +306,27 @@ class ContextSnapshotRecorder:
             metadata["source_path_external"] = True
         if source.exists():
             metadata["source_sha256"] = _sha256_file(source)
+        meta_redacted = False
+        meta_patterns: List[str] = []
         if query:
-            safe_query, _, _ = redact_snapshot_text(query)
+            safe_query, q_redacted, q_patterns = redact_snapshot_text(query)
             metadata["query"] = safe_query
-        return self._write_text_artifact(
+            if q_redacted:
+                meta_redacted = True
+                meta_patterns = sorted(set(meta_patterns) | set(q_patterns))
+        if meta_redacted:
+            self.redaction_applied = True
+            self.redaction_patterns = sorted(set(self.redaction_patterns) | set(meta_patterns))
+        record = self._write_text_artifact(
             artifact_type=artifact_type,
             name=f"{artifact_type}-{len(self.artifacts) + 1}-{source.name}",
             text=output if output is not None else content,
             metadata=metadata,
         )
+        if meta_redacted:
+            record["redaction_applied"] = True
+            record["redaction_patterns"] = sorted(set(record["redaction_patterns"]) | set(meta_patterns))
+        return record
 
     def record_shell(
         self,
@@ -330,9 +342,14 @@ class ContextSnapshotRecorder:
 
         if "shell" not in self.dynamic_tags:
             self.dynamic_tags.append("shell")
-        safe_command, _, _ = redact_snapshot_text(command)
-        safe_cwd, _, _ = redact_snapshot_text(cwd) if cwd else (None, False, [])
-        return self._write_text_artifact(
+        safe_command, cmd_redacted, cmd_patterns = redact_snapshot_text(command)
+        safe_cwd, cwd_redacted, cwd_patterns = redact_snapshot_text(cwd) if cwd else (None, False, [])
+        meta_redacted = cmd_redacted or cwd_redacted
+        meta_patterns: List[str] = sorted(set(cmd_patterns) | set(cwd_patterns))
+        if meta_redacted:
+            self.redaction_applied = True
+            self.redaction_patterns = sorted(set(self.redaction_patterns) | set(meta_patterns))
+        record = self._write_text_artifact(
             artifact_type="shell",
             name=f"shell-{len(self.artifacts) + 1}",
             text=f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}",
@@ -344,6 +361,10 @@ class ContextSnapshotRecorder:
                 "environment": "not_persisted",
             },
         )
+        if meta_redacted:
+            record["redaction_applied"] = True
+            record["redaction_patterns"] = sorted(set(record["redaction_patterns"]) | set(meta_patterns))
+        return record
 
     def record_web(
         self,
@@ -357,13 +378,20 @@ class ContextSnapshotRecorder:
 
         if "web" not in self.dynamic_tags:
             self.dynamic_tags.append("web")
-        safe_url, _, _ = redact_snapshot_text(url)
-        return self._write_text_artifact(
+        safe_url, url_redacted, url_patterns = redact_snapshot_text(url)
+        if url_redacted:
+            self.redaction_applied = True
+            self.redaction_patterns = sorted(set(self.redaction_patterns) | set(url_patterns))
+        record = self._write_text_artifact(
             artifact_type="web",
             name=f"web-{len(self.artifacts) + 1}",
             text=content,
             metadata={"url": safe_url, "fetcher": fetcher, "status": status},
         )
+        if url_redacted:
+            record["redaction_applied"] = True
+            record["redaction_patterns"] = sorted(set(record["redaction_patterns"]) | set(url_patterns))
+        return record
 
     def record_grounding_examples(
         self, examples: Iterable[Mapping[str, Any]]
