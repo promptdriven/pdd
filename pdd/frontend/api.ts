@@ -129,7 +129,10 @@ export interface CostEstimate {
 export interface TokenMetrics {
   token_count: number;
   context_limit: number;
-  context_usage_percent: number;
+  // Nullable: the backend returns null for models litellm doesn't know yet
+  // (e.g. a freshly-released Opus before litellm ships its id). Consumers must
+  // guard before calling number methods like toFixed().
+  context_usage_percent: number | null;
   cost_estimate: CostEstimate | null;
 }
 
@@ -172,7 +175,7 @@ export interface ModelInfo {
   elo: number;             // Coding arena ELO rating
   context_limit: number;   // Maximum context window size in tokens
   max_thinking_tokens: number;  // Maximum thinking/reasoning tokens (0 if not supported)
-  reasoning_type: string;  // "none", "effort", or "budget"
+  reasoning_type: string;  // "none", "effort", "budget", or "adaptive"
   structured_output: boolean;  // Whether the model supports structured output
 }
 
