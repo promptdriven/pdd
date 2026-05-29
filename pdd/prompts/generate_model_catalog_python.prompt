@@ -46,8 +46,8 @@ match model identities at runtime.
    - `_extract_base_model(model_id)`: conservative canonicalization by stripping provider/region/vendor/org/version routing noise, then longest-prefix match against `STATIC_ELO_FALLBACK` keys with safe remainders only.
    - `_get_elo(model_id, arena_index)`: resolution chain, returning the first non-zero hit: exact reviewed manifest alias, `STATIC_ELO_FALLBACK` exact, `STATIC_ELO_FALLBACK` canonical-prefix, legacy exact alias hook, then 0.
    - `_get_provider_root`, `_has_region`.
-   - `_infer_reasoning_type`: `"none"` if no reasoning support; `"budget"` for roots `anthropic`/`azure_ai`, EXCEPT direct-Anthropic-provider Opus models in the adaptive allowlist (`claude-opus-4-7`, `claude-opus-4-8`) which return `"adaptive"` (Opus 4.7+ removed the legacy `thinking.type="enabled"` budget shape and 400 on it); otherwise `"effort"`. Azure AI / Bedrock / Vertex Claude relays stay on `budget`/`effort`.
-   - `_infer_max_reasoning_tokens`: `128000` for reasoning-capable `anthropic`/`azure_ai`, but `16000` for the adaptive-allowlist Opus models; else `0`.
+   - `_infer_reasoning_type`: `"none"` if no reasoning support; `"budget"` for roots `anthropic`/`azure_ai`, EXCEPT Opus models in the adaptive allowlist which return `"adaptive"`: direct-Anthropic-provider `claude-opus-4-7`/`claude-opus-4-8` (Opus 4.7+ removed the legacy `thinking.type="enabled"` budget shape and 400 on it) AND `azure_ai/claude-opus-4-7` (Azure AI has adopted the same adaptive enforcement); otherwise `"effort"`. Bedrock / Vertex Claude relays stay on `budget`/`effort`.
+   - `_infer_max_reasoning_tokens`: `128000` for reasoning-capable `anthropic`/`azure_ai`, but `16000` for the adaptive-allowlist Opus models (both direct Anthropic and azure_ai); else `0`.
    - `_is_deprecated`, `_is_placeholder`, and `_is_superseded_preview`.
 5. `build_rows(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None)`:
    - Lazy-import `litellm`; on ImportError print install hint to stderr and exit 1.
