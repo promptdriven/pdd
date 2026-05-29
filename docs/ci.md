@@ -11,3 +11,5 @@ Longer suites remain separate:
 
 - `make regression` and `make sync-regression` exercise LLM-backed CLI flows.
 - `make cloud-regression` and cloud batch targets require cloud authentication and should run only in protected or private CI.
+
+Projects with critical modules may add a policy check that rejects unsnapshotted nondeterministic prompt context. The check should fail when a protected prompt uses `<shell>`, `<web>`, or `<include ... query="...">` without a corresponding snapshot-context run artifact. Keep this check separate from public fork-safe regression jobs if it requires private snapshot artifacts or secret-gated web access.

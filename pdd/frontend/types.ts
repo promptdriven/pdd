@@ -17,6 +17,7 @@ export enum CommandType {
   AUTO_DEPS = 'auto-deps',
   CONFLICTS = 'conflicts',
   PREPROCESS = 'preprocess',
+  REPLAY = 'replay',
 }
 
 export interface CommandOption {
@@ -145,8 +146,6 @@ export interface ArchitectureModule {
     x: number;
     y: number;
   };
-  // Optional group name for graph layout hierarchy
-  group?: string;
 }
 
 export interface ProjectArchitecture {

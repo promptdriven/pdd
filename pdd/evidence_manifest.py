@@ -389,6 +389,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     logs: Optional[Mapping[str, Optional[str]]] = None,
     basename: Optional[str] = None,
     project_root: Optional[str | Path] = None,
+    context_snapshot: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
@@ -422,6 +423,15 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     if logs:
         log_values.update(logs)
 
+    snapshot_context = dict(context_snapshot or {})
+    snapshot_expanded = snapshot_context.get("expanded_prompt")
+    if isinstance(snapshot_expanded, Mapping) and isinstance(snapshot_expanded.get("sha256"), str):
+        prompt["expanded_sha256"] = snapshot_expanded["sha256"]
+    if snapshot_context.get("uses_nondeterministic_context") is not None:
+        prompt["uses_nondeterministic_tags"] = bool(
+            snapshot_context.get("uses_nondeterministic_context")
+        )
+
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -452,6 +462,30 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "logs": log_values,
     }
+    if snapshot_context:
+        manifest["context_snapshot"] = {
+            "enabled": True,
+            "manifest_path": snapshot_context.get("manifest_path"),
+            "snapshot_dir": snapshot_context.get("snapshot_dir"),
+            "expanded_prompt": snapshot_expanded,
+            "expanded_prompt_path": (
+                snapshot_expanded.get("path")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "expanded_sha256": (
+                snapshot_expanded.get("sha256")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "uses_nondeterministic_context": bool(
+                snapshot_context.get("uses_nondeterministic_context")
+            ),
+            "dynamic_tags": list(snapshot_context.get("dynamic_tags") or []),
+            "declared_dynamic_tags": list(snapshot_context.get("declared_dynamic_tags") or []),
+            "redaction_applied": bool(snapshot_context.get("redaction_applied")),
+            "artifacts": list(snapshot_context.get("artifacts") or []),
+        }
 
     runs_dir = root / ".pdd" / "evidence" / "runs"
     latest_dir = root / ".pdd" / "evidence" / "devunits"

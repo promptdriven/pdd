@@ -128,6 +128,12 @@ DEFAULT_SYNC_BUDGET = 20.0
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option(
+    "--snapshot-context",
+    is_flag=True,
+    default=False,
+    help="Write replayable expanded prompt context artifacts for generation steps.",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -151,6 +157,7 @@ def sync(
     no_resume: bool,
     durable_max_parallel: Optional[int],
     evidence: bool,
+    snapshot_context: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -172,6 +179,8 @@ def sync(
 
     # No basename -> global Tier 1 sync
     if basename is None:
+        if snapshot_context:
+            raise click.UsageError("--snapshot-context is only supported for single-module sync.")
         if durable or durable_branch or no_resume or durable_max_parallel is not None:
             raise click.UsageError("Durable sync options require a GitHub issue URL.")
         effective_one_session = one_session if one_session is not None else False
@@ -206,6 +215,8 @@ def sync(
 
     # Detect GitHub issue URL -> dispatch to agentic sync
     if _is_github_issue_url(basename):
+        if snapshot_context:
+            raise click.UsageError("--snapshot-context is only supported for single-module sync.")
         if not durable and (
             durable_branch is not None or no_resume or durable_max_parallel is not None
         ):
@@ -270,6 +281,7 @@ def sync(
             steer_timeout=steer_timeout,
             agentic_mode=agentic,
             one_session=effective_one_session,
+            snapshot_context=snapshot_context,
         )
         if evidence:
             write_evidence_manifest(
@@ -284,6 +296,7 @@ def sync(
                     skip_verify=skip_verify,
                     dry_run=dry_run,
                 ),
+                context_snapshot=(ctx.obj or {}).get("context_snapshot"),
             )
         return str(result), total_cost, model_name
     except click.Abort:

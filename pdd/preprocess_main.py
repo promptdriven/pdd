@@ -8,6 +8,7 @@ from rich import print as rprint
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess
+from .context_snapshot import start_snapshot_run
 from .xml_tagger import xml_tagger
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
@@ -17,7 +18,7 @@ from .architecture_sync import (
 
 
 def preprocess_main(
-    ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list, pdd_tags: bool = False
+    ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list, pdd_tags: bool = False, snapshot: bool = False
 ) -> Tuple[str, float, str]:
     """
     CLI wrapper for preprocessing prompts.
@@ -31,6 +32,7 @@ def preprocess_main(
     :param exclude: List of keys to exclude from curly bracket doubling.
     :return: Tuple containing the preprocessed prompt, total cost, and model name used.
     :param pdd_tags: If True, inject PDD metadata tags from architecture.json.
+    :param snapshot: If True, write replayable expanded prompt context artifacts.
     """
     try:
         # Construct file paths
@@ -70,6 +72,8 @@ def preprocess_main(
                     rprint(f"[yellow]No architecture entry found for '{prompt_filename}', skipping PDD tags.[/yellow]")
 
         if xml:
+            if snapshot:
+                raise click.UsageError("--snapshot is not supported with --xml.")
             # Use xml_tagger to add XML delimiters
             # Use centralized config resolution with proper priority: CLI > pddrc > defaults
             effective_config = resolve_effective_config(ctx, resolved_config)
@@ -87,6 +91,10 @@ def preprocess_main(
             processed_prompt = xml_tagged
         else:
             # Preprocess the prompt
+            recorder = None
+            if snapshot:
+                recorder = start_snapshot_run(prompt_file, command="pdd preprocess")
+                recorder.record_prompt_source(prompt)
             initial_seen = {str(Path(prompt_file).resolve())}
             processed_prompt = preprocess(
                 prompt,
@@ -94,12 +102,22 @@ def preprocess_main(
                 double,
                 exclude_keys=exclude,
                 _seen=initial_seen,
+                snapshot_recorder=recorder,
             )
             total_cost, model_name = 0.0, "N/A"
 
         # Save the preprocessed prompt
         with open(output_file_paths["output"], "w") as f:
             f.write(processed_prompt)
+
+        snapshot_manifest = None
+        if snapshot and not xml:
+            snapshot_manifest = recorder.finalize(
+                expanded_prompt=processed_prompt,
+                prompt_text=prompt,
+                output_files=[output_file_paths["output"]],
+                model=model_name,
+            )
 
         # Provide user feedback
         if not ctx.obj.get("quiet", False):
@@ -112,6 +130,8 @@ def preprocess_main(
                 rprint(f"[bold]Model used: {model_name}[/bold]")
             rprint(f"[bold]Total cost: ${total_cost:.6f}[/bold]")
             rprint(f"[bold]Preprocessed prompt saved to:[/bold] {output_file_paths['output']}")
+            if snapshot_manifest:
+                rprint(f"[bold]Context snapshot:[/bold] {snapshot_manifest['manifest_path']}")
 
         return processed_prompt, total_cost, model_name
 

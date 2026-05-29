@@ -63,6 +63,29 @@
       "type": "object",
       "required": ["core_dump", "verify_results", "cost_csv"],
       "additionalProperties": {"type": ["string", "null"]}
+    },
+    "context_snapshot": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "manifest_path": {"type": ["string", "null"]},
+        "snapshot_dir": {"type": ["string", "null"]},
+        "expanded_prompt_path": {"type": ["string", "null"]},
+        "expanded_sha256": {"type": ["string", "null"]},
+        "expanded_prompt": {
+          "type": ["object", "null"],
+          "properties": {
+            "path": {"type": "string"},
+            "sha256": {"type": "string"},
+            "redaction_applied": {"type": "boolean"}
+          }
+        },
+        "uses_nondeterministic_context": {"type": "boolean"},
+        "dynamic_tags": {"type": "array", "items": {"type": "string"}},
+        "declared_dynamic_tags": {"type": "array", "items": {"type": "string"}},
+        "redaction_applied": {"type": "boolean"},
+        "artifacts": {"type": "array"}
+      }
     }
   },
   "$defs": {
