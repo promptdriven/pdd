@@ -197,9 +197,19 @@ def preserve_git_work_tree():
 
 @pytest.fixture(autouse=True)
 def isolate_cloud_only_overrides(monkeypatch):
-    """Clear developer cloud-only env flags unless a test sets them."""
+    """Clear developer/CI env flags unless a test sets them.
+
+    ``PDD_QUIET`` is included because the Cloud Batch worker exports it
+    globally. Without this, tests that exercise the *non-quiet* user-facing
+    console output (e.g. the unresolved-include warning in
+    ``test_preprocess.py``) inherit the CI quiet flag and assert against an
+    empty stdout — passing locally but failing in Cloud Batch. Tests that
+    need quiet mode still ``monkeypatch.setenv("PDD_QUIET", "1")`` after this
+    autouse fixture runs, so their behavior is unchanged.
+    """
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+    monkeypatch.delenv("PDD_QUIET", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -478,6 +488,16 @@ def pytest_runtest_makereport(item: pytest.Item, call):
 # `tests/fixtures/` contains fixture source trees used by higher-level tests;
 # some of those fixtures intentionally include broken `test_*.py` files.
 # They must never be collected as part of the main pytest suite.
+#
+# NOTE: ``collect_ignore_glob`` only prunes directory *recursion*. It is
+# silently bypassed when a specific fixture file path is handed to pytest on
+# the command line (pytest forces collection of explicitly-named files), so it
+# cannot, on its own, stop the Cloud Batch chunker from crashing a chunk that
+# happens to include an intentionally-broken fixture such as
+# ``tests/fixtures/coverage_contracts/fake_tests/test_receipt_failed.py``. The
+# authoritative guard for that path lives in the chunker / entrypoint file-list
+# discovery (``ci/cloud-batch/balance-chunks.py`` and
+# ``ci/cloud-batch/entrypoint.sh``), which now exclude all of ``tests/fixtures/``.
 collect_ignore_glob = [
     "csv/*",
     "fixtures/*",

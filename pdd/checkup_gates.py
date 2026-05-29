@@ -61,7 +61,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -493,16 +493,16 @@ def _has_active_noemit(tokens: List[str]) -> bool:
     for i, t in enumerate(tokens):
         if t == "--noemit":
             if i + 1 < len(tokens) and tokens[i + 1] in (
-                "false", "0", "no",
+                "false",
+                "0",
+                "no",
             ):
                 continue
             return True
     return False
 
 
-def _extract_tsc_project_paths(
-    script_command: str, worktree: Path
-) -> List[Path]:
+def _extract_tsc_project_paths(script_command: str, worktree: Path) -> List[Path]:
     """Return the worktree-resolved paths a tsc-flavoured script
     targets via ``-p <path>`` / ``--project <path>``.
 
@@ -542,7 +542,7 @@ def _extract_tsc_project_paths(
             continue
         for prefix in flag_equals:
             if tok_cmp.startswith(prefix):
-                raw_paths.append(tok[len(prefix):])
+                raw_paths.append(tok[len(prefix) :])
                 break
         i += 1
     resolved: List[Path] = []
@@ -726,9 +726,7 @@ def _tsconfig_chain_signals_emit(
             candidate = candidate / "tsconfig.json"
         if not candidate.name.endswith(".json"):
             candidate = candidate.with_suffix(candidate.suffix + ".json")
-        if _tsconfig_chain_signals_emit(
-            candidate, worktree, _depth=_depth + 1
-        ):
+        if _tsconfig_chain_signals_emit(candidate, worktree, _depth=_depth + 1):
             return True
     return False
 
@@ -757,9 +755,7 @@ _PACKAGE_MANAGER_CONFIG_BASENAMES: Tuple[str, ...] = (
 )
 
 
-def _npm_runner_redirect_unsafe(
-    worktree: Path, pr_changed_set: set
-) -> bool:
+def _npm_runner_redirect_unsafe(worktree: Path, pr_changed_set: set) -> bool:
     """Return True iff a package-manager config can redirect npm-family
     script execution to a PR-controlled binary or runtime.
 
@@ -934,12 +930,15 @@ def _discover_npm_gates(
     node_modules_pr_touched = any(
         path.startswith("node_modules/") for path in pr_changed_set
     )
+
     def _pr_modified_any(prefixes: Tuple[str, ...]) -> bool:
         for path in pr_changed_set:
             base = path.rsplit("/", 1)[-1]
             for pfx in prefixes:
-                if base == pfx or base.startswith(pfx + ".") or (
-                    pfx.endswith(".") and base.startswith(pfx)
+                if (
+                    base == pfx
+                    or base.startswith(pfx + ".")
+                    or (pfx.endswith(".") and base.startswith(pfx))
                 ):
                     return True
                 # Also match arbitrary-ext variants like
@@ -949,12 +948,8 @@ def _discover_npm_gates(
                     return True
         return False
 
-    prettier_config_changed = _pr_modified_any(
-        ("prettier.config", ".prettierrc")
-    )
-    eslint_config_changed = _pr_modified_any(
-        ("eslint.config", ".eslintrc")
-    )
+    prettier_config_changed = _pr_modified_any(("prettier.config", ".prettierrc"))
+    eslint_config_changed = _pr_modified_any(("eslint.config", ".eslintrc"))
     tsconfig_changed = any(
         path.endswith("tsconfig.json")
         or "/tsconfig." in path
@@ -979,9 +974,7 @@ def _discover_npm_gates(
                 continue
             if not isinstance(script_command, str):
                 continue
-            for project_path in _extract_tsc_project_paths(
-                script_command, worktree
-            ):
+            for project_path in _extract_tsc_project_paths(script_command, worktree):
                 chain_roots.append(project_path)
         chain_paths: set = set()
         seen_roots: set = set()
@@ -993,13 +986,12 @@ def _discover_npm_gates(
             if rkey in seen_roots:
                 continue
             seen_roots.add(rkey)
-            chain_paths.update(
-                _collect_tsconfig_chain_paths(root, worktree)
-            )
+            chain_paths.update(_collect_tsconfig_chain_paths(root, worktree))
         if chain_paths:
             lowered_chain = {p.lower() for p in chain_paths}
             if lowered_chain & pr_changed_set:
                 tsconfig_changed = True
+
     # Iter-29 Finding 2: prettier/eslint configs ``require()``
     # arbitrary local JavaScript — including files in subdirectories
     # like ``./src/plugin.js``. The iter-28 heuristic that allowed
@@ -1015,9 +1007,7 @@ def _discover_npm_gates(
     def _is_plugin_loadable(path: str) -> bool:
         return path.endswith((".cjs", ".mjs", ".js"))
 
-    js_plugin_module_changed = any(
-        _is_plugin_loadable(path) for path in pr_changed_set
-    )
+    js_plugin_module_changed = any(_is_plugin_loadable(path) for path in pr_changed_set)
     # Iter-28 Finding 1 + iter-29 Finding 1 + iter-38 Finding 2: a
     # script-based tsc gate runs the operator's unmodified argv, so we
     # cannot inject ``--incremental false`` / ``--tsBuildInfoFile
@@ -1038,9 +1028,7 @@ def _discover_npm_gates(
             continue
         if not isinstance(script_command, str):
             continue
-        for project_path in _extract_tsc_project_paths(
-            script_command, worktree
-        ):
+        for project_path in _extract_tsc_project_paths(script_command, worktree):
             tsconfig_signal_roots.append(project_path)
     tsconfig_signals_emit = False
     seen_emit_roots: set = set()
@@ -1120,9 +1108,7 @@ def _discover_npm_gates(
         # an operator-supplied custom path slips through. Parse the
         # script body for any ``--config`` / ``-c`` argument and
         # skip when that path is in the PR diff.
-        if _script_references_pr_modified_config(
-            script_command, pr_changed_set
-        ):
+        if _script_references_pr_modified_config(script_command, pr_changed_set):
             logger.debug(
                 "checkup-gates: skipping npm:%s — script body references "
                 "a PR-modified --config path",
@@ -1139,10 +1125,7 @@ def _discover_npm_gates(
         # to opt back in. We do not try to validate the hook body, because
         # the gate value here (a generic format/typecheck) is not worth
         # the attack surface of allowlisting more shell snippets.
-        if (
-            f"pre{script_name}" in scripts
-            or f"post{script_name}" in scripts
-        ):
+        if f"pre{script_name}" in scripts or f"post{script_name}" in scripts:
             logger.debug(
                 "checkup-gates: skipping npm:%s — pre/post lifecycle hook present",
                 script_name,
@@ -1272,11 +1255,16 @@ def _discover_npm_gates(
 
 
 def _discover_python_gates(
-    worktree: Path, changed_files: Sequence[str]
+    worktree: Path,
+    changed_files: Sequence[str],
+    *,
+    base_ref: Optional[str] = None,
 ) -> List[Gate]:
     gates: List[Gate] = []
     changed_py = [
-        rel for rel in changed_files if rel.endswith(".py") and (worktree / rel).is_file()
+        rel
+        for rel in changed_files
+        if rel.endswith(".py") and (worktree / rel).is_file()
     ]
     for rel in changed_py:
         gates.append(
@@ -1331,7 +1319,7 @@ def _discover_python_gates(
                     # itself uses.
                     f"Fix the syntax error in {rel}. To re-check locally "
                     f"without writing __pycache__ artifacts: "
-                    f"`python -B -c \"import sys; "
+                    f'`python -B -c "import sys; '
                     f"compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')\" "
                     f"{rel}`."
                 ),
@@ -1415,11 +1403,98 @@ def _discover_python_gates(
                 cmd=[ruff_abs, "check", "--", *changed_py],
                 source="pyproject.toml:[tool.ruff]",
                 required_fix_hint=(
-                    "Run `ruff check --fix` locally and address the remaining "
-                    "issues."
+                    "Run `ruff check --fix` locally and address the remaining issues."
                 ),
             )
         )
+    # Issue #1433 Bug #2: parity with CI's ``ruff format --check``.
+    # Codex review pass-8 finding 3: the ruff-format gate is INDEPENDENT
+    # of the ruff lint gate. Pre-fix code nested it inside the ``[tool.
+    # ruff]`` block, so a project that runs ``ruff format --check`` in
+    # CI without ANY ``[tool.ruff]`` declaration silently skipped the
+    # gate — re-introducing the original Bug #2 local-clean/CI-red
+    # failure. The format gate's prerequisites are now JUST: a ruff
+    # binary on the sanitized PATH, a non-empty changed-Python set,
+    # ``python_tool_config_touched`` False (the same fork-PR-poisoning
+    # defence the lint gate uses), and one of the explicit/derived
+    # ruff-format opt-in signals below.
+    #
+    # Codex pass-4 finding 3 + pass-5 finding 3 + pass-6 finding 3 +
+    # pass-7 finding 1: ruff-format opt-in requires an EXPLICIT signal
+    # that the project uses ruff format. Two signals are accepted:
+    #   1. ``[tool.ruff.format]`` declared in pyproject.toml — the
+    #      canonical opt-in.
+    #   2. The literal pattern ``\bruff[\s-]+format\b`` appearing in
+    #      any of the project's CI configs (.pre-commit-config.yaml,
+    #      cloudbuild-*-ci.yaml, .github/workflows/*.yml|*.yaml). The
+    #      hyphen alternative matches the canonical pre-commit hook
+    #      id ``ruff-format`` (pass-7 finding 1).
+    # Without ANY of these signals the format gate stays silent —
+    # projects that use ruff for linting alone won't see false-positive
+    # formatting blockers.
+    #
+    # Codex pass-7 finding 2: exclude per-touched-file rather than
+    # blocking the whole CI-signal branch. Build the worktree-relative
+    # POSIX path set of CI config files in the PR diff; only those
+    # individual files are skipped during the scan, so an unchanged
+    # .pre-commit-config.yaml still contributes its signal when a
+    # sibling workflow file IS in the diff.
+    if changed_py and ruff_abs and not python_tool_config_touched:
+        ci_touched_paths: Set[str] = set()
+        for path in changed_files:
+            if (
+                path == ".pre-commit-config.yaml"
+                or path.startswith("cloudbuild-")
+                or path.startswith(".github/workflows/")
+            ):
+                ci_touched_paths.add(path)
+        pre_commit_signaled, workflow_signaled = _ruff_format_signaled_by_ci(
+            worktree,
+            exclude_paths=ci_touched_paths,
+            base_ref=base_ref,
+        )
+        ci_signaled = pre_commit_signaled or workflow_signaled
+        if _tool_section_present("ruff.format") or ci_signaled:
+            if _tool_section_present("ruff.format") or workflow_signaled:
+                # Codex pass-9 finding 1 + pass-11 finding 1:
+                # - pyproject.toml ``[tool.ruff.format]`` opts in ALL Python
+                #   files; the pre-commit hook scope is irrelevant.
+                # - A workflow/CloudBuild signal also means no pre-commit
+                #   scope filter: the workflow runs ``ruff format`` on its own
+                #   file set, which may differ from the pre-commit hook's
+                #   ``files:``/``exclude:`` pattern. Applying the hook scope
+                #   here would silently skip files the workflow checks.
+                ruff_format_py = list(changed_py)
+            else:
+                # Pre-commit-only signal: filter by the hook scope so the
+                # gate only checks files the configured hook would see
+                # (codex pass-8 finding 3, union across all hooks pass-9/10).
+                ruff_format_py = _filter_changed_py_for_ruff_format(
+                    worktree, changed_py
+                )
+            if ruff_format_py:
+                source_label = (
+                    "pyproject.toml:[tool.ruff.format]"
+                    if _tool_section_present("ruff.format")
+                    else "ci-config:ruff format"
+                )
+                gates.append(
+                    Gate(
+                        name="ruff-format",
+                        cmd=[
+                            ruff_abs,
+                            "format",
+                            "--check",
+                            "--",
+                            *ruff_format_py,
+                        ],
+                        source=source_label,
+                        required_fix_hint=(
+                            "Run `ruff format` locally and commit the formatting "
+                            "changes."
+                        ),
+                    )
+                )
     black_abs = _resolve_tool("black", worktree)
     if (
         changed_py
@@ -1508,7 +1583,7 @@ def _script_references_pr_modified_config(
             continue
         for prefix in flag_equals:
             if tok.startswith(prefix):
-                config_paths.append(tok[len(prefix):])
+                config_paths.append(tok[len(prefix) :])
                 break
         i += 1
     # Iter-37 Finding 3: ``--config config/../config/lint.json``
@@ -1516,9 +1591,7 @@ def _script_references_pr_modified_config(
     # the ``..``. Use ``os.path.normpath`` on BOTH sides of the
     # comparison so a PR-modified file isn't missed because the
     # script wrote a non-canonical path.
-    normalised_changed = {
-        os.path.normpath(p) for p in pr_changed_set
-    }
+    normalised_changed = {os.path.normpath(p) for p in pr_changed_set}
     for raw in config_paths:
         if not raw:
             continue
@@ -1544,9 +1617,7 @@ def _script_references_pr_modified_config(
     return False
 
 
-def _mypy_declares_local_plugin_anywhere(
-    worktree: Path, pyproject_text: str
-) -> bool:
+def _mypy_declares_local_plugin_anywhere(worktree: Path, pyproject_text: str) -> bool:
     """Return True iff ANY mypy config surface declares a local plugin.
 
     iter-34 Finding 2 generalises iter-32 Finding 1's check from
@@ -1708,7 +1779,7 @@ def _extract_mypy_plugin_entries(pyproject_text: str) -> List[str]:
     )
     if not header:
         return []
-    tail = pyproject_text[header.end():]
+    tail = pyproject_text[header.end() :]
     next_table = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_table else tail[: next_table.start()]
     plugins_match = re.search(
@@ -1735,7 +1806,7 @@ def _extract_ini_mypy_plugin_entries(text: str, header_pattern: str) -> List[str
     header = re.search(header_pattern, text, re.MULTILINE)
     if not header:
         return []
-    tail = text[header.end():]
+    tail = text[header.end() :]
     next_section = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_section else tail[: next_section.start()]
     plugins_match = re.search(
@@ -1762,7 +1833,7 @@ def _ini_section_has_local_plugin(text: str, header_pattern: str) -> bool:
     header = re.search(header_pattern, text, re.MULTILINE)
     if not header:
         return False
-    tail = text[header.end():]
+    tail = text[header.end() :]
     next_section = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_section else tail[: next_section.start()]
     plugins_match = re.search(
@@ -1818,7 +1889,7 @@ def _mypy_declares_local_plugin(pyproject_text: str) -> bool:
     if not header:
         return False
     # Slice from header to the next ``[`` table header (or EOF).
-    tail = pyproject_text[header.end():]
+    tail = pyproject_text[header.end() :]
     next_table = re.search(r"^\s*\[", tail, re.MULTILINE)
     section = tail if not next_table else tail[: next_table.start()]
     plugins_match = re.search(
@@ -2002,7 +2073,7 @@ def discover_gates(
         base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
         gates.append(_git_diff_check_gate(trusted_git, base_spec))
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
-    gates.extend(_discover_python_gates(worktree, changed_files))
+    gates.extend(_discover_python_gates(worktree, changed_files, base_ref=base_ref))
     # Stable order: git-diff-check first, then language-specific gates
     # in discovery order. The runner walks the list left-to-right so
     # operators see consistent artifact filenames across rounds.
@@ -2124,6 +2195,525 @@ def _sanitized_path(worktree: Path) -> str:
         else:
             clean.append(entry)
     return os.pathsep.join(clean)
+
+
+# Codex pass-11 finding 2: workflow/CloudBuild YAML can contain
+# non-executable text like ``name: ruff format migration`` that
+# still matches a bare ``\bruff\s+format\b`` regex (the step *name*
+# field, not a run command). The workflow scan parses the YAML and
+# only inspects the values of exec-intent keys (see ``_RUFF_FORMAT_
+# EXEC_KEYS``), so non-exec fields never contribute a signal.
+_RUFF_FORMAT_CMD_PATTERN = re.compile(r"\bruff\s+format\b")
+# YAML mapping keys whose value carries a shell command / exec intent.
+# Codex pass-13 finding 3: ``args`` is included so CloudBuild steps that
+# invoke ruff via ``args: ["-c", "ruff format --check ."]`` are detected;
+# the previous line scan only honoured ``run``/``script``/``command``/
+# ``entrypoint`` and missed the inline-args form.
+_RUFF_FORMAT_EXEC_KEYS = frozenset({"run", "script", "command", "entrypoint", "args"})
+
+
+def _parse_ruff_format_hooks_from_text(text: str) -> List[Dict[str, object]]:
+    """Return the full hook-dict for every ``id: ruff-format`` hook in
+    YAML text, with top-level ``files:``/``exclude:`` defaults merged in.
+
+    Shared by ``_parse_ruff_format_scopes_from_text`` (scope filtering)
+    and ``_file_has_unchanged_ruff_format_signal`` (full-config comparison
+    for codex pass-11 finding 3 — stages/args changes now detected).
+
+    Returns an empty list on parse error or when no such hook exists.
+    """
+    import yaml  # local import to keep top-of-module imports tight
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    top_files = data.get("files") if isinstance(data.get("files"), str) else None
+    top_exclude = data.get("exclude") if isinstance(data.get("exclude"), str) else None
+    # Codex pass-11 finding 3: top-level ``default_stages`` applies when
+    # a hook does not declare its own ``stages``. Propagate it so a PR
+    # that changes ``default_stages: [pre-commit]`` → ``[manual]`` is
+    # detected as a behavioral change even when the hook dict itself is
+    # otherwise unchanged.
+    top_default_stages = data.get("default_stages")
+    repos = data.get("repos")
+    if not isinstance(repos, list):
+        return []
+    hooks_out: List[Dict[str, object]] = []
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        hooks = repo.get("hooks")
+        if not isinstance(hooks, list):
+            continue
+        for hook in hooks:
+            if not isinstance(hook, dict) or hook.get("id") != "ruff-format":
+                continue
+            merged: Dict[str, object] = dict(hook)
+            if "files" not in merged and top_files is not None:
+                merged["files"] = top_files
+            if "exclude" not in merged and top_exclude is not None:
+                merged["exclude"] = top_exclude
+            if "stages" not in merged and top_default_stages is not None:
+                merged["stages"] = top_default_stages
+            hooks_out.append(merged)
+    return hooks_out
+
+
+# The pre-commit stage that never runs as part of the normal commit/CI
+# flow — a hook gated to it (explicitly via ``stages:`` or by inheriting
+# top-level ``default_stages``) runs only on an explicit
+# ``pre-commit run --hook-stage manual`` invocation.
+_PRE_COMMIT_MANUAL_STAGE = "manual"
+
+
+def _hook_runs_automatically(hook: Dict[str, object]) -> bool:
+    """Return True if a parsed (stage-merged) pre-commit hook runs as part
+    of the normal commit/CI flow rather than manual-only.
+
+    ``_parse_ruff_format_hooks_from_text`` merges top-level
+    ``default_stages`` into each hook's ``stages`` when the hook declares
+    none, so ``hook["stages"]`` reflects the EFFECTIVE stages. A hook with
+    no effective stages runs by default. A hook whose effective stages are
+    exactly the manual stage never runs automatically and MUST NOT count
+    as a ruff-format opt-in signal (issue #1433 review: an unchanged
+    ``stages: [manual]`` hook — or one inheriting top-level
+    ``default_stages: [manual]`` — was emitting a false blocking
+    ruff-format gate for ordinary changed Python files).
+    """
+    stages = hook.get("stages")
+    if isinstance(stages, str):
+        # Scalar form (e.g. ``stages: manual``): treat as a 1-element list
+        # so a manual-only scalar is honoured rather than mis-read as active.
+        stages = [stages]
+    if not isinstance(stages, list) or not stages:
+        return True
+    return any(s != _PRE_COMMIT_MANUAL_STAGE for s in stages)
+
+
+def _pre_commit_has_active_ruff_format(text: str) -> bool:
+    """Return True if ``.pre-commit-config.yaml`` text declares at least
+    one ``id: ruff-format`` hook that runs automatically (not manual-only).
+
+    This is the stage-aware pre-commit opt-in signal: a config whose only
+    ruff-format hook is manual-only (explicit ``stages: [manual]`` or an
+    inherited top-level ``default_stages: [manual]``) does NOT signal.
+    """
+    return any(
+        _hook_runs_automatically(hook)
+        for hook in _parse_ruff_format_hooks_from_text(text)
+    )
+
+
+def _parse_ruff_format_scopes_from_text(
+    text: str,
+) -> List[Tuple[Optional[str], Optional[str]]]:
+    """Return raw ``(files_pat, exclude_pat)`` string pairs for every
+    AUTOMATICALLY-RUNNING ``id: ruff-format`` hook found in YAML text.
+
+    Delegates to ``_parse_ruff_format_hooks_from_text`` and extracts only
+    the scope fields. Manual-only hooks (``stages: [manual]`` or inherited
+    ``default_stages: [manual]``) are skipped so their scope never narrows
+    or widens the gate's file set (issue #1433 review: the scope parser
+    previously dropped the merged ``stages`` value before filtering).
+    Returns an empty list on parse error or when no such hook exists.
+    """
+    result: List[Tuple[Optional[str], Optional[str]]] = []
+    for hook in _parse_ruff_format_hooks_from_text(text):
+        if not _hook_runs_automatically(hook):
+            continue
+        files_pat = hook.get("files")
+        exclude_pat = hook.get("exclude")
+        result.append(
+            (
+                files_pat if isinstance(files_pat, str) else None,
+                exclude_pat if isinstance(exclude_pat, str) else None,
+            )
+        )
+    return result
+
+
+def _ruff_format_pre_commit_scope(
+    worktree: Path,
+) -> Optional[List[Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]]]:
+    """Return compiled ``(files_re, exclude_re)`` pairs for ALL
+    ``id: ruff-format`` hooks in ``.pre-commit-config.yaml``.
+
+    Codex pass-8 finding 3: pre-commit hooks can scope file matching
+    via ``files:``/``exclude:`` regex patterns. Running ``ruff format
+    --check`` against the full ``changed_py`` would block files the
+    configured hook would not check.
+
+    Codex pass-9 finding 3: pre-fix returned after the FIRST matching
+    hook, silently dropping later hooks with different scopes. Now
+    returns a list with one entry per hook so callers can union them.
+
+    Returns ``None`` when the file is absent or unparseable (caller
+    falls back to no scope filter). Returns an empty list when the file
+    is present but declares no ``ruff-format`` hook (also treated as no
+    filter by the caller).
+    """
+    pcc = worktree / ".pre-commit-config.yaml"
+    if not pcc.is_file():
+        return None
+    try:
+        text = pcc.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.debug(
+            "ruff-format pre-commit scope read failed: %s",
+            type(exc).__name__,
+        )
+        return None
+    raw_scopes = _parse_ruff_format_scopes_from_text(text)
+    if not raw_scopes:
+        return None
+    result: List[Tuple[Optional["re.Pattern[str]"], Optional["re.Pattern[str]"]]] = []
+    for files_pat, exclude_pat in raw_scopes:
+        files_re: Optional["re.Pattern[str]"] = None
+        exclude_re: Optional["re.Pattern[str]"] = None
+        if files_pat:
+            try:
+                files_re = re.compile(files_pat)
+            except re.error:
+                pass
+        if exclude_pat:
+            try:
+                exclude_re = re.compile(exclude_pat)
+            except re.error:
+                pass
+        result.append((files_re, exclude_re))
+    return result
+
+
+def _filter_changed_py_for_ruff_format(
+    worktree: Path, changed_py: Sequence[str]
+) -> List[str]:
+    """Apply all ``.pre-commit-config.yaml`` ruff-format hook scopes to
+    ``changed_py``.
+
+    Codex pass-8 finding 3: filter by pre-commit hook scope so the
+    gate only checks files the configured hook would see.
+
+    Codex pass-9 finding 3: a file is kept when it falls within ANY
+    declared hook's scope (union). Pre-fix kept only files within the
+    FIRST hook's scope, silently dropping files that later hooks covered.
+
+    Returns ``changed_py`` unchanged when no scope is declared or when
+    the pre-commit config is absent/unreadable (fail-open).
+    """
+    scopes = _ruff_format_pre_commit_scope(worktree)
+    if not scopes:
+        return list(changed_py)
+    out: List[str] = []
+    for path in changed_py:
+        for files_re, exclude_re in scopes:
+            if files_re is not None and not files_re.search(path):
+                continue
+            if exclude_re is not None and exclude_re.search(path):
+                continue
+            out.append(path)
+            break
+    return out
+
+
+def _strip_yaml_comments(text: str) -> str:
+    """Strip ``#``-to-EOL comments from a YAML-like text body.
+
+    Codex pass-8 finding 1: scanning the raw text matched
+    ``ruff-format`` / ``ruff format`` mentions inside comments or
+    TODOs, producing a false-positive ruff-format gate. YAML's only
+    line-comment syntax is ``#`` to end-of-line; strip it before the
+    regex scan. Conservative: ``#`` inside quoted strings is also
+    stripped (rare in CI configs and the worst-case effect is a
+    missed signal, not a false positive). Multi-line block strings
+    are still scanned in full since ``#`` mid-block is uncommon.
+    """
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        # Drop everything from the first ``#`` to EOL. Preserve the
+        # rest of the line so YAML structure context (key:, sequence
+        # markers) is still visible to the regex.
+        comment_at = line.find("#")
+        if comment_at >= 0:
+            line = line[:comment_at]
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def _exec_value_has_ruff_format(value: object) -> bool:
+    """Return True if an exec-key's value invokes ``ruff format``.
+
+    The value of a ``run``/``script``/``command``/``entrypoint`` key is a
+    string (possibly a multi-line block scalar resolved by the YAML
+    loader); ``args`` is a list of argv tokens. Block scalars preserve
+    their ``#`` lines verbatim, so strip shell comments per line before
+    matching — a ``# TODO: enable ruff format`` line inside a ``run:``
+    block is a comment, not an executed command.
+    """
+    if isinstance(value, str):
+        return bool(_RUFF_FORMAT_CMD_PATTERN.search(_strip_yaml_comments(value)))
+    if isinstance(value, list):
+        joined = " ".join(
+            str(item) for item in value if isinstance(item, (str, int, float, bool))
+        )
+        return bool(_RUFF_FORMAT_CMD_PATTERN.search(_strip_yaml_comments(joined)))
+    return False
+
+
+def _node_has_ruff_format(node: object) -> bool:
+    """Recursively walk a parsed YAML node for a ``ruff format`` invocation
+    in an executable position (the value of an exec-intent mapping key)."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() in _RUFF_FORMAT_EXEC_KEYS:
+                if _exec_value_has_ruff_format(value):
+                    return True
+            if _node_has_ruff_format(value):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(_node_has_ruff_format(item) for item in node)
+    return False
+
+
+def _workflow_text_has_ruff_format(text: str) -> bool:
+    """Return True if ``text`` (a workflow/CloudBuild YAML) invokes
+    ``ruff format`` in an executable position.
+
+    Codex pass-11 finding 2 + pass-13 findings 2/3: the previous
+    line-based scan was in tension between two failure modes — it
+    false-positived on non-executable multi-line block scalars (e.g. an
+    ``env: NOTE: |`` note mentioning ``ruff format``) yet missed the
+    inline ``args: ["-c", "ruff format --check ."]`` CloudBuild form.
+    Parsing the YAML and walking only the values of exec-intent keys
+    (``run``/``script``/``command``/``entrypoint``/``args``) resolves
+    both: non-exec keys are never inspected, and ``args`` lists are
+    joined and matched.
+
+    Fail-open: any parse error returns False (a missed signal never
+    blocks a clean verdict), consistent with the rest of this module.
+    """
+    import yaml  # local import to keep top-of-module imports tight
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return False
+    return _node_has_ruff_format(data)
+
+
+def _git_show_text(worktree: Path, ref: str, path: str) -> Optional[str]:
+    """Return the contents of ``path`` at ``ref`` via ``git show``,
+    or ``None`` on any failure. Used to read the pre-PR version of
+    a CI config so the ruff-format helper can distinguish a PR that
+    introduced/modified the signal from one that left an existing
+    signal unchanged.
+    """
+    trusted_git = _resolve_trusted_git(worktree)
+    if not trusted_git:
+        return None
+    try:
+        result = subprocess.run(
+            [trusted_git, "-C", str(worktree), "show", f"{ref}:{path}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug(
+            "ruff-format git-show failed for %s@%s: %s",
+            path,
+            ref,
+            type(exc).__name__,
+        )
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _file_has_unchanged_ruff_format_signal(
+    worktree: Path, rel_path: str, base_ref: Optional[str]
+) -> bool:
+    """Return True if ``rel_path`` carries the ruff-format signal at
+    BOTH ``base_ref`` and the worktree version, AND (for pre-commit
+    configs) the full hook configuration is unchanged between those
+    versions.
+
+    Codex pass-8 finding 2: distinguishes a PR-introduced signal from an
+    unchanged one. Pre-fix whole-file exclusion missed unchanged signals in
+    files touched for unrelated reasons.
+
+    Codex pass-9 finding 2: pre-fix only compared the regex presence; a PR
+    could narrow ``files:``/``exclude:`` to suppress the gate against its
+    own files. Added scope-set comparison.
+
+    Codex pass-11 finding 2 + 3 / issue #1433 review:
+    - Workflow files use the exec-context-aware ``_workflow_text_has_ruff
+      _format`` scan so a YAML key like ``name: ruff-format migration``
+      does not trigger a false signal.
+    - For ``.pre-commit-config.yaml`` the signal is stage-aware: a
+      manual-only ``id: ruff-format`` hook (explicit ``stages: [manual]``
+      or inherited ``default_stages: [manual]``) does not count. The full
+      hook dicts are also compared so a PR that adds ``stages: [manual]``
+      to an active hook is detected as a change and the signal drops.
+
+    Fail-open: missing ``base_ref``, unresolvable git read, or missing
+    signal at either version all return False.
+    """
+    is_pre_commit = rel_path == ".pre-commit-config.yaml"
+    try:
+        post_text = (worktree / rel_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    # Use the same exec-context-aware check as the scanner so a step-name
+    # false positive (``name: ruff format migration``) does not count.
+    if is_pre_commit:
+        # Stage-aware (issue #1433 review): an unchanged manual-only
+        # ruff-format hook must NOT count as a signal even in a touched file.
+        post_has_signal = _pre_commit_has_active_ruff_format(post_text)
+    else:
+        post_has_signal = _workflow_text_has_ruff_format(post_text)
+    if not post_has_signal:
+        return False
+    if not base_ref:
+        return False
+    pre_text = _git_show_text(worktree, base_ref, rel_path)
+    if pre_text is None:
+        return False
+    if is_pre_commit:
+        pre_has_signal = _pre_commit_has_active_ruff_format(pre_text)
+    else:
+        pre_has_signal = _workflow_text_has_ruff_format(pre_text)
+    if not pre_has_signal:
+        return False
+    # Codex pass-11 finding 3: for pre-commit configs, compare full hook
+    # configs (including stages/args/always_run) so behavioural changes
+    # beyond files/exclude are detected. Serialise each hook dict to a
+    # stable JSON string for hashing.
+    if is_pre_commit:
+        pre_hooks = {
+            json.dumps(h, sort_keys=True, default=str)
+            for h in _parse_ruff_format_hooks_from_text(pre_text)
+        }
+        post_hooks = {
+            json.dumps(h, sort_keys=True, default=str)
+            for h in _parse_ruff_format_hooks_from_text(post_text)
+        }
+        if pre_hooks != post_hooks:
+            return False
+    return True
+
+
+def _ruff_format_signaled_by_ci(
+    worktree: Path,
+    *,
+    exclude_paths: Optional[Set[str]] = None,
+    base_ref: Optional[str] = None,
+) -> Tuple[bool, bool]:
+    """Return ``(pre_commit_signaled, workflow_signaled)`` for ruff format.
+
+    Splitting the signal type lets the gate decide whether to apply the
+    pre-commit hook's ``files:``/``exclude:`` scope (codex pass-11
+    finding 1): the scope belongs to the pre-commit step, not to a
+    GitHub Actions / CloudBuild workflow invocation. When a workflow also
+    signals ``ruff format``, the scope filter must be skipped because the
+    workflow may check files outside the pre-commit hook's declared scope.
+
+    Codex review pass-6 finding 3: a project may run ``ruff format
+    --check`` in CI using Ruff's default formatter config (no
+    ``[tool.ruff.format]`` section). Without this signal the gate
+    would silently skip ``ruff-format`` and the original CI-parity
+    gap (Bug #2) re-emerges as a false negative — local clean +
+    failing CI. ``.pre-commit-config.yaml`` is scanned via the
+    stage-aware ``_pre_commit_has_active_ruff_format`` (an ``id:
+    ruff-format`` hook signals only when it runs automatically — not
+    manual-only); ``cloudbuild-*-ci.yaml`` and ``.github/workflows/
+    *.yml`` / ``*.yaml`` are scanned via the exec-context-aware
+    ``_workflow_text_has_ruff_format`` so a ``run: ruff format ...``
+    command triggers the signal but a step ``name:`` does not.
+
+    Codex pass-7 finding 2: ``exclude_paths`` is a per-FILE
+    suppression set (worktree-relative POSIX paths the PR diff
+    touched). For these paths the helper REQUIRES the signal to be
+    unchanged between ``base_ref`` and HEAD (codex pass-8 finding 2:
+    pre-fix whole-file exclusion missed unchanged signals in
+    touched-for-unrelated-reasons files). When ``base_ref`` cannot
+    be resolved we conservatively skip the touched file's signal,
+    matching the pre-pass-8 behaviour.
+
+    Codex pass-8 finding 1: YAML ``#``-to-EOL comments are stripped
+    before scanning so a ``# TODO: enable ruff format`` mention in a
+    comment does NOT trigger the signal.
+
+    Issue #1433 review: the pre-commit signal is stage-aware — a
+    manual-only ``id: ruff-format`` hook (``stages: [manual]`` or an
+    inherited top-level ``default_stages: [manual]``) never runs in the
+    normal flow and must not opt the gate in. Workflow and CloudBuild
+    signals remain independent: either can opt in on its own.
+
+    Fail-OPEN: any IO error returns ``(False, False)`` so the absence
+    of a signal never blocks clean verdicts.
+    """
+    skip = exclude_paths or set()
+    candidates: List[Path] = []
+    pre_commit = worktree / ".pre-commit-config.yaml"
+    if pre_commit.is_file():
+        candidates.append(pre_commit)
+    for cb in sorted(worktree.glob("cloudbuild-*-ci.yaml")):
+        if cb.is_file():
+            candidates.append(cb)
+    workflows_dir = worktree / ".github" / "workflows"
+    if workflows_dir.is_dir():
+        for pattern in ("*.yml", "*.yaml"):
+            for yml in sorted(workflows_dir.glob(pattern)):
+                if yml.is_file():
+                    candidates.append(yml)
+    pre_commit_signaled = False
+    workflow_signaled = False
+    for path in candidates:
+        try:
+            rel = path.relative_to(worktree).as_posix()
+        except ValueError:
+            continue
+        is_pre_commit = rel == ".pre-commit-config.yaml"
+        if rel in skip:
+            # Codex pass-8 finding 2: for a touched file, only count
+            # the signal when it was already present pre-PR. This
+            # blocks a PR from silently adding the signal AND it
+            # honours an unchanged signal even when the PR touched
+            # another part of the same file.
+            if _file_has_unchanged_ruff_format_signal(worktree, rel, base_ref):
+                if is_pre_commit:
+                    pre_commit_signaled = True
+                else:
+                    workflow_signaled = True
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.debug(
+                "ruff-format CI signal read failed for %s: %s",
+                path,
+                type(exc).__name__,
+            )
+            continue
+        if is_pre_commit:
+            # Pre-commit: stage-aware signal (issue #1433 review). A
+            # manual-only ``id: ruff-format`` hook (explicit
+            # ``stages: [manual]`` or inherited ``default_stages: [manual]``)
+            # never runs in the normal flow and must NOT opt the gate in.
+            if _pre_commit_has_active_ruff_format(text):
+                pre_commit_signaled = True
+        else:
+            # Workflow/CloudBuild: use the exec-context-aware scan
+            # (codex pass-11 finding 2) to skip non-exec YAML fields.
+            if _workflow_text_has_ruff_format(text):
+                workflow_signaled = True
+    return (pre_commit_signaled, workflow_signaled)
 
 
 def _resolve_tool(tool: str, worktree: Path) -> Optional[str]:
@@ -2263,12 +2853,16 @@ def _execute_one(
         captured_stdout = ""
         captured_stderr = ""
         if exc.stdout:
-            captured_stdout = exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(
-                "utf-8", "replace"
+            captured_stdout = (
+                exc.stdout
+                if isinstance(exc.stdout, str)
+                else exc.stdout.decode("utf-8", "replace")
             )
         if exc.stderr:
-            captured_stderr = exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode(
-                "utf-8", "replace"
+            captured_stderr = (
+                exc.stderr
+                if isinstance(exc.stderr, str)
+                else exc.stderr.decode("utf-8", "replace")
             )
         return GateResult(
             gate=gate,
@@ -2577,10 +3171,7 @@ def _build_finding_message(result: GateResult) -> str:
     # still per-gate-unique.
     scrubbed_name = _scrub(result.gate.name)
     if result.exit_code is None:
-        return (
-            f"Deterministic gate {scrubbed_name!r} failed to execute "
-            "(runner error)."
-        )
+        return f"Deterministic gate {scrubbed_name!r} failed to execute (runner error)."
     return (
         f"Deterministic gate {scrubbed_name!r} failed with exit "
         f"code {result.exit_code}."
