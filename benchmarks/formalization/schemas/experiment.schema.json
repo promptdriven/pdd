@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/promptdriven/pdd/benchmarks/formalization/schemas/experiment.schema.json",
+  "title": "M1FormalizationExperimentSummary",
+  "type": "object",
+  "required": ["milestone", "claim", "task_count", "tasks", "headline"],
+  "properties": {
+    "milestone": { "type": "integer", "const": 1 },
+    "claim": { "type": "string" },
+    "task_count": { "type": "integer", "minimum": 0 },
+    "tasks_gained_vocabulary": { "type": "integer" },
+    "tasks_gained_contract_rules": { "type": "integer" },
+    "tasks_lint_warnings_improved": { "type": "integer" },
+    "headline": { "type": "string" },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/task_row" }
+    }
+  },
+  "$defs": {
+    "task_row": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "a0_lint_warnings",
+        "a1_lint_warnings",
+        "a0_contract_rule_count",
+        "a1_contract_rule_count",
+        "regen_runs",
+        "behavior_stability"
+      ],
+      "properties": {
+        "task_id": { "type": "string" },
+        "a0_lint_warnings": { "type": "integer" },
+        "a1_lint_warnings": { "type": "integer" },
+        "a0_contract_rule_count": { "type": "integer" },
+        "a1_contract_rule_count": { "type": "integer" },
+        "a0_has_vocabulary": { "type": "boolean" },
+        "a1_has_vocabulary": { "type": "boolean" },
+        "a1_has_contract_rules": { "type": "boolean" },
+        "regen_runs": { "type": ["integer", "null"] },
+        "behavior_stability": { "type": ["number", "null"] }
+      }
+    }
+  }
+}

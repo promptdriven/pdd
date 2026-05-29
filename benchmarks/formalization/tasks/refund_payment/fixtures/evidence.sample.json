@@ -1,0 +1,23 @@
+{
+  "version": "1",
+  "devunit": "refund_payment",
+  "collected_at": "2026-01-15T12:00:00+00:00",
+  "source": {
+    "prompt_path": "benchmarks/formalization/tasks/refund_payment/prompts/formalized.prompt",
+    "prompt_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "generation": {
+    "grounding": {
+      "mode": "unavailable",
+      "selected_examples": [],
+      "pinned": ["refund_payment"],
+      "excluded": [],
+      "reviewed": false
+    }
+  },
+  "validation": {
+    "contract_check": "passed",
+    "coverage": "partial",
+    "detect_stories": "passed"
+  }
+}

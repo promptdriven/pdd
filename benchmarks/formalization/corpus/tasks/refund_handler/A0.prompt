@@ -1,0 +1,10 @@
+% Handwritten A0 — Milestone 1 corpus (refund_handler)
+
+<requirements>
+Implement a refund handler for a payment API.
+Only active users may receive refunds.
+The same refund request id must be idempotent: repeating it returns the same outcome.
+When the user is unauthorized, reject the refund.
+When the refund amount is invalid, reject the refund.
+Successful refunds must return a receipt identifier.
+</requirements>

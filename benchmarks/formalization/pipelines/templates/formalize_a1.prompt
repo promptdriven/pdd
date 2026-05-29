@@ -1,0 +1,21 @@
+% Pinned formalization template for benchmarks/formalization/pipelines/formalize_a1.py
+% Version: formalize_a1_v1
+%
+% Do not invent APIs or business rules not implied by the prompt.
+% Use observable verbs: returns, raises, rejects, writes, emits.
+
+<prompt_content>
+{prompt_content}
+</prompt_content>
+
+<prior_guidance>
+{guidance_json}
+</prior_guidance>
+
+% Output JSON only (no markdown prose):
+% {
+%   "vocabulary": ["term: observable definition"],
+%   "contract_rules": ["R1 - Title\\nWhen ...\\nThe function MUST ..."],
+%   "acceptance_tests": ["- R1: Given ..., then ..."],
+%   "formalization": []
+% }

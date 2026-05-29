@@ -1,0 +1,12 @@
+% Ad-hoc baseline (A0): refund service described in prose without contract sections.
+
+Build a refund payment service that:
+
+- Rejects zero or negative refund amounts when an amount is provided.
+- Never refunds more than the original charge.
+- Does not call the payment provider when validation already failed.
+- Reuses the same idempotency key when retrying with the same refund id.
+- Writes an audit log when the provider confirms success.
+- Never logs or returns provider credentials.
+
+Also handle disputes outside this module and do not store card data here.

@@ -1,0 +1,14 @@
+id: payment_api_lint
+description: >
+  Vague vs fully-defined contract vocabulary (prompt lint showcase). A0 uses
+  partial vocabulary; A1 uses complete vocabulary from payment_api_clean fixture.
+
+arms:
+  a0:
+    prompt: prompts/vague.prompt
+  a1:
+    prompt: prompts/formalized.prompt
+  a2:
+    test_paths: []
+
+evidence_paths: []

@@ -1,0 +1,18 @@
+id: refund_payment
+description: >
+  Refund payment contracts (from tests/fixtures/coverage_contracts). A0 is
+  prose-only; A1 is full PDD contract + stories + placeholder tests. A2 has
+  no implementation in v0 — tests document expected rule coverage only.
+
+arms:
+  a0:
+    prompt: prompts/adhoc.prompt
+  a1:
+    prompt: prompts/formalized.prompt
+    stories_dir: stories
+    tests_dir: tests
+  a2:
+    test_paths: []
+
+evidence_paths:
+  - fixtures/evidence.sample.json

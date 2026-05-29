@@ -1,0 +1,6 @@
+% Handwritten A0 — Milestone 1 corpus (hello_fn)
+
+<requirements>
+Write a Python function named hello that prints the string hello to stdout.
+The function takes no arguments and returns None.
+</requirements>

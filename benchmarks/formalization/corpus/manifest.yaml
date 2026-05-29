@@ -1,0 +1,40 @@
+# Milestone 1 corpus — handwritten A0 only; A1 produced by formalize_a1.py
+version: "1.0"
+benchmark_name: "A0→A1 Prompt Formalization Benchmark"
+milestone: 1
+
+tasks:
+  - id: hello_fn
+    tier: A
+    module: hello_fn
+    language: python
+    description: Minimal print function
+    a0: tasks/hello_fn/A0.prompt
+
+  - id: pi_digits
+    tier: A
+    module: pi_digits
+    language: python
+    description: Compute pi to n decimal places (intentionally underspecified)
+    a0: tasks/pi_digits/A0.prompt
+
+  - id: email_validator
+    tier: B
+    module: email_validator
+    language: python
+    description: Validate email strings and reject invalid input
+    a0: tasks/email_validator/A0.prompt
+
+  - id: token_bucket
+    tier: B
+    module: token_bucket
+    language: python
+    description: Rate limiter with burst capacity
+    a0: tasks/token_bucket/A0.prompt
+
+  - id: refund_handler
+    tier: B
+    module: refund_handler
+    language: python
+    description: Idempotent refund API with active-user check
+    a0: tasks/refund_handler/A0.prompt

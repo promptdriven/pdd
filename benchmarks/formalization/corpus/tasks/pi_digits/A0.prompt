@@ -1,0 +1,7 @@
+% Handwritten A0 — Milestone 1 corpus (pi_digits)
+
+<requirements>
+Write a Python function that computes pi to n decimal places.
+Accept an integer n and return a string representation of pi.
+Handle invalid n appropriately.
+</requirements>

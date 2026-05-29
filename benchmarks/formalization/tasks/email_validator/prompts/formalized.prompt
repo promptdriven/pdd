@@ -1,0 +1,95 @@
+% PDD formalized baseline (A1): vocabulary + contract_rules for traceability.
+
+<vocabulary>
+normalized email: input stripped of leading/trailing whitespace and lowercased
+valid email: satisfies R1–R5 simultaneously after normalization
+invalid email: any rule R1–R5 is violated
+</vocabulary>
+
+<contract_rules>
+R1 - Single at-sign
+
+For every email string after normalization,
+the system MUST contain exactly one `@` character.
+
+R2 - Non-empty local part
+
+For every email string after normalization,
+the system MUST NOT accept an empty local part before `@`.
+
+R3 - Domain with dot
+
+For every email string after normalization,
+the domain part after `@` MUST contain at least one `.` character.
+
+R4 - No consecutive dots
+
+For every email string,
+the system MUST NOT contain the substring `..`.
+
+R5 - None input
+
+For every call where `email` is None,
+the system MUST raise TypeError with message `email cannot be None`.
+
+R6 - Empty after normalization
+
+For every email that is empty after normalization,
+the system MUST return is_valid=false with error_message `Email cannot be empty`.
+</contract_rules>
+
+<formalization>
+R1:
+  level: FORMAL_CANDIDATE
+  target: normalized email string
+  predicate: exactly one '@' character (count equals 1)
+  status: bounded string theory — suitable for Z3 proof tests via pdd test
+
+R2:
+  level: FORMAL_CANDIDATE
+  target: local part before '@'
+  predicate: length(local) > 0
+  status: bounded — Z3 can encode non-empty prefix
+
+R3:
+  level: FORMAL_CANDIDATE
+  target: domain part after '@'
+  predicate: domain contains '.'
+  status: bounded — Z3 Contains('.', domain)
+
+R4:
+  level: FORMAL_CANDIDATE
+  target: full email string
+  predicate: NOT Contains('..', email)
+  status: primary Z3 invariant — forbidden substring
+
+R5:
+  level: RUNTIME_TEST_ONLY
+  target: None input
+  predicate: TypeError — not encodable as finite string theory
+  status: unit test only
+
+R6:
+  level: RUNTIME_TEST_ONLY
+  target: empty after strip
+  predicate: observable return value — unit test only
+  status: unit test only
+</formalization>
+
+<coverage>
+R1: test_R1_single_at_sign, test_z3_R1_exactly_one_at_sign
+R2: test_R2_local_part_nonempty
+R3: test_R3_domain_contains_dot
+R4: test_R4_no_consecutive_dots, test_z3_R4_forbidden_consecutive_dots
+R5: test_R5_none_raises_type_error
+R6: test_R6_empty_after_normalize
+</coverage>
+
+% When generating tests with ``pdd test``, classify R1–R4 as FORMAL_CANDIDATE per
+% generate_test_LLM.prompt and emit runnable Z3-based proof tests (see baseline/tests/test_email_validator_z3.py).
+
+% Implementation target (generated code is output, not source of truth)
+
+Public API:
+- class EmailValidator.validate_email(email: str) -> ValidationResult
+- dataclass ValidationResult(is_valid, normalized_email, error_message)

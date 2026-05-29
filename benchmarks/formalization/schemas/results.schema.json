@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/promptdriven/pdd/benchmarks/formalization/schemas/results.schema.json",
+  "title": "PDDFormalizationBenchmarkRun",
+  "type": "object",
+  "required": [
+    "benchmark_version",
+    "task_id",
+    "arm",
+    "collected_at",
+    "command_success",
+    "metrics",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "benchmark_version": { "type": "string" },
+    "task_id": { "type": "string" },
+    "arm": { "type": "string", "enum": ["A0", "A1", "A2"] },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "command_success": { "type": "boolean" },
+    "metrics": { "$ref": "#/$defs/metrics" },
+    "epic833": { "$ref": "#/$defs/epic833" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "nullable_number": {
+      "type": ["number", "null"]
+    },
+    "nullable_integer": {
+      "type": ["integer", "null"]
+    },
+    "nullable_boolean": {
+      "type": ["boolean", "null"]
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "prompt_lint_warnings",
+        "contract_check_errors",
+        "contract_check_warnings",
+        "formalization_records",
+        "formal_candidate_rules",
+        "z3_test_count",
+        "total_rules",
+        "checked_rules",
+        "unchecked_rules",
+        "test_pass_rate",
+        "evidence_manifest_present",
+        "generated_file_count",
+        "wall_clock_s"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "prompt_lint_warnings": { "$ref": "#/$defs/nullable_integer" },
+        "prompt_lint_errors": { "$ref": "#/$defs/nullable_integer" },
+        "contract_check_errors": { "$ref": "#/$defs/nullable_integer" },
+        "contract_check_warnings": { "$ref": "#/$defs/nullable_integer" },
+        "formalization_records": { "$ref": "#/$defs/nullable_integer" },
+        "formal_candidate_rules": { "$ref": "#/$defs/nullable_integer" },
+        "z3_test_count": { "$ref": "#/$defs/nullable_integer" },
+        "total_rules": { "$ref": "#/$defs/nullable_integer" },
+        "checked_rules": { "$ref": "#/$defs/nullable_integer" },
+        "story_only_rules": { "$ref": "#/$defs/nullable_integer" },
+        "test_only_rules": { "$ref": "#/$defs/nullable_integer" },
+        "unchecked_rules": { "$ref": "#/$defs/nullable_integer" },
+        "waived_rules": { "$ref": "#/$defs/nullable_integer" },
+        "test_pass_rate": { "$ref": "#/$defs/nullable_number" },
+        "test_passed": { "$ref": "#/$defs/nullable_integer" },
+        "test_failed": { "$ref": "#/$defs/nullable_integer" },
+        "test_total": { "$ref": "#/$defs/nullable_integer" },
+        "evidence_manifest_present": { "$ref": "#/$defs/nullable_boolean" },
+        "generated_file_count": { "$ref": "#/$defs/nullable_integer" },
+        "wall_clock_s": { "type": "number", "minimum": 0 }
+      }
+    },
+    "epic833": {
+      "type": "object",
+      "required": ["epic_issue", "arm", "checks_passed", "checks_total", "checks"],
+      "properties": {
+        "epic_issue": { "type": "integer" },
+        "arm": { "type": "string" },
+        "checks_passed": { "type": "integer" },
+        "checks_warn": { "type": "integer" },
+        "checks_failed": { "type": "integer" },
+        "checks_skipped": { "type": "integer" },
+        "checks_total": { "type": "integer" },
+        "checks": { "type": "array" },
+        "source_set_answers": { "type": "object" }
+      }
+    }
+  }
+}

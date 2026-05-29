@@ -1,0 +1,9 @@
+% Handwritten A0 — Milestone 1 corpus (token_bucket)
+
+<requirements>
+Implement a token-bucket rate limiter with configurable burst capacity.
+When a request is allowed, return True and decrement tokens.
+When the bucket is empty, reject the request and return False.
+Refill tokens at a steady rate over time.
+Duplicate requests within a short window should be handled safely.
+</requirements>
