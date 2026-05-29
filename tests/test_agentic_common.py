@@ -3992,7 +3992,7 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
 
 
 def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
-    """Codex positional prompt must be '-' so it receives the prompt body."""
+    """Codex positional prompt must be final '-' so it receives the prompt body."""
     from pdd.agentic_common import _run_with_provider
 
     with patch.dict(
@@ -4026,10 +4026,87 @@ def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
     assert output == "ok"
     args, kwargs = mock_run.call_args
     cmd = args[0]
+    assert cmd[-1] == "-", f"Codex prompt operand must remain final '-': {cmd}"
     assert cmd[cmd.index("--json") + 1] == "-"
     assert cmd[cmd.index("--model") + 1] == "test-model"
+    assert cmd.index("--model") < cmd.index("exec"), (
+        f"Codex --model is a top-level flag and must precede exec: {cmd}"
+    )
     assert str(prompt_file) not in cmd
     assert kwargs["input"] == "test prompt body"
+
+
+def test_codex_nonzero_prefers_jsonl_stdout_error_over_stdin_notice(tmp_path):
+    """Codex JSONL stdout should explain failures better than the stdin notice."""
+    from pdd.agentic_common import _run_with_provider
+
+    stdout = "\n".join([
+        json.dumps({"type": "session.start"}),
+        json.dumps({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Unsupported model for Codex exec",
+            },
+        }),
+    ])
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=stdout,
+            stderr="Reading additional input from stdin...",
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt body")
+
+        success, output, cost, _model = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=True
+        )
+
+    assert success is False
+    assert cost == 0.0
+    assert "Unsupported model for Codex exec" in output
+    assert "Reading additional input from stdin" not in output
+
+
+def test_codex_nonzero_prefers_terminal_failure_over_intermediate_error(tmp_path):
+    """Codex can emit retry/progress errors before the terminal failure event."""
+    from pdd.agentic_common import _run_with_provider
+
+    stdout = "\n".join([
+        json.dumps({"type": "session.start"}),
+        json.dumps({"type": "error", "message": "Reconnecting to Codex..."}),
+        json.dumps({
+            "type": "turn.failed",
+            "error": {
+                "message": "Access to requested model was denied",
+            },
+        }),
+    ])
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=stdout,
+            stderr="Reading additional input from stdin...",
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt body")
+
+        success, output, cost, _model = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=True
+        )
+
+    assert success is False
+    assert cost == 0.0
+    assert "Access to requested model was denied" in output
+    assert "Reconnecting to Codex" not in output
+    assert "Reading additional input from stdin" not in output
 
 
 def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
