@@ -307,10 +307,11 @@ class ContextSnapshotRecorder:
         if source.exists():
             metadata["source_sha256"] = _sha256_file(source)
         if query:
-            metadata["query"] = query
+            safe_query, _, _ = redact_snapshot_text(query)
+            metadata["query"] = safe_query
         return self._write_text_artifact(
             artifact_type=artifact_type,
-            name=f"{artifact_type}-{source.name}",
+            name=f"{artifact_type}-{len(self.artifacts) + 1}-{source.name}",
             text=output if output is not None else content,
             metadata=metadata,
         )
@@ -329,13 +330,15 @@ class ContextSnapshotRecorder:
 
         if "shell" not in self.dynamic_tags:
             self.dynamic_tags.append("shell")
+        safe_command, _, _ = redact_snapshot_text(command)
+        safe_cwd, _, _ = redact_snapshot_text(cwd) if cwd else (None, False, [])
         return self._write_text_artifact(
             artifact_type="shell",
             name=f"shell-{len(self.artifacts) + 1}",
             text=f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}",
             metadata={
-                "command": command,
-                "cwd": cwd,
+                "command": safe_command,
+                "cwd": safe_cwd,
                 "exit_code": exit_code,
                 "timeout": timeout,
                 "environment": "not_persisted",
@@ -354,11 +357,12 @@ class ContextSnapshotRecorder:
 
         if "web" not in self.dynamic_tags:
             self.dynamic_tags.append("web")
+        safe_url, _, _ = redact_snapshot_text(url)
         return self._write_text_artifact(
             artifact_type="web",
             name=f"web-{len(self.artifacts) + 1}",
             text=content,
-            metadata={"url": url, "fetcher": fetcher, "status": status},
+            metadata={"url": safe_url, "fetcher": fetcher, "status": status},
         )
 
     def record_grounding_examples(

@@ -539,10 +539,26 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 return extracted
             except ImportError:
                 console.print("[yellow]Warning: pdd.include_query_extractor not found. Cannot perform semantic query.[/yellow]")
-                return f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+                error_msg = f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(
+                        source_path=resolved_path,
+                        content=error_msg,
+                        query=query,
+                        output=error_msg,
+                    )
+                return error_msg
             except Exception as e:
                 console.print(f"[bold red]Error in semantic query:[/bold red] {e}")
-                return f"[Error in semantic query from {file_path}: {e}]"
+                error_msg = f"[Error in semantic query from {file_path}: {e}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(
+                        source_path=resolved_path,
+                        content=error_msg,
+                        query=query,
+                        output=error_msg,
+                    )
+                return error_msg
 
         try:
             full_path = get_file_path(file_path)
@@ -894,13 +910,19 @@ def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any
                     from firecrawl import FirecrawlApp as Firecrawl
                 except ImportError:
                     _dbg("firecrawl import failed; package not installed")
-                    return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+                    error_msg = f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+                    if snapshot_recorder is not None:
+                        snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+                    return error_msg
 
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
-                return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+                error_msg = f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+                return error_msg
 
             app = Firecrawl(api_key=api_key)
 
@@ -909,7 +931,10 @@ def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any
             scrape_fn = getattr(app, 'scrape', None) or getattr(app, 'scrape_url', None)
             if scrape_fn is None:
                 _dbg("firecrawl client exposes neither scrape() nor scrape_url()")
-                return f"[Error: firecrawl-py client missing scrape API. Cannot scrape {url}]"
+                error_msg = f"[Error: firecrawl-py client missing scrape API. Cannot scrape {url}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+                return error_msg
 
             # Firecrawl SDK has historically had a bug where it passed timeout
             # (ms) to requests.post() which expects seconds, so timeout=30000
@@ -942,15 +967,24 @@ def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
-                return f"[No content available for {url}]"
+                error_msg = f"[No content available for {url}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(url=url, content=error_msg, fetcher="firecrawl", status=200)
+                return error_msg
         except FuturesTimeoutError:
             console.print(f"[bold yellow]Warning:[/bold yellow] Web scrape timed out after 30s for {url}")
             _dbg(f"Web scrape timeout for {url}")
-            return f"[Web scraping timed out for {url}]"
+            error_msg = f"[Web scraping timed out for {url}]"
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+            return error_msg
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
-            return f"[Web scraping error: {str(e)}]"
+            error_msg = f"[Web scraping error: {str(e)}]"
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+            return error_msg
     code_spans = _extract_code_spans(text)
     def replace_web_with_spans(match):
         if _intersects_any_span(match.start(), match.end(), code_spans):
