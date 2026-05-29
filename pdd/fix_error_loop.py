@@ -563,6 +563,7 @@ def fix_error_loop(unit_test_file: str,
 
     # Consecutive timeout/flaky iterations without improvement (failure-aware early exit)
     timeout_flaky_streak = 0
+    assertion_logic_streak = 0
 
     while fix_attempts < max_attempts and total_cost < budget:
         iteration += 1
@@ -870,6 +871,10 @@ def fix_error_loop(unit_test_file: str,
         # as pytest execution errors.
         if failure_aware_retries and not success and post_fix_pytest_output is not None:
             improved = stats["iterations_info"][-1].get("improved", False)
+            old_total_failures = iteration_stats["fails"] + iteration_stats["errors"]
+            new_total_failures = fails + errors
+            failures_decreased = (new_total_failures < old_total_failures)
+
             sig_after_fix = extract_failure_signature(post_fix_pytest_output)
             kind_after_fix = classify_failure(post_fix_pytest_output)
             if kind_after_fix == FailureKind.TIMEOUT_FLAKY:
@@ -886,6 +891,22 @@ def fix_error_loop(unit_test_file: str,
                     break
             else:
                 timeout_flaky_streak = 0
+
+            if kind_after_fix == FailureKind.ASSERTION_LOGIC:
+                if not failures_decreased:
+                    assertion_logic_streak += 1
+                else:
+                    assertion_logic_streak = 0
+                if assertion_logic_streak >= 3:
+                    rprint(
+                        "[yellow]Stopping after "
+                        f"{fix_attempts} attempt(s): assertion/logic failures are stagnant. "
+                        "Consider increasing strength/temperature, simplifying the prompt, or manual fixes.[/yellow]"
+                    )
+                    break
+            else:
+                assertion_logic_streak = 0
+
             if kind_after_fix == FailureKind.SYNTAX_IMPORT:
                 if (
                     fix_attempts >= 1
