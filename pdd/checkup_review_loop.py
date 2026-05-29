@@ -26,6 +26,7 @@ the final report is posted to the source issue / PR. Read-side calls
 always run; this module never parses stdout-supplied issue or PR content.
 Issue/PR context is supplied through ``ReviewLoopContext`` by the caller.
 """
+
 from __future__ import annotations
 
 import json
@@ -129,14 +130,10 @@ EXTERNAL_STATUS_AREAS: Tuple[str, ...] = (
 )
 REVIEW_TRAILING_SECTION_NAMES = r"(?:Checks|Checks Run|Verification|Regression Checks)"
 REVIEW_TRAILING_SECTION_LOOKAHEAD = (
-    r"\n\s*(?:\*\*)?"
-    + REVIEW_TRAILING_SECTION_NAMES
-    + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
+    r"\n\s*(?:\*\*)?" + REVIEW_TRAILING_SECTION_NAMES + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
 )
 REVIEW_TRAILING_SECTION_SPLIT_RE = (
-    r"(?:^|\n)\s*(?:\*\*)?"
-    + REVIEW_TRAILING_SECTION_NAMES
-    + r"(?:\*\*)?\s*:?[^\n]*"
+    r"(?:^|\n)\s*(?:\*\*)?" + REVIEW_TRAILING_SECTION_NAMES + r"(?:\*\*)?\s*:?[^\n]*"
 )
 
 # Statuses that always mean "not clean" regardless of how a caller widens
@@ -440,7 +437,9 @@ def _defang_issue_aligned(text: str) -> str:
     if not text:
         return text
     return _DEFANG_ISSUE_ALIGNED_RE.sub(
-        lambda m: f"{m.group('lead')}{m.group('key')}*{m.group('close')}{m.group('sep')}",
+        lambda m: (
+            f"{m.group('lead')}{m.group('key')}*{m.group('close')}{m.group('sep')}"
+        ),
         text,
     )
 
@@ -952,6 +951,89 @@ def run_checkup_review_loop(
     # render ``fresh-final-review: clean`` against a SHA we never
     # observed.
     state.reviewed_head_sha = _git_rev_parse_head(worktree) or None
+    # Issue #1433 Bug #1: pre-flight conflict check. Detect ``mergeable:
+    # CONFLICTING`` BEFORE the first LLM round so a hopeless run never
+    # incurs $reviewer + $fixer spend.
+    #
+    # Codex review finding F5: only probe against a base ref that
+    # ``_refresh_pr_base_ref`` JUST fetched (``base_local_ref``). The
+    # naive ``origin/<base_ref>`` fallback can be stale on a fork-origin
+    # operator setup or report a conflict against the wrong base
+    # entirely. When ``base_local_ref`` is unavailable (gates disabled,
+    # ``base_ref_fetch_error`` set, or metadata fetch failure) we skip
+    # pre-flight: the gates-enabled path surfaces the underlying base
+    # problem via the existing ``gate:base-ref`` blocker, and the
+    # gates-disabled path explicitly opted out of base-ref correctness
+    # checks. Skipping here keeps pre-flight conservative — a SAVINGS
+    # feature only, never the source of a spurious block.
+    base_for_preflight: Optional[str] = None
+    if pr_metadata and not pr_metadata.get("base_ref_fetch_error"):
+        base_local = pr_metadata.get("base_local_ref")
+        if isinstance(base_local, str) and base_local.strip():
+            base_for_preflight = base_local.strip()
+    preflight_conflict = _detect_pr_base_merge_conflict(worktree, base_for_preflight)
+    if preflight_conflict:
+        conflict_finding = ReviewFinding(
+            severity="blocker",
+            reviewer="preflight:base-merge",
+            area="pr-merge-conflict",
+            evidence=f"base={base_for_preflight}\n{preflight_conflict}"[:4000],
+            finding=(
+                "PR head conflicts with the base ref "
+                f"{base_for_preflight!r}: `git merge-tree --write-tree "
+                f"{base_for_preflight} HEAD` reported conflicts before "
+                "the review loop even started. A clean reviewer verdict "
+                "over a base-conflicting PR is misleading because the "
+                "PR cannot be merged from the GitHub UI without manual "
+                "conflict resolution."
+            ),
+            required_fix=(
+                "Resolve the merge conflicts (rebase the PR branch onto "
+                f"the latest {base_for_preflight} and fix the conflicts, "
+                "or merge the base into the PR branch and resolve), "
+                "push the resolution, then re-run `pdd checkup --pr "
+                "--review-loop`."
+            ),
+            location="pdd/checkup_review_loop.py:_detect_pr_base_merge_conflict",
+            status="open",
+            round_number=0,
+        )
+        state.findings_by_key[conflict_finding.key] = conflict_finding
+        # Mirror the per-round "reviewer found blocker-severity findings"
+        # status so the downstream verdict adapter and final-report
+        # renderer treat the pre-flight blocker exactly like any other
+        # reviewer-surfaced blocker. ``findings`` is the standard
+        # non-clean value used by ``_record_review``.
+        state.reviewer_status[reviewer] = "findings"
+        state.stop_reason = (
+            "Pre-flight base-merge conflict detected; refusing to start "
+            "the review loop. See the synthetic blocker finding for "
+            "remediation."
+        )
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # The raw ``preflight_conflict`` body comes from ``git merge-tree``
+        # stdout and CodeQL ``py/clear-text-storage-sensitive-data`` treats
+        # it as tainted (the scrubber it passed through is not modelled as
+        # a sanitizer). Persist a minimal marker artifact only — the full
+        # conflict description still flows through the synthetic blocker
+        # finding (``conflict_finding.evidence`` above) which IS modelled
+        # by CodeQL's scrub paths. Operators who need the raw merge-tree
+        # output can re-run ``git merge-tree --write-tree <base> HEAD``
+        # locally.
+        _write_artifact(
+            artifacts_dir / "preflight-base-merge-conflict.txt",
+            "Pre-flight base-merge conflict detected. "
+            "See the synthetic blocker finding "
+            "(reviewer='preflight:base-merge') for the conflict "
+            "description. Reproduce locally with "
+            "`git merge-tree --write-tree --no-messages <base> HEAD` "
+            "in the loop's worktree.\n",
+        )
+        report = _finalize(context, state, roles, artifacts_dir)
+        _post_review_loop_report(context, report, use_github_state)
+        return True, report, state.total_cost, state.last_model
+
     if not quiet:
         mode_label = "review-only" if config.review_only else "review-loop"
         console.print(
@@ -1090,7 +1172,9 @@ def run_checkup_review_loop(
                             )
                             if gate_findings:
                                 _record_gate_findings(state, gate_findings)
-                                state.reviewer_status[fallback_result.reviewer] = "findings"
+                                state.reviewer_status[fallback_result.reviewer] = (
+                                    "findings"
+                                )
                                 # The fallback reviewer is now the active
                                 # reviewer for the rest of the loop;
                                 # feed the gate findings to the fixer on
@@ -1157,8 +1241,7 @@ def run_checkup_review_loop(
                         _record_gate_findings(state, gate_findings)
                         state.reviewer_status[reviewer] = "findings"
                         state.stop_reason = (
-                            "Review-only mode: deterministic gates "
-                            "reported findings."
+                            "Review-only mode: deterministic gates reported findings."
                         )
                     else:
                         _mark_reviewer_findings_fixed(state, reviewer)
@@ -1389,7 +1472,24 @@ def run_checkup_review_loop(
         # three return paths. The analogous failed-push refusal path
         # (line ~1068) follows the same contract and is exercised by
         # ``test_failed_push_aborts_loop_without_running_verifier``.
-        guard_changed_files = _git_changed_files(worktree)
+        guard_changed_files = list(_git_changed_files(worktree))
+        # Issue #1433 Bug #3: when the fixer subprocess committed inside
+        # the worktree (e.g., codex autoheal), ``_git_changed_files``
+        # returns empty because ``git status --porcelain`` only sees
+        # working-tree drift. The #1063 prompt-source guard and #1081
+        # registry-edit guard must STILL fire on those committed
+        # changes — otherwise a fixer can land a generated-code patch
+        # without its owning prompt simply by committing as well as
+        # editing. Union the working-tree paths with the diff against
+        # ``pre_fix_sha`` so both guards see the complete change set.
+        if pre_fix_sha:
+            already_committed = _files_changed_since(worktree, pre_fix_sha)
+            if already_committed:
+                seen = set(guard_changed_files)
+                for path in already_committed:
+                    if path not in seen:
+                        guard_changed_files.append(path)
+                        seen.add(path)
         # Issue #1081: architecture-registry edit guard runs BEFORE the
         # 10a prompt-source guard. 10a is per-entry against the
         # pre-fixer HEAD registry, which a coordinated rename + prompt
@@ -1402,8 +1502,17 @@ def run_checkup_review_loop(
         # shape; running it first surfaces the registry-mutation
         # refusal rather than a downstream 10a refusal that fires on a
         # partial symptom.
+        # Codex review finding F1: the guards read
+        # ``HEAD:architecture.json`` as their baseline by default. When
+        # the fixer subprocess committed inside the worktree (Bug #3
+        # path), ``HEAD`` IS the post-fix registry — a committed
+        # registry repoint/removal would produce zero diff against
+        # itself. Pin the guard baseline to ``pre_fix_sha`` whenever
+        # the loop captured one; the helpers default to ``"HEAD"`` so
+        # legacy/test callers keep working.
+        guard_head_ref = pre_fix_sha or "HEAD"
         registry_guard_refusal = _check_architecture_registry_edit_guard(
-            worktree, guard_changed_files
+            worktree, guard_changed_files, head_ref=guard_head_ref
         )
         if registry_guard_refusal:
             _write_artifact(
@@ -1413,11 +1522,12 @@ def run_checkup_review_loop(
             )
             state.stop_reason = registry_guard_refusal
             break
-        guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
+        guard_refusal = _check_prompt_source_guard(
+            worktree, guard_changed_files, head_ref=guard_head_ref
+        )
         if guard_refusal:
             _write_artifact(
-                artifacts_dir
-                / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                artifacts_dir / f"round-{round_number}-prompt-source-guard-refusal.txt",
                 guard_refusal + "\n",
             )
             state.stop_reason = guard_refusal
@@ -1427,6 +1537,7 @@ def run_checkup_review_loop(
             worktree,
             pr_metadata,
             f"fix: address {reviewer} review-loop findings",
+            pre_fix_sha=pre_fix_sha,
         )
         # Verification trust boundary (issue #1088, R-V1/R-V2/R-V3):
         # Capture local/remote SHAs and push status from observable
@@ -1572,16 +1683,14 @@ def run_checkup_review_loop(
             # is ``"unverified"``.
             state.verification_status_by_round[round_number] = "unverified"
             state.stop_reason = (
-                f"Primary reviewer {reviewer} could not verify fixes: "
-                f"{verify.status}."
+                f"Primary reviewer {reviewer} could not verify fixes: {verify.status}."
             )
             break
 
         verify_open_findings = _actionable_findings(state, verify.findings)
         verify_open_keys = {finding.key for finding in verify_open_findings}
         fixed_findings = [
-            finding for finding in fix_findings
-            if finding.key not in verify_open_keys
+            finding for finding in fix_findings if finding.key not in verify_open_keys
         ]
         _mark_findings_fixed(state, fixed_findings)
         _record_reviewer_feedback(state, verify_open_findings, fix)
@@ -1639,7 +1748,9 @@ def run_checkup_review_loop(
 
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
-        state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
+        state.stop_reason = _clean_stop_reason(
+            fresh_final=config.require_final_fresh_review
+        )
         break
 
     if not state.stop_reason and state.reviewer_status.get(reviewer) == "clean":
@@ -1660,7 +1771,10 @@ def run_checkup_review_loop(
         state.max_rounds_reached = True
         state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
-    if state.fresh_final_status == "missing" and state.reviewer_status.get(reviewer) == "clean":
+    if (
+        state.fresh_final_status == "missing"
+        and state.reviewer_status.get(reviewer) == "clean"
+    ):
         state.fresh_final_status = "clean"
 
     report = _finalize(context, state, roles, artifacts_dir)
@@ -1683,18 +1797,24 @@ def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     """Resolve the primary reviewer and fixer roles from new and legacy config."""
     legacy_roles = _normalize_reviewers(config.reviewers)
-    explicit_reviewer = _normalize_reviewers([config.reviewer]) if config.reviewer else []
+    explicit_reviewer = (
+        _normalize_reviewers([config.reviewer]) if config.reviewer else []
+    )
     explicit_fixer = _normalize_reviewers([config.fixer]) if config.fixer else []
 
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
+        else legacy_roles[0]
+        if legacy_roles
+        else DEFAULT_REVIEWER
     )
     fixer = (
         explicit_fixer[0]
         if explicit_fixer
-        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
+        else legacy_roles[1]
+        if len(legacy_roles) > 1
+        else DEFAULT_FIXER
     )
 
     if reviewer == fixer and not config.review_only:
@@ -1948,8 +2068,14 @@ def _package_companion_python_files(
                 name = entry.name
                 # Skip dot-dirs and conventional non-source roots.
                 if name.startswith(".") or name in {
-                    "__pycache__", "node_modules", "build", "dist",
-                    "site-packages", ".venv", "venv", "env",
+                    "__pycache__",
+                    "node_modules",
+                    "build",
+                    "dist",
+                    "site-packages",
+                    ".venv",
+                    "venv",
+                    "env",
                 }:
                     continue
                 # An "obvious package" has at least one ``.py`` file in it.
@@ -2101,11 +2227,164 @@ def _collect_static_analysis_candidate_findings(
 
     # Persist for offline inspection alongside the prompt artifact.
     _write_artifact(
-        artifacts_dir
-        / f"round-{round_number}-{mode}-static-analysis-candidates.json",
+        artifacts_dir / f"round-{round_number}-{mode}-static-analysis-candidates.json",
         json.dumps(candidates, indent=2),
     )
     return candidates
+
+
+def _collect_companion_source_of_truth_files(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, Any]] = None,
+    *,
+    max_entries: int = 200,
+) -> List[Dict[str, Any]]:
+    """Map every code file in the PR diff to its prompt + architecture entry.
+
+    Issue #1433 Bug #4: PDD's contract is that prompts are source of truth.
+    The reviewer's natural attention orbits the PR diff; for code whose
+    prompt or architecture entry is NOT in the diff, the reviewer can miss
+    drift between the implementation and the prompt contract entirely.
+    Surface the companion files explicitly so the prompt builder can list
+    them as part of the review scope.
+
+    Returns at most ``max_entries`` companion dicts. When the eligible set
+    is larger, the LAST entry in the returned list is a synthetic marker
+    dict with ``__truncated__: True`` carrying ``total_eligible`` and
+    ``omitted_code_paths`` (full list of code-file paths the reviewer
+    must ALSO inspect — codex pass-4 finding 2: silent truncation lets
+    drift in omitted files ride a clean review when the prompt says
+    "for each code file"). The marker can be inspected by callers /
+    rendered explicitly by ``_format_companion_source_of_truth``.
+
+    Only entries where at least one companion file is OUTSIDE the diff
+    are returned — when everything is in the diff the reviewer's normal
+    attention covers it and the section adds noise.
+
+    Always fail-open: any git/IO/JSON error returns ``[]`` so the prompt
+    just omits the section.
+    """
+    try:
+        changed = _pr_changed_files_all(worktree, pr_metadata)
+    except Exception as exc:  # noqa: BLE001 - defensive
+        # CodeQL does not recognise ``_scrub_secrets`` as a sanitizer
+        # for ``py/clear-text-logging-sensitive-data``. Log only the
+        # exception CLASS NAME (no message body) so the alert cannot
+        # fire on a tainted-string log argument. Operators who need
+        # the full exception text can reproduce locally.
+        logger.debug(
+            "companion-files: changed-file resolution failed (%s)",
+            type(exc).__name__,
+        )
+        return []
+    if not changed:
+        return []
+
+    mapping = _load_prompt_source_map(worktree)
+    if not mapping:
+        return []
+
+    changed_set = {Path(p).as_posix() for p in changed}
+    # Codex review pass-6 finding 1: gate emission on PER-ENTRY signals
+    # for both companions. ``_arch_entries_changed_set`` returns the
+    # set of code_paths whose architecture entry actually differs
+    # between base and HEAD — not the global "architecture.json was
+    # touched somewhere" signal pass-5 used. This way module A is
+    # only skipped when BOTH (a) its prompt is in the diff AND (b)
+    # its own architecture entry was changed; if either companion is
+    # OUTSIDE the diff at the entry granularity, A's drift surface is
+    # surfaced for the reviewer.
+    base_ref_for_arch = None
+    if pr_metadata:
+        local = pr_metadata.get("base_local_ref")
+        if isinstance(local, str) and local.strip():
+            base_ref_for_arch = local.strip()
+        elif pr_metadata.get("base_ref"):
+            base_ref_for_arch = f"origin/{str(pr_metadata['base_ref']).strip()}"
+    arch_entry_changed_set = _arch_entries_changed_set(worktree, base_ref_for_arch)
+    # Codex pass-14 finding 1: a PR that DELETES a registered module no
+    # longer has that code_path in the HEAD registry (``mapping``), so the
+    # HEAD-only lookup silently drops it from review scope — exactly the
+    # "code path changed, source-of-truth lives elsewhere" case this
+    # feature exists to surface. Resolve the owning prompt for deleted
+    # paths from the BASE-side registry instead. (When the module's prompt
+    # AND architecture entry are also removed in the same PR, the
+    # both-in-diff skip below correctly drops it; the surfaced case is the
+    # orphan — code+entry removed but the prompt left behind.)
+    base_mapping: Optional[Dict[str, str]] = None
+    if base_ref_for_arch:
+        base_mapping = _load_prompt_source_map(worktree, head_ref=base_ref_for_arch)
+    # Build the full eligible set FIRST so the truncation marker (below)
+    # can report total_eligible accurately and enumerate the omitted
+    # paths. Walking ``mapping`` (the canonical code -> prompt registry)
+    # ensures eligibility is judged the same way regardless of cap.
+    eligible: List[Dict[str, Any]] = []
+    for code_path in sorted(changed_set):
+        prompt_path = mapping.get(code_path)
+        if not prompt_path and base_mapping:
+            # Deleted-module fallback: only fires for code paths absent
+            # from the HEAD registry (present/modified paths resolve above).
+            prompt_path = base_mapping.get(code_path)
+        if not prompt_path:
+            continue
+        prompt_in_diff = prompt_path in changed_set
+        arch_entry_in_diff = code_path in arch_entry_changed_set
+        # Skip only when BOTH per-module signals say the companion is
+        # covered by the diff. If either is OUTSIDE the diff, the
+        # drift surface must be surfaced.
+        if prompt_in_diff and arch_entry_in_diff:
+            continue
+        eligible.append(
+            {
+                "code_path": code_path,
+                "prompt_path": prompt_path,
+                "prompt_in_diff": prompt_in_diff,
+                "architecture_in_diff": arch_entry_in_diff,
+            }
+        )
+
+    if len(eligible) <= max_entries:
+        return eligible
+
+    # Truncation: keep the first ``max_entries`` real entries and append
+    # a synthetic marker describing what was omitted. The formatter
+    # MUST render the marker as an explicit "ALSO inspect" note so the
+    # reviewer knows the listed entries are not the complete set.
+    #
+    # Codex review pass-5 finding 2: the omitted-paths list MUST itself
+    # be bounded in the PROMPT to keep the reviewer prompt's context
+    # budget predictable.
+    # Codex review pass-7 finding 3: but the SIDECAR ARTIFACT must
+    # carry the COMPLETE eligible set (full per-entry dicts) so the
+    # reviewer who follows the artifact-path instruction in the
+    # truncation note actually has every omitted prompt/architecture
+    # pair available to inspect. Store the full omitted_entries on
+    # the marker under ``omitted_entries_full`` (full dicts with
+    # prompt_in_diff / architecture_in_diff intact) and keep the
+    # bounded ``omitted_code_paths`` + ``omitted_paths_remaining``
+    # fields for the formatter's prompt rendering. The formatter does
+    # NOT render ``omitted_entries_full`` — it stays artifact-only.
+    head = eligible[:max_entries]
+    omitted_entries = eligible[max_entries:]
+    omitted_paths_cap = max(1, max_entries // 2)
+    omitted_paths_shown = [
+        entry["code_path"] for entry in omitted_entries[:omitted_paths_cap]
+    ]
+    omitted_paths_remaining = max(0, len(omitted_entries) - omitted_paths_cap)
+    head.append(
+        {
+            "__truncated__": True,
+            "total_eligible": len(eligible),
+            "shown": max_entries,
+            "omitted_code_paths": omitted_paths_shown,
+            "omitted_paths_remaining": omitted_paths_remaining,
+            # Full per-entry dicts for the sidecar artifact only;
+            # underscored to discourage prompt rendering (formatter
+            # explicitly skips it).
+            "omitted_entries_full": list(omitted_entries),
+        }
+    )
+    return head
 
 
 def _maybe_run_fallback_reviewer(
@@ -2197,9 +2476,7 @@ def _maybe_run_fallback_reviewer(
         # in ``reviewer_status_details`` by the earlier ``_record_review``
         # call), tag it as superseded, then flip the rendered status to
         # ``"clean"`` so adapter rule r1 lets r1.5 fire.
-        original_detail = dict(
-            state.reviewer_status_details.get(primary_reviewer, {})
-        )
+        original_detail = dict(state.reviewer_status_details.get(primary_reviewer, {}))
         original_detail.setdefault("status", primary_status)
         original_detail.setdefault("classification", "unknown")
         original_detail.setdefault("exit_code", "no exit code")
@@ -2311,8 +2588,14 @@ def _maybe_run_fallback_fixer(
     if (
         canonical_fallback == normalized_primary[0]
         or canonical_fallback == normalized_reviewer[0]
-        or (active_reviewer_norm is not None and canonical_fallback == active_reviewer_norm)
-        or (original_reviewer_norm is not None and canonical_fallback == original_reviewer_norm)
+        or (
+            active_reviewer_norm is not None
+            and canonical_fallback == active_reviewer_norm
+        )
+        or (
+            original_reviewer_norm is not None
+            and canonical_fallback == original_reviewer_norm
+        )
     ):
         return None
 
@@ -2485,6 +2768,75 @@ def _run_review(
         mode=mode,
         pr_metadata=pr_metadata,
     )
+    # Issue #1433 Bug #4: surface companion prompt + architecture entries
+    # for every code file in the PR diff so the reviewer's attention
+    # extends past the diff window when those companions are unmodified.
+    companion_source_of_truth = _collect_companion_source_of_truth_files(
+        worktree,
+        pr_metadata=pr_metadata,
+    )
+    # Codex review pass-6 finding 2: when truncation forces the prompt
+    # to omit some companion entries, persist the FULL eligible list
+    # as a sidecar JSON artifact under artifacts_dir so the operator
+    # (or a future audit) has the complete record. The prompt
+    # truncation note references this path so the reviewer can refuse
+    # ``clean`` when coverage is incomplete. The artifact is only
+    # written when truncation actually occurred — bounded PRs do not
+    # accumulate extra artifacts.
+    companion_artifact_relpath: Optional[str] = None
+    if any(c.get("__truncated__") for c in companion_source_of_truth):
+        full_eligible = [
+            c for c in companion_source_of_truth if not c.get("__truncated__")
+        ]
+        marker = next(
+            (c for c in companion_source_of_truth if c.get("__truncated__")),
+            None,
+        )
+        # Reconstruct the FULL eligible list by combining the head
+        # (shown) entries with the marker's omitted-path inventory.
+        # The omitted entries' ``prompt_in_diff`` / ``architecture_in
+        # _diff`` flags are unknown from the marker alone, so the
+        # artifact records the shown set (with full per-entry detail)
+        # AND the omitted code-path list under separate keys so the
+        # operator can reconstruct coverage. The marker's
+        # ``omitted_paths_remaining`` count is also persisted.
+        # Codex pass-7 finding 3: the artifact MUST be truly complete.
+        # ``omitted_entries_full`` carries every omitted entry with
+        # the same per-entry fields (prompt_in_diff,
+        # architecture_in_diff) as the shown entries, so the reviewer
+        # who follows the artifact-path instruction in the prompt
+        # truncation note can actually inspect every omitted
+        # prompt/architecture pair before issuing a verdict.
+        omitted_full: List[Dict[str, Any]] = (
+            list(marker.get("omitted_entries_full", [])) if marker is not None else []
+        )
+        artifact_payload = {
+            "round": round_number,
+            "mode": mode,
+            "shown_companions": full_eligible,
+            "omitted_companions": omitted_full,
+            "truncation": (
+                {
+                    "total_eligible": marker.get("total_eligible"),
+                    "shown": marker.get("shown"),
+                    "omitted_code_paths_listed_in_prompt": marker.get(
+                        "omitted_code_paths", []
+                    ),
+                    "omitted_paths_remaining_count_in_prompt": marker.get(
+                        "omitted_paths_remaining", 0
+                    ),
+                    "omitted_total": len(omitted_full),
+                }
+                if marker is not None
+                else None
+            ),
+        }
+        artifact_path = (
+            artifacts_dir
+            / f"round-{round_number}-{mode}-companion-source-of-truth.json"
+        )
+        _write_artifact(artifact_path, json.dumps(artifact_payload, indent=2))
+        companion_artifact_relpath = artifact_path.name
     prompt = _review_prompt(
         reviewer=reviewer,
         context=context,
@@ -2495,6 +2847,8 @@ def _run_review(
         findings_to_verify=findings_to_verify or [],
         fix_result=fix_result,
         candidate_findings=candidate_findings,
+        companion_source_of_truth=companion_source_of_truth,
+        companion_artifact_path=companion_artifact_relpath,
     )
     base = f"round-{round_number}-{mode}-{reviewer}"
     _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
@@ -2552,9 +2906,8 @@ def _run_review(
             )
             result.status_exit_code = result.status_exit_code or exit_code
             result.status_reason = result.status_reason or reason
-        if (
-            _should_attempt_parse_repair(output, result)
-            and not _budget_exhausted(config, state, deadline or float("inf"))
+        if _should_attempt_parse_repair(output, result) and not _budget_exhausted(
+            config, state, deadline or float("inf")
         ):
             repaired = _run_review_parse_repair(
                 reviewer=reviewer,
@@ -2584,8 +2937,7 @@ def _run_review(
                 # not silently drop the traceback tail.
                 if repaired.status in HARD_NOT_CLEAN_STATES:
                     repaired.status_classification = (
-                        repaired.status_classification
-                        or result.status_classification
+                        repaired.status_classification or result.status_classification
                     )
                     repaired.status_exit_code = (
                         repaired.status_exit_code or result.status_exit_code
@@ -2612,9 +2964,7 @@ def _run_review(
                         repaired.status_exit_code = (
                             repaired.status_exit_code or exit_code
                         )
-                        repaired.status_reason = (
-                            repaired.status_reason or reason
-                        )
+                        repaired.status_reason = repaired.status_reason or reason
                 result = repaired
     _write_artifact(
         artifacts_dir / f"{base}.findings.json",
@@ -2654,7 +3004,9 @@ def _run_review_parse_repair(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}:parse-repair", output))
+    state.raw_outputs.append(
+        (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
+    )
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     if not success:
         return None
@@ -2668,7 +3020,10 @@ def _run_review_parse_repair(
         round_number,
         allow_degraded=config.continue_on_reviewer_limit,
     )
-    if repaired.status in {"clean", "findings"} or repaired.status in HARD_NOT_CLEAN_STATES:
+    if (
+        repaired.status in {"clean", "findings"}
+        or repaired.status in HARD_NOT_CLEAN_STATES
+    ):
         return repaired
     return None
 
@@ -2711,7 +3066,9 @@ def _run_fix(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append((f"fix:{fixer}:for:{reviewer}:round{round_number}", output))
+    state.raw_outputs.append(
+        (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
+    )
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     changed_files = _git_changed_files(worktree)
     summary, dispositions, rationales = _parse_fix_output(output, findings)
@@ -2984,6 +3341,102 @@ def _format_candidate_findings(
     )
 
 
+def _format_companion_source_of_truth(
+    companions: Sequence[Dict[str, Any]],
+    *,
+    artifact_path: Optional[str] = None,
+) -> str:
+    """Render the companion source-of-truth files block for the reviewer.
+
+    Issue #1433 Bug #4: the reviewer's diff-attention window misses
+    prompt/architecture drift when those companion files are NOT in the
+    PR diff. PDD's invariant is prompts-are-source-of-truth; the reviewer
+    must open the prompt + architecture entry for every changed code file
+    even when those companions are unmodified. Returns ``""`` when there
+    is nothing to surface so the section disappears from the prompt
+    entirely.
+
+    Codex review pass-4 finding 2 + pass-6 finding 2: when truncation
+    occurs the reviewer prompt CANNOT carry every omitted entry without
+    blowing the context budget. The bounded omitted list + remaining
+    count + sidecar artifact path together let the reviewer either
+    (a) confirm coverage of every listed AND omitted companion via the
+    artifact, or (b) refuse ``clean`` until coverage is complete.
+    """
+    if not companions:
+        return ""
+    real_entries = [c for c in companions if not c.get("__truncated__")]
+    truncation = next((c for c in companions if c.get("__truncated__")), None)
+    truncation_note = ""
+    if truncation is not None:
+        omitted = truncation.get("omitted_code_paths", [])
+        total = truncation.get("total_eligible", len(real_entries) + len(omitted))
+        shown = truncation.get("shown", len(real_entries))
+        # Codex pass-5 finding 2: ``omitted_paths_remaining`` is the
+        # count of omitted paths beyond the bounded shown-list; render
+        # it as "... and N more" instead of dumping every path so the
+        # reviewer prompt stays within a predictable context budget.
+        remaining = truncation.get("omitted_paths_remaining", 0)
+        if remaining > 0:
+            extra_note = (
+                f"\n\n(And {remaining} more omitted code-file path(s) are "
+                "not listed — narrow the PR scope or rerun checkup against "
+                "a subset to ensure full review coverage of those "
+                "companions.)"
+            )
+        else:
+            extra_note = ""
+        # Codex pass-6 finding 2: surface the sidecar artifact path
+        # explicitly so the reviewer can fetch the FULL eligible list
+        # when coverage requires it, AND must refuse ``clean`` when
+        # coverage of every listed/omitted companion cannot be
+        # confirmed.
+        artifact_note = (
+            f"\n\nThe complete eligible companion list (with the same "
+            "per-entry fields shown above) is persisted as "
+            f"`{artifact_path}` in this round's artifacts directory. "
+            "Open and review every entry in that file. If you cannot "
+            "confirm you reviewed the prompt + architecture entry for "
+            "every listed AND omitted code file in the artifact, REPORT "
+            "a `severity=blocker` finding (reviewer="
+            f"'{'companion-scope'}', area='workflow') instead of a "
+            "clean verdict — silent gaps over an unreviewed companion "
+            "violate the source-of-truth contract."
+            if artifact_path
+            else ""
+        )
+        truncation_note = (
+            "\n\n**Truncated review scope (codex pass-4 + pass-6 finding 2).** The "
+            f"checkup found {total} code files in this PR's diff whose "
+            "prompt OR per-module `architecture.json` entry is OUTSIDE the diff, "
+            f"but only the first {shown} are listed in the JSON above. The "
+            "first omitted code paths are listed below; further omissions "
+            "are summarised as a remaining count and the full set is "
+            "persisted as a sidecar artifact for explicit reviewer "
+            "coverage:\n"
+            f"{json.dumps(omitted, indent=2)}"
+            f"{extra_note}"
+            f"{artifact_note}\n"
+        )
+    return (
+        "\n\n## Companion Source-Of-Truth Files To Inspect\n"
+        "PDD's contract is that prompts are source of truth and code is "
+        "regenerated from prompts. For each code file in this PR's diff "
+        "below, the listed prompt path AND the matching `architecture.json` "
+        "entry are PART OF THE REVIEW SCOPE even when not in the PR diff. "
+        "Open them; verify the implementation still satisfies the prompt "
+        "contract (interface signatures, dependencies, examples, "
+        "documented invariants); flag drift between the prompt or "
+        "architecture interface and the implementation as a finding. "
+        "Severity matches impact — typically `medium` for tests and "
+        "`critical` for runtime modules. When `prompt_in_diff` is false "
+        "the prompt was NOT updated alongside the code change: that is "
+        "the highest-risk drift surface.\n"
+        f"{json.dumps(list(real_entries), indent=2)}"
+        f"{truncation_note}\n"
+    )
+
+
 def _review_prompt(
     *,
     reviewer: str,
@@ -2995,6 +3448,8 @@ def _review_prompt(
     findings_to_verify: Sequence[ReviewFinding],
     fix_result: Optional[FixResult] = None,
     candidate_findings: Optional[Sequence[Dict[str, Any]]] = None,
+    companion_source_of_truth: Optional[Sequence[Dict[str, Any]]] = None,
+    companion_artifact_path: Optional[str] = None,
 ) -> str:
     mode_instruction = (
         "\n\n## Initial Review Instructions\n"
@@ -3033,6 +3488,10 @@ def _review_prompt(
             "evidence and a clear reason the fixer should act on it.\n"
         )
     static_analysis_block = _format_candidate_findings(candidate_findings or [])
+    companion_block = _format_companion_source_of_truth(
+        companion_source_of_truth or [],
+        artifact_path=companion_artifact_path,
+    )
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
@@ -3200,7 +3659,7 @@ Architecture context:
 Prior normalized findings:
 {prior_findings}
 {verify_block}
-{fix_block}{static_analysis_block}
+{fix_block}{static_analysis_block}{companion_block}
 
 Return ONLY JSON with this shape:
 {{
@@ -3409,11 +3868,7 @@ def _filter_actionable_review_findings(
     findings: Sequence[ReviewFinding],
 ) -> List[ReviewFinding]:
     """Drop findings that only reflect external PR readiness status."""
-    return [
-        finding
-        for finding in findings
-        if not _is_external_status_finding(finding)
-    ]
+    return [finding for finding in findings if not _is_external_status_finding(finding)]
 
 
 def _is_external_status_finding(finding: ReviewFinding) -> bool:
@@ -3665,7 +4120,7 @@ def _markdown_findings_section(output: str) -> str:
     text = output or ""
     match = re.search(r"^\s*\*\*Findings\*\*\s*$", text, re.IGNORECASE | re.MULTILINE)
     if match:
-        text = text[match.end():]
+        text = text[match.end() :]
     return _strip_review_trailing_sections(text)
 
 
@@ -3748,7 +4203,7 @@ def _strip_markdown_emphasis(text: str) -> str:
             and value.endswith(marker)
             and len(value) >= len(marker) * 2
         ):
-            value = value[len(marker):-len(marker)].strip()
+            value = value[len(marker) : -len(marker)].strip()
     return value
 
 
@@ -3836,7 +4291,9 @@ def _pr_changed_files_all(
                 text=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            logger.debug("gates: changed-files base verify failed for %r: %s", base, exc)
+            logger.debug(
+                "gates: changed-files base verify failed for %r: %s", base, exc
+            )
             continue
         if verify.returncode != 0:
             continue
@@ -3955,9 +4412,7 @@ def _enforce_gates_before_clean(
     # is healthy or passes ``--no-gates`` explicitly.
     if pr_metadata and pr_metadata.get("base_ref_fetch_error"):
         base_ref_label = str(pr_metadata.get("base_ref") or "<unknown>")
-        scrubbed_err = _scrub_secrets(
-            str(pr_metadata["base_ref_fetch_error"])
-        )
+        scrubbed_err = _scrub_secrets(str(pr_metadata["base_ref_fetch_error"]))
         state.gate_runs.append(
             {
                 "round": round_number,
@@ -4024,9 +4479,7 @@ def _enforce_gates_before_clean(
     # earlier-commit poisoning slip through. Fail closed with a
     # synthetic blocker just like the base-ref-refresh failure path.
     if pr_metadata and pr_metadata.get("changed_files_fallback"):
-        scrubbed_err = _scrub_secrets(
-            str(pr_metadata["changed_files_fallback"])
-        )
+        scrubbed_err = _scrub_secrets(str(pr_metadata["changed_files_fallback"]))
         state.gate_runs.append(
             {
                 "round": round_number,
@@ -4309,10 +4762,7 @@ def _required_findings(
 ) -> List[ReviewFinding]:
     blocking = {sev.lower() for sev in config.blocking_severities}
     return [
-        f
-        for f in findings
-        if f.status != "fixed"
-        and f.severity.lower() in blocking
+        f for f in findings if f.status != "fixed" and f.severity.lower() in blocking
     ]
 
 
@@ -4449,7 +4899,9 @@ def _mark_budget_exhausted(
         state.stop_reason = f"Max review cost reached: ${config.max_cost:.2f}."
     if time.monotonic() >= deadline:
         state.max_duration_reached = True
-        state.stop_reason = f"Max review duration reached: {config.max_minutes:g} minutes."
+        state.stop_reason = (
+            f"Max review duration reached: {config.max_minutes:g} minutes."
+        )
 
 
 # Multi-word / specific substrings used to classify transient/infra failures.
@@ -4658,7 +5110,9 @@ def _fetch_pr_metadata(
     *,
     include_changed_files: bool = False,
 ) -> Dict[str, str]:
-    success, output = _run_gh_command(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}"]
+    )
     if not success:
         return {}
     try:
@@ -4714,10 +5168,225 @@ def _git_rev_parse_head(worktree: Path) -> str:
     return result.stdout.strip()
 
 
+def _resolve_trusted_git_for_worktree(worktree: Path) -> Optional[str]:
+    """Return a git binary path resolved via the same sanitized-PATH
+    rules the gate layer uses, without importing the heavyweight gate
+    module just for the lookup. Falls back to plain ``shutil.which``
+    so unit tests that monkeypatch ``shutil.which`` still resolve.
+    """
+    try:
+        from .checkup_gates import _resolve_trusted_git
+
+        resolved = _resolve_trusted_git(worktree)
+        if resolved:
+            return resolved
+    except Exception as exc:  # noqa: BLE001 - defensive
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exception class name, never the message body.
+        logger.debug(
+            "trusted-git lookup via checkup_gates failed (%s)",
+            type(exc).__name__,
+        )
+    import shutil
+
+    return shutil.which("git")
+
+
+def _detect_pr_base_merge_conflict(
+    worktree: Path, base_ref: Optional[str]
+) -> Optional[str]:
+    """Return a conflict description string when HEAD conflicts with ``base_ref``.
+
+    Issue #1433 Bug #1: ``pdd checkup --pr`` historically ran the full
+    review/fix loop on PRs that GitHub considered ``mergeable:
+    CONFLICTING, mergeStateStatus: DIRTY``. The loop could declare a
+    clean verdict over real merge conflicts because no step ever
+    attempted the base merge. Catching the conflict BEFORE the first
+    LLM round saves the operator from a hopeless run (~\\$62 in the
+    reporter's case) and surfaces an actionable blocker instead of a
+    misleading "ship" verdict.
+
+    Returns ``None`` when the merge is clean, when no ``base_ref`` is
+    available, or when the check itself cannot run (missing git, very
+    old git that lacks ``merge-tree --write-tree``, network/IO error).
+    On those cannot-decide paths the existing review/fix machinery
+    still runs — the helper degrades open rather than blocking
+    spuriously.
+    """
+    base = (base_ref or "").strip()
+    if not base:
+        return None
+    git_cmd = _resolve_trusted_git_for_worktree(worktree)
+    if not git_cmd:
+        return None
+    try:
+        # Verify the base ref resolves locally first — an unresolvable
+        # ref makes ``merge-tree`` exit 1 (which we would otherwise
+        # mis-classify as a conflict). Degrade open here so the
+        # pre-flight is never the source of a spurious block.
+        verify = subprocess.run(
+            [git_cmd, "-C", str(worktree), "rev-parse", "--verify", base],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        logger.debug(
+            "pr-base merge-conflict probe verify failed (%s)",
+            type(exc).__name__,
+        )
+        return None
+    if verify.returncode != 0 or not verify.stdout.strip():
+        return None
+    try:
+        # ``git merge-tree --write-tree <base> HEAD`` exits:
+        #   0  → clean merge (write the resulting tree SHA to stdout).
+        #   1  → conflict (write conflicted file inventory to stdout).
+        #  >1 → unrecoverable usage / git error (treat as "cannot decide").
+        # Requires git ≥ 2.38. Use ``--no-messages`` so the conflict
+        # output stays parseable (no localized chatter mixed in).
+        result = subprocess.run(
+            [
+                git_cmd,
+                "-C",
+                str(worktree),
+                "merge-tree",
+                "--write-tree",
+                "--no-messages",
+                base,
+                "HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        logger.debug(
+            "pr-base merge-conflict probe failed (%s)",
+            type(exc).__name__,
+        )
+        return None
+    if result.returncode == 0:
+        return None
+    if result.returncode != 1:
+        # The merge-tree subcommand exists in older gits but
+        # ``--write-tree`` was added in 2.38. On older git the call
+        # exits >1; degrade open rather than block. CodeQL sanitizer
+        # note: see _collect_companion_source_of_truth_files — log
+        # the exit code only, not the stderr body.
+        logger.debug(
+            "pr-base merge-conflict probe got unexpected exit %s",
+            result.returncode,
+        )
+        return None
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        return f"git merge-tree --write-tree {base} HEAD reported a conflict."
+    return _scrub_secrets(stdout)
+
+
+def _files_changed_since(worktree: Path, base_sha: str) -> List[str]:
+    """Return files changed between ``base_sha`` and HEAD.
+
+    Used by Issue #1433 Bug #3 to extend the prompt-source / registry
+    guards' attention beyond the working tree: when the fixer (e.g., the
+    codex autoheal subprocess) ALREADY committed inside the worktree,
+    ``_git_changed_files`` (which inspects ``git status --porcelain``)
+    returns empty even though the committed change is real. The guards
+    must still enforce the source-of-truth contract against those
+    committed changes.
+
+    Codex review finding F4: surfaces BOTH the old AND new paths for
+    rename records (``R<score>`` from ``--name-status``) so a committed
+    rename of a prompt-owned code file to an unregistered location
+    still triggers the prompt-source guard. This matches the contract
+    of ``_git_changed_files`` (which surfaces both via
+    ``git_porcelain``). Copy records (``C<score>``) emit only the
+    destination to match the same contract.
+
+    Returns ``[]`` on any error, on empty input, and when
+    ``base_sha == HEAD`` (no movement). Names use forward slashes.
+    """
+    base = (base_sha or "").strip()
+    if not base:
+        return []
+    head = _git_rev_parse_head(worktree)
+    if not head or head == base:
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "diff",
+                "--name-status",
+                "-z",
+                "--find-renames",
+                f"{base}..HEAD",
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exception CLASS NAME (never the message body) so a
+        # tainted path/token in the exception text cannot reach the log
+        # surface (py/clear-text-logging-sensitive-data). The operator can
+        # reproduce locally with `git diff --name-status <base>..HEAD`.
+        logger.debug("files-changed-since failed: %s", type(exc).__name__)
+        return []
+    if result.returncode != 0:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exit code, never the stderr body.
+        logger.debug(
+            "files-changed-since git diff returned %s for %s..HEAD",
+            result.returncode,
+            base,
+        )
+        return []
+    raw = result.stdout or b""
+    # ``--name-status -z`` emits NUL-separated records. For ordinary
+    # records (A/M/D/T/U) one NUL-terminated path follows the status.
+    # For rename and copy records (R<score>/C<score>) TWO NUL-terminated
+    # paths follow: source then destination.
+    tokens = [tok for tok in raw.split(b"\0") if tok]
+    paths: List[str] = []
+    i = 0
+    while i < len(tokens):
+        status = tokens[i].decode("ascii", errors="replace")
+        i += 1
+        if status.startswith("R") and i + 1 < len(tokens):
+            old_path = os.fsdecode(tokens[i]).strip("/")
+            new_path = os.fsdecode(tokens[i + 1]).strip("/")
+            if old_path:
+                paths.append(old_path)
+            if new_path:
+                paths.append(new_path)
+            i += 2
+        elif status.startswith("C") and i + 1 < len(tokens):
+            new_path = os.fsdecode(tokens[i + 1]).strip("/")
+            if new_path:
+                paths.append(new_path)
+            i += 2
+        elif i < len(tokens):
+            path = os.fsdecode(tokens[i]).strip("/")
+            if path:
+                paths.append(path)
+            i += 1
+    return paths
+
+
 def _commit_and_push_if_changed(
     worktree: Path,
     pr_metadata: Dict[str, str],
     message: str,
+    *,
+    pre_fix_sha: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Commit any worktree changes with the bot identity and push to the PR head ref.
 
@@ -4726,49 +5395,75 @@ def _commit_and_push_if_changed(
     loop disables that helper's force-with-lease fallback because PR head refs
     can be shared with humans and other automation; remote advancement is
     handled by fetch/rebase/retry below.
+
+    Issue #1433 Bug #3: the fixer may run as a subprocess (e.g., codex
+    autoheal) that creates its own commit inside ``worktree`` BEFORE this
+    function returns. ``_git_changed_files`` only sees working-tree drift,
+    so it returns empty even though HEAD is now ahead of ``pre_fix_sha``
+    by a real fixer commit. Pre-fix, that empty result short-circuited
+    the function with ``"No changes to push."`` and the autoheal commit
+    silently stayed in the worktree forever. When ``pre_fix_sha`` is
+    provided and HEAD has moved past it, push the existing commits AS-IS
+    rather than creating a redundant PDD-Bot commit on top — preserving
+    the original author/message (e.g., ``Codex Local Autoheal``).
     """
     changed = _git_changed_files(worktree)
-    if not changed:
+    current_head = _git_rev_parse_head(worktree)
+    # Codex review finding F2: compute HEAD-movement INDEPENDENTLY of
+    # ``changed``. The earlier gate of ``not changed`` failed on the
+    # realistic case of "fixer committed + left .pdd/checkup-context /
+    # .pdd/meta untracked artifacts" — staging filters those out, the
+    # staged-set check goes empty, and the function returned "no
+    # eligible changes" while the real fixer commit silently rotted.
+    has_unpushed_local_commits = bool(
+        pre_fix_sha and current_head and current_head != pre_fix_sha
+    )
+
+    if not changed and not has_unpushed_local_commits:
         return True, "No changes to push."
 
-    stage_cmds: List[List[str]] = [["git", "add", "-u"]]
-    untracked = [
-        path
-        for path in _git_untracked_files(worktree)
-        if not _is_untracked_pdd_meta_artifact(path)
-    ]
-    if untracked:
-        stage_cmds.append(["git", "add", "--", *untracked])
+    if changed:
+        stage_cmds: List[List[str]] = [["git", "add", "-u"]]
+        untracked = [
+            path
+            for path in _git_untracked_files(worktree)
+            if not _is_untracked_pdd_meta_artifact(path)
+        ]
+        if untracked:
+            stage_cmds.append(["git", "add", "--", *untracked])
 
-    for cmd in stage_cmds:
-        result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
-        if result.returncode != 0:
-            return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
+        for cmd in stage_cmds:
+            result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
 
-    if not _git_has_staged_changes(worktree):
-        return True, "No eligible changes to push."
+        if not _git_has_staged_changes(worktree):
+            # Staging produced no eligible content (everything filtered out as
+            # PDD meta-artifact). If the fixer subprocess ALSO landed a commit
+            # we still want to push it; otherwise this is the historical
+            # "no eligible changes" no-op.
+            if not has_unpushed_local_commits:
+                return True, "No eligible changes to push."
+        else:
+            commit_cmd = [
+                "git",
+                "-c",
+                "user.name=PDD Bot",
+                "-c",
+                "user.email=pdd-bot@users.noreply.github.com",
+                "commit",
+                "-m",
+                message,
+            ]
+            result = subprocess.run(
+                commit_cmd, cwd=worktree, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
 
-    commit_cmd = [
-        "git",
-        "-c",
-        "user.name=PDD Bot",
-        "-c",
-        "user.email=pdd-bot@users.noreply.github.com",
-        "commit",
-        "-m",
-        message,
-    ]
-    result = subprocess.run(commit_cmd, cwd=worktree, capture_output=True, text=True)
-    if result.returncode != 0:
-        return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
-
-    # Capture the fixer commit's SHA right after committing so every rebase
-    # retry below can reset to the same starting point. Without this, a first
-    # rebase that fast-forwards or drops the fixer commit as empty (because the
-    # fetched PR head already contains the patch) leaves HEAD on a remote
-    # commit; a second remote-advance retry's HEAD~1..HEAD range would then
-    # describe that remote commit instead of our fix, which can resurrect work
-    # a maintainer just force-pushed away.
+    # Capture the fixer commit's SHA right after committing (or right
+    # after detecting an already-committed fixer commit) so every rebase
+    # retry below can reset to the same starting point.
     fixer_sha_result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=worktree,
@@ -4782,7 +5477,10 @@ def _commit_and_push_if_changed(
         )
     fixer_sha = fixer_sha_result.stdout.strip()
     if not fixer_sha:
-        return False, "Failed to capture fixer commit SHA before push: empty rev-parse output"
+        return (
+            False,
+            "Failed to capture fixer commit SHA before push: empty rev-parse output",
+        )
 
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
@@ -4824,6 +5522,11 @@ def _commit_and_push_if_changed(
             repo_owner=head_owner,
             repo_name=head_repo,
             fixer_sha=fixer_sha,
+            # Codex F3: pass the pre-fix snapshot as the local base so
+            # a multi-commit local range (e.g., several codex autoheal
+            # commits) replays in full on the remote-advance retry
+            # rather than dropping all-but-the-last commit.
+            local_base_sha=pre_fix_sha,
         )
         if not rebased:
             return False, rebase_message
@@ -4832,7 +5535,10 @@ def _commit_and_push_if_changed(
     # retry path used `https://x-access-token:...@github.com/...`. Scrub before
     # surfacing so secrets cannot leak into operator-visible logs or reports.
     token = _github_token_from_env()
-    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}"
+    return (
+        False,
+        f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}",
+    )
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -4858,24 +5564,30 @@ def _rebase_onto_updated_pr_head(
     repo_owner: str,
     repo_name: str,
     fixer_sha: str,
+    local_base_sha: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    """Fetch the updated PR head and replay the local fix commit on top.
+    """Fetch the updated PR head and replay the local fix commits on top.
 
     Review-loop fixes can race with auto-heal or a maintainer push to the same
     PR branch. Force-pushing over those commits would discard remote work, so
-    recover by rebasing before retrying the push. Fetch the exact branch ref so
-    tags with the same name cannot populate FETCH_HEAD. Before each rebase,
-    hard-reset the worktree to ``fixer_sha`` (captured immediately after the
-    commit step) so every retry starts from the same local state: that way the
-    ``HEAD~1..HEAD`` range always describes the original fixer commit, even if
-    a previous rebase fast-forwarded HEAD past the fix because the fetched PR
-    head already contained the patch. Without this reset, a later retry could
-    replay a remote commit instead of our fix and resurrect work a maintainer
-    force-pushed away. Rebase only the fixer commit range (HEAD~1..HEAD) onto
-    FETCH_HEAD so a force-pushed PR head cannot resurrect commits the remote
-    branch intentionally dropped. Use a plain rebase: if the fixer commit
-    conflicts with remote changes, abort and let the next run review/fix from
-    the updated PR head instead of choosing a side silently.
+    recover by rebasing before retrying the push. Before each rebase, hard-reset
+    the worktree to ``fixer_sha`` so every retry starts from the same local
+    state.
+
+    Codex review finding F3: rebase the FULL ``local_base_sha..HEAD`` range
+    when ``local_base_sha`` is provided (typically the ``pre_fix_sha`` the
+    review-loop captured before invoking the fixer subprocess). The pre-fix
+    code hard-coded ``HEAD~1..HEAD`` — fine when the only local commit is
+    the PDD-Bot commit this function creates, but wrong when an agentic
+    fixer (codex autoheal) committed two or more times inside the worktree:
+    a remote-advance retry then dropped every local commit except the last
+    one. When ``local_base_sha`` is ``None`` or equal to ``fixer_sha``
+    (empty range), fall back to the single-commit ``HEAD~1`` upstream so
+    behaviour for the historical caller is preserved.
+
+    Use a plain rebase: if the local range conflicts with remote changes,
+    abort and let the next run review/fix from the updated PR head instead
+    of choosing a side silently.
     """
     fetched, fetch_message = _fetch_pr_head_for_rebase(
         worktree,
@@ -4886,8 +5598,7 @@ def _rebase_onto_updated_pr_head(
     )
     if not fetched:
         return False, (
-            "Failed to refresh PR branch before retrying push: "
-            f"{fetch_message}"
+            f"Failed to refresh PR branch before retrying push: {fetch_message}"
         )
 
     # Pin the local state to the original fixer commit before every rebase so
@@ -4908,6 +5619,14 @@ def _rebase_onto_updated_pr_head(
             f"{reset.stderr.strip() or reset.stdout.strip()}"
         )
 
+    # Codex F3: prefer the explicit local base over ``HEAD~1`` so a
+    # multi-commit local range (typical with agentic autoheal) replays
+    # in full. ``HEAD~1`` is kept for callers that did not supply a
+    # base — strictly identical behaviour to the pre-F3 single-commit
+    # case.
+    upstream = (
+        local_base_sha if local_base_sha and local_base_sha != fixer_sha else "HEAD~1"
+    )
     rebase = subprocess.run(
         [
             "git",
@@ -4918,7 +5637,7 @@ def _rebase_onto_updated_pr_head(
             "rebase",
             "--onto",
             "FETCH_HEAD",
-            "HEAD~1",
+            upstream,
             "HEAD",
         ],
         cwd=worktree,
@@ -4935,14 +5654,10 @@ def _rebase_onto_updated_pr_head(
         text=True,
     )
     token = _github_token_from_env()
-    rebase_tail = _redact_secret(
-        rebase.stderr.strip() or rebase.stdout.strip(), token
-    )
+    rebase_tail = _redact_secret(rebase.stderr.strip() or rebase.stdout.strip(), token)
     abort_note = ""
     if abort.returncode != 0:
-        abort_tail = _redact_secret(
-            abort.stderr.strip() or abort.stdout.strip(), token
-        )
+        abort_tail = _redact_secret(abort.stderr.strip() or abort.stdout.strip(), token)
         abort_note = f" (rebase --abort also failed: {abort_tail})"
     return False, (
         "Failed to rebase fixes onto updated PR branch before retrying push: "
@@ -5084,14 +5799,22 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
 
 
-def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+def _load_prompt_source_map(
+    worktree: Path, head_ref: str = "HEAD"
+) -> Optional[Dict[str, str]]:
     """Build the ``code_path -> prompt_path`` mapping from ``architecture.json`` AS OF HEAD.
 
-    Reads from ``git show HEAD:architecture.json`` rather than the
-    worktree filesystem so a fixer cannot remove its own registry
+    Reads from ``git show <head_ref>:architecture.json`` rather than
+    the worktree filesystem so a fixer cannot remove its own registry
     entry in the same change set and slip past the guard (review pass
-    #3 Finding 2). The pre-fixer ``HEAD`` is the canonical registry
-    for enforcing the source-of-truth contract.
+    #3 Finding 2). ``head_ref`` defaults to ``"HEAD"`` for
+    backward-compat with non-loop callers (e.g. the reviewer-prompt
+    companion-files collector). Issue #1433 Bug #3 + codex F1: when
+    the fixer subprocess has already committed inside the worktree,
+    ``HEAD`` IS the post-fix state — the guard then compares the
+    post-fix registry against the post-fix worktree and sees no
+    diff. The loop caller passes ``head_ref=pre_fix_sha`` so the
+    baseline is the snapshot we captured BEFORE the fixer ran.
 
     Returns ``None`` when the registry is missing/unreadable/unparseable
     or lists no prompt-owned modules so the caller can degrade
@@ -5101,7 +5824,7 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
     the registry-evasion hole.
     """
     result = subprocess.run(
-        ["git", "show", "HEAD:architecture.json"],
+        ["git", "show", f"{head_ref}:architecture.json"],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -5111,16 +5834,16 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
         # ``git show HEAD:architecture.json`` returns non-zero when
         # the worktree is not a git repo, HEAD does not exist (no
         # commits), or architecture.json is not in the HEAD tree.
-        # Degrade gracefully rather than block, but emit enough
-        # diagnostic for the operator to recognize a misconfigured
-        # worktree.
+        # Degrade gracefully rather than block. CodeQL sanitizer note:
+        # see _collect_companion_source_of_truth_files — log only the
+        # exit code, never the stderr body. The operator can re-run
+        # `git show HEAD:architecture.json` locally to see the cause.
         logger.warning(
             "prompt-source guard: architecture.json missing at HEAD "
-            "in %s (git show exit=%s, stderr=%s); skipping prompt-"
-            "drift enforcement for this round.",
+            "in %s (git show exit=%s); skipping prompt-drift "
+            "enforcement for this round.",
             worktree,
             result.returncode,
-            (result.stderr or "").strip(),
         )
         return None
     try:
@@ -5158,8 +5881,98 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
     return mapping
 
 
+def _arch_entries_changed_set(worktree: Path, base_ref: Optional[str]) -> Set[str]:
+    """Return the set of code_paths whose architecture entry differs
+    between ``base_ref`` and HEAD.
+
+    Codex review pass-6 finding 1: ``architecture.json`` being in the
+    PR diff is a GLOBAL signal — it does not tell us which module
+    entries actually changed. The companion-files collector needs a
+    PER-ENTRY signal so it can skip a module only when both its prompt
+    and its architecture entry are genuinely covered by the diff.
+
+    Compares ``git show <base_ref>:architecture.json`` to ``git show
+    HEAD:architecture.json``, parses both via ``extract_modules``, and
+    returns the filepaths whose canonical JSON entry differs (changed
+    fields, added entry, or removed entry). Fail-open: any git/IO/JSON
+    error returns ``set()`` (treat as "no entries changed") so the
+    collector still emits useful output.
+
+    ``base_ref`` may be a literal ref name ("main", "release-1.x"),
+    a fully-qualified ref ("refs/remotes/.../base"), or already
+    prefixed ("origin/main"). The helper tries the supplied form
+    first and then a small set of common fallbacks so production
+    callers (which pass ``base_local_ref`` or ``origin/<base>``) AND
+    unit tests (which build local-only worktrees with ``main``) both
+    resolve.
+    """
+    base = (base_ref or "").strip()
+    if not base:
+        return set()
+
+    def _read_entries(ref: str) -> Optional[Dict[str, str]]:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(worktree), "show", f"{ref}:architecture.json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug(
+                "arch-entries-changed: git show %s failed (%s)",
+                ref,
+                type(exc).__name__,
+            )
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            logger.debug(
+                "arch-entries-changed: parse %s failed (%s)",
+                ref,
+                type(exc).__name__,
+            )
+            return None
+        out: Dict[str, str] = {}
+        for entry in extract_modules(data):
+            filepath = entry.get("filepath")
+            if not isinstance(filepath, str) or not filepath:
+                continue
+            try:
+                out[Path(filepath).as_posix()] = json.dumps(entry, sort_keys=True)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    # Try the supplied ref first, then strip an ``origin/`` prefix if
+    # present (so tests that build a local-only worktree with ``main``
+    # still resolve when the production caller would have prefixed
+    # with ``origin/``). Stop at the first ref that resolves.
+    candidates: List[str] = [base]
+    if base.startswith("origin/"):
+        candidates.append(base[len("origin/") :])
+    pre: Optional[Dict[str, str]] = None
+    for cand in candidates:
+        pre = _read_entries(cand)
+        if pre is not None:
+            break
+    if pre is None:
+        return set()
+    post = _read_entries("HEAD")
+    if post is None:
+        return set()
+
+    all_paths = set(pre) | set(post)
+    return {fp for fp in all_paths if pre.get(fp) != post.get(fp)}
+
+
 def _check_prompt_source_guard(
-    worktree: Path, changed_files: Sequence[str]
+    worktree: Path,
+    changed_files: Sequence[str],
+    head_ref: str = "HEAD",
 ) -> Optional[str]:
     """Refuse commits that touch generated code without their owning prompt.
 
@@ -5168,6 +5981,14 @@ def _check_prompt_source_guard(
     file without updating its prompt, and the result silently survives
     until the next ``pdd sync`` overwrites it (issue #1063). This guard
     enforces the contract deterministically before the push step.
+
+    ``head_ref`` selects the registry baseline. Defaults to ``"HEAD"``
+    for backward compat. Issue #1433 Bug #3 + codex F1: when the fixer
+    subprocess committed inside the worktree, ``HEAD`` IS the post-fix
+    registry — comparing against it would mask the very drift this
+    guard exists to catch. The loop caller passes
+    ``head_ref=pre_fix_sha`` so the baseline is the snapshot we
+    captured BEFORE the fixer ran.
 
     Returns ``None`` when the push should proceed, or a refusal string
     (suitable for ``state.stop_reason``) when at least one offending
@@ -5184,7 +6005,7 @@ def _check_prompt_source_guard(
     if not changed_files:
         return None
 
-    code_to_prompt = _load_prompt_source_map(worktree)
+    code_to_prompt = _load_prompt_source_map(worktree, head_ref=head_ref)
     if code_to_prompt is None:
         return None
 
@@ -5277,17 +6098,23 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
     return pairs
 
 
-def _path_exists_at_head(worktree: Path, path: str) -> bool:
-    """Return True if ``path`` exists in HEAD's tree.
+def _path_exists_at_head(worktree: Path, path: str, head_ref: str = "HEAD") -> bool:
+    """Return True if ``path`` exists in ``head_ref``'s tree.
 
     Used by ``_check_architecture_registry_edit_guard`` to distinguish
-    additions (path not in HEAD) from modifications (path in HEAD). The
+    additions (path not in baseline tree) from modifications. The
     unregistered-new-code scan must skip modifications: a legitimate
     retirement that also touches an existing unregistered helper or
     test would otherwise falsely trip the scan (round-3 finding 2).
+
+    ``head_ref`` defaults to ``"HEAD"`` for backward compat. Issue
+    #1433 Bug #3 + codex F1: when the fixer subprocess committed
+    inside the worktree, ``HEAD`` IS the post-fix tree — the caller
+    passes ``head_ref=pre_fix_sha`` so additions are measured against
+    the pre-fix baseline.
     """
     result = subprocess.run(
-        ["git", "cat-file", "-e", f"HEAD:{path}"],
+        ["git", "cat-file", "-e", f"{head_ref}:{path}"],
         cwd=worktree,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -5308,10 +6135,22 @@ def _is_real_file_no_symlink(path: Path) -> bool:
 
 
 def _check_architecture_registry_edit_guard(
-    worktree: Path, changed_files: Sequence[str]
+    worktree: Path,
+    changed_files: Sequence[str],
+    head_ref: str = "HEAD",
 ) -> Optional[str]:
     """Refuse ``architecture.json`` mutations that bypass the prompt
     source-of-truth contract (issue #1081).
+
+    ``head_ref`` selects the baseline tree for the registry comparison
+    and the unregistered-new-code scan's "did this path already exist?"
+    check. Defaults to ``"HEAD"`` for backward compat. Issue #1433
+    Bug #3 + codex F1: when the fixer subprocess committed inside the
+    worktree, ``HEAD`` IS the post-fix tree — a committed registry
+    repoint or removal would produce zero added/removed/repointed
+    pairs against itself. The loop caller passes
+    ``head_ref=pre_fix_sha`` so the baseline is the snapshot we
+    captured BEFORE the fixer ran.
 
     Sibling of ``_check_prompt_source_guard`` (10a). Where 10a iterates
     over the HEAD registry to catch code-only edits, this guard
@@ -5375,20 +6214,21 @@ def _check_architecture_registry_edit_guard(
     arch_in_changes = "architecture.json" in changed_norm
 
     head_result = subprocess.run(
-        ["git", "show", "HEAD:architecture.json"],
+        ["git", "show", f"{head_ref}:architecture.json"],
         cwd=worktree,
         capture_output=True,
         text=True,
         check=False,
     )
     if head_result.returncode != 0:
+        # CodeQL sanitizer note: see _collect_companion_source_of_truth_files.
+        # Log only the exit code, never the stderr body.
         logger.warning(
             "architecture-registry guard: architecture.json missing at "
-            "HEAD in %s (git show exit=%s, stderr=%s); skipping "
-            "registry-edit enforcement for this round.",
+            "HEAD in %s (git show exit=%s); skipping registry-edit "
+            "enforcement for this round.",
             worktree,
             head_result.returncode,
-            (head_result.stderr or "").strip(),
         )
         return None
     try:
@@ -5603,9 +6443,7 @@ def _check_architecture_registry_edit_guard(
     # (``removed_only or implicit_retirement``) and the same notion
     # of "registered on either side of the registry edit".
     head_registered_paths = {path for pair in head_pairs for path in pair}
-    worktree_registered_paths = {
-        path for pair in worktree_pairs for path in pair
-    }
+    worktree_registered_paths = {path for pair in worktree_pairs for path in pair}
     unregistered_new_code_paths: List[str] = []
     if removed_only or implicit_retirement:
         for path in sorted(changed_norm):
@@ -5682,10 +6520,7 @@ def _check_architecture_registry_edit_guard(
             # comparison; ``_IMPORTABLE_SUFFIXES`` is already
             # lowercase so the tuple does not need re-casing.
             is_symlink = candidate.is_symlink()
-            if (
-                not is_symlink
-                and not path.lower().endswith(_IMPORTABLE_SUFFIXES)
-            ):
+            if not is_symlink and not path.lower().endswith(_IMPORTABLE_SUFFIXES):
                 continue
             # Treat either a real file or a symlink as "present on
             # disk" — symlinks are themselves part of the #1081
@@ -5694,7 +6529,9 @@ def _check_architecture_registry_edit_guard(
                 continue
             # Round-3 finding 2: skip modifications of files that
             # already existed at HEAD. Only flag genuine additions.
-            if _path_exists_at_head(worktree, path):
+            # Codex F1: ``head_ref`` is the pre-fix snapshot when the
+            # fixer subprocess committed inside the worktree.
+            if _path_exists_at_head(worktree, path, head_ref=head_ref):
                 continue
             unregistered_new_code_paths.append(path)
 
@@ -5742,16 +6579,22 @@ def _check_architecture_registry_edit_guard(
             # — those are caught by the symlink branch of the 10b
             # scan above.
             if candidate.is_dir() and not candidate.is_symlink():
-                if not _path_exists_at_head(worktree, path):
+                # Codex F1: ``head_ref`` is the pre-fix snapshot when
+                # the fixer subprocess committed inside the worktree.
+                if not _path_exists_at_head(worktree, path, head_ref=head_ref):
                     submodule_offenders.append(path)
 
     repointed_by_code.sort()
     repointed_by_prompt.sort()
 
-    if not (offenders_added or offenders_removed
-            or repointed_by_code or repointed_by_prompt
-            or unregistered_new_code_paths
-            or submodule_offenders):
+    if not (
+        offenders_added
+        or offenders_removed
+        or repointed_by_code
+        or repointed_by_prompt
+        or unregistered_new_code_paths
+        or submodule_offenders
+    ):
         return None
 
     parts: List[str] = []
@@ -5783,13 +6626,9 @@ def _check_architecture_registry_edit_guard(
                 f"as a prompt)"
             )
         else:
-            parts.append(
-                f"added {code}\u2194{prompt} without prompt source on disk"
-            )
+            parts.append(f"added {code}\u2194{prompt} without prompt source on disk")
     for code, prompt in offenders_removed:
-        parts.append(
-            f"removed {code}\u2194{prompt} with code still present"
-        )
+        parts.append(f"removed {code}\u2194{prompt} with code still present")
     for code, old_prompt, new_prompt in repointed_by_code:
         # Round-14 finding (symmetry with the added-pair check): a
         # repoint whose NEW prompt path is not a ``.prompt`` file is the
@@ -5803,9 +6642,7 @@ def _check_architecture_registry_edit_guard(
                 f"(importable code disguised as a prompt)"
             )
         else:
-            parts.append(
-                f"repointed {code} from {old_prompt} to {new_prompt}"
-            )
+            parts.append(f"repointed {code} from {old_prompt} to {new_prompt}")
     for prompt, old_code, new_code in repointed_by_prompt:
         # Round-14 finding (defence-in-depth symmetry): ``prompt`` here
         # is HEAD-side (the unchanged registry key), so it should
@@ -5819,9 +6656,7 @@ def _check_architecture_registry_edit_guard(
                 f"file (importable code disguised as a prompt)"
             )
         else:
-            parts.append(
-                f"repointed {prompt} from {old_code} to {new_code}"
-            )
+            parts.append(f"repointed {prompt} from {old_code} to {new_code}")
     for path in submodule_offenders:
         parts.append(
             f"new git submodule {path} introduced via .gitmodules edit "
@@ -5864,15 +6699,16 @@ def _git_has_staged_changes(worktree: Path) -> bool:
 
 def _is_untracked_pdd_meta_artifact(path: str) -> bool:
     rel = path.replace(os.sep, "/")
-    return (
-        rel.startswith(".pdd/checkup-context/")
-        or (rel.startswith(".pdd/meta/") and rel.endswith(".json"))
+    return rel.startswith(".pdd/checkup-context/") or (
+        rel.startswith(".pdd/meta/") and rel.endswith(".json")
     )
 
 
 def _artifacts_dir(cwd: Path, issue_number: int, pr_number: int) -> Path:
     root = _get_git_root(cwd) or cwd
-    return root / ".pdd" / "checkup-review-loop" / f"issue-{issue_number}-pr-{pr_number}"
+    return (
+        root / ".pdd" / "checkup-review-loop" / f"issue-{issue_number}-pr-{pr_number}"
+    )
 
 
 def _write_artifact(path: Path, content: str) -> None:
@@ -6018,21 +6854,25 @@ def _post_review_loop_report(
 ) -> None:
     if not use_github_state:
         return
-    _run_gh_command([
-        "api",
-        f"repos/{context.repo_owner}/{context.repo_name}/issues/{context.issue_number}/comments",
-        "-X",
-        "POST",
-        "-f",
-        f"body={report}",
-    ])
-    _run_gh_command([
-        "pr",
-        "comment",
-        context.pr_url,
-        "--body",
-        report,
-    ])
+    _run_gh_command(
+        [
+            "api",
+            f"repos/{context.repo_owner}/{context.repo_name}/issues/{context.issue_number}/comments",
+            "-X",
+            "POST",
+            "-f",
+            f"body={report}",
+        ]
+    )
+    _run_gh_command(
+        [
+            "pr",
+            "comment",
+            context.pr_url,
+            "--body",
+            report,
+        ]
+    )
 
 
 def _finalize(
@@ -6082,9 +6922,7 @@ def _finalize(
         #  3. Otherwise the SHA the reviewer observed in the worktree
         #     before any fixer ran.
         compare_sha = (
-            state.verified_head_sha
-            or last_pushed_fix_sha
-            or state.reviewed_head_sha
+            state.verified_head_sha or last_pushed_fix_sha or state.reviewed_head_sha
         )
         metadata = _fetch_pr_metadata(
             context.pr_owner, context.pr_repo, context.pr_number
@@ -6101,7 +6939,10 @@ def _finalize(
                 stale_head = True
                 if state.fresh_final_status == "clean":
                     state.fresh_final_status = "missing"
-                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                    if (
+                        not state.stop_reason
+                        or "could not" not in state.stop_reason.lower()
+                    ):
                         state.stop_reason = (
                             "Reviewed PR head SHA was not observable; "
                             "cannot prove remote head matches review. "
@@ -6117,7 +6958,10 @@ def _finalize(
                     state.fresh_final_status = "missing"
                     short_reviewed = compare_sha[:7]
                     short_remote = remote_sha[:7]
-                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                    if (
+                        not state.stop_reason
+                        or "could not" not in state.stop_reason.lower()
+                    ):
                         # Pick the verb that matches what actually
                         # cleared the SHA. When the verifier was the
                         # one that cleared it, keep the existing
@@ -6189,11 +7033,15 @@ def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
         return True
     if state.active_reviewer:
         return state.reviewer_status.get(state.active_reviewer) in HARD_NOT_CLEAN_STATES
-    return any(status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values())
+    return any(
+        status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values()
+    )
 
 
 def _has_limit_state(state: ReviewLoopState) -> bool:
-    return state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached
+    return (
+        state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached
+    )
 
 
 def _render_final_report(
@@ -6262,9 +7110,7 @@ def _render_final_report(
             and status in HARD_NOT_CLEAN_STATES
         )
         if is_superseded:
-            cell = (
-                f"{status} (optional, superseded by {state.active_reviewer})"
-            )
+            cell = f"{status} (optional, superseded by {state.active_reviewer})"
         else:
             cell = status
         lines.append(f"| {reviewer} | {cell} |")
@@ -6408,13 +7254,15 @@ def _render_final_report(
                                 lines.append(f"    {output_line}")
                             lines.append("    ```")
 
-    lines.extend([
-        "",
-        "### Findings",
-        "",
-        "| Severity | Status | Location | Finding | Required fix | Reviewer |",
-        "|----------|--------|----------|---------|--------------|----------|",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Findings",
+            "",
+            "| Severity | Status | Location | Finding | Required fix | Reviewer |",
+            "|----------|--------|----------|---------|--------------|----------|",
+        ]
+    )
     if remaining_findings:
         for finding in remaining_findings:
             lines.append(
@@ -6446,13 +7294,17 @@ def _render_final_report(
             "review-loop |"
         )
 
-    lines.extend([
-        "",
-        "### Fixer Rationale",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Fixer Rationale",
+            "",
+        ]
+    )
     findings_with_rationale = [
-        finding for finding in remaining_findings if finding.key in state.dispute_notes_by_key
+        finding
+        for finding in remaining_findings
+        if finding.key in state.dispute_notes_by_key
     ]
     if findings_with_rationale:
         # Issue #1088 trust boundary: remaining findings are, by
@@ -6463,7 +7315,9 @@ def _render_final_report(
         # ``fixer_disposition=`` / ``fixer_rationale=`` note produced by
         # ``_fix_dispute_note``.
         for finding in findings_with_rationale:
-            note = state.dispute_notes_by_key.get(finding.key, "No fixer rationale captured.")
+            note = state.dispute_notes_by_key.get(
+                finding.key, "No fixer rationale captured."
+            )
             location = finding.location or "-"
             lines.append(
                 f"- {_escape_table(location)}: {_escape_table(finding.finding)} "
@@ -6472,11 +7326,13 @@ def _render_final_report(
     else:
         lines.append("- none")
 
-    lines.extend([
-        "",
-        "### Fixes Attempted",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Fixes Attempted",
+            "",
+        ]
+    )
     if state.fixes:
         # Verification trust boundary (issue #1088, R-V7). Render each
         # ``### Fixes Attempted`` bullet in the structured triple
@@ -6504,13 +7360,9 @@ def _render_final_report(
             )
             push_status = fix.push_status or "not_attempted"
             local_sha = (
-                fix.local_fixer_commit_sha[:7]
-                if fix.local_fixer_commit_sha
-                else "none"
+                fix.local_fixer_commit_sha[:7] if fix.local_fixer_commit_sha else "none"
             )
-            pushed_sha = (
-                fix.pushed_head_sha[:7] if fix.pushed_head_sha else "none"
-            )
+            pushed_sha = fix.pushed_head_sha[:7] if fix.pushed_head_sha else "none"
             # R-V7 + R-V5: verification=verified requires push_status
             # ``pushed``, the verifier cleared the pushed SHA, no
             # loop-level unfinished state, and the render-time re-fetch

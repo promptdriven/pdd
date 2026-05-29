@@ -1,0 +1,15 @@
+% Write `pdd/checkup_simplify_engines.py`, engine selection and invocation for checkup simplify.
+
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>checkup_simplify_claude_python.prompt</pdd-dependency>
+
+<pdd-reason>Maps simplify engines (claude, codex, gemini, opencode, auto) to Claude Code or agentic task execution.</pdd-reason>
+
+% Public API
+- `normalize_simplify_engine(engine: Optional[str], *, default: str = "claude") -> str`
+- `resolve_simplify_engine(engine: str) -> str`
+- `check_simplify_engine_available(engine: str, *, quiet: bool) -> Tuple[str, str, Optional[str]]`
+- `run_simplify_engine_command(engine: str, rel_files: Sequence[str], repo_root: Path, *, focus: str, verbose: bool, quiet: bool, timeout: float) -> Tuple[bool, str, float, str]`
+
+% Code output
+- Code: `pdd/checkup_simplify_engines.py`
