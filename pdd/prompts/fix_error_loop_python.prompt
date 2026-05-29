@@ -6,7 +6,7 @@
   "module": {
     "functions": [
       {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
-      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)", "returns": "Tuple[bool, str, str, int, float, str]"}
+      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)", "returns": "Tuple[bool, str, str, int, float, str]"}
     ]
   }
 }
@@ -109,6 +109,7 @@ def fix_error_loop(
     use_cloud: bool = False,
     test_files: list[str] | None = None,
     failure_aware_retries: bool = True,
+    no_local_fallback: bool = False,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -121,6 +122,8 @@ def fix_error_loop(
         failure_aware_retries: When True (default), use failure classification to stop early on
             stuck syntax/import or timeout/flaky patterns. When False, use the legacy loop that
             runs up to max_attempts (subject to budget) without those early exits.
+        no_local_fallback: When True, cloud failures raise instead of falling back to local LLM.
+            Only meaningful when use_cloud=True. Default is False.
     """
 ```
 
