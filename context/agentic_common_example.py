@@ -1,22 +1,114 @@
+from __future__ import annotations
+
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-# Import the functions from the agentic_common module
+from rich.console import Console
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from pdd.agentic_common import (
     get_agent_provider_preference,
-    get_available_agents,
-    detect_control_token,
+    github_load_state,
+    github_save_state,
     post_pr_comment,
-    substitute_template_variables
+    post_step_comment,
+    run_agentic_task,
+    validate_cached_state,
 )
 
+console = Console()
 
-def example_post_pr_comment():
+
+def example_provider_preference() -> None:
+    """Show the default provider order and an env override."""
+    console.print("[bold blue]Provider Preference[/bold blue]")
+    console.print(f"Default: {get_agent_provider_preference()}")
+
+    with patch.dict(os.environ, {"PDD_AGENTIC_PROVIDER": "google,anthropic"}, clear=False):
+        console.print(f"Override: {get_agent_provider_preference()}")
+
+
+def example_run_agentic_task(cwd: Path) -> None:
+    """Run a fully mocked agentic task through the public entry point."""
+    console.print("\n[bold blue]run_agentic_task()[/bold blue]")
+    mocked_json = {
+        "response": "Applied the fix, ran verification, and everything passed.",
+        "total_cost_usd": 0.12,
+    }
+
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/local/bin/claude"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["claude"],
+            returncode=0,
+            stdout=json.dumps(mocked_json),
+            stderr="",
+        )
+        success, output, cost, provider = run_agentic_task(
+            "Fix the failing workflow.",
+            cwd,
+            verbose=False,
+            max_retries=1,
+        )
+
+    console.print(f"Success: {success}")
+    console.print(f"Provider: {provider}")
+    console.print(f"Cost: ${cost:.2f}")
+    console.print(f"Output: {output}")
+
+
+def example_validate_cached_state() -> None:
+    """Demonstrate cache correction when a stored step failed."""
+    console.print("\n[bold blue]validate_cached_state()[/bold blue]")
+    corrected = validate_cached_state(
+        last_completed_step=4,
+        step_outputs={
+            "1": "Collected context",
+            "2": "Generated fix",
+            "3": "FAILED: verification failed",
+            "4": "Should not be trusted",
+        },
+        step_order=[1, 2, 3, 4],
+        quiet=True,
+    )
+    console.print(f"Corrected last completed step: {corrected}")
+
+
+def example_post_step_comment(cwd: Path) -> None:
+    """Show the issue comment helper with a mocked gh CLI."""
+    console.print("\n[bold blue]post_step_comment()[/bold blue]")
+    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_common.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        posted = post_step_comment(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            issue_number=822,
+            step_num=3,
+            total_steps=5,
+            description="Verify generated fix",
+            output="pytest failed with one assertion error",
+            cwd=cwd,
+        )
+    console.print(f"Issue comment posted: {posted}")
+
+
+def _example_post_pr_comment(cwd: Path) -> None:
     """Show the PR comment helper used by CI validation."""
-    print("4. PR Comment Helper")
+    console.print("\n[bold blue]post_pr_comment()[/bold blue]")
     with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
          patch("pdd.agentic_common.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
@@ -30,64 +122,64 @@ def example_post_pr_comment():
             repo_name="example-repo",
             pr_number=42,
             body="CI validation exhausted retries; lint is still failing.",
-            cwd=Path.cwd(),
+            cwd=cwd,
         )
-    print(f"PR comment posted: {posted}\n")
+    console.print(f"PR comment posted: {posted}")
 
 
-def main():
-    print("--- Agentic Common Examples ---\n")
-    
-    # Example 1: Template Variable Substitution
-    # -----------------------------------------
-    # Safely substitute variables in a string without failing on missing keys.
-    print("1. Template Variable Substitution")
-    template = "You are an agent. Current task: {task_name}. File: {file_path}. Ignored placeholder: {unknown_key}."
-    context = {
-        "task_name": "Fix issue #123",
-        "file_path": "src/main.py"
-    }
-    
-    # Note: strict_unresolved=False is the default, which keeps {unknown_key} intact.
-    rendered = substitute_template_variables(template, context)
-    print(f"Original template: {template}")
-    print(f"Rendered output: {rendered}\n")
+def example_post_pr_comment():
+    """Compatibility wrapper retained for prompt-level example assertions."""
+    _example_post_pr_comment(Path.cwd())
 
-    # Example 2: Provider Preferences & Availability
-    # --------------------------------------------
-    # Check which providers the system prefers and which are actually configured.
-    print("2. Provider Preferences & Availability")
-    
-    # This reads PDD_AGENTIC_PROVIDER environment variable, or defaults to ['anthropic', 'google', 'openai', 'opencode']
-    prefs = get_agent_provider_preference()
-    print(f"Provider preferences: {prefs}")
-    
-    # This checks local CLI binaries and API keys to determine what's actually runnable
-    available = get_available_agents()
-    print(f"Available agents (configured and installed): {available}\n")
 
-    # Example 3: Control Token Detection
-    # ----------------------------------
-    # Detect workflow control tokens even if the LLM paraphrases them.
-    print("3. Control Token Detection")
-    
-    # Simulate some LLM output
-    success_output = """I have reviewed the code and applied the fix.\n    Running the tests now.\n    All tests are green. The issue is resolved.\n    """
-    
-    failure_output = """I tried to fix the issue, but I need more context.\n    Tests still failing.\n    """
+def example_github_state_helpers(cwd: Path) -> None:
+    """Show state save/load helpers without talking to GitHub."""
+    console.print("\n[bold blue]GitHub State Helpers[/bold blue]")
 
-    # Looking for 'ALL_TESTS_PASS' semantic match
-    # Our output doesn't literally say 'ALL_TESTS_PASS', but uses a semantic paraphrase "All tests are green".
-    match_success = detect_control_token(success_output, "ALL_TESTS_PASS")
-    if match_success:
-        print(f"Success token found in text! Match tier: {match_success.tier}, Pattern used: {match_success.pattern}")
-    
-    # Looking for 'CONTINUE_CYCLE' semantic match
-    match_continue = detect_control_token(failure_output, "CONTINUE_CYCLE")
-    if match_continue:
-        print(f"Continue token found in text! Match tier: {match_continue.tier}, Pattern used: {match_continue.pattern}")
+    def mock_gh_api(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        cmd = args[0]
+        if isinstance(cmd, list) and "POST" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"id": 321}), "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    example_post_pr_comment()
+    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_common.subprocess.run", side_effect=mock_gh_api), \
+         patch(
+             "pdd.agentic_common._find_state_comment",
+             return_value=(321, {"last_completed_step": 2, "step_outputs": {"1": "ok", "2": "ok"}}),
+         ):
+        comment_id = github_save_state(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            issue_number=822,
+            workflow_type="agentic_sync",
+            state={"last_completed_step": 2, "step_outputs": {"1": "ok", "2": "ok"}},
+            cwd=cwd,
+        )
+        loaded_state, loaded_comment_id = github_load_state(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            issue_number=822,
+            workflow_type="agentic_sync",
+            cwd=cwd,
+        )
+
+    console.print(f"Saved comment id: {comment_id}")
+    console.print(f"Loaded state: {loaded_state}")
+    console.print(f"Loaded comment id: {loaded_comment_id}")
+
+
+def main() -> None:
+    """Run the example in a temporary working directory."""
+    with TemporaryDirectory() as temp_dir:
+        cwd = Path(temp_dir)
+        example_provider_preference()
+        example_run_agentic_task(cwd)
+        example_validate_cached_state()
+        example_post_step_comment(cwd)
+        _example_post_pr_comment(cwd)
+        example_github_state_helpers(cwd)
+
 
 if __name__ == "__main__":
     main()
