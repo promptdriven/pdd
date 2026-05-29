@@ -36,6 +36,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional until gate lands on m
 DEFAULT_MAX_COST_USD = 20.0
 _COST_RE = re.compile(r"(?:Total\s+)?Cost:\s*\$([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _POLICY_VALIDATION_KEYS = ("policy", "gate", "checkup_gate", "policy_gate")
+_SOURCE_TREE_ROOTS = frozenset({"src", "lib", "app"})
 _SKIP_VALIDATION_STATUSES = frozenset(
     {"", "not_applicable", "not_available", "skipped"}
 )
@@ -301,6 +302,70 @@ def _copy_project_subtree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, ignore=_ignore_cache_dir)
 
 
+def _top_level_import_names(module_path: Path) -> set[str]:
+    """Return top-level package/module names imported by ``module_path``."""
+    try:
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".", maxsplit=1)[0]
+                if top:
+                    names.add(top)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                top = node.module.split(".", maxsplit=1)[0]
+                if top:
+                    names.add(top)
+    return names
+
+
+def _overlay_package_roots(
+    rel: Path,
+    project_root: Path,
+    candidate: Path,
+) -> list[Path]:
+    """Directories to mirror so pytest can resolve local and cross-package imports."""
+    roots: list[Path] = []
+    seen: set[Path] = set()
+
+    def add_root(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved in seen or not path.is_dir():
+            return
+        seen.add(resolved)
+        roots.append(path)
+
+    if rel.parts:
+        head = rel.parts[0]
+        if head in _SOURCE_TREE_ROOTS:
+            add_root(project_root / head)
+        elif rel.parent != Path("."):
+            add_root(project_root / rel.parent)
+
+    for import_name in _top_level_import_names(candidate):
+        imported = project_root / import_name
+        if imported.is_dir():
+            add_root(imported)
+        elif import_name in _SOURCE_TREE_ROOTS:
+            add_root(project_root / import_name)
+
+    return roots
+
+
+def _pytest_pythonpath(overlay_root: Path, rel: Path) -> str:
+    """Build ``PYTHONPATH`` for overlay pytest (include ``src/`` roots when needed)."""
+    entries = [overlay_root]
+    if rel.parts and rel.parts[0] in _SOURCE_TREE_ROOTS:
+        nested = overlay_root / rel.parts[0]
+        if nested.is_dir():
+            entries.append(nested)
+    return os.pathsep.join(str(path) for path in entries)
+
+
 def _copy_test_support_files(
     project_root: Path,
     overlay_root: Path,
@@ -340,11 +405,9 @@ def _build_pytest_overlay(
 ) -> Optional[Path]:
     """Build an overlay with project package deps and the candidate replacing baseline."""
     rel = _candidate_relative_path(code_path, project_root)
-    package_rel = rel.parent
-    if package_rel != Path("."):
-        source_package = project_root / package_rel
-        if source_package.is_dir():
-            _copy_project_subtree(source_package, overlay_root / package_rel)
+    for source_root in _overlay_package_roots(rel, project_root, candidate):
+        destination = overlay_root / source_root.relative_to(project_root)
+        _copy_project_subtree(source_root, destination)
 
     module_dest = overlay_root / rel
     module_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -372,6 +435,7 @@ def _run_pytest_for_candidate(
         shutil.rmtree(overlay_root)
     overlay_root.mkdir(parents=True, exist_ok=True)
 
+    rel = _candidate_relative_path(code_path, project_root)
     overlay_tests = _build_pytest_overlay(
         candidate,
         code_path,
@@ -382,7 +446,7 @@ def _run_pytest_for_candidate(
         return True
 
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(overlay_root)
+    env["PYTHONPATH"] = _pytest_pythonpath(overlay_root, rel)
     cmd = [sys.executable, "-m", "pytest", "-q", str(overlay_tests)]
     completed = subprocess.run(
         cmd,

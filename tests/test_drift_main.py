@@ -10,6 +10,7 @@ import pytest
 from pdd.drift_main import (
     DEFAULT_MAX_COST_USD,
     RunSnapshot,
+    _build_pytest_overlay,
     _public_api,
     _run_pytest_for_candidate,
     run_drift,
@@ -68,6 +69,80 @@ def _write_pytest_local_import_fixture(project: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return prompt, code
+
+
+def test_build_pytest_overlay_copies_conftest_and_fixtures(tmp_path: Path) -> None:
+    """``conftest.py`` and fixtures must be present in the overlay for pytest."""
+    _write_pytest_package_fixture(tmp_path)
+    conftest = tmp_path / "tests" / "conftest.py"
+    conftest.write_text(
+        "import pytest\n\n@pytest.fixture\ndef multiplier() -> int:\n    return 2\n",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "tests" / "test_refund_payment.py"
+    test_file.write_text(
+        "from pdd.refund_payment import refund_payment\n\n"
+        "def test_refund_payment_uses_conftest(multiplier: int) -> None:\n"
+        "    assert refund_payment(3) == 3 * multiplier\n",
+        encoding="utf-8",
+    )
+    code = tmp_path / "pdd" / "refund_payment.py"
+    code.write_text(
+        "def refund_payment(amount: int) -> int:\n    return amount * 2\n",
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.py"
+    candidate.write_text(code.read_text(encoding="utf-8"), encoding="utf-8")
+    overlay = tmp_path / "overlay"
+    overlay.mkdir()
+
+    overlay_tests = _build_pytest_overlay(candidate, code, tmp_path, overlay)
+    assert overlay_tests is not None
+    overlay_conftest = overlay / "tests" / "conftest.py"
+    assert overlay_conftest.is_file()
+    assert "multiplier" in overlay_conftest.read_text(encoding="utf-8")
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    assert _run_pytest_for_candidate(candidate, code, tmp_path, sandbox) is True
+
+
+def _write_src_cross_package_fixture(project: Path) -> Path:
+    """``src/pkg_b`` module importing a sibling package under ``src/pkg_a``."""
+    for package in ("pkg_a", "pkg_b"):
+        init_py = project / "src" / package / "__init__.py"
+        init_py.parent.mkdir(parents=True, exist_ok=True)
+        init_py.write_text("", encoding="utf-8")
+    (project / "src" / "pkg_a" / "helper.py").write_text(
+        "def adjust(amount: int) -> int:\n    return amount + 1\n",
+        encoding="utf-8",
+    )
+    code = project / "src" / "pkg_b" / "refund_payment.py"
+    code.write_text(
+        "from pkg_a.helper import adjust\n\n"
+        "def refund_payment(amount: int) -> int:\n    return adjust(amount)\n",
+        encoding="utf-8",
+    )
+    test_file = project / "tests" / "test_refund_payment.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "from pkg_b.refund_payment import refund_payment\n\n"
+        "def test_refund_payment_cross_package() -> None:\n"
+        "    assert refund_payment(5) == 6\n",
+        encoding="utf-8",
+    )
+    return code
+
+
+def test_pytest_for_candidate_supports_cross_package_src_imports(tmp_path: Path) -> None:
+    """Copy the full ``src/`` tree so siblings like ``pkg_a`` are importable from ``pkg_b``."""
+    code = _write_src_cross_package_fixture(tmp_path)
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    candidate = tmp_path / "candidate.py"
+    candidate.write_text(code.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert _run_pytest_for_candidate(candidate, code, tmp_path, sandbox) is True
 
 
 def test_pytest_for_candidate_supports_local_package_imports(tmp_path: Path) -> None:

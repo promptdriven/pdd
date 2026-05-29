@@ -26,7 +26,7 @@ pdd checkup drift <devunit> --max-cost 5.0
 
 | Check | What it evaluates |
 |-------|-------------------|
-| **Tests** | Sandbox overlay copies the candidate's package tree (sibling modules preserved), swaps in the candidate module, and runs pytest with project-local imports |
+| **Tests** | Sandbox overlay copies source roots (`pdd/`, full `src/`, import-discovered top-level packages), swaps in the candidate module, copies tests/`conftest.py`/helpers, and runs pytest with overlay `PYTHONPATH` |
 | **Stories** | Prompt↔story consistency for the dev unit prompt (live `detect --stories` scope); not a direct re-validation of regenerated code semantics |
 | **Verify** | Candidate code against its verification program (live `pdd verify` on temp copies) |
 | **Policy** | `pdd checkup gate` when a policy file exists or evidence explicitly records a policy/gate validation key; **fails closed** only in that case if gate is not installed (ordinary evidence alone does not enable policy) |
