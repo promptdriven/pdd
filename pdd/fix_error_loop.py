@@ -405,6 +405,7 @@ def fix_error_loop(
         last_syntax_signature = extract_failure_signature(output_log)
     else:
         last_syntax_signature = ""
+    _cloud_no_fallback_break = False
 
     for attempt in range(1, max_attempts + 1):
         last_attempt = attempt
@@ -450,6 +451,7 @@ def fix_error_loop(
                 if no_local_fallback:
                     with open(error_log_file, "a", encoding="utf-8") as log_file:
                         log_file.write(format_log_for_output(attempt, output_log, f"Cloud fix failed (no local fallback): {exc}", ""))
+                    _cloud_no_fallback_break = True
                     break
                 try:
                     update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
@@ -530,7 +532,7 @@ def fix_error_loop(
             Path(unit_test_file).write_text(str(best_state["test"]), encoding="utf-8")
         code_content = str(best_state["code"])
         unit_test_content = str(best_state["test"])
-    if agentic_fallback and total_cost < budget:
+    if agentic_fallback and total_cost < budget and not _cloud_no_fallback_break:
         return call_agentic()
     return False, str(best_state["test"]), str(best_state["code"]), total_attempts, total_cost, model_name
 

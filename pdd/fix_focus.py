@@ -459,7 +459,13 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                         # Fallback: include whole class.
                         chunk = "".join(lines[deco_start - 1 : node_end])
                         test_parts.append(chunk)
-                # Non-target helper classes are omitted.
+                else:
+                    # Non-target class: include as preamble if it looks like a helper/data
+                    # class (name does not start with "Test") so that failing tests can
+                    # reference it without NameError (e.g. `class Case`, `class Params`).
+                    if not node.name.startswith("Test"):
+                        chunk = "".join(lines[deco_start - 1 : node_end])
+                        preamble_parts.append(chunk)
 
         if not test_parts:
             return unit_test
