@@ -110,6 +110,7 @@ if _AnthropicConfigOpus47 is not None:
     # which it now controls). Dot-aliases mirror LiteLLM's own naming
     # support so we don't miss `claude-opus-4.7` style identifiers.
     _OPUS_ADDITIONAL_ALIASES = (
+        "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
         "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
         "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
     )
@@ -216,11 +217,22 @@ if _AnthropicConfigOpus47 is not None:
 # model=model)` — and the predicate patch above flips that to adaptive
 # for opus-4-7, with no effort field attached.
 #
+# Opus models that use the adaptive-thinking API on the Bedrock/Vertex relays
+# (currently 4.7 and 4.8). Kept SEPARATE from _OPUS_ADDITIONAL_ALIASES, which
+# also lists the pre-adaptive 4.5 — reusing that here would force the adaptive
+# thinking shape onto 4.5 relay rows (reasoning_type='none' today) and likely
+# 400 them. Both relay patch sites below reference this single tuple so a new
+# adaptive Opus can't be half-synced into one relay but not the other.
+_RELAY_OPUS_ADAPTIVE_ALIASES = (
+    "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+    "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
+)
+
 # AWS Bedrock Converse for Claude flattens adaptive thinking into a
 # single key (no output_config sibling like the direct Anthropic API).
 # Wrap Converse `map_openai_params` to:
 #   * normalize any remaining `thinking.type.enabled` to adaptive on
-#     opus-4-7 (defensive — 1.80.x without the predicate-effective
+#     opus-4-7/4-8 (defensive — 1.80.x without the predicate-effective
 #     change), and
 #   * make sure the effort hint from `reasoning_effort` lands in the
 #     thinking dict so `time_to_effort_level()` isn't dropped.
@@ -232,7 +244,7 @@ try:
     if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
         _orig_converse_map = _existing_converse_map
         # Match LiteLLM's own naming convention (hyphen + dot aliases).
-        _CONVERSE_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        _CONVERSE_OPUS_47_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
         def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
             result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
             m = model.lower() if isinstance(model, str) else ""
@@ -283,7 +295,7 @@ try:
     _existing_vertex_transform = _VertexAIAnthropicConfigOpus47.transform_request
     if not getattr(_existing_vertex_transform, "_pdd_opus_4_7_vertex_patched", False):
         _orig_vertex_transform = _existing_vertex_transform
-        _VERTEX_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        _VERTEX_OPUS_47_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
         # Map LiteLLM "low/medium/high/max" reasoning_effort levels back to a
         # default `output_config.effort` value when none is present on the
         # incoming request. This mirrors what LiteLLM's map_openai_params
@@ -1358,9 +1370,44 @@ litellm.success_callback = [_litellm_success_callback]
 # --- Cost Mapping Support (CSV Rates) ---
 # Populate from CSV inside llm_invoke; used by callback fallback
 _MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+_MODEL_PROVIDER_MAP: Dict[str, str] = {}
+
+# CSV provider column -> litellm provider token, for models whose id is BARE
+# (no "provider/" prefix). Prefixed ids ("vertex_ai/...") already encode the
+# provider; bare ids from direct-API rows (e.g. Anthropic's "claude-opus-4-8")
+# previously fell through to a hardcoded "openai" default in registration,
+# which silently misrouted any litellm-unknown bare non-OpenAI model to OpenAI
+# (wrong provider + wrong key -> auth failure -> silent fallback). Unmapped
+# providers keep the historical "openai" fallback so existing registrations
+# are unchanged.
+_CSV_PROVIDER_TO_LITELLM_PROVIDER: Dict[str, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    # AWS Bedrock ids are bare with dots (e.g. "anthropic.claude-opus-4-8"),
+    # so they have no "/" prefix to route on; map the CSV provider explicitly.
+    "aws bedrock": "bedrock",
+}
+
+
+def _litellm_provider_for_csv_model(
+    model_name: str, csv_provider: Optional[str]
+) -> str:
+    """Resolve the litellm provider token a CSV model should register under.
+
+    Prefixed model ids carry the provider in the prefix; bare ids are mapped
+    from the CSV ``provider`` column. Falls back to ``"openai"`` for unmapped
+    providers to preserve prior behavior.
+    """
+    if "/" in model_name:
+        return model_name.split("/", 1)[0]
+    token = _CSV_PROVIDER_TO_LITELLM_PROVIDER.get(
+        str(csv_provider or "").strip().lower()
+    )
+    return token or "openai"
+
 
 def _set_model_rate_map(df: pd.DataFrame) -> None:
-    global _MODEL_RATE_MAP
+    global _MODEL_RATE_MAP, _MODEL_PROVIDER_MAP
     try:
         _MODEL_RATE_MAP = {
             str(row['model']): (
@@ -1369,8 +1416,14 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
             )
             for _, row in df.iterrows()
         }
+        _MODEL_PROVIDER_MAP = {
+            str(row['model']): str(row['provider'])
+            for _, row in df.iterrows()
+            if pd.notna(row.get('provider'))
+        }
     except Exception:
         _MODEL_RATE_MAP = {}
+        _MODEL_PROVIDER_MAP = {}
     _register_csv_models_with_litellm()
 
 
@@ -1386,7 +1439,9 @@ def _register_csv_models_with_litellm() -> None:
         for model_name, (in_rate, out_rate) in _MODEL_RATE_MAP.items():
             if not model_name or model_name in existing:
                 continue
-            provider = model_name.split("/", 1)[0] if "/" in model_name else "openai"
+            provider = _litellm_provider_for_csv_model(
+                model_name, _MODEL_PROVIDER_MAP.get(model_name)
+            )
             registrations[model_name] = {
                 "input_cost_per_token": in_rate / 1_000_000.0,
                 "output_cost_per_token": out_rate / 1_000_000.0,
@@ -1936,7 +1991,12 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
 def _model_disallows_temperature(model_name: Any) -> bool:
     """Return True for models whose provider rejects the temperature parameter."""
     model_lower = str(model_name or "").lower()
-    return "claude-opus-4-7" in model_lower or "claude-opus-4.7" in model_lower
+    return (
+        "claude-opus-4-7" in model_lower
+        or "claude-opus-4.7" in model_lower
+        or "claude-opus-4-8" in model_lower
+        or "claude-opus-4.8" in model_lower
+    )
 
 
 # Regex anchored to the Gemini 3 family identifier so that:
