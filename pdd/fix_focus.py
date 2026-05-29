@@ -436,22 +436,31 @@ def _extract_test_slices(error: str, unit_test: str) -> str:
                     class_header = "".join(lines[deco_start - 1 : first_body_start - 1])
                     selected_methods: list[str] = []
                     for child in node.body:
-                        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            continue
                         child_end = getattr(child, "end_lineno", child.lineno)
-                        child_deco = (
-                            child.decorator_list[0].lineno
-                            if child.decorator_list
-                            else child.lineno
-                        )
-                        if (
-                            child.name in method_targets
-                            or child.name in _SETUP_NAMES
-                            or _has_fixture_decorator(child.decorator_list)
-                        ):
+                        if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                            # Class-level attributes/constants (e.g. CASES = [...])
+                            # needed by targeted methods via self.CASES.
                             selected_methods.append(
-                                "".join(lines[child_deco - 1 : child_end])
+                                "".join(lines[child.lineno - 1 : child_end])
                             )
+                        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            child_deco = (
+                                child.decorator_list[0].lineno
+                                if child.decorator_list
+                                else child.lineno
+                            )
+                            if (
+                                child.name in method_targets
+                                or child.name in _SETUP_NAMES
+                                or _has_fixture_decorator(child.decorator_list)
+                                or not child.name.startswith("test_")
+                            ):
+                                # Include: targeted methods, setup/teardown/fixtures, and
+                                # non-test helper methods (e.g. self.helper()) so that
+                                # targeted tests have all referenced context.
+                                selected_methods.append(
+                                    "".join(lines[child_deco - 1 : child_end])
+                                )
                     if selected_methods:
                         class_text = class_header + "\n".join(selected_methods) + "\n"
                         test_parts.append(class_text)
