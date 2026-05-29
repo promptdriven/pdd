@@ -1,69 +1,75 @@
+"""
+Example demonstrating how to use the sync_determine_operation module.
+
+This script creates a dummy prompt file in an output directory, then uses
+the sync_determine_operation function to analyze the state of the "demo_unit"
+module. Because only the prompt exists (no code, tests, or examples), the
+decision engine will logically recommend generating the code (or resolving dependencies).
+"""
+
 import os
 import sys
-import json
 from pathlib import Path
-from typing import Dict, Any
 
-# Import the necessary functions and dataclasses from the module
+# Import the core decision-making function and data class
 from pdd.sync_determine_operation import sync_determine_operation, SyncDecision
 
-def main() -> None:
-    """
-    Demonstrates how to use the `sync_determine_operation` function to analyze
-    the state of a module and decide the next appropriate synchronization operation.
-    
-    This example simulates a 'new module' scenario where only the prompt file exists,
-    meaning the expected next operation should be 'generate' (or 'auto-deps').
-    """
-    # Setup output directory for our mock project structure
+def main():
+    # 1. Setup our dummy workspace
     output_dir = Path("./output")
     prompts_dir = output_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     
-    # Inputs for the operation
-    basename = "demo_calculator"
+    basename = "demo_unit"
     language = "python"
-    target_coverage = 85.0  # Percentage
-    budget = 5.0            # Dollars
     
-    # Create a mock prompt file so the analyzer finds it
-    # The expected prompt file name pattern is {basename}_{language}.prompt
+    # Create a mock prompt file so the analyzer has something to read.
+    # We include an <include> tag to show how it triggers 'auto-deps' operations.
     prompt_path = prompts_dir / f"{basename}_{language}.prompt"
     prompt_content = """
-    Write a simple calculator class in Python with add and subtract methods.
-    """
-    prompt_path.write_text(prompt_content.strip())
+<include>config.json</include>
+Please create a simple calculator module.
+"""
+    prompt_path.write_text(prompt_content.strip(), encoding="utf-8")
     
-    print(f"Analyzing sync state for module: '{basename}' ({language})")
-    print(f"Target Coverage: {target_coverage}% | Budget: ${budget}")
-    print(f"Prompts Directory: {prompts_dir}\n")
+    print(f"Created mock prompt at: {prompt_path}")
+    print("-" * 50)
     
-    # Determine the next operation
-    # log_mode=True is used here to avoid creating file locks during analysis
-    # read_only=True ensures we don't accidentally mutate the state
+    # 2. Run the decision analyzer
+    # Inputs:
+    # - basename: The relative identifier for the module (e.g., 'demo_unit')
+    # - language: The programming language (e.g., 'python')
+    # - target_coverage: Desired test coverage percentage (float, e.g., 80.0)
+    # - budget: Maximum budget in dollars for the operation (float)
+    # - log_mode / read_only: If True, skips lock acquisition and metadata mutation
+    # - prompts_dir: Directory where prompt files are stored
+    print(f"Analyzing sync state for basename='{basename}', language='{language}'...")
+    
     decision: SyncDecision = sync_determine_operation(
         basename=basename,
         language=language,
-        target_coverage=target_coverage,
-        budget=budget,
-        log_mode=True,       # Skip locking for read-only analysis
+        target_coverage=80.0,
+        budget=10.0,
         prompts_dir=str(prompts_dir),
-        skip_tests=False,
-        skip_verify=False,
-        read_only=True
+        read_only=True  # Avoids locking and modifying actual metadata for this example
     )
     
-    # Display the results
-    # For a new module with just a prompt, the expected operation is 'generate'
-    print("--- Sync Decision Results ---")
-    print(f"Operation:      {decision.operation}")
-    print(f"Reason:         {decision.reason}")
-    print(f"Confidence:     {decision.confidence * 100:.1f}%")
-    print(f"Estimated Cost: ${decision.estimated_cost:.2f}")
+    # 3. Inspect the decision
+    # Outputs:
+    # - operation: The recommended PDD command (e.g., 'auto-deps', 'generate', 'test')
+    # - reason: Human-readable explanation of why this operation was chosen
+    # - estimated_cost: Estimated cost in dollars to execute this operation
+    # - confidence: Confidence level (0.0 to 1.0)
+    print("\nDecision Results:")
+    print(f"  Operation      : {decision.operation}")
+    print(f"  Reason         : {decision.reason}")
+    print(f"  Confidence     : {decision.confidence:.2f}")
+    print(f"  Estimated Cost : ${decision.estimated_cost:.2f}")
     
     if decision.details:
-        print("\nDetails:")
-        print(json.dumps(decision.details, indent=2))
+        print("\nDecision Details (Internal state context):")
+        for key, value in decision.details.items():
+            print(f"  {key}: {value}")
 
 if __name__ == "__main__":
     main()
