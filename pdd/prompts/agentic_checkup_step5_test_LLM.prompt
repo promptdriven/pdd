@@ -106,6 +106,38 @@ Your comment should follow this format:
 *Proceeding to Step 6: Fix Issues*
 ```
 
+% Required: Structured Failure-Signal Block
+
+REGARDLESS of whether tests pass or fail, the LAST block of your final
+response MUST be a fenced ```failure_signal``` block in the exact shape
+below. Step 6 receives this block verbatim and uses it to scope fixes;
+omitting or paraphrasing it forces Step 6 to invent context and produces
+unrelated changes.
+
+```failure_signal
+command: <exact test command you ran>
+exit_code: <integer exit code, or "skipped" if the command was not run>
+status: <pass | fail | skipped | error>
+failing_ids: <comma-separated test IDs, e.g. tests/test_main.py::test_x; empty when no failures>
+artifact_path: <relative path to a saved full log on disk, or "inline">
+output: |
+  <raw stdout/stderr of the failing tests, redacted of any tokens or
+  credentials. Cap at ~200 lines; if longer, point at artifact_path
+  instead. Include FAILED lines, tracebacks, and short test summary
+  info. NEVER omit this when status is fail or error.>
+```
+
+Notes:
+- When `artifact_path` is a file, the file MUST contain the full output and
+  the inline `output:` may be empty.
+- When the test command could not be run at all (time budget, missing
+  scope), set `status: skipped`, `exit_code: skipped`, and put the exact
+  command that was not run in `command`. The `output:` field may then be
+  a one-line explanation.
+- Do NOT include API tokens, Bearer headers, or `https://user:token@host`
+  URLs in `output:` or anywhere else in this block — Step 5 output is
+  surfaced verbatim to operator-visible logs.
+
 % Important
 
 - Discover the correct test command from the project — do NOT assume pytest or jest
@@ -114,3 +146,4 @@ Your comment should follow this format:
 - In PR mode, `targeted` test scope is opt-in. `full` (the default) means the user expects comprehensive verification — do NOT silently downgrade to targeted because the suite is large; instead report the skipped command honestly
 - Always post your findings as a GitHub comment before completing
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
+- IMPORTANT: The `failure_signal` block is REQUIRED on every Step 5 response — Step 6 will reject failures that lack it
