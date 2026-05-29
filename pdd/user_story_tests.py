@@ -1,3 +1,5 @@
+"""User story discovery, validation, generation, and prompt-fix helpers."""
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 import logging
@@ -81,20 +83,20 @@ def _build_prompt_name_map(
 ) -> Dict[str, Path]:
     """Build case-sensitive and case-insensitive lookup keys for prompt paths."""
     name_map: Dict[str, Path] = {}
-    for pf in prompt_files:
-        name_map[pf.name] = pf
-        name_map[str(pf)] = pf
-        name_map[pf.name.lower()] = pf
-        name_map[str(pf).lower()] = pf
+    for prompt_path in prompt_files:
+        name_map[prompt_path.name] = prompt_path
+        name_map[str(prompt_path)] = prompt_path
+        name_map[prompt_path.name.lower()] = prompt_path
+        name_map[str(prompt_path).lower()] = prompt_path
         if prompts_dir:
             try:
-                rel = pf.relative_to(prompts_dir)
+                rel = prompt_path.relative_to(prompts_dir)
                 rel_str = str(rel)
                 rel_posix = rel.as_posix()
-                name_map[rel_str] = pf
-                name_map[rel_str.lower()] = pf
-                name_map[rel_posix] = pf
-                name_map[rel_posix.lower()] = pf
+                name_map[rel_str] = prompt_path
+                name_map[rel_str.lower()] = prompt_path
+                name_map[rel_posix] = prompt_path
+                name_map[rel_posix.lower()] = prompt_path
             except ValueError:
                 continue
     return name_map
@@ -113,9 +115,9 @@ def _resolve_prompt_path(
     if lower in name_map:
         return name_map[lower]
     # Fallback: match by basename if detect output used a short name
-    for pf in prompt_files:
-        if pf.name == prompt_name or pf.name.lower() == lower:
-            return pf
+    for prompt_path in prompt_files:
+        if prompt_path.name == prompt_name or prompt_path.name.lower() == lower:
+            return prompt_path
     return None
 
 
@@ -261,7 +263,9 @@ def _change_main_succeeded(result_message: object) -> bool:
     change_main (non-CSV mode) reports success with:
     "Modified prompt saved to <path>".
     """
-    return isinstance(result_message, str) and result_message.startswith("Modified prompt saved to ")
+    return isinstance(result_message, str) and result_message.startswith(
+        "Modified prompt saved to "
+    )
 
 
 def _linked_prompts_from_changes(
@@ -307,7 +311,7 @@ def _select_story_prompt_links(
     return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
-def cache_story_prompt_links(
+def cache_story_prompt_links(  # pylint: disable=too-many-locals,too-many-return-statements
     *,
     story_file: str,
     prompts_dir: Optional[str] = None,
@@ -329,7 +333,9 @@ def cache_story_prompt_links(
     if not story_path.exists() or not story_path.is_file():
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
-    prompt_files = prompt_files or discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
+    prompt_files = prompt_files or discover_prompt_files(
+        prompts_dir, include_llm=include_llm_prompts
+    )
     if not prompt_files:
         return False, "No prompt files found to link user story metadata.", 0.0, "", []
 
@@ -348,7 +354,13 @@ def cache_story_prompt_links(
             else:
                 unresolved_refs.append(ref)
         if resolved_refs and not unresolved_refs:
-            return True, "Story already contains prompt metadata.", 0.0, "", sorted(set(resolved_refs))
+            return (
+                True,
+                "Story already contains prompt metadata.",
+                0.0,
+                "",
+                sorted(set(resolved_refs)),
+            )
 
     changes_list, cost, model = detect_change(
         [str(p) for p in prompt_files],
@@ -382,13 +394,31 @@ def cache_story_prompt_links(
         if link_source == "detect_change":
             return True, "Story prompt metadata linked.", cost, model, linked_refs
         if link_source == "story_content":
-            return True, "Story prompt metadata linked from story content.", cost, model, linked_refs
+            return (
+                True,
+                "Story prompt metadata linked from story content.",
+                cost,
+                model,
+                linked_refs,
+            )
         return True, "Story prompt metadata linked to full prompt set.", cost, model, linked_refs
     if link_source == "detect_change":
         return True, "Story prompt metadata already up to date.", cost, model, linked_refs
     if link_source == "story_content":
-        return True, "Story prompt metadata already up to date from story content.", cost, model, linked_refs
-    return True, "Story prompt metadata already up to date for full prompt set.", cost, model, linked_refs
+        return (
+            True,
+            "Story prompt metadata already up to date from story content.",
+            cost,
+            model,
+            linked_refs,
+        )
+    return (
+        True,
+        "Story prompt metadata already up to date for full prompt set.",
+        cost,
+        model,
+        linked_refs,
+    )
 
 
 def _slugify_story_name(raw_name: str) -> str:
@@ -444,7 +474,7 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     """Extract a compact summary line from prompt content."""
     try:
         content = prompt_path.read_text(encoding="utf-8")
-    except Exception:
+    except OSError:
         return "Prompt included in story scope."
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -533,7 +563,7 @@ def _seed_negative_cases_from_rules(
     return deduped
 
 
-def _render_story_markdown_from_prompts(
+def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
     *,
     title: str,
     prompt_paths: List[Path],
@@ -618,7 +648,7 @@ def _render_story_markdown_from_prompts(
     )
 
 
-def generate_user_story(
+def generate_user_story(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     *,
     prompt_files: List[str],
     output: Optional[str] = None,
@@ -669,7 +699,9 @@ def generate_user_story(
     else:
         stories_root = _resolve_stories_dir(stories_dir)
         stories_root.mkdir(parents=True, exist_ok=True)
-        output_path = _default_story_output_path(_story_slug_from_prompts(resolved_paths), stories_root)
+        output_path = _default_story_output_path(
+            _story_slug_from_prompts(resolved_paths), stories_root
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(story_markdown, encoding="utf-8")
@@ -687,14 +719,20 @@ def generate_user_story(
     detected_pool = discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
     merged_pool: List[Path] = []
     seen_pool = set()
-    for pf in resolved_paths + detected_pool:
-        key = str(pf.resolve()).lower()
+    for prompt_path in resolved_paths + detected_pool:
+        key = str(prompt_path.resolve()).lower()
         if key in seen_pool:
             continue
-        merged_pool.append(pf)
+        merged_pool.append(prompt_path)
         seen_pool.add(key)
 
-    detect_success, detect_message, detect_cost, detect_model, detected_links = cache_story_prompt_links(
+    (
+        detect_success,
+        detect_message,
+        detect_cost,
+        detect_model,
+        detected_links,
+    ) = cache_story_prompt_links(
         story_file=str(output_path),
         prompts_dir=prompts_dir,
         prompt_files=merged_pool,
@@ -758,7 +796,7 @@ def generate_user_story(
     )
 
 
-def run_user_story_tests(
+def run_user_story_tests(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     *,
     prompts_dir: Optional[str] = None,
     stories_dir: Optional[str] = None,
@@ -771,14 +809,16 @@ def run_user_story_tests(
     quiet: bool = False,
     fail_fast: bool = False,
     include_llm_prompts: bool = False,
-    cache_story_prompt_links: bool = False,
+    link_story_prompt_metadata: bool = False,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
     Run user story tests by calling detect_change on each story.
 
     A story passes if detect_change returns an empty changes_list.
     """
-    prompt_files = prompt_files or discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
+    prompt_files = prompt_files or discover_prompt_files(
+        prompts_dir, include_llm=include_llm_prompts
+    )
     story_files = story_files or discover_story_files(stories_dir)
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
 
@@ -851,7 +891,7 @@ def run_user_story_tests(
             "changes": changes_list,
         })
 
-        if cache_story_prompt_links and not metadata_prompt_refs:
+        if link_story_prompt_metadata and not metadata_prompt_refs:
             linked_prompt_paths, _ = _select_story_prompt_links(
                 story_content=story_content,
                 prompt_files=prompt_files,
@@ -877,7 +917,7 @@ def run_user_story_tests(
     return all_passed, results, total_cost, model_name
 
 
-def run_user_story_fix(
+def run_user_story_fix(  # pylint: disable=too-many-locals,too-many-branches
     *,
     ctx: object,
     story_file: str,
@@ -895,7 +935,7 @@ def run_user_story_fix(
     This runs detect_change on the story, then applies changes to each affected
     prompt by calling change_main with the story as the change prompt.
     """
-    from .change_main import change_main
+    from .change_main import change_main  # pylint: disable=import-outside-toplevel
 
     prompts_root = _resolve_prompts_dir(prompts_dir)
     prompt_files = discover_prompt_files(str(prompts_root))
@@ -989,6 +1029,12 @@ def run_user_story_fix(
         model_name = validation_model
 
     if not passed:
-        return False, "User story still failing after prompt updates.", total_cost, model_name, changed_files
+        return (
+            False,
+            "User story still failing after prompt updates.",
+            total_cost,
+            model_name,
+            changed_files,
+        )
 
     return True, "User story prompts updated successfully.", total_cost, model_name, changed_files
