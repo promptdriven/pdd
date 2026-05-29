@@ -990,8 +990,16 @@ def _setup_pr_worktree(
 
     # 2. Fetch the PR's head into a local branch.
     #    Always refresh (force) so a re-run picks up new pushes to the PR.
-    if _branch_exists(git_root, branch_name) and not resume_existing:
-        _delete_branch(git_root, branch_name)
+    deleted_branch = False
+    has_branch = _branch_exists(git_root, branch_name)
+    if has_branch and not resume_existing:
+        success, err = _delete_branch(git_root, branch_name)
+        if success:
+            has_branch = False
+            deleted_branch = True
+        else:
+            if not quiet:
+                console.print(f"[yellow]Failed to delete branch {branch_name}: {err}[/yellow]")
 
     # Resolve which remote actually has this PR. Prefer a configured remote
     # (uses the user's auth + caching); fall back to the explicit GitHub URL
@@ -1025,12 +1033,20 @@ def _setup_pr_worktree(
     # 3. Create worktree on the fetched branch.
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", str(worktree_path), branch_name],
-            cwd=git_root,
-            capture_output=True,
-            check=True,
-        )
+        if has_branch and not resume_existing and not deleted_branch:
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
         return None, f"Failed to create PR worktree: {err_msg}"
@@ -1078,6 +1094,7 @@ def _setup_worktree(
 
     # 2. Handle existing branch
     has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
     if has_branch:
         if resume_existing:
             if not quiet:
@@ -1085,8 +1102,13 @@ def _setup_worktree(
         else:
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            _delete_branch(git_root, branch_name)
-            has_branch = False
+            success, err = _delete_branch(git_root, branch_name)
+            if success:
+                has_branch = False
+                deleted_branch = True
+            else:
+                if not quiet:
+                    console.print(f"[yellow]Failed to delete branch (may be locked by stale worktree): {err}[/yellow]")
 
     # 3. Create worktree
     try:
@@ -1095,6 +1117,13 @@ def _setup_worktree(
         if has_branch and resume_existing:
             subprocess.run(
                 ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        elif has_branch and not resume_existing and not deleted_branch:
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root,
                 capture_output=True,
                 check=True,
