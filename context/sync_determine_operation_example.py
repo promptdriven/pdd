@@ -1,78 +1,82 @@
-"""
-Example demonstrating how to use the sync_determine_operation module to analyze
-a PDD unit's state and determine the next sync operation.
-"""
-
 import os
 import sys
+import shutil
 from pathlib import Path
 import json
 
-# Import the core decision-making function and data structures
-from pdd.sync_determine_operation import sync_determine_operation, SyncDecision
+# Add the PDD_PATH to sys.path if needed, but normally we assume pdd is installed
+from pdd.sync_determine_operation import sync_determine_operation
 
-def main():
+def setup_mock_project(base_dir: Path, basename: str, language: str) -> None:
     """
-    Demonstrates how to use sync_determine_operation to get the next
-    recommended operation for a PDD unit based on its current file state.
+    Creates a minimal mock project structure for the sync determination logic to analyze.
     """
-    # Create an output directory for our example files
-    output_dir = Path("./output")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Create directories
+    base_dir.mkdir(parents=True, exist_ok=True)
+    prompts_dir = base_dir / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
     
-    # Set up a mock project structure in the output directory
-    prompts_dir = output_dir / "prompts"
-    prompts_dir.mkdir(parents=True, exist_ok=True)
+    # Create a simple prompt file
+    prompt_path = prompts_dir / f"{basename}_{language}.prompt"
+    prompt_path.write_text("Task: Implement a basic calculator.", encoding="utf-8")
     
-    # Create a mock prompt file
+    # Create a code file to simulate partial progress
+    code_path = base_dir / f"{basename}.py"
+    code_path.write_text("class Calculator:\n    pass", encoding="utf-8")
+    
+    # Example and Test files are purposefully left out to simulate an incomplete sync state
+
+
+def main() -> None:
+    """
+    Example showing how to use `sync_determine_operation` to analyze a module's state
+    and determine the next action required to synchronize the project.
+    """
+    # 1. Prepare environment
+    output_dir = Path("./output/sync_determination_example")
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    
     basename = "calculator"
     language = "python"
-    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
     
-    print(f"Creating mock prompt file at: {prompt_file}")
-    prompt_file.write_text(
-        "Create a simple calculator class with add and subtract methods.",
-        encoding="utf-8"
-    )
+    # Set up files inside the output directory
+    setup_mock_project(output_dir, basename, language)
     
-    print("\n--- Running Sync Analysis ---")
-    print(f"Basename: {basename}")
-    print(f"Language: {language}")
+    # Change working directory so the path resolution logic operates correctly
+    original_cwd = Path.cwd()
+    os.chdir(output_dir)
     
-    # Call the decision-making logic in read-only/log mode to avoid mutating real metadata
-    # Inputs:
-    # - basename: The base name of the module (e.g., 'calculator')
-    # - language: The programming language (e.g., 'python')
-    # - target_coverage: Target test coverage percentage
-    # - budget: Max cost in dollars for the operation
-    # - log_mode: True to skip locking and run in read-only mode for analysis
-    # - prompts_dir: The directory containing the prompt files
-    decision: SyncDecision = sync_determine_operation(
+    print("--- PDD Sync Determination Example ---")
+    print(f"Analyzing module: {basename} (Language: {language})")
+    print("Current state: Prompt and Code exist. Example and Tests are missing.\n")
+    
+    # 2. Determine the next operation
+    # We use log_mode=True to bypass file locking for this read-only demonstration
+    decision = sync_determine_operation(
         basename=basename,
         language=language,
         target_coverage=90.0,
-        budget=1.0,
-        log_mode=True,  # Read-only mode
-        prompts_dir=str(prompts_dir)
+        budget=5.0,
+        log_mode=True,       # Read-only analysis without acquiring locks
+        prompts_dir="prompts",
+        skip_tests=False,
+        skip_verify=False,
     )
     
-    # Display the results
-    # Outputs:
-    # - operation: The recommended next command (e.g., 'generate', 'test', 'fix')
-    # - reason: Human-readable explanation for the decision
-    # - estimated_cost: Estimated cost in dollars to run the operation
-    # - confidence: 0.0 to 1.0 score of confidence in this decision
-    print("\n--- Decision Results ---")
-    print(f"Next Operation: {decision.operation}")
-    print(f"Reason:         {decision.reason}")
-    print(f"Estimated Cost: ${decision.estimated_cost:.2f}")
-    print(f"Confidence:     {decision.confidence:.2f}")
+    # 3. Print the decision
+    print(f"Recommended Operation : {decision.operation}")
+    print(f"Reason                : {decision.reason}")
+    print(f"Confidence Level      : {decision.confidence:.2f}")
+    print(f"Estimated Cost        : ${decision.estimated_cost:.2f}")
     
     if decision.details:
-        print("\nDecision Details:")
+        print("\nDetails:")
         print(json.dumps(decision.details, indent=2))
         
-    print("\nExample complete.")
+    # Restore original working directory
+    os.chdir(original_cwd)
+
 
 if __name__ == "__main__":
     main()
