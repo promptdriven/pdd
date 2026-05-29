@@ -541,6 +541,69 @@ def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
     )
 
 
+def _extract_codex_jsonl_error(stdout: str) -> str:
+    """Extract the most useful error message from Codex JSON/JSONL stdout."""
+    if not stdout:
+        return ""
+
+    def _message_from_value(value: Any) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, dict):
+            for key in ("message", "detail", "reason", "error", "output", "result"):
+                msg = _message_from_value(value.get(key))
+                if msg:
+                    return msg
+        if isinstance(value, list):
+            for item in value:
+                msg = _message_from_value(item)
+                if msg:
+                    return msg
+        return ""
+
+    def _message_from_event(event: Any) -> str:
+        if not isinstance(event, dict):
+            return ""
+
+        event_type = str(event.get("type") or "").lower()
+        has_error_signal = (
+            "error" in event_type
+            or "failed" in event_type
+            or bool(event.get("is_error"))
+            or "error" in event
+        )
+        if not has_error_signal:
+            return ""
+
+        for key in ("error", "message", "detail", "reason", "output", "result"):
+            msg = _message_from_value(event.get(key))
+            if msg:
+                return msg
+        return ""
+
+    terminal_error = ""
+    last_error = ""
+    for raw_line in stdout.splitlines() or [stdout]:
+        line = raw_line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = _message_from_event(event)
+        if msg:
+            last_error = msg
+            event_type = str(event.get("type") or "").lower() if isinstance(event, dict) else ""
+            if event_type in {"turn.failed", "task.failed", "session.failed"}:
+                terminal_error = msg
+    return (terminal_error or last_error)[:MAX_ERROR_SNIPPET_LENGTH]
+
+
+def _is_codex_stdin_notice(text: str) -> bool:
+    return text.strip().startswith("Reading additional input from stdin")
+
+
 # Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
 # can report how far the workflow progressed (console + core dumps).
 _agentic_interrupt_context: Optional[Dict[str, Any]] = None
@@ -3481,16 +3544,17 @@ def _run_with_provider(
             effective_codex_effort = None
         if effective_codex_effort:
             cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
+        # Codex --model is a top-level flag; keep it before the subcommand so
+        # the final "-" remains the explicit stdin prompt operand.
+        codex_model = env.get("CODEX_MODEL")
+        if codex_model:
+            cmd.extend(["--model", codex_model])
         cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,
             "--json",
             "-"
         ])
-        # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
-        codex_model = env.get("CODEX_MODEL")
-        if codex_model:
-            cmd.extend(["--model", codex_model])
     elif provider == "opencode":
         # OpenCode is a multi-provider routing CLI: a single binary that
         # delegates to whichever backend (Anthropic, OpenAI, GitHub Copilot,
@@ -3567,8 +3631,8 @@ def _run_with_provider(
         return False, str(e), 0.0, None
 
     if result.returncode != 0:
-        error_detail = result.stderr or result.stdout[:500]
         if provider == "openai":
+            stdout_error = _extract_codex_jsonl_error(result.stdout or "")
             combined_error = "\n".join(
                 part for part in [
                     result.stderr or "",
@@ -3579,6 +3643,14 @@ def _run_with_provider(
             codex_auth_message = _codex_auth_failure_message(combined_error)
             if codex_auth_message:
                 return False, codex_auth_message, 0.0, None
+            if stdout_error:
+                return False, f"Exit code {result.returncode}: {stdout_error}", 0.0, None
+            if result.stderr and not _is_codex_stdin_notice(result.stderr):
+                error_detail = result.stderr
+            else:
+                error_detail = (result.stdout or result.stderr or "")[:MAX_ERROR_SNIPPET_LENGTH]
+            return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
+        error_detail = result.stderr or result.stdout[:500]
         return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
 
     # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
