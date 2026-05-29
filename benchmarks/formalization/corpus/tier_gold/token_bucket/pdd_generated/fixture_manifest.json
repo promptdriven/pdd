@@ -1,0 +1,8 @@
+{
+  "provenance": "bootstrap_pending_pdd_record",
+  "note": "Run record_pdd_fixtures.py --tasks token_bucket to replace with live pdd output",
+  "arms": {
+    "A0": {"module": "token_bucket"},
+    "A1": {"module": "token_bucket"}
+  }
+}

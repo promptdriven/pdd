@@ -3,11 +3,38 @@
 This benchmark makes PDD's business value measurable: better prompts should reduce wasted
 generation loops, lower token spend, and make AI-generated software easier to trust.
 
+**Design:** [EXPERIMENT_DESIGN.md](EXPERIMENT_DESIGN.md)
+
 ## Core hypothesis
 
 > A structured **A1** prompt with vocabulary, contract rules, and checkable requirements
 > should need fewer PDD **generate / fix / verify** rounds than a vague **A0** prompt to
 > reach acceptable behavior.
+
+## Three phases → business levers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. PROMPT QUALITY — shift-left before generate spend        │
+└───────────────────────────┬─────────────────────────────────┘
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. GENERATE + RECORD — dollars and oracle pass rate         │
+└───────────────────────────┬─────────────────────────────────┘
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. SHIP + STABILITY — trust across regeneration             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| Phase | Milestone | Business lever | Key metrics |
+|-------|-----------|----------------|-------------|
+| **1** | **M1** | Cheaper mistakes caught **before** generation | Lint, contract rules, vocabulary, coverage, story Covers |
+| **2** | **M2** | **Generation economics** — A0 vs A1 to acceptable code | Rounds, cost USD, oracle pass rate, non-oracle pass rate |
+| **3** | **M3** | **Maintenance** — stable behavior across regen | Drift score, behavior stability, regen runs |
+
+M1 does **not** claim lower token spend or fewer fix loops yet — it measures the upstream
+lever that M2 and M3 connect to dollars and stability.
 
 ## Why this matters
 
@@ -25,16 +52,24 @@ generation loops, lower token spend, and make AI-generated software easier to tr
   whether generated code can be reproduced, checked, and kept aligned with requirements
   over time.
 
-## What each milestone proves
+## Prompt as source of truth → better code
 
-| Milestone | Business lever | Key metrics |
-|-----------|----------------|-------------|
-| **M1** | Cheaper mistakes caught **before** generation | Lint warnings, contract rules, vocabulary, command log, hashes |
-| **M2** | **Generation economics** — A0 vs A1 cost to acceptable code | Generation rounds, tokens, cost USD, wall-clock, generated-test pass rate, **oracle-test** pass rate |
-| **M3** | **Long-term maintenance** — stable behavior across regen | Drift score, regen runs, behavioral stability vs oracle |
+```mermaid
+flowchart LR
+  A0[Vague A0] --> F[Formalize]
+  F --> A1[Structured A1 SoT]
+  A1 --> G[pdd generate]
+  G --> C[Code + tests]
+  A1 --> O[Oracle pytest]
+  C --> O
+```
 
-M1 does **not** claim lower token spend or fewer fix loops yet — it measures the upstream
-lever (prompt checkability) that M2 and M3 connect to dollars and stability.
+| Stage | A0 (vague) | A1 (formalized) | Effect on generated code |
+|-------|------------|-----------------|--------------------------|
+| Terms | Implicit | `<vocabulary>` | One interpretation, fewer silent mismatches |
+| Behavior | Prose | `R*` contract rules | Observable MUST outcomes |
+| Verification | None in prompt | Coverage + acceptance tests | Tests align with stated rules |
+| Audit | Unstructured | Sections + evidence + SHA256 | Reviewers diff prompts, not only code |
 
 ## Honest reporting (M2+)
 

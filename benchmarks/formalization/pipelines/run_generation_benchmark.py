@@ -22,8 +22,21 @@ if str(_PIPELINE_DIR) not in sys.path:
 import formalize_a1  # noqa: E402
 from economics import business_value_block, economics_delta_from_arms, evaluation_modes_summary  # noqa: E402
 from generation_loop import run_generation_loop  # noqa: E402
+import pdd_fixture_store  # noqa: E402
 
 DEFAULT_OUTPUT = _BENCHMARK_ROOT / "experiments" / "m2_latest"
+
+
+def _fixtures_root(entry: dict[str, Any]) -> Optional[Path]:
+    """Resolve tier_gold pdd_generated fixtures for a task."""
+    raw = entry.get("pdd_fixtures")
+    if raw:
+        path = (_BENCHMARK_ROOT / raw).resolve()
+        return path if path.is_dir() else None
+    if entry.get("oracle_tests"):
+        path = (_BENCHMARK_ROOT / "corpus" / "tier_gold" / entry["id"] / "pdd_generated").resolve()
+        return path if path.is_dir() else None
+    return None
 
 
 def _load_tasks(m2_only: bool = True) -> list[dict[str, Any]]:
@@ -44,6 +57,8 @@ def run_m2(
     max_rounds: int,
     max_cost_usd: Optional[float],
     skip_formalize: bool,
+    replay_fixtures: bool,
+    save_fixtures: bool,
 ) -> dict[str, Any]:
     tasks = _load_tasks()
     if task_ids:
@@ -57,6 +72,8 @@ def run_m2(
         "business_value": business_value_block(),
         "allow_llm": allow_llm,
         "harness_only": harness_only,
+        "replay_fixtures": replay_fixtures,
+        "save_fixtures": save_fixtures,
         "m1_dir": str(m1_dir),
         "tasks": [],
     }
@@ -96,6 +113,8 @@ def run_m2(
         if entry.get("baseline_src"):
             baseline_src = (_BENCHMARK_ROOT / entry["baseline_src"]).resolve()
 
+        fixtures_root = _fixtures_root(entry) if replay_fixtures or harness_only else None
+
         arms_result: dict[str, Any] = {}
         for arm, prompt in (("A0", a0_path), ("A1", a1_path)):
             arm_dir = task_out / arm
@@ -112,7 +131,27 @@ def run_m2(
                 max_rounds=max_rounds,
                 harness_only=harness_only,
                 baseline_src=baseline_src if arm == "A1" else None,
+                pdd_fixtures_root=fixtures_root,
             )
+            if save_fixtures and allow_llm and not harness_only:
+                if fixtures_root is None:
+                    fixtures_root = (
+                        _BENCHMARK_ROOT / "corpus" / "tier_gold" / task_id / "pdd_generated"
+                    ).resolve()
+                fixtures_root.mkdir(parents=True, exist_ok=True)
+                pdd_fixture_store.save_arm_fixtures(
+                    fixtures_root=fixtures_root,
+                    arm=arm,
+                    module=module,
+                    work_dir=arm_dir,
+                    prompt_path=prompt,
+                    provenance="pdd_cli_record",
+                    extra={
+                        "generation_rounds": result.economics.get("generation_rounds"),
+                        "fix_rounds": result.economics.get("fix_rounds"),
+                        "oracle_test_pass_rate": result.economics.get("oracle_test_pass_rate"),
+                    },
+                )
             arms_result[arm] = {
                 "prompt": str(prompt),
                 "economics": result.economics,
@@ -165,12 +204,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--m1-dir", type=Path, default=_BENCHMARK_ROOT / "experiments" / "latest")
     parser.add_argument("--tasks", type=str, default=None)
     parser.add_argument("--allow-llm", action="store_true")
-    parser.add_argument("--harness-only", action="store_true", help="CI: use baseline/stub, no LLM")
+    parser.add_argument("--harness-only", action="store_true", help="CI: replay fixtures, baseline, or stub")
+    parser.add_argument(
+        "--replay-fixtures",
+        action="store_true",
+        help="Prefer tier_gold pdd_generated replay in harness mode (implies --harness-only)",
+    )
+    parser.add_argument(
+        "--save-fixtures",
+        action="store_true",
+        help="After live --allow-llm M2, persist code/tests to corpus/tier_gold/*/pdd_generated",
+    )
     parser.add_argument("--max-rounds", type=int, default=2)
     parser.add_argument("--max-cost-usd", type=float, default=None)
     parser.add_argument("--skip-formalize", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)
+
+    harness_only = args.harness_only or args.replay_fixtures
+    if args.replay_fixtures and args.allow_llm:
+        parser.error("--replay-fixtures cannot combine with --allow-llm")
+    if args.save_fixtures and not args.allow_llm:
+        parser.error("--save-fixtures requires --allow-llm")
 
     task_ids = [t.strip() for t in args.tasks.split(",")] if args.tasks else None
     manifest = run_m2(
@@ -178,10 +233,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         task_ids=task_ids,
         m1_dir=args.m1_dir.resolve(),
         allow_llm=args.allow_llm,
-        harness_only=args.harness_only,
+        harness_only=harness_only,
         max_rounds=args.max_rounds,
         max_cost_usd=args.max_cost_usd,
         skip_formalize=args.skip_formalize,
+        replay_fixtures=args.replay_fixtures,
+        save_fixtures=args.save_fixtures,
     )
     if args.as_json:
         print(json.dumps(manifest, indent=2))

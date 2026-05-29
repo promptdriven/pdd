@@ -1,0 +1,43 @@
+% Handwritten A0 — Milestone 1 corpus (refund_handler)
+% Each requirement line maps to story ## Covers R1–R5 (see stories/).
+
+<requirements>
+Only active users may receive refunds.
+The same refund request id must be idempotent: repeating it returns the same outcome.
+When the user is unauthorized, reject the refund.
+When the refund amount is invalid, reject the refund.
+Successful refunds must return a receipt identifier.
+</requirements>
+
+<vocabulary>
+- active: returns an observable outcome defined by this prompt's rules
+- unauthorized: returns an observable outcome defined by this prompt's rules
+- invalid: returns an observable outcome defined by this prompt's rules
+- successful: returns an observable outcome defined by this prompt's rules
+</vocabulary>
+
+<contract_rules>
+R1 - Requirement 1
+When Only active users may receive refunds
+The module MUST satisfy this requirement with an observable outcome.
+R2 - Requirement 2
+When The same refund request id must be idempotent: repeating it returns the same outcome
+The module MUST satisfy this requirement with an observable outcome.
+R3 - Requirement 3
+When When the user is unauthorized, reject the refund
+The module MUST satisfy this requirement with an observable outcome.
+R4 - Requirement 4
+When When the refund amount is invalid, reject the refund
+The module MUST satisfy this requirement with an observable outcome.
+R5 - Requirement 5
+When Successful refunds must return a receipt identifier
+The module MUST satisfy this requirement with an observable outcome.
+</contract_rules>
+
+<coverage>
+- R1: story__refund_handler.md
+- R2: story__refund_handler.md
+- R3: story__refund_handler.md
+- R4: story__refund_handler.md
+- R5: story__refund_handler.md
+</coverage>

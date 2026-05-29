@@ -15,6 +15,12 @@ _ACCEPTANCE_OPEN = "<acceptance_tests>"
 _ACCEPTANCE_CLOSE = "</acceptance_tests>"
 _FORMALIZATION_OPEN = "<formalization>"
 _FORMALIZATION_CLOSE = "</formalization>"
+_COVERAGE_OPEN = "<coverage>"
+_COVERAGE_CLOSE = "</coverage>"
+_WAIVERS_OPEN = "<waivers>"
+_WAIVERS_CLOSE = "</waivers>"
+_COVERAGE_REF_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\s*:", re.IGNORECASE)
+_WAIVER_HDR_RE = re.compile(r"^W(\d+):", re.IGNORECASE)
 
 _XML_SECTION_RE = re.compile(
     r"<(?P<tag>[a-zA-Z_][\w-]*)>(?P<body>.*?)</(?P=tag)>",
@@ -222,6 +228,151 @@ def bootstrap_contract_rules_from_requirements(path: Path) -> int:
     if not rules:
         return 0
     return append_contract_rules(path, rules)
+
+
+def _rule_sort_key(rule_id: str) -> tuple[int, str]:
+    match = re.search(r"(\d+)", rule_id)
+    return (int(match.group(1)) if match else 0, rule_id.upper())
+
+
+def _parse_coverage_body(body: str) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    for line in body.splitlines():
+        stripped = line.strip().lstrip("-* ")
+        if not stripped:
+            continue
+        ref_match = _COVERAGE_REF_RE.match(stripped)
+        if ref_match:
+            rid = ref_match.group(1).upper()
+            rest = stripped[ref_match.end():].lstrip(":").strip()
+            entries[rid] = rest
+    return entries
+
+
+def _format_coverage_body(entries: dict[str, str]) -> str:
+    lines = [
+        f"- {rid}: {entries[rid]}"
+        for rid in sorted(entries.keys(), key=_rule_sort_key)
+    ]
+    return "\n".join(lines)
+
+
+def _max_waiver_number(text: str) -> int:
+    max_num = 0
+    for line in text.splitlines():
+        match = _WAIVER_HDR_RE.match(line.strip())
+        if match:
+            max_num = max(max_num, int(match.group(1)))
+    return max_num
+
+
+def append_coverage_entries(path: Path, links: dict[str, str]) -> int:
+    """Merge story/test links into ``<coverage>`` (rule_id → evidence text)."""
+    if not links:
+        return 0
+
+    text = path.read_text(encoding="utf-8")
+    sections = extract_sections(text)
+    entries = _parse_coverage_body(sections.get("coverage", ""))
+
+    written = 0
+    for rule_id, evidence in links.items():
+        rid = rule_id.upper()
+        if entries.get(rid) != evidence:
+            entries[rid] = evidence
+            written += 1
+
+    if written == 0:
+        return 0
+
+    new_body = _format_coverage_body(entries)
+    _replace_or_append_section(
+        path, text, "coverage", _COVERAGE_OPEN, _COVERAGE_CLOSE, new_body,
+    )
+    return written
+
+
+def append_benchmark_waivers(
+    path: Path,
+    rule_ids: list[str],
+    *,
+    reason: str,
+    expires: str,
+    approved_by: str = "formalization-benchmark",
+) -> int:
+    """Append benchmark waivers and matching ``WAIVED W<n>`` coverage entries."""
+    cleaned = [rid.upper() for rid in rule_ids if rid.strip()]
+    if not cleaned:
+        return 0
+
+    text = path.read_text(encoding="utf-8")
+    sections = extract_sections(text)
+    waivers_body = sections.get("waivers", "")
+    coverage_entries = _parse_coverage_body(sections.get("coverage", ""))
+
+    next_num = _max_waiver_number(waivers_body) + 1
+    if _WAIVERS_OPEN in text and _WAIVERS_CLOSE in text:
+        waivers_body = waivers_body.rstrip()
+
+    new_blocks: list[str] = []
+    written = 0
+    for rule_id in cleaned:
+        waiver_id = f"W{next_num}"
+        next_num += 1
+        waived_ref = f"WAIVED {waiver_id}"
+        if coverage_entries.get(rule_id) == waived_ref:
+            continue
+        new_blocks.append(
+            f"{waiver_id}:\n"
+            f"Rule: {rule_id}\n"
+            f"Status: temporary\n"
+            f"Reason: {reason}\n"
+            f"Approved by: {approved_by}\n"
+            f"Expires: {expires}"
+        )
+        coverage_entries[rule_id] = waived_ref
+        written += 1
+
+    if written == 0:
+        return 0
+
+    combined_waivers = waivers_body
+    if new_blocks:
+        combined_waivers = (
+            (combined_waivers + "\n\n" if combined_waivers else "")
+            + "\n\n".join(new_blocks)
+        ).strip()
+
+    updated = text
+    if _WAIVERS_OPEN in updated and _WAIVERS_CLOSE in updated:
+        pattern = re.compile(
+            re.escape(_WAIVERS_OPEN) + r".*?" + re.escape(_WAIVERS_CLOSE),
+            re.DOTALL,
+        )
+        updated = pattern.sub(
+            f"{_WAIVERS_OPEN}\n{combined_waivers}\n{_WAIVERS_CLOSE}",
+            updated,
+            count=1,
+        )
+    else:
+        updated = updated.rstrip() + f"\n\n{_WAIVERS_OPEN}\n{combined_waivers}\n{_WAIVERS_CLOSE}\n"
+
+    coverage_body = _format_coverage_body(coverage_entries)
+    if _COVERAGE_OPEN in updated and _COVERAGE_CLOSE in updated:
+        pattern = re.compile(
+            re.escape(_COVERAGE_OPEN) + r".*?" + re.escape(_COVERAGE_CLOSE),
+            re.DOTALL,
+        )
+        updated = pattern.sub(
+            f"{_COVERAGE_OPEN}\n{coverage_body}\n{_COVERAGE_CLOSE}",
+            updated,
+            count=1,
+        )
+    else:
+        updated = updated.rstrip() + f"\n\n{_COVERAGE_OPEN}\n{coverage_body}\n{_COVERAGE_CLOSE}\n"
+
+    path.write_text(updated, encoding="utf-8")
+    return written
 
 
 def merge_formalize_bundle(path: Path, bundle: dict) -> dict[str, int]:

@@ -39,8 +39,8 @@ generation loops, lower token spend, and make AI-generated software easier to tr
 | **M2** | Generation economics: rounds, tokens, cost, wall-clock, oracle vs generated pass rate |
 | **M3** | Regeneration drift and behavioral stability vs oracle |
 
-Pipeline placeholders for M2/M3 live in `pipelines/economics.py` and are emitted as
-`null` in M1 `result.json` until `run_generation_benchmark.py` (M2) lands.
+Pipeline placeholders for M2/M3 live in `pipelines/economics.py`; M2/M3 populate them via
+`run_generation_benchmark.py` and `run_drift_benchmark.py`.
 
 ---
 
@@ -51,7 +51,7 @@ python benchmarks/formalization/pipelines/run_experiment.py
 pytest -vv tests/test_formalization_pipeline.py
 ```
 
-See [EVALUATION.md](EVALUATION.md) for full workflow.
+See [EXPERIMENT_DESIGN.md](EXPERIMENT_DESIGN.md) for architecture and [EVALUATION.md](EVALUATION.md) for full workflow.
 
 ---
 

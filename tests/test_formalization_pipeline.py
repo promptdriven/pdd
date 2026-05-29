@@ -157,6 +157,74 @@ def test_m2_harness_only_smoke(tmp_path: Path) -> None:
     assert "evaluation_summary" in task
 
 
+def test_m2_replay_fixtures_smoke(tmp_path: Path) -> None:
+    m1 = tmp_path / "m1"
+    a0 = BENCHMARK_ROOT / "corpus" / "tasks" / "email_validator" / "A0.prompt"
+    (m1 / "email_validator").mkdir(parents=True)
+    (m1 / "email_validator" / "A1.prompt").write_text(
+        a0.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BENCHMARK_ROOT / "pipelines" / "run_generation_benchmark.py"),
+            "--replay-fixtures",
+            "--skip-formalize",
+            "--m1-dir",
+            str(m1),
+            "--output-dir",
+            str(tmp_path / "m2"),
+            "--tasks",
+            "email_validator",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    manifest = json.loads(proc.stdout)
+    assert manifest["replay_fixtures"] is True
+    notes = manifest["tasks"][0]["arms"]["A0"]["notes"]
+    assert any("pdd_generated fixtures" in n for n in notes)
+
+
+def test_m3_pipeline_replay_smoke(tmp_path: Path) -> None:
+    m1 = tmp_path / "m1"
+    a0 = BENCHMARK_ROOT / "corpus" / "tasks" / "email_validator" / "A0.prompt"
+    (m1 / "email_validator").mkdir(parents=True)
+    (m1 / "email_validator" / "A1.prompt").write_text(
+        a0.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BENCHMARK_ROOT / "pipelines" / "run_m3_pipeline.py"),
+            "--replay-fixtures",
+            "--m1-dir",
+            str(m1),
+            "--m2-dir",
+            str(tmp_path / "m2"),
+            "--m3-dir",
+            str(tmp_path / "m3"),
+            "--tasks",
+            "email_validator",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    payload = json.loads(proc.stdout)
+    assert payload["live_m2"] is False
+    assert payload["m3_dry_run"] is True
+    assert (tmp_path / "m3" / "PIPELINE_RESULT.md").is_file()
+    assert (tmp_path / "m3" / "summary.json").is_file()
+
+
 def test_m3_dry_run_smoke(tmp_path: Path) -> None:
     m1 = tmp_path / "m1"
     m2 = tmp_path / "m2"

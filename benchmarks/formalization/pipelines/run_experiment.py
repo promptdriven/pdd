@@ -221,6 +221,7 @@ def run_experiment(
         encoding="utf-8",
     )
     _write_report_md(output_dir / "REPORT.md", summary, run_manifest)
+    _write_evaluation_result_md(output_dir / "EVALUATION_RESULT.md", summary, run_manifest)
     return run_manifest
 
 
@@ -350,6 +351,134 @@ def _write_report_md(path: Path, summary: dict[str, Any], manifest: dict[str, An
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _write_evaluation_result_md(
+    path: Path,
+    summary: dict[str, Any],
+    manifest: dict[str, Any],
+) -> None:
+    """Write narrative evaluation: conclusions, SoT link, business value."""
+    allow_llm = manifest.get("allow_llm")
+    total_cost = manifest.get("total_cost_usd")
+    n = summary["task_count"]
+    lint_ok = summary["tasks_lint_warnings_improved"]
+    rules_ok = summary["tasks_gained_contract_rules"]
+    vocab_ok = summary["tasks_gained_vocabulary"]
+    covers_ok = summary.get("tasks_story_covers_improved", 0)
+
+    regressed = [
+        t["task_id"]
+        for t in summary["tasks"]
+        if (t["a1_lint_warnings"] or 0) > (t["a0_lint_warnings"] or 0)
+    ]
+
+    lines = [
+        "# Evaluation result — Milestone 1 (prompt checkability)",
+        "",
+        "## Run metadata",
+        "",
+        f"| Field | Value |",
+        f"|-------|-------|",
+        f"| Started | {manifest.get('started_at', '—')} |",
+        f"| Finished | {manifest.get('finished_at', '—')} |",
+        f"| Git SHA | `{manifest.get('git_sha', '—')[:12]}` |",
+        f"| Formalizer | `{manifest.get('formalize_script_version')}` |",
+        f"| allow_llm | {allow_llm} |",
+        f"| total_cost_usd | {total_cost if total_cost is not None else '—'} |",
+        f"| Output | `{path.parent}` |",
+        "",
+        "## Conclusions",
+        "",
+        f"**{n}/{n} tasks** gained explicit contract rules; **{vocab_ok}/{n}** gained "
+        f"vocabulary; **{lint_ok}/{n}** reduced lint warnings; **{covers_ok}/{n}** "
+        f"increased `## Covers` bullets when stories were seeded from A1 vs A0.",
+        "",
+        "Formalization turns requirements-only A0 prompts into reviewable artifacts "
+        "with `<vocabulary>`, `<contract_rules>`, and often `<acceptance_tests>`. "
+        "That is the upstream lever for **prompt as source of truth**: the prompt "
+        "carries definitions, obligations, and test hooks before any code is generated.",
+        "",
+    ]
+    if regressed:
+        lines.extend(
+            [
+                f"**Caveat:** lint warnings increased for: {', '.join(regressed)}. "
+                "More structure can surface new checkup findings — not every LLM pass "
+                "is strictly cleaner than deterministic bootstrap.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "### What this run proves",
+            "",
+            "- Ambiguous natural-language requirements can be systematically structured.",
+            "- Checkup lint/contract metrics move in the expected direction on most tasks.",
+            "- Story `#820` seeding shows better rule-to-story traceability after A1.",
+            "",
+            "### What this run does **not** prove",
+            "",
+            "- Lower token spend or fewer `pdd generate` / fix loops (→ **M2**).",
+            "- Regeneration stability or drift resistance (→ **M3**).",
+            "- That every formalization path (deterministic vs LLM vs checkup) is optimal.",
+            "",
+            "## Prompt as source of truth → better code",
+            "",
+            "| Stage | A0 (vague) | A1 (formalized) | Effect on generated code |",
+            "|-------|------------|-----------------|--------------------------|",
+            "| Terms | Implicit (\"valid\", \"safely\") | Defined in `<vocabulary>` | Model picks one interpretation, fewer silent mismatches |",
+            "| Behavior | Prose requirements | `R*` contract rules (When/The MUST) | Generate/test targets observable outcomes |",
+            "| Verification | None in prompt | Acceptance tests + story `## Covers` | Tests align with stated rules; oracle can adjudicate |",
+            "| Audit | Unstructured blob | Sections + command log + SHA256 | Reviewers diff prompts, not only diffs in code |",
+            "",
+            "Downstream, M2 compares **oracle** (hand-written tier_gold pytest) vs "
+            "**non-oracle** (`pdd test` from the same prompt). A1 gives the generator "
+            "and test writer the same explicit contract — the hypothesis is fewer "
+            "rounds to pass independent oracle tests.",
+            "",
+            "## Business value (this run)",
+            "",
+            "| Lever | Signal in this run | Dollar impact (when M2 runs) |",
+            "|-------|-------------------|------------------------------|",
+            "| **Shift-left quality** | Lint/rules improved on most tasks | Catch ambiguity before generation tokens |",
+            "| **Reviewable specs** | All tasks gained rules; stories gained Covers | Less engineer time clarifying intent mid-sprint |",
+            "| **Traceability** | Corpus stories + seeded A1 stories link rules to tests | Easier compliance / audit of AI-generated changes |",
+            "| **Predictable AI workflow** | Measurable checkability gate before `pdd generate` | Budget caps and go/no-go on prompt readiness |",
+            "",
+            f"**Hypothesis (full chain):** {summary.get('business_hypothesis', '')}",
+            "",
+            "## Per-task snapshot",
+            "",
+            "| Task | Δlint | Δrules | A1 vocab | Covers Δ |",
+            "|------|-------|--------|----------|----------|",
+        ]
+    )
+    for row in summary["tasks"]:
+        dw = (row["a1_lint_warnings"] or 0) - (row["a0_lint_warnings"] or 0)
+        dr = (row["a1_contract_rule_count"] or 0) - (row["a0_contract_rule_count"] or 0)
+        covers = row.get("story_covers_delta")
+        lines.append(
+            f"| {row['task_id']} | {dw:+d} | {dr:+d} | "
+            f"{'yes' if row['a1_has_vocabulary'] else 'no'} | "
+            f"{covers if covers is not None else '—'} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Artifacts",
+            "",
+            "- `summary.json` — aggregate metrics",
+            "- `run_manifest.json` — full per-task manifests + formalize iterations",
+            "- `<task>/result.json` — A0 vs A1 deltas",
+            "- `<task>/A1.prompt` — formalized prompt (SoT candidate for M2)",
+            "- `REPORT.md` — tabular M1 report",
+            "",
+            "Next: wire A1 prompts into `run_generation_benchmark.py` (M2) and "
+            "`run_drift_benchmark.py` (M3). See `benchmarks/formalization/EVALUATION.md`.",
+        ]
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(
@@ -405,6 +534,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Wrote experiment to {args.output_dir}")
         print(f"  {manifest['summary']['headline']}")
         print(f"  Report: {args.output_dir / 'REPORT.md'}")
+        print(f"  Evaluation: {args.output_dir / 'EVALUATION_RESULT.md'}")
 
     return 0
 

@@ -1,14 +1,21 @@
 # Step-by-step evaluation guide
 
-| Path | Section | LLM? | What it proves |
-|------|---------|------|----------------|
-| **M1** — Prompt checkability | §2–§4 | No (default) | A0→A1 improves lint/contract structure |
-| **M2** — Generation economics | §6 | Harness-only in CI; `--allow-llm` for real runs | Oracle (tier_gold) vs non-oracle (pdd test) pass rates |
-| **M3** — Regen drift | §7 | `--dry-run` in CI; `--allow-llm` for regen | `pdd checkup drift` stability on gold tasks |
-| **Story template (#820)** | §6–§7 | Deterministic seed in M1 | `## Oracle` / `## Non-Oracle` blocks in stories |
-| **v0.3 static harness** | §8 | No | Hand-curated fixtures + epic #833 scorecard |
+**Design (phases, diagrams, rationale):** [EXPERIMENT_DESIGN.md](EXPERIMENT_DESIGN.md)
 
-**Time:** ~3 minutes for M1+M2+M3 CI smoke (`scripts/run_eval.sh`).
+```
+Phase 1 (M1)  →  Phase 2 (M2)  →  Phase 3 (M3)
+prompt quality    generate+record    drift stability
+```
+
+| Phase | Milestone | LLM? | What it proves |
+|-------|-----------|------|----------------|
+| **1 — Prompt quality** | M1 | No (default) | A0→A1 improves lint/contract/coverage |
+| **2 — Generate + record** | M2 | `--replay-fixtures` in CI; `--allow-llm` live | Oracle vs non-oracle pass rates; economics |
+| **3 — Ship + stability** | M3 | `--dry-run` / `--replay-fixtures` in CI; `--allow-llm` live | `pdd checkup drift` on M2 code |
+| Story template (#820) | M1 | Seeded in M1 | `## Oracle` / `## Non-Oracle` in stories |
+| v0.3 static harness | — | No | Legacy epic #833 scorecard |
+
+**Time:** ~3 minutes for full CI smoke (`scripts/run_eval.sh`).
 
 ---
 
@@ -17,6 +24,7 @@
 ```bash
 cd /path/to/pdd
 pip install -e ".[dev]"
+pdd setup   # only for --allow-llm live runs
 ```
 
 ---
@@ -29,94 +37,145 @@ pytest -vv tests/test_formalization_benchmark.py tests/test_formalization_pipeli
 
 ---
 
-## 2. Milestone 1 — run experiment (deterministic)
+## Phase 1 — M1 prompt checkability
+
+### 2. Batch experiment (deterministic)
 
 ```bash
-python benchmarks/formalization/pipelines/run_experiment.py
+python benchmarks/formalization/pipelines/run_experiment.py \
+  --output-dir benchmarks/formalization/experiments/ci_smoke
 ```
 
-Outputs under `benchmarks/formalization/experiments/latest/` (gitignored).
+Outputs: `REPORT.md`, `EVALUATION_RESULT.md`, `summary.json`, per-task `A1.prompt`.
 
-```bash
-jq -r '.headline' benchmarks/formalization/experiments/latest/summary.json
-```
-
----
-
-## 3. Optional LLM experiment
+### 3. Optional LLM formalization
 
 ```bash
 python benchmarks/formalization/pipelines/run_experiment.py \
   --allow-llm --max-cost-usd 25 \
-  --output-dir benchmarks/formalization/experiments/llm_run
+  --output-dir benchmarks/formalization/experiments/latest
 ```
 
----
-
-## 4. Single-task formalize
+### 4. Single-task paths
 
 ```bash
+# Benchmark formalizer
 python benchmarks/formalization/pipelines/formalize_a1.py \
-  --input  benchmarks/formalization/corpus/tasks/email_validator/A0.prompt \
+  --input benchmarks/formalization/corpus/tasks/email_validator/A0.prompt \
   --output /tmp/email_A1.prompt --json
+
+# Product checkup loop (lint → contract → coverage writeback)
+python benchmarks/formalization/pipelines/checkup_formalize.py \
+  --input benchmarks/formalization/corpus/tasks/email_validator/A0.prompt \
+  --output /tmp/email_A1.prompt \
+  --stories-dir benchmarks/formalization/corpus/tasks/email_validator/stories
+```
+
+### Product read-only checks (no benchmark script)
+
+```bash
+pdd checkup lint     path/to/prompt.prompt [--stories dir] [--json]
+pdd checkup contract check path/to/prompt.prompt [--stories dir] [--json]
+pdd checkup coverage path/to/prompt.prompt [--stories-dir dir] [--json]
 ```
 
 ---
 
-## 6. Milestone 2 — generation economics (oracle vs non-oracle)
+## Phase 2 — M2 generation economics
 
-Each M2 arm reports two evaluation modes:
+Each arm runs **`pdd generate` on A0 and A1**. M2 reports:
 
 | Mode | Source | What it measures |
 |------|--------|------------------|
-| **oracle** | `corpus/tier_gold/*/oracle_tests/` | Independent hand-written pytest (ground truth) |
-| **non_oracle** | `pdd test` output | Self-consistency tests generated from the same prompt |
+| **oracle** | `corpus/tier_gold/*/oracle_tests/` | Independent hand-written pytest |
+| **non_oracle** | `pdd test` output | Self-consistency from the same prompt |
+
+### CI replay (no API keys)
 
 ```bash
-# CI-safe harness (copies tier_gold baseline, runs oracle pytest)
 python benchmarks/formalization/pipelines/run_generation_benchmark.py \
-  --harness-only --skip-formalize \
-  --m1-dir benchmarks/formalization/experiments/latest \
-  --output-dir benchmarks/formalization/experiments/m2_latest \
+  --replay-fixtures \
+  --skip-formalize \
+  --m1-dir benchmarks/formalization/experiments/ci_smoke \
+  --output-dir benchmarks/formalization/experiments/ci_m2_smoke \
   --tasks email_validator,token_bucket,refund_handler
 ```
 
-Paid run (requires API keys):
+### Live run (API keys)
 
 ```bash
 python benchmarks/formalization/pipelines/run_generation_benchmark.py \
-  --allow-llm --max-rounds 3 --max-cost-usd 50
+  --allow-llm \
+  --max-rounds 3 \
+  --max-cost-usd 50 \
+  --m1-dir benchmarks/formalization/experiments/latest \
+  --output-dir benchmarks/formalization/experiments/m2_live \
+  --tasks email_validator,token_bucket,refund_handler
 ```
+
+Optional: `--save-fixtures` persists outputs to `corpus/tier_gold/*/pdd_generated/`.
 
 ---
 
-## 7. Milestone 3 — drift
+## Phase 3 — M3 drift (requires M2 code)
+
+M3 reads code from `m2_dir/<task>/{A0,A1}/generated/src/` and runs `pdd checkup drift`.
+
+### Combined M2 → M3
 
 ```bash
-python benchmarks/formalization/pipelines/run_drift_benchmark.py \
-  --dry-run \
-  --m2-dir benchmarks/formalization/experiments/m2_latest \
+# CI-safe
+python benchmarks/formalization/pipelines/run_m3_pipeline.py \
+  --replay-fixtures \
+  --m1-dir benchmarks/formalization/experiments/ci_smoke \
   --tasks email_validator
+
+# Live
+bash benchmarks/formalization/scripts/run_live_m3.sh
 ```
 
-Regeneration (paid):
+Or explicitly:
+
+```bash
+python benchmarks/formalization/pipelines/run_m3_pipeline.py \
+  --allow-llm \
+  --save-fixtures \
+  --m1-dir benchmarks/formalization/experiments/latest \
+  --m2-dir benchmarks/formalization/experiments/m2_live \
+  --m3-dir benchmarks/formalization/experiments/m3_live \
+  --tasks email_validator,token_bucket,refund_handler \
+  --runs 2 \
+  --max-cost-usd-m2 50 \
+  --max-cost-usd-m3 20
+```
+
+Drift-only (existing M2):
 
 ```bash
 python benchmarks/formalization/pipelines/run_drift_benchmark.py \
-  --allow-llm --runs 3 --max-cost-usd 20
+  --allow-llm --runs 3 \
+  --m2-dir benchmarks/formalization/experiments/m2_live \
+  --m1-dir benchmarks/formalization/experiments/latest
 ```
 
 ---
 
-## 8. v0.3 static harness
+## Full CI smoke (all phases)
 
 ```bash
 bash benchmarks/formalization/scripts/run_eval.sh
 ```
 
+Opens: `experiments/ci_smoke/REPORT.md`, `experiments/ci_m3_smoke/PIPELINE_RESULT.md`
+
 ---
 
-## What M1 does NOT prove
+## What each phase does NOT prove alone
 
-- Generated code correctness → **M2** (+ oracle tests)
-- Same behavior each generation → **M3** (regen + drift)
+| Phase | Does not prove |
+|-------|----------------|
+| **M1** | Lower token cost; correct generated code |
+| **M2 (harness replay)** | Live cloud economics (use `--allow-llm`) |
+| **M3 (dry-run)** | Regen variance (use `--allow-llm --runs N`) |
+
+See [BUSINESS_VALUE.md](BUSINESS_VALUE.md) for honest reporting templates.

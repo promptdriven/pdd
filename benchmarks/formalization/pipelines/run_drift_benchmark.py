@@ -193,8 +193,73 @@ def run_m3(
 
     manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
     manifest["total_cost_usd"] = round(total_cost, 4)
+    summary = _build_m3_summary(manifest["tasks"])
+    manifest["summary"] = summary
     (output_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    _write_m3_report_md(output_dir / "REPORT.md", summary, manifest)
     return manifest
+
+
+def _build_m3_summary(task_records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate drift outcomes across tasks and arms."""
+    stable_a0 = stable_a1 = 0
+    count_a0 = count_a1 = 0
+    headlines: list[str] = []
+
+    for task in task_records:
+        tid = task.get("task_id", "?")
+        arms = task.get("arms") or {}
+        parts = [tid]
+        for arm in ("A0", "A1"):
+            data = arms.get(arm) or {}
+            if "error" in data:
+                parts.append(f"{arm}=error")
+                continue
+            drift = data.get("drift") or {}
+            status = drift.get("status", "unknown")
+            parts.append(f"{arm}={status}")
+            if arm == "A0":
+                count_a0 += 1
+                if status == "stable":
+                    stable_a0 += 1
+            else:
+                count_a1 += 1
+                if status == "stable":
+                    stable_a1 += 1
+        headlines.append(" ".join(parts))
+
+    return {
+        "milestone": 3,
+        "task_count": len(task_records),
+        "a0_stable_count": stable_a0,
+        "a1_stable_count": stable_a1,
+        "a0_arm_count": count_a0,
+        "a1_arm_count": count_a1,
+        "headline": "; ".join(headlines),
+        "claim": (
+            "M3 measures regeneration drift after M2 code exists. "
+            "Live runs require --allow-llm; dry-run validates harness only."
+        ),
+    }
+
+
+def _write_m3_report_md(path: Path, summary: dict[str, Any], manifest: dict[str, Any]) -> None:
+    lines = [
+        "# M3 — Regeneration Drift Report",
+        "",
+        f"**Mode:** {'dry-run' if manifest.get('dry_run') else 'live regen'} · "
+        f"**Runs:** {manifest.get('runs')} · **M2:** `{manifest.get('m2_dir')}`",
+        "",
+        f"**Tasks:** {summary['task_count']} · "
+        f"A0 stable: {summary['a0_stable_count']}/{summary['a0_arm_count']} · "
+        f"A1 stable: {summary['a1_stable_count']}/{summary['a1_arm_count']}",
+        "",
+        f"**Headline:** {summary['headline']}",
+        "",
+        summary.get("claim", ""),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -229,6 +294,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(json.dumps(manifest, indent=2))
     else:
         print(f"M3 complete → {args.output_dir}")
+        if manifest.get("summary"):
+            print(f"  {manifest['summary'].get('headline', '')}")
+        print(f"  Report: {args.output_dir / 'REPORT.md'}")
     return 0
 
 

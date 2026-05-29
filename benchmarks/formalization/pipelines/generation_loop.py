@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from command_log import append_jsonl, run_logged_command
 from economics import economics_placeholders, evaluation_modes_summary
+from pdd_fixture_store import arm_has_fixtures, copy_arm_fixtures
 from pytest_metrics import run_pytest
 
 
@@ -47,6 +48,7 @@ def run_generation_loop(
     max_rounds: int,
     harness_only: bool,
     baseline_src: Optional[Path],
+    pdd_fixtures_root: Optional[Path] = None,
 ) -> GenerationLoopResult:
     """Run generate/test/pytest for one prompt arm."""
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -71,17 +73,33 @@ def run_generation_loop(
 
     loop_notes: list[str] = []
     if harness_only:
-        if baseline_src and (baseline_src / f"{module}.py").is_file():
+        if (
+            pdd_fixtures_root
+            and arm_has_fixtures(pdd_fixtures_root, arm, module)
+        ):
+            replay = copy_arm_fixtures(
+                fixtures_root=pdd_fixtures_root,
+                arm=arm,
+                module=module,
+                work_dir=work_dir,
+            )
+            rounds.append(replay)
+            economics["generation_rounds"] = 0
+            loop_notes.append(
+                f"harness_only: replayed pdd_generated fixtures from {pdd_fixtures_root}"
+            )
+        elif baseline_src and (baseline_src / f"{module}.py").is_file():
             shutil.copy2(baseline_src / f"{module}.py", code_path)
             economics["generation_rounds"] = 0
             loop_notes.append("harness_only: used baseline reference implementation")
+            rounds.append({"stage": "harness_only", "code_path": str(code_path)})
         else:
             code_path.write_text(
                 f"def {module}():\n    \"\"\"Harness stub for {arm}.\"\"\"\n    return None\n",
                 encoding="utf-8",
             )
             loop_notes.append("harness_only: wrote minimal stub (no baseline)")
-        rounds.append({"stage": "harness_only", "code_path": str(code_path)})
+            rounds.append({"stage": "harness_only", "code_path": str(code_path)})
     else:
         if not allow_llm:
             raise RuntimeError("M2 generation requires --allow-llm (or use --harness-only for CI)")
@@ -91,6 +109,7 @@ def run_generation_loop(
             str(prompt_path),
             "--output",
             str(code_path),
+            "--force",
             "--evidence",
         ]
         gen_entry = run_logged_command(gen_cmd, cwd=project_root, log_path=commands_log)

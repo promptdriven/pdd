@@ -1,0 +1,19 @@
+{
+  "provenance": "bootstrap_pending_pdd_record",
+  "note": "Replace by running: python benchmarks/formalization/pipelines/record_pdd_fixtures.py --tasks email_validator",
+  "updated_at": "2026-05-29T00:00:00+00:00",
+  "arms": {
+    "A0": {
+      "prompt": "corpus/tasks/email_validator/A0.prompt",
+      "module": "email_validator",
+      "code": "A0/generated/src/email_validator.py",
+      "tests": "A0/generated/tests/test_email_validator.py"
+    },
+    "A1": {
+      "prompt": "experiments/latest/email_validator/A1.prompt",
+      "module": "email_validator",
+      "code": "A1/generated/src/email_validator.py",
+      "tests": "A1/generated/tests/test_email_validator.py"
+    }
+  }
+}
