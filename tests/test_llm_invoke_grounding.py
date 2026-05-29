@@ -1,11 +1,25 @@
-"""Grounding metadata tests for llm_invoke cloud path."""
+"""Grounding metadata tests for llm_invoke cloud and local paths."""
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
+from pdd import llm_invoke as llm_mod
 from pdd.llm_invoke import llm_invoke
+
+
+def _make_completion_response(content: str = "ok") -> MagicMock:
+    message = MagicMock()
+    message.content = content
+    choice = MagicMock()
+    choice.message = message
+    choice.finish_reason = "stop"
+    response = MagicMock()
+    response.choices = [choice]
+    return response
 
 
 @pytest.mark.timeout(60)
@@ -74,3 +88,47 @@ def test_llm_invoke_uses_source_prompt_for_overrides() -> None:
 
   assert result["grounding"]["pinned"] == ["auth"]
   assert result["grounding"]["excluded"] == ["legacy"]
+
+
+@pytest.mark.timeout(60)
+@patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1", "OPENAI_API_KEY": "test-key"})
+def test_llm_invoke_local_returns_unavailable_grounding() -> None:
+    """Local runs record unavailable grounding with pin/exclude overrides preserved."""
+    mock_model = {
+        "provider": "Anthropic",
+        "model": "claude-test-model",
+        "input": 3.0,
+        "output": 15.0,
+        "coding_arena_elo": 1500,
+        "structured_output": False,
+        "base_url": "",
+        "api_key": "OPENAI_API_KEY",
+        "max_tokens": "",
+        "max_completion_tokens": "",
+        "reasoning_type": "none",
+        "max_reasoning_tokens": 0,
+    }
+    llm_mod._LAST_CALLBACK_DATA["cost"] = 0.01
+    llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 10
+    llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 5
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=pd.DataFrame([mock_model])), patch(
+        "pdd.llm_invoke._select_model_candidates", return_value=[mock_model]
+    ), patch("pdd.llm_invoke._ensure_api_key", return_value=True), patch(
+        "pdd.llm_invoke.litellm"
+    ) as mock_litellm:
+        mock_litellm.completion = MagicMock(return_value=_make_completion_response())
+        mock_litellm.cache = None
+        mock_litellm.drop_params = True
+        result = llm_invoke(
+            prompt="Say <pin>auth</pin> hello {name}",
+            input_json={"name": "world"},
+            strength=0.5,
+            use_cloud=False,
+            source_prompt="Say <pin>auth</pin> hello",
+        )
+
+    grounding = result["grounding"]
+    assert grounding["mode"] == "unavailable"
+    assert grounding["pinned"] == ["auth"]
+    assert grounding["selected_examples"] == []
