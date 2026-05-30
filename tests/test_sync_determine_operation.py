@@ -4860,3 +4860,152 @@ def test_get_filepath_dict_format_without_modules_key_returns_tuple(tmp_path):
         f"Expected (None, None) for dict without 'modules' key, got {result!r}. "
         "Line 343 returns bare None instead of the expected (None, None) tuple."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1201: generate_output_path from .pddrc not honored in arch branch
+# ---------------------------------------------------------------------------
+# The architecture.json branch of get_pdd_file_paths() at line 942 sets
+#   code_path = project_root / arch_filepath
+# with no consultation of .pddrc's generate_output_path.  Meanwhile,
+# lines 961-962 correctly read test_dir and example_dir from .pddrc defaults.
+# All four tests below FAIL on the current (buggy) code and must PASS after
+# the fix that reads generate_output_path from .pddrc in the same block.
+# ---------------------------------------------------------------------------
+
+class TestIssue1201GenerateOutputPathInArchBranch:
+    """Issue #1201: generate_output_path is silently ignored when architecture.json
+    provides a filepath, unlike example_output_path and test_output_path which are
+    correctly applied from .pddrc defaults.
+    """
+
+    def _write_pddrc(self, tmp_path: Path, generate_dir: str = "src/",
+                     test_dir: str = "tests/", example_dir: str = "examples/") -> None:
+        (tmp_path / ".pddrc").write_text(
+            f"contexts:\n"
+            f"  default:\n"
+            f"    paths: [\"**\"]\n"
+            f"    defaults:\n"
+            f"      generate_output_path: \"{generate_dir}\"\n"
+            f"      test_output_path: \"{test_dir}\"\n"
+            f"      example_output_path: \"{example_dir}\"\n"
+        )
+
+    def _write_arch_json(self, tmp_path: Path, prompt_filename: str, filepath: str) -> None:
+        (tmp_path / "architecture.json").write_text(json.dumps({
+            "modules": [{"filename": prompt_filename, "filepath": filepath}]
+        }))
+
+    def _setup_dirs(self, tmp_path: Path) -> None:
+        for d in ("prompts", ".pdd/meta", ".pdd/locks"):
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+
+    def test_generate_output_path_honored_when_arch_filepath_is_bare(self, tmp_path, monkeypatch):
+        """code_path must land in .pddrc generate_output_path when arch.json filepath has no
+        directory component (i.e., is a bare filename at the project root).
+
+        Bug: code_path = project_root / arch_filepath uses root unconditionally.
+        Fix: read generate_output_path from .pddrc defaults and apply it to code_path,
+             exactly as example_dir/test_dir are already applied.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        self._write_pddrc(tmp_path, generate_dir="src/")
+        self._write_arch_json(tmp_path, "widget_python.prompt", "widget.py")
+
+        paths = get_pdd_file_paths("widget", "python", "prompts")
+
+        assert "src" in paths["code"].parts, (
+            f"generate_output_path 'src/' from .pddrc must be applied to code path in the "
+            f"architecture.json branch, but got: {paths['code']!r} (parent: {paths['code'].parent!r})"
+        )
+
+    def test_all_three_output_paths_applied_symmetrically_in_arch_branch(self, tmp_path, monkeypatch):
+        """generate_output_path, test_output_path, and example_output_path must all be
+        honored uniformly in the architecture.json branch — not just the latter two.
+
+        Currently example_dir and test_dir are read from .pddrc (correct), but
+        generate_output_path is absent from the same block, causing asymmetry.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        self._write_pddrc(tmp_path, generate_dir="src/", test_dir="tests/", example_dir="examples/")
+        self._write_arch_json(tmp_path, "widget_python.prompt", "widget.py")
+
+        paths = get_pdd_file_paths("widget", "python", "prompts")
+
+        # test and example are already correct (they should stay correct after fix)
+        assert "examples" in paths["example"].parts, (
+            f"example_output_path not honored: {paths['example']!r}"
+        )
+        assert "tests" in paths["test"].parts, (
+            f"test_output_path not honored: {paths['test']!r}"
+        )
+        # code must also use its configured directory — currently broken
+        assert "src" in paths["code"].parts, (
+            f"generate_output_path 'src/' is not applied symmetrically with "
+            f"test_output_path and example_output_path. "
+            f"code={paths['code']!r}, test={paths['test']!r}, example={paths['example']!r}"
+        )
+
+    def test_code_filename_from_arch_json_preserved_after_generate_path_applied(
+        self, tmp_path, monkeypatch
+    ):
+        """After the fix, the filename component from architecture.json must be preserved;
+        only the parent directory should be overridden by .pddrc generate_output_path.
+
+        This verifies the correct resolution: src/widget.py — not src/widget_widget.py.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        self._write_pddrc(tmp_path, generate_dir="src/")
+        self._write_arch_json(tmp_path, "widget_python.prompt", "widget.py")
+
+        paths = get_pdd_file_paths("widget", "python", "prompts")
+
+        # Filename must come from arch.json
+        assert paths["code"].name == "widget.py", (
+            f"Filename should be preserved from arch.json as 'widget.py', got: {paths['code'].name!r}"
+        )
+        # Parent directory must come from .pddrc generate_output_path
+        assert paths["code"].parent.name == "src", (
+            f"Parent directory should be 'src' from generate_output_path, "
+            f"got: {paths['code'].parent.name!r} (full path: {paths['code']!r})"
+        )
+
+    def test_generate_output_path_honored_with_explicit_context_override(
+        self, tmp_path, monkeypatch
+    ):
+        """generate_output_path is honored in the arch branch even when context_override is given.
+
+        Steps 2-3 confirmed the bug in the pddrc_path branch that reads context_name from
+        context_override (line 952).  This test ensures the fix works end-to-end when the
+        caller supplies an explicit context.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / ".pddrc").write_text(
+            "contexts:\n"
+            "  default:\n"
+            "    paths: [\"**\"]\n"
+            "    defaults:\n"
+            "      generate_output_path: \"lib/\"\n"
+            "      test_output_path: \"tests/\"\n"
+            "      example_output_path: \"examples/\"\n"
+            "  backend:\n"
+            "    paths: [\"backend/**\"]\n"
+            "    defaults:\n"
+            "      generate_output_path: \"backend/src/\"\n"
+            "      test_output_path: \"backend/tests/\"\n"
+            "      example_output_path: \"backend/examples/\"\n"
+        )
+        self._write_arch_json(tmp_path, "service_python.prompt", "service.py")
+
+        paths = get_pdd_file_paths("service", "python", "prompts", context_override="backend")
+
+        # With context_override="backend", generate_output_path should be "backend/src/"
+        code_parts = paths["code"].parts
+        assert "backend" in code_parts and "src" in code_parts, (
+            f"With context_override='backend', code_path should be in backend/src/, "
+            f"but got: {paths['code']!r}"
+        )
