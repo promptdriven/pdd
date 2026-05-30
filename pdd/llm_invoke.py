@@ -4064,14 +4064,22 @@ def llm_invoke(
                 if litellm.cache is not None:
                     logger.debug(f"litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}")
 
-                # Only add if litellm.cache is configured
-                if litellm.cache is not None:
+                # Only add if litellm.cache is configured.
+                # Skip caching for chatgpt/ subscription models (issue #1269):
+                # litellm's responses-API cache-key path raises (preset_cache_key
+                # bug), and flat-rate subscription responses must not be cached —
+                # a transient empty response would otherwise poison the prompt's
+                # cache entry and break it on every later run.
+                if litellm.cache is not None and not is_chatgpt_subscription:
                     litellm_kwargs["caching"] = True
                     # Workaround for litellm bug where metadata=None causes AttributeError
                     # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
                     if litellm_kwargs.get("metadata") is None:
                         litellm_kwargs["metadata"] = {}
                     logger.debug("Caching enabled for this request")
+                elif is_chatgpt_subscription:
+                    litellm_kwargs["caching"] = False
+                    logger.debug("Caching disabled for chatgpt/ subscription model (#1269)")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
 

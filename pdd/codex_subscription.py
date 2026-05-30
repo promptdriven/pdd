@@ -327,7 +327,28 @@ def apply_litellm_chatgpt_output_patch() -> bool:
         if not isinstance(response_obj, dict) or response_obj.get("output"):
             return None  # nothing to fix — backend already populated output
         response_obj = dict(response_obj)
-        response_obj["output"] = collected
+        # Codex (gpt-5.x) can emit several message items — e.g. an empty
+        # phase='commentary' preamble plus the real phase='final_answer'. litellm's
+        # responses->chat transform mishandles multiple/empty message items and
+        # returns a response with no usable ``.choices`` (issue #1269). Collapse to
+        # the single message that actually carries the answer (prefer
+        # phase='final_answer', else the last non-empty message), matching the
+        # single-message shape litellm converts correctly. Fall back to the raw
+        # collected items only if no message carried text.
+        def _item_text(item: Dict[str, Any]) -> str:
+            return "".join(
+                part.get("text", "")
+                for part in (item.get("content") or [])
+                if isinstance(part, dict)
+            )
+
+        messages = [it for it in collected if it.get("type") == "message"]
+        nonempty = [it for it in messages if _item_text(it).strip()]
+        if nonempty:
+            finals = [it for it in nonempty if it.get("phase") == "final_answer"]
+            response_obj["output"] = [finals[-1] if finals else nonempty[-1]]
+        else:
+            response_obj["output"] = collected
         completed_payload = dict(completed_payload)
         completed_payload["response"] = response_obj
         lines[completed_idx] = "data: " + json.dumps(completed_payload)
