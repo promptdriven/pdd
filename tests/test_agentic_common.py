@@ -8190,13 +8190,9 @@ class TestDuplicateStateCommentHandling:
 # so its model lives in ANTIGRAVITY_MODEL rather than the provider response.
 # ---------------------------------------------------------------------------
 
-# Cleared before each seed test. PDD_AGENTIC_PROVIDER controls provider order;
-# PDD_GOOGLE_CLI is set as a side effect by the `antigravity` normalization, so
-# clear it too (monkeypatch.delenv registers it for restoration at teardown,
-# containing that side effect).
+# Cleared before each seed test. PDD_AGENTIC_PROVIDER controls provider order.
 _SEED_ENV_VARS = (
     "PDD_AGENTIC_PROVIDER",
-    "PDD_GOOGLE_CLI",
     "ANTIGRAVITY_MODEL",
     "GEMINI_MODEL",
     "CLAUDE_MODEL",
@@ -8210,6 +8206,12 @@ def _clear_seed_env(monkeypatch):
     # (anthropic -> google -> openai -> opencode) apply deterministically.
     for var in _SEED_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    # get_agent_provider_preference()'s `antigravity` normalization sets
+    # PDD_GOOGLE_CLI via a *direct* os.environ assignment. monkeypatch.delenv
+    # does NOT register a teardown restore when the var starts absent, so that
+    # mutation would leak across tests. setenv always records the original
+    # state, so pin a neutral default here and let teardown restore it.
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "auto")
 
 
 def test_seed_startup_model_default_order_is_provider_preference(monkeypatch):
@@ -8318,3 +8320,20 @@ def test_seed_startup_model_ignores_unknown_env_value(monkeypatch):
     monkeypatch.setenv("CLAUDE_MODEL", "Unknown")
     assert seed_startup_model({"model_used": "google"}) == "google"
     assert seed_startup_model() == "unknown"
+
+
+def test_seed_startup_model_legacy_gemini_binary_prefers_gemini_model(monkeypatch):
+    """Issue #1306 (review nit): when PDD_GOOGLE_CLI=gemini (legacy binary), the
+    google slot uses GEMINI_MODEL, not a stale ANTIGRAVITY_MODEL."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)  # also sets PDD_GOOGLE_CLI="auto"
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "google")
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "gemini")
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "agy-only-stale")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")
+    assert seed_startup_model() == "gemini-2.0"
+
+    # With the agy binary selected, ANTIGRAVITY_MODEL wins for the google slot.
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
+    assert seed_startup_model() == "agy-only-stale"

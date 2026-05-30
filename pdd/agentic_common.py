@@ -759,10 +759,16 @@ def seed_startup_model(state: Optional[Dict[str, Any]] = None) -> str:
     for provider in get_agent_provider_preference():
         if provider == "google":
             # agy carries its model in ANTIGRAVITY_MODEL; legacy gemini in
-            # GEMINI_MODEL (handled by _get_provider_model below).
-            agy_model = (os.environ.get("ANTIGRAVITY_MODEL") or "").strip()
-            if _is_meaningful_model_label(agy_model):
-                return agy_model
+            # GEMINI_MODEL (handled by _get_provider_model below). Only consult
+            # ANTIGRAVITY_MODEL when the resolved Google binary is NOT explicitly
+            # legacy gemini, so a `PDD_GOOGLE_CLI=gemini` run does not show a
+            # stale agy label. (A cheap env check, not _get_google_cli_name(),
+            # avoids filesystem probing and does not drop a user-set
+            # ANTIGRAVITY_MODEL when neither binary is installed.)
+            if (os.environ.get("PDD_GOOGLE_CLI") or "auto").strip().lower() != "gemini":
+                agy_model = (os.environ.get("ANTIGRAVITY_MODEL") or "").strip()
+                if _is_meaningful_model_label(agy_model):
+                    return agy_model
         candidate = _get_provider_model(provider)
         if _is_meaningful_model_label(candidate):
             return candidate
