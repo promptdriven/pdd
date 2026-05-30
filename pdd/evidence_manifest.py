@@ -355,14 +355,18 @@ def validation_from_sync(
         for operation in lang_result.get("operations_completed") or []:
             operations.add(str(operation))
 
-    overall_success = sync_result.get("overall_success")
-    if overall_success is None:
-        successes = [
-            bool(lang_result.get("success"))
-            for lang_result in by_language.values()
-            if isinstance(lang_result, dict)
-        ]
-        overall_success = bool(successes) and all(successes)
+    lang_successes = [
+        bool(lang_result.get("success"))
+        for lang_result in by_language.values()
+        if isinstance(lang_result, dict) and "success" in lang_result
+    ]
+    if lang_successes:
+        # Prefer per-language outcomes over a stale top-level overall_success flag.
+        overall_success = all(lang_successes)
+    elif sync_result.get("overall_success") is not None:
+        overall_success = bool(sync_result.get("overall_success"))
+    else:
+        overall_success = False
 
     test_operations = {"test", "crash", "fix", "test_extend"}
     if not skip_tests and operations & test_operations:
