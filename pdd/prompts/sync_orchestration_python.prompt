@@ -1,4 +1,20 @@
-<pdd-reason>Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.</pdd-reason>
+<pdd-reason>Coordinates sync workflow steps and TUI feedback. Manages state, tracks progress, and handles loop step execution.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "sync_orchestration",
+        "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]",
+        "sideEffects": ["None"]
+      }
+    ]
+  }
+}
+</pdd-interface>
 
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
@@ -367,7 +383,7 @@ Detect and break infinite loops with these limits:
 - Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
-- Consecutive fix operations: Break after 5
+- Consecutive fix operations: Break only when the fix loop is NOT making progress. After each consecutive `fix` operation, read the current failing-test count from the run report (resolve the meta directory using the active path hints, i.e. the same resolved paths used elsewhere in sync — never a path-less lookup, which can misread a subproject `.pdd/meta` and record 0 failures). Track a non-progress counter: reset it whenever the failing-test count strictly decreases versus the prior consecutive `fix` iteration, and increment it otherwise. Break after 5 consecutive `fix` operations that do NOT strictly decrease the failing-test count. This lets a regeneration that mismatched N error strings converge in N iterations while still terminating genuinely stuck loops. Absolute backstops (independent of progress): also break the loop after 30 total operations or after 15 minutes of wall-clock time, recording a `LogicalFailure` core dump in each case.
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
 - Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
 - Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)
