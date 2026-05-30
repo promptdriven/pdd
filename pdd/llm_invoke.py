@@ -3592,7 +3592,11 @@ def llm_invoke(
     # --- 2. Load Model Data & Select Candidates ---
     try:
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
-        candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        # Resolve the base model from PDD_MODEL_DEFAULT at CALL time (not the
+        # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
+        # `pdd sync --model` takes effect this run (issue #1269).
+        _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
+        candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -3632,8 +3636,8 @@ def llm_invoke(
         # Find min/max for cost and ELO
         min_cost = model_df['avg_cost'].min()
         max_elo = model_df['coding_arena_elo'].max()
-        base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
-        base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
+        base_cost = model_df[model_df['model'] == _effective_default_model]['avg_cost'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else min_cost
+        base_elo = model_df[model_df['model'] == _effective_default_model]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else max_elo
 
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)

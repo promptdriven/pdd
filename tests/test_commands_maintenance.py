@@ -761,3 +761,34 @@ def test_sync_without_model_flag_leaves_default_unset(mock_sync_main, mock_auto_
     result = runner.invoke(cli.cli, ["sync", "test_module"])
     assert result.exit_code == 0, result.output
     assert seen.get("model_default") is None
+
+
+def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
+    """P1 core: llm_invoke must resolve the base model from PDD_MODEL_DEFAULT at
+    CALL time, not the import-frozen constant — this is what makes `pdd sync
+    --model` (which sets the env var) actually change the model in-process,
+    including precedence over a different value present at startup."""
+    import pdd.llm_invoke as li
+
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
+    captured = {}
+
+    def _spy(strength, base, df):
+        captured["base"] = base
+        return [{
+            "model": base or "x", "provider": "p", "api_key": "",
+            "coding_arena_elo": 1, "avg_cost": 0.0, "structured_output": False,
+            "reasoning_type": "none", "max_reasoning_tokens": 0, "location": "",
+        }]
+
+    monkeypatch.setattr(li, "_select_model_candidates", _spy)
+    # change the env AFTER import (as `pdd sync --model` does) and call:
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    try:
+        li.llm_invoke(prompt="hi {x}", input_json={"x": "y"}, strength=0.5, verbose=False)
+    except Exception:
+        pass  # selector is stubbed; downstream may error — we only assert the base.
+
+    assert captured.get("base") == "chatgpt/gpt-5.3-codex", (
+        "llm_invoke used a stale base model; --model would not take effect in-process"
+    )

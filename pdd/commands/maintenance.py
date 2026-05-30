@@ -169,10 +169,11 @@ def sync(
     'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
     multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
-    # Honor an explicit per-run model override (CLI > env). The selection
-    # resolver reads PDD_MODEL_DEFAULT at call time, so setting it here makes
-    # every downstream path (global/agentic/single sync) use the chosen model
-    # for this invocation only (issue #1269).
+    # Honor an explicit per-run model override (CLI > env, issue #1269).
+    # Set PDD_MODEL_DEFAULT: subprocess/agentic sync paths inherit the env and
+    # read it at their own import, and the in-process llm_invoke path resolves
+    # the base model from this env var at CALL time, so every downstream path
+    # uses the chosen model for this run only.
     if model:
         os.environ["PDD_MODEL_DEFAULT"] = model
     # Handle deprecated --log flag
