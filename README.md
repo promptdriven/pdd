@@ -1002,7 +1002,8 @@ pdd sync --one-session factorial_calculator
 
 # Agentic sync (one-session is the default)
 pdd sync https://github.com/myorg/myrepo/issues/100
-pdd sync calculator --model chatgpt/gpt-5.3-codex  # force a specific model for this run
+pdd sync calculator --model chatgpt/gpt-5.3-codex  # force a model on the local route; for chatgpt/* on a cloud-enabled install add --local
+pdd sync calculator --local --model chatgpt/gpt-5.3-codex  # local route: required for a chatgpt/* subscription model when PDD Cloud is configured
 
 # Disable one-session for agentic sync
 pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100

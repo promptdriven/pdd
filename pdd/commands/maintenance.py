@@ -174,8 +174,10 @@ def sync(
     # Honor an explicit per-run model override (CLI > env, issue #1269).
     # Set PDD_MODEL_DEFAULT: subprocess/agentic sync paths inherit the env and
     # read it at their own import, and the in-process llm_invoke path resolves
-    # the base model from this env var at CALL time, so every downstream path
-    # uses the chosen model for this run only.
+    # the base model from this env var at CALL time. NOTE: this steers the LOCAL
+    # llm_invoke route only — the cloud route serializes no model override or
+    # Codex auth, so a chatgpt/* subscription model on a cloud-enabled install
+    # also needs --local (PDD_FORCE_LOCAL=1). See the --model help / README.
     if model:
         # Scope the override to THIS invocation: restore the prior value when
         # the command's Click context closes, so a long-lived in-process caller
