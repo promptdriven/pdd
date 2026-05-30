@@ -1230,3 +1230,71 @@ class TestTrustedStepCommentPosting:
             success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
         assert success is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #1306: model_used must be seeded from the requested-model env at
+# startup (before any step's provider runs) so the Step 0 banner shows the
+# model instead of "unknown".
+# ---------------------------------------------------------------------------
+
+def test_startup_model_seeded_before_any_provider_issue_1306(mock_deps, default_args, monkeypatch):
+    """The real seed_startup_model runs at startup — before run_agentic_task —
+    and derives the label from the requested-model env (agy/Antigravity model
+    lives in ANTIGRAVITY_MODEL)."""
+    import pdd.agentic_test_orchestrator as mod
+
+    for var in ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5.3-codex")
+
+    order = []
+    captured = {}
+    real_seed = mod.seed_startup_model
+
+    def spy_seed(state=None):
+        val = real_seed(state)
+        captured["seed_value"] = val
+        order.append("seed")
+        return val
+
+    def spy_run(*args, **kwargs):
+        order.append("run")
+        return (True, "Step Output", 0.1, "anthropic")
+
+    monkeypatch.setattr(mod, "seed_startup_model", spy_seed)
+    mock_deps["run"].side_effect = spy_run
+
+    run_agentic_test_orchestrator(**default_args)
+
+    assert order, "seed_startup_model was never invoked at startup"
+    assert order[0] == "seed", f"seed must run before any provider; got {order[:3]}"
+    assert captured["seed_value"] == "gpt-5.3-codex"
+    assert "run" in order, "expected at least one provider call after seeding"
+    assert order.index("seed") < order.index("run")
+
+
+def test_startup_model_seeded_from_state_on_resume_issue_1306(mock_deps, default_args, monkeypatch):
+    """Resume with no requested-model env: seed_startup_model falls back to the
+    model persisted in state rather than 'unknown'."""
+    import pdd.agentic_test_orchestrator as mod
+
+    for var in ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    mock_deps["load"].return_value = (
+        {"last_completed_step": 0, "step_outputs": {}, "model_used": "anthropic"},
+        777,
+    )
+
+    captured = {}
+    real_seed = mod.seed_startup_model
+
+    def spy_seed(state=None):
+        val = real_seed(state)
+        captured["seed_value"] = val
+        return val
+
+    monkeypatch.setattr(mod, "seed_startup_model", spy_seed)
+    run_agentic_test_orchestrator(**default_args)
+
+    assert captured.get("seed_value") == "anthropic"

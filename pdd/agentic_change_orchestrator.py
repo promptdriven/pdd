@@ -32,6 +32,7 @@ from pdd.agentic_common import (
     extract_step_report,
     post_step_comment_once,
     normalize_step_comments_state,
+    seed_startup_model,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -1512,7 +1513,6 @@ def run_agentic_change_orchestrator(
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
-        model_used = state.get("model_used", "unknown")
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
@@ -1530,11 +1530,17 @@ def run_agentic_change_orchestrator(
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
-        model_used = "unknown"
         github_comment_id = None
         worktree_path = None
         if effective_clean_restart:
             state["clean_restart"] = True
+
+    # Issue #1306: seed model_used so the Step 0 workflow-startup banner shows
+    # the requested model instead of "unknown" (env-first; agy/Antigravity has
+    # no --model flag, so its model lives in ANTIGRAVITY_MODEL). Persist it so a
+    # state-reading banner sees it before any step has reported a provider.
+    model_used = seed_startup_model(state)
+    state["model_used"] = model_used
 
     # Normalize step comments tracking (Set[int] of step indices already posted)
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))

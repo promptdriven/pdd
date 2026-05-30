@@ -8182,3 +8182,103 @@ class TestDuplicateStateCommentHandling:
         assert "1003" in warning_text, (
             f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1306: seed_startup_model — Step 0 workflow-startup banner should show
+# the requested model, not "unknown". agy/Antigravity has no `--model` flag,
+# so its model lives in ANTIGRAVITY_MODEL rather than the provider response.
+# ---------------------------------------------------------------------------
+
+_SEED_ENV_VARS = ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL")
+
+
+def _clear_seed_env(monkeypatch):
+    for var in _SEED_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_seed_startup_model_antigravity_first(monkeypatch):
+    """ANTIGRAVITY_MODEL wins over every other requested-model env var."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")
+    monkeypatch.setenv("CLAUDE_MODEL", "opus")
+    monkeypatch.setenv("CODEX_MODEL", "gpt")
+    assert seed_startup_model() == "gemini-3.5-flash"
+
+
+def test_seed_startup_model_env_precedence_chain(monkeypatch):
+    """Precedence is ANTIGRAVITY -> GEMINI -> CLAUDE -> CODEX."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")
+    monkeypatch.setenv("CLAUDE_MODEL", "opus")
+    monkeypatch.setenv("CODEX_MODEL", "gpt")
+    assert seed_startup_model() == "gemini-2.0"
+
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    assert seed_startup_model() == "opus"
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    assert seed_startup_model() == "gpt"
+
+
+def test_seed_startup_model_ignores_blank_env(monkeypatch):
+    """Empty / whitespace-only env vars are skipped (not returned)."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "   ")
+    monkeypatch.setenv("GEMINI_MODEL", "")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
+    assert seed_startup_model() == "claude-opus-4-8"
+
+
+def test_seed_startup_model_state_fallback(monkeypatch):
+    """With no env var set, fall back to a meaningful state['model_used']."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    assert seed_startup_model({"model_used": "anthropic"}) == "anthropic"
+
+
+def test_seed_startup_model_env_beats_state(monkeypatch):
+    """Env var (requested model) takes precedence over resumed state."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")
+    assert seed_startup_model({"model_used": "google"}) == "gemini-3.5-flash"
+
+
+def test_seed_startup_model_unknown_when_nothing(monkeypatch):
+    """No env and no usable state -> 'unknown'."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    assert seed_startup_model() == "unknown"
+    assert seed_startup_model(None) == "unknown"
+    assert seed_startup_model({}) == "unknown"
+    # A persisted "unknown" is not a meaningful value either.
+    assert seed_startup_model({"model_used": "unknown"}) == "unknown"
+    assert seed_startup_model({"model_used": "  "}) == "unknown"
+
+
+def test_seed_startup_model_ignores_unknown_env_value(monkeypatch):
+    """A case-insensitive "unknown" env value is not meaningful — fall through."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "UNKNOWN")
+    monkeypatch.setenv("GEMINI_MODEL", "unknown")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
+    assert seed_startup_model() == "claude-opus-4-8"
+
+    # All env vars "unknown" -> fall back to meaningful state, else "unknown".
+    monkeypatch.setenv("CLAUDE_MODEL", "Unknown")
+    assert seed_startup_model({"model_used": "google"}) == "google"
+    assert seed_startup_model() == "unknown"

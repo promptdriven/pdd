@@ -6516,3 +6516,81 @@ class TestSetupWorktreeCleanRestart:
         assert err and "clean restart" in err.lower(), (
             f"Expected a clean-restart-refusal error; got {err!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1306: Step 0 workflow-startup banner should show the requested model,
+# not "unknown". model_used must be seeded from the requested-model env (agy
+# has no --model flag, so its model is in ANTIGRAVITY_MODEL) before any step's
+# provider has reported in.
+# ---------------------------------------------------------------------------
+
+_SEED_ENV_VARS_1306 = ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL")
+
+
+def test_startup_model_seeded_from_env_issue_1306(mock_dependencies, temp_cwd, monkeypatch):
+    """Fresh run: model_used reflects the requested-model env at startup even
+    when the workflow stops before any step's provider runs."""
+    for var in _SEED_ENV_VARS_1306:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
+    # Stop at the Step 1 template load — this happens before run_agentic_task,
+    # so model_used is still the startup seed.
+    mock_dependencies["template_loader"].return_value = None
+
+    success, msg, _cost, model, _files = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+        repo_name="repo", issue_number=1, issue_author="me",
+        issue_title="Bug fix", cwd=temp_cwd, quiet=True,
+    )
+
+    assert success is False
+    assert "Missing prompt template" in msg
+    assert model == "gemini-3.5-flash"
+    mock_dependencies["run"].assert_not_called()
+
+
+def test_startup_model_seeded_from_state_on_resume_issue_1306(mock_dependencies, temp_cwd, monkeypatch):
+    """Resume run with no requested-model env: the seed falls back to the
+    model persisted in state rather than 'unknown'."""
+    for var in _SEED_ENV_VARS_1306:
+        monkeypatch.delenv(var, raising=False)
+    mock_dependencies["load_state"].return_value = (
+        {"last_completed_step": 0, "step_outputs": {}, "model_used": "anthropic"},
+        555,
+    )
+    mock_dependencies["template_loader"].return_value = None
+
+    success, msg, _cost, model, _files = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+        repo_name="repo", issue_number=1, issue_author="me",
+        issue_title="Bug fix", cwd=temp_cwd, quiet=True,
+    )
+
+    assert success is False
+    assert "Missing prompt template" in msg
+    assert model == "anthropic"
+
+
+def test_startup_banner_shows_seeded_model_issue_1306(mock_dependencies, temp_cwd, monkeypatch):
+    """The Step 0 'Workflow Startup' comment renders the requested model, not
+    'unknown' — this is the exact user-visible symptom from issue #1306."""
+    for var in _SEED_ENV_VARS_1306:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
+    # Let Step 1 fail fast (after the unconditional startup banner is posted).
+    mock_dependencies["template_loader"].return_value = None
+
+    with patch("pdd.agentic_change_orchestrator.post_step_comment_once", return_value=True) as mock_once:
+        run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+            repo_name="repo", issue_number=1, issue_author="me",
+            issue_title="Bug fix", cwd=temp_cwd, quiet=True,
+        )
+
+    step0_calls = [c for c in mock_once.call_args_list if c.kwargs.get("step_num") == 0]
+    assert step0_calls, "Step 0 startup banner was not posted"
+    body = step0_calls[0].kwargs["body"]
+    assert "## Step 0/13: Workflow Startup" in body
+    assert "- **Model**: gemini-3.5-flash" in body
+    assert "**Model**: unknown" not in body
