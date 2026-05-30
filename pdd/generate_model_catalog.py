@@ -1632,7 +1632,10 @@ def build_rows(
     # block deterministically rather than appended after the last provider.
     rows = _merge_chatgpt_subscription_rows(rows)
     # Sort: provider ascending, then ELO descending within each provider
-    rows.sort(key=lambda r: (r["provider"], -r["coding_arena_elo"], r["model"]))
+    # int() coercion: litellm-derived rows carry int elo, but the hand-managed
+    # ChatGPT subscription rows (merged just above) store it as a string — keep
+    # the key total-orderable across both so the merge-before-sort holds.
+    rows.sort(key=lambda r: (r["provider"], -int(r["coding_arena_elo"]), r["model"]))
     return rows
 
 
