@@ -102,16 +102,20 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ github.ref_name }}"
-          # Preserve GitHub's auto-generated notes (created by the previous
-          # step) so we can append their contributor attribution
-          # ("What's Changed", PR authors, "New Contributors") below the AI
-          # summary instead of discarding it.
-          auto_notes=$(gh release view "$tag" --json body --jq .body 2>/dev/null || true)
           prev_tag=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
           if [ -z "$prev_tag" ]; then
             echo "No previous tag found; keeping auto-generated notes."
             exit 0
           fi
+          # Regenerate GitHub's auto-generated notes (What's Changed / PR
+          # authors / New Contributors) fresh from the tag range so we can
+          # append their contributor attribution below the AI summary.
+          # We deliberately do NOT read the existing release body: on a
+          # workflow re-run it may already be "AI summary + appended
+          # auto-notes", and re-appending it would duplicate the notes and
+          # break the idempotent release path. Matches backfill-release-notes.yml.
+          auto_notes=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$tag" -f previous_tag_name="$prev_tag" --jq .body 2>/dev/null || true)
           echo "Summarizing ${prev_tag}..${tag} with Claude Code."
 
           npm install -g @anthropic-ai/claude-code@2.1.150
