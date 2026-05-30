@@ -6525,7 +6525,14 @@ class TestSetupWorktreeCleanRestart:
 # provider has reported in.
 # ---------------------------------------------------------------------------
 
-_SEED_ENV_VARS_1306 = ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL")
+_SEED_ENV_VARS_1306 = (
+    "PDD_AGENTIC_PROVIDER",
+    "ANTIGRAVITY_MODEL",
+    "GEMINI_MODEL",
+    "CLAUDE_MODEL",
+    "CODEX_MODEL",
+    "OPENCODE_MODEL",
+)
 
 
 def test_startup_model_seeded_from_env_issue_1306(mock_dependencies, temp_cwd, monkeypatch):

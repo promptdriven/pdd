@@ -723,22 +723,6 @@ def _get_provider_model(provider: str) -> Optional[str]:
     return value.strip() or None
 
 
-# Issue #1306: requested-model env vars consulted (in order) to seed the
-# Step 0 workflow-startup banner before any step has reported a provider.
-# ``ANTIGRAVITY_MODEL`` is first because ``agy`` (Antigravity) has no
-# ``--model`` flag — its model lives in this env var / settings.json, never in
-# the provider's reported model — so it would otherwise be permanently
-# "unknown". The remaining three mirror the model-knob env vars in
-# ``_PROVIDER_MODEL_ENV``. ``OPENCODE_MODEL`` is intentionally omitted — the
-# issue #1306 precedence chain does not include OpenCode.
-_STARTUP_MODEL_ENV_VARS: Tuple[str, ...] = (
-    "ANTIGRAVITY_MODEL",
-    "GEMINI_MODEL",
-    "CLAUDE_MODEL",
-    "CODEX_MODEL",
-)
-
-
 def _is_meaningful_model_label(value: Optional[str]) -> bool:
     """True when *value* is a usable model label (non-empty, not "unknown")."""
     text = (value or "").strip()
@@ -750,21 +734,38 @@ def seed_startup_model(state: Optional[Dict[str, Any]] = None) -> str:
 
     Issue #1306: the agentic orchestrators set ``model_used`` only after a
     step's provider responds, so the Step 0 "Workflow Startup" banner reads a
-    hard-coded ``"unknown"``. Seed it instead from the first meaningful
-    requested-model env var (``ANTIGRAVITY_MODEL`` → ``GEMINI_MODEL`` →
-    ``CLAUDE_MODEL`` → ``CODEX_MODEL``), then any meaningful model carried in
-    resumed *state*, before falling back to ``"unknown"``. A value is
-    "meaningful" when it is non-empty after stripping and not a
+    hard-coded ``"unknown"``. Seed it instead from the requested-model env var
+    of the provider that will actually run.
+
+    Resolution walks ``get_agent_provider_preference()`` order (which honors
+    ``PDD_AGENTIC_PROVIDER``) and returns the first provider's requested model
+    via ``_get_provider_model`` — so the banner can't advertise, say, a Gemini
+    model when the run is pinned to Anthropic, and OpenCode (``OPENCODE_MODEL``)
+    is covered for free. For the ``google`` slot, ``ANTIGRAVITY_MODEL`` is
+    consulted before ``GEMINI_MODEL`` because ``agy`` (Antigravity) has no
+    ``--model`` flag — its model lives in ``ANTIGRAVITY_MODEL`` / settings.json,
+    never in the provider's reported model, so it would otherwise be
+    permanently "unknown" on the Antigravity path.
+
+    When no provider env var yields a meaningful value, fall back to a
+    meaningful model carried in resumed *state*, then ``"unknown"``. A value
+    is "meaningful" when it is non-empty after stripping and not a
     case-insensitive ``"unknown"``.
 
-    Env vars take precedence over resumed state so the banner reflects the
-    model requested for *this* run rather than a provider name persisted by a
-    prior run.
+    This is a display/seed label only — it does not change provider selection
+    or the post-step ``model_used`` (the provider that actually served each
+    step).
     """
-    for env_var in _STARTUP_MODEL_ENV_VARS:
-        value = (os.environ.get(env_var) or "").strip()
-        if _is_meaningful_model_label(value):
-            return value
+    for provider in get_agent_provider_preference():
+        if provider == "google":
+            # agy carries its model in ANTIGRAVITY_MODEL; legacy gemini in
+            # GEMINI_MODEL (handled by _get_provider_model below).
+            agy_model = (os.environ.get("ANTIGRAVITY_MODEL") or "").strip()
+            if _is_meaningful_model_label(agy_model):
+                return agy_model
+        candidate = _get_provider_model(provider)
+        if _is_meaningful_model_label(candidate):
+            return candidate
     if state and _is_meaningful_model_label(state.get("model_used")):
         return state["model_used"].strip()
     return "unknown"

@@ -10724,3 +10724,38 @@ class TestFinalCheckupHeadSafetyChecks:
         # Only the pre-checkup SHA is fetched; the post-checkup fetch must
         # not happen because the checkup failed before any push.
         assert sha_mock.call_count == 1
+
+
+def test_startup_banner_shows_seeded_model_issue_1306(
+    e2e_fix_mock_dependencies, e2e_fix_default_args, monkeypatch
+):
+    """`pdd fix --clean-restart` Step 0 banner shows the requested model, not
+    'unknown' (issue #1306). The banner is posted before any provider runs, so
+    model_used must be seeded at startup."""
+    mock_run, _, _ = e2e_fix_mock_dependencies
+    for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL",
+                "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step3" in label:
+            return (True, "Root cause: NOT_A_BUG - expected behavior.", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    args = dict(e2e_fix_default_args)
+    args["clean_restart"] = True
+
+    with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]), \
+         patch("pdd.agentic_e2e_fix_orchestrator.post_step_comment_once", return_value=True) as mock_once:
+        run_agentic_e2e_fix_orchestrator(**args)
+
+    step0 = [c for c in mock_once.call_args_list if c.kwargs.get("step_num") == 0]
+    assert step0, "Step 0 startup banner was not posted on clean restart"
+    body = step0[0].kwargs["body"]
+    assert "## Step 0/11: Workflow Startup" in body
+    assert "- **Model**: claude-opus-4-8" in body
+    assert "**Model**: unknown" not in body

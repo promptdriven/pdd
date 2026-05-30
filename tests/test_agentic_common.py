@@ -8190,41 +8190,77 @@ class TestDuplicateStateCommentHandling:
 # so its model lives in ANTIGRAVITY_MODEL rather than the provider response.
 # ---------------------------------------------------------------------------
 
-_SEED_ENV_VARS = ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL")
+# Cleared before each seed test. PDD_AGENTIC_PROVIDER controls provider order;
+# PDD_GOOGLE_CLI is set as a side effect by the `antigravity` normalization, so
+# clear it too (monkeypatch.delenv registers it for restoration at teardown,
+# containing that side effect).
+_SEED_ENV_VARS = (
+    "PDD_AGENTIC_PROVIDER",
+    "PDD_GOOGLE_CLI",
+    "ANTIGRAVITY_MODEL",
+    "GEMINI_MODEL",
+    "CLAUDE_MODEL",
+    "CODEX_MODEL",
+    "OPENCODE_MODEL",
+)
 
 
 def _clear_seed_env(monkeypatch):
+    # Clearing PDD_AGENTIC_PROVIDER makes the default provider preference
+    # (anthropic -> google -> openai -> opencode) apply deterministically.
     for var in _SEED_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
 
 
-def test_seed_startup_model_antigravity_first(monkeypatch):
-    """ANTIGRAVITY_MODEL wins over every other requested-model env var."""
+def test_seed_startup_model_default_order_is_provider_preference(monkeypatch):
+    """Issue #1306: with no provider pinned, resolve in default provider order
+    (anthropic -> google -> openai -> opencode), NOT a fixed env-var order."""
     from pdd.agentic_common import seed_startup_model
 
     _clear_seed_env(monkeypatch)
-    monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
     monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")
-    monkeypatch.setenv("CLAUDE_MODEL", "opus")
-    monkeypatch.setenv("CODEX_MODEL", "gpt")
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5.3-codex")
+    # anthropic is first in the default preference.
+    assert seed_startup_model() == "claude-opus-4-8"
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    # google slot: ANTIGRAVITY_MODEL wins over GEMINI_MODEL (agy has no --model flag).
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
+    assert seed_startup_model() == "gemini-3.5-flash"
+
+    monkeypatch.delenv("ANTIGRAVITY_MODEL", raising=False)
+    assert seed_startup_model() == "gemini-2.0"  # falls back to GEMINI_MODEL
+
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    assert seed_startup_model() == "gpt-5.3-codex"  # openai slot
+
+
+def test_seed_startup_model_respects_pinned_provider(monkeypatch):
+    """Issue #1306 (review finding): a pinned provider must win over a stale
+    env var for a provider that will not run."""
+    from pdd.agentic_common import seed_startup_model
+
+    _clear_seed_env(monkeypatch)
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")  # unused provider
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
+    assert seed_startup_model() == "claude-opus-4-8"
+
+    # Pinning Antigravity (normalizes to the google slot) surfaces ANTIGRAVITY_MODEL.
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "antigravity")
+    monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
     assert seed_startup_model() == "gemini-3.5-flash"
 
 
-def test_seed_startup_model_env_precedence_chain(monkeypatch):
-    """Precedence is ANTIGRAVITY -> GEMINI -> CLAUDE -> CODEX."""
+def test_seed_startup_model_includes_opencode(monkeypatch):
+    """Issue #1306 (review finding): OpenCode is a supported provider, so
+    OPENCODE_MODEL seeds the banner (it was previously omitted)."""
     from pdd.agentic_common import seed_startup_model
 
     _clear_seed_env(monkeypatch)
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")
-    monkeypatch.setenv("CLAUDE_MODEL", "opus")
-    monkeypatch.setenv("CODEX_MODEL", "gpt")
-    assert seed_startup_model() == "gemini-2.0"
-
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    assert seed_startup_model() == "opus"
-
-    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
-    assert seed_startup_model() == "gpt"
+    monkeypatch.setenv("OPENCODE_MODEL", "openrouter/anthropic/claude-3.5")
+    assert seed_startup_model() == "openrouter/anthropic/claude-3.5"
 
 
 def test_seed_startup_model_ignores_blank_env(monkeypatch):

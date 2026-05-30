@@ -33,6 +33,7 @@ from .agentic_common import (
     extract_step_report,
     normalize_step_comments_state,
     post_step_comment_once,
+    seed_startup_model,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -2070,7 +2071,11 @@ def run_agentic_e2e_fix_orchestrator(
     last_completed_step = 0
     step_outputs: Dict[str, str] = {}
     total_cost = 0.0
-    model_used = "unknown"
+    # Issue #1306: seed the Step 0 "Workflow Startup" banner model from the
+    # requested-model env (resolved by provider preference) instead of a
+    # hard-coded "unknown". Overwritten by the resume branch below when state
+    # carries a model, and by each step's provider as the workflow runs.
+    model_used = seed_startup_model()
     changed_files: List[str] = []
     dev_unit_states: Dict[str, Any] = {}
     skipped_steps: Dict[int, str] = {}
@@ -2122,7 +2127,9 @@ def run_agentic_e2e_fix_orchestrator(
             last_completed_step = loaded_state.get("last_completed_step", 0)
             step_outputs = loaded_state.get("step_outputs", {})
             total_cost = loaded_state.get("total_cost", 0.0)
-            model_used = loaded_state.get("model_used", "unknown")
+            # Issue #1306: env-first seed, falling back to the model persisted
+            # in resumed state, so the Step 0 banner is never "unknown".
+            model_used = seed_startup_model(loaded_state)
             changed_files = loaded_state.get("changed_files", [])
             dev_unit_states = loaded_state.get("dev_unit_states", {})
             # Load skipped_steps from state (keys are strings in JSON, convert to int)

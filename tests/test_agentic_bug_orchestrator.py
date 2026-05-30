@@ -8088,7 +8088,7 @@ def test_startup_model_seeded_from_env_issue_1306(mock_dependencies, default_arg
     """Fresh run: model_used reflects the requested-model env at startup even
     when the workflow stops before any step's provider runs."""
     mock_run, mock_load, _ = mock_dependencies
-    for var in ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL"):
+    for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")
     # Stop at the Step 1 template load — before run_agentic_task — so
@@ -8107,7 +8107,7 @@ def test_startup_model_seeded_from_state_on_resume_issue_1306(mock_dependencies,
     """Resume with no requested-model env: the seed falls back to the model
     persisted in state rather than 'unknown'."""
     mock_run, mock_load, _ = mock_dependencies
-    for var in ("ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL"):
+    for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
     with patch("pdd.agentic_bug_orchestrator.load_workflow_state",
                return_value=({"last_completed_step": 0, "step_outputs": {}, "model_used": "anthropic"}, 777)):
