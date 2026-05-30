@@ -92,6 +92,28 @@ def _is_local_row(row: Dict[str, str]) -> bool:
     )
 
 
+def _empty_api_key_row_usable(row: Dict[str, str]) -> bool:
+    """Is an empty-``api_key`` (device-login) row actually usable right now?
+
+    Most device-login rows (e.g. GitHub Copilot) are treated as usable — their
+    token is validated at call time. ChatGPT/Codex subscription rows
+    (provider ``OpenAI ChatGPT`` / model ``chatgpt/*``) additionally require a
+    real ``codex login``; without that token they fail at runtime, so setup must
+    NOT count them as available, default-keep them, or smoke-test them. Otherwise
+    an OAuth-only user with no ChatGPT token gets the chatgpt/ family silently
+    selected and a failing smoke test (issue #1269 review, failure mode 1).
+    """
+    model = (row.get("model") or "").strip().lower()
+    provider = (row.get("provider") or "").strip().lower()
+    if model.startswith("chatgpt/") or provider == "openai chatgpt":
+        try:
+            from pdd.codex_subscription import has_codex_subscription_auth
+            return has_codex_subscription_auth()
+        except Exception:
+            return False
+    return True
+
+
 def _provider_pref_path() -> Path:
     """Sidecar storing the user's primary-provider selection, next to the user
     CSV. Used so re-running `pdd setup` doesn't silently re-add providers the
@@ -521,7 +543,7 @@ def _usable_providers_in_csv() -> set:
         if (r.get("provider") or "").strip() in ref_providers
         and not _is_local_row(r)
         and (
-            not (r.get("api_key") or "").strip()
+            ((not (r.get("api_key") or "").strip()) and _empty_api_key_row_usable(r))
             or api_key_requirements_satisfied(r.get("api_key") or "", found)
         )
     }
@@ -878,8 +900,10 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
             if "127.0.0.1" in base_url or "localhost" in base_url:
                 continue
             if not api_key:
-                # Device flow — always include
-                configured_models.append(r)
+                # Device flow — include unless it is a ChatGPT/Codex subscription
+                # row with no real `codex login` (would fail at runtime; #1269).
+                if _empty_api_key_row_usable(r):
+                    configured_models.append(r)
             else:
                 if api_key_requirements_satisfied(api_key, found_key_names):
                     configured_models.append(
@@ -968,7 +992,7 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
         if (r.get("provider") or "").strip() in _ref_providers
         and not _is_local_row(r)
         and (
-            not (r.get("api_key") or "").strip()
+            ((not (r.get("api_key") or "").strip()) and _empty_api_key_row_usable(r))
             or api_key_requirements_satisfied(r.get("api_key") or "", found_key_names)
         )
     })
@@ -1051,7 +1075,7 @@ def _step3_test_and_summary(found_key_names: List[str],
                 return False
             if "127.0.0.1" in base_url or "localhost" in base_url:
                 return False
-            return not api_key or api_key_requirements_satisfied(api_key, found_key_names)
+            return ((not api_key) and _empty_api_key_row_usable(r)) or (bool(api_key) and api_key_requirements_satisfied(api_key, found_key_names))
 
         # Test a model from the user's SELECTED provider(s) first, so the live
         # test reflects their choice rather than a preserved row from a provider

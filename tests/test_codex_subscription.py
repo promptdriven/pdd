@@ -355,3 +355,24 @@ def test_catalog_generator_preserves_chatgpt_family():
     elos = {r["model"]: r["coding_arena_elo"] for r in again if str(r["model"]).startswith("chatgpt/")}
     assert elos["chatgpt/gpt-5.4"] == "1437"
     assert elos["chatgpt/gpt-5.3-codex"] == "1407"
+
+
+# --------------------------------------------------------------------------- #
+# setup availability gate: chatgpt/ rows require real codex auth (#1269 review FM1)
+# --------------------------------------------------------------------------- #
+
+def test_empty_api_key_row_usable_gates_chatgpt_on_codex_auth(monkeypatch):
+    """A chatgpt/ subscription row (empty api_key) is only 'usable' for setup
+    default-keep / smoke-test when a real codex login exists. Other device-login
+    rows (e.g. github_copilot) stay usable regardless."""
+    import pdd.setup_tool as st
+
+    chatgpt_row = {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.4", "api_key": ""}
+    copilot_row = {"provider": "Github Copilot", "model": "github_copilot/gpt-5", "api_key": ""}
+
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: False)
+    assert st._empty_api_key_row_usable(chatgpt_row) is False
+    assert st._empty_api_key_row_usable(copilot_row) is True
+
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
+    assert st._empty_api_key_row_usable(chatgpt_row) is True
