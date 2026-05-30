@@ -1,13 +1,17 @@
+"""User story discovery, validation, generation, and prompt-fix helpers."""
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 import logging
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich import print as rprint
 
+from .contract_ir import Rule, parse_prompt_contracts
 from .detect_change import detect_change
 from .get_extension import get_extension
 
@@ -25,6 +29,11 @@ STORY_PROMPTS_METADATA_RE = re.compile(
 STORY_PROMPT_REFERENCE_RE = re.compile(
     r"(?P<ref>[A-Za-z0-9_./-]+\.prompt)\b",
     flags=re.IGNORECASE,
+)
+_FORBIDDEN_MODAL_RE = re.compile(r"\b(?:MUST|SHALL|MAY)\s+NOT\b", re.IGNORECASE)
+_FORBIDDEN_CLAUSE_RE = re.compile(
+    r"\b(?:must|shall|may)\s+not\s+([^.\n]+)",
+    re.IGNORECASE,
 )
 logger = logging.getLogger(__name__)
 
@@ -75,20 +84,20 @@ def _build_prompt_name_map(
 ) -> Dict[str, Path]:
     """Build case-sensitive and case-insensitive lookup keys for prompt paths."""
     name_map: Dict[str, Path] = {}
-    for pf in prompt_files:
-        name_map[pf.name] = pf
-        name_map[str(pf)] = pf
-        name_map[pf.name.lower()] = pf
-        name_map[str(pf).lower()] = pf
+    for prompt_path in prompt_files:
+        name_map[prompt_path.name] = prompt_path
+        name_map[str(prompt_path)] = prompt_path
+        name_map[prompt_path.name.lower()] = prompt_path
+        name_map[str(prompt_path).lower()] = prompt_path
         if prompts_dir:
             try:
-                rel = pf.relative_to(prompts_dir)
+                rel = prompt_path.relative_to(prompts_dir)
                 rel_str = str(rel)
                 rel_posix = rel.as_posix()
-                name_map[rel_str] = pf
-                name_map[rel_str.lower()] = pf
-                name_map[rel_posix] = pf
-                name_map[rel_posix.lower()] = pf
+                name_map[rel_str] = prompt_path
+                name_map[rel_str.lower()] = prompt_path
+                name_map[rel_posix] = prompt_path
+                name_map[rel_posix.lower()] = prompt_path
             except ValueError:
                 continue
     return name_map
@@ -107,9 +116,9 @@ def _resolve_prompt_path(
     if lower in name_map:
         return name_map[lower]
     # Fallback: match by basename if detect output used a short name
-    for pf in prompt_files:
-        if pf.name == prompt_name or pf.name.lower() == lower:
-            return pf
+    for prompt_path in prompt_files:
+        if prompt_path.name == prompt_name or prompt_path.name.lower() == lower:
+            return prompt_path
     return None
 
 
@@ -132,6 +141,14 @@ def _prompt_reference_for_metadata(prompt_path: Path, prompts_dir: Optional[Path
         except ValueError:
             pass
     return prompt_path.name
+
+
+def _cross_module_covers_ref(prompt_ref: str) -> str:
+    """Normalize a prompt ref for cross-module ``## Covers`` lines (``prompts/...#R1``)."""
+    normalized = prompt_ref.replace("\\", "/")
+    if normalized.startswith("prompts/"):
+        return normalized
+    return f"prompts/{normalized}"
 
 
 def _upsert_story_prompt_metadata(
@@ -218,6 +235,8 @@ def _resolve_src_dir(prompts_dir: Path) -> Path:
 
 def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]:
     """Map a prompt file path to its corresponding source file path."""
+    prompt_path = prompt_path.resolve()
+    prompts_dir = prompts_dir.resolve()
     try:
         rel_path = prompt_path.relative_to(prompts_dir)
     except ValueError:
@@ -247,7 +266,9 @@ def _change_main_succeeded(result_message: object) -> bool:
     change_main (non-CSV mode) reports success with:
     "Modified prompt saved to <path>".
     """
-    return isinstance(result_message, str) and result_message.startswith("Modified prompt saved to ")
+    return isinstance(result_message, str) and result_message.startswith(
+        "Modified prompt saved to "
+    )
 
 
 def _linked_prompts_from_changes(
@@ -293,7 +314,7 @@ def _select_story_prompt_links(
     return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
-def cache_story_prompt_links(
+def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
     *,
     story_file: str,
     prompts_dir: Optional[str] = None,
@@ -315,7 +336,9 @@ def cache_story_prompt_links(
     if not story_path.exists() or not story_path.is_file():
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
-    prompt_files = prompt_files or discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
+    prompt_files = prompt_files or discover_prompt_files(
+        prompts_dir, include_llm=include_llm_prompts
+    )
     if not prompt_files:
         return False, "No prompt files found to link user story metadata.", 0.0, "", []
 
@@ -334,7 +357,13 @@ def cache_story_prompt_links(
             else:
                 unresolved_refs.append(ref)
         if resolved_refs and not unresolved_refs:
-            return True, "Story already contains prompt metadata.", 0.0, "", sorted(set(resolved_refs))
+            return (
+                True,
+                "Story already contains prompt metadata.",
+                0.0,
+                "",
+                sorted(set(resolved_refs)),
+            )
 
     changes_list, cost, model = detect_change(
         [str(p) for p in prompt_files],
@@ -368,13 +397,31 @@ def cache_story_prompt_links(
         if link_source == "detect_change":
             return True, "Story prompt metadata linked.", cost, model, linked_refs
         if link_source == "story_content":
-            return True, "Story prompt metadata linked from story content.", cost, model, linked_refs
+            return (
+                True,
+                "Story prompt metadata linked from story content.",
+                cost,
+                model,
+                linked_refs,
+            )
         return True, "Story prompt metadata linked to full prompt set.", cost, model, linked_refs
     if link_source == "detect_change":
         return True, "Story prompt metadata already up to date.", cost, model, linked_refs
     if link_source == "story_content":
-        return True, "Story prompt metadata already up to date from story content.", cost, model, linked_refs
-    return True, "Story prompt metadata already up to date for full prompt set.", cost, model, linked_refs
+        return (
+            True,
+            "Story prompt metadata already up to date from story content.",
+            cost,
+            model,
+            linked_refs,
+        )
+    return (
+        True,
+        "Story prompt metadata already up to date for full prompt set.",
+        cost,
+        model,
+        linked_refs,
+    )
 
 
 def _slugify_story_name(raw_name: str) -> str:
@@ -430,7 +477,7 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     """Extract a compact summary line from prompt content."""
     try:
         content = prompt_path.read_text(encoding="utf-8")
-    except Exception:
+    except OSError:
         return "Prompt included in story scope."
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -446,7 +493,80 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     return "Prompt included in story scope."
 
 
-def _render_story_markdown_from_prompts(
+def _summary_text_from_rule_line(text: str) -> str:
+    """Extract display summary from a rule header or first block line."""
+    id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", text, re.IGNORECASE)
+    if id_prefix:
+        return id_prefix.group(1).strip()
+    return re.sub(r"^[^a-zA-Z0-9]+", "", text).strip()
+
+
+def _rule_covers_summary(rule: Rule) -> str:
+    """Return a short human-readable summary for a parsed contract rule."""
+    summary = _summary_text_from_rule_line(rule.line.strip())
+    if not summary and rule.block:
+        first_line = rule.block.splitlines()[0].strip()
+        summary = _summary_text_from_rule_line(first_line)
+    if len(summary) > 120:
+        return summary[:117].rstrip() + "..."
+    return summary or rule.raw_id.upper()
+
+
+def _seed_covers_from_prompts(
+    prompt_paths: List[Path],
+    prompts_root: Optional[Path],
+) -> List[Tuple[str, str, str, str]]:
+    """Seed Covers bullets from ``<contract_rules>`` via ``contract_ir.parse_prompt_contracts``."""
+    seeded: List[Tuple[str, str, str, str]] = []
+    for path in prompt_paths:
+        if not path.exists() or not path.is_file():
+            continue
+        parsed = parse_prompt_contracts(path.resolve())
+        if not parsed.rules:
+            continue
+        ref = _prompt_reference_for_metadata(path, prompts_root)
+        for rule in parsed.rules:
+            if rule.raw_id == "(unnumbered)":
+                continue
+            rule_id = rule.raw_id.upper()
+            summary = _rule_covers_summary(rule)
+            seeded.append((ref, rule_id, summary, rule.block))
+    return seeded
+
+
+def _seed_negative_cases_from_rules(
+    rules: List[Tuple[str, str, str, str]],
+) -> List[str]:
+    """Extract forbidden outcomes from rules containing MUST/SHALL/MAY NOT."""
+    negatives: List[str] = []
+    for _, _, _, rule_text in rules:
+        if not _FORBIDDEN_MODAL_RE.search(rule_text):
+            continue
+        match = _FORBIDDEN_CLAUSE_RE.search(rule_text)
+        if not match:
+            continue
+        clause = match.group(1).strip()
+        if not clause:
+            continue
+        cleaned = re.sub(r"^[^a-zA-Z0-9]+", "", clause).strip()
+        if not cleaned:
+            continue
+        bullet = cleaned[0].upper() + cleaned[1:]
+        if not bullet.endswith("."):
+            bullet += "."
+        negatives.append(bullet)
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for neg in negatives:
+        key = neg.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(neg)
+    return deduped
+
+
+def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
     *,
     title: str,
     prompt_paths: List[Path],
@@ -457,27 +577,81 @@ def _render_story_markdown_from_prompts(
         _prompt_reference_for_metadata(path, prompts_root)
         for path in prompt_paths
     ]
-    scope_lines = []
+    seeded_rules = _seed_covers_from_prompts(prompt_paths, prompts_root)
+    covers_lines: List[str] = []
+    if seeded_rules:
+        # Cross-module Covers when the story scopes multiple prompt files.
+        use_cross = len(prompt_paths) > 1
+        for ref, rule_id, summary, _ in seeded_rules:
+            if use_cross:
+                cross_ref = _cross_module_covers_ref(ref)
+                covers_lines.append(f"- {cross_ref}#{rule_id}: {summary}")
+            else:
+                covers_lines.append(f"- {rule_id}: {summary}")
+    else:
+        covers_lines.append(
+            "- R1: Add contract rule IDs here after contracts are authored."
+        )
+    covers_block = "\n".join(covers_lines)
+
+    negatives = _seed_negative_cases_from_rules(seeded_rules)
+    if negatives:
+        neg_block = "\n".join(f"- {neg}" for neg in negatives)
+    else:
+        neg_block = "- List forbidden outcomes this story protects against."
+
+    context_lines = [
+        "Describe relevant state, assumptions, fixtures, users, records, "
+        "external services, or dependencies.",
+        "",
+        "This story covers the following prompt files:",
+    ]
     for path in prompt_paths:
         ref = _prompt_reference_for_metadata(path, prompts_root)
         summary = _prompt_summary_line(path)
-        scope_lines.append(f"- `{ref}`: {summary}")
+        context_lines.append(f"- `{ref}`: {summary}")
+    context_block = "\n".join(context_lines)
 
-    scope_block = "\n".join(scope_lines)
+    metadata_line = f"<!-- {STORY_PROMPTS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
     return (
+        f"{metadata_line}\n\n"
         f"# User Story: {title}\n\n"
-        f"<!-- {STORY_PROMPTS_METADATA_KEY}: {', '.join(metadata_refs)} -->\n\n"
-        "## Story\n"
-        "As a user, I want the scoped prompt capabilities to compose correctly so that the full workflow works end-to-end.\n\n"
-        "## Prompt Scope\n"
-        f"{scope_block}\n\n"
-        "## Acceptance Criteria\n"
-        "- [ ] Behavior required by all listed prompts works when used together.\n"
-        "- [ ] `pdd detect --stories` reports no required prompt changes for this story.\n"
+        "## Covers\n\n"
+        f"{covers_block}\n\n"
+        "## Story\n\n"
+        "As a <persona>,\n"
+        "I want the scoped prompt capabilities to compose correctly,\n"
+        "so that the full workflow works end-to-end.\n\n"
+        "## Context\n\n"
+        f"{context_block}\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given behavior required by all listed prompts, when used together, "
+        "then all components function correctly.\n"
+        "2. Given `pdd detect --stories` is run, when analyzed, then it reports "
+        "no required prompt changes.\n\n"
+        "## Oracle\n\n"
+        "These details matter for pass/fail:\n"
+        "- error type\n"
+        "- state transition\n"
+        "- absence/presence of external call\n"
+        "- emitted event\n"
+        "- returned value shape\n\n"
+        "## Non-Oracle\n\n"
+        "These details should not matter:\n"
+        "- private helper names\n"
+        "- internal class structure\n"
+        "- exact wording of non-user-facing messages\n"
+        "- deterministic but irrelevant ordering\n\n"
+        "## Negative Cases\n\n"
+        f"{neg_block}\n\n"
+        "## Non-Goals\n\n"
+        "What this story explicitly does not cover.\n\n"
+        "## Notes\n\n"
+        "Links, edge cases, fixtures, rationale, or implementation hints.\n"
     )
 
 
-def generate_user_story(
+def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     *,
     prompt_files: List[str],
     output: Optional[str] = None,
@@ -528,7 +702,9 @@ def generate_user_story(
     else:
         stories_root = _resolve_stories_dir(stories_dir)
         stories_root.mkdir(parents=True, exist_ok=True)
-        output_path = _default_story_output_path(_story_slug_from_prompts(resolved_paths), stories_root)
+        output_path = _default_story_output_path(
+            _story_slug_from_prompts(resolved_paths), stories_root
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(story_markdown, encoding="utf-8")
@@ -546,14 +722,20 @@ def generate_user_story(
     detected_pool = discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
     merged_pool: List[Path] = []
     seen_pool = set()
-    for pf in resolved_paths + detected_pool:
-        key = str(pf.resolve()).lower()
+    for prompt_path in resolved_paths + detected_pool:
+        key = str(prompt_path.resolve()).lower()
         if key in seen_pool:
             continue
-        merged_pool.append(pf)
+        merged_pool.append(prompt_path)
         seen_pool.add(key)
 
-    detect_success, detect_message, detect_cost, detect_model, detected_links = cache_story_prompt_links(
+    (
+        detect_success,
+        detect_message,
+        detect_cost,
+        detect_model,
+        detected_links,
+    ) = cache_story_prompt_links(
         story_file=str(output_path),
         prompts_dir=prompts_dir,
         prompt_files=merged_pool,
@@ -617,7 +799,7 @@ def generate_user_story(
     )
 
 
-def run_user_story_tests(
+def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-name,too-many-locals,too-many-branches,too-many-statements
     *,
     prompts_dir: Optional[str] = None,
     stories_dir: Optional[str] = None,
@@ -631,13 +813,29 @@ def run_user_story_tests(
     fail_fast: bool = False,
     include_llm_prompts: bool = False,
     cache_story_prompt_links: bool = False,
+    link_story_prompt_metadata: Optional[bool] = None,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
     Run user story tests by calling detect_change on each story.
 
     A story passes if detect_change returns an empty changes_list.
+
+    ``link_story_prompt_metadata`` is a deprecated alias for
+    ``cache_story_prompt_links`` (main API). When both are passed,
+    ``cache_story_prompt_links`` wins if it is true.
     """
-    prompt_files = prompt_files or discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
+    if link_story_prompt_metadata is not None:
+        warnings.warn(
+            "link_story_prompt_metadata is deprecated; use cache_story_prompt_links",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if not cache_story_prompt_links:
+            cache_story_prompt_links = link_story_prompt_metadata
+
+    prompt_files = prompt_files or discover_prompt_files(
+        prompts_dir, include_llm=include_llm_prompts
+    )
     story_files = story_files or discover_story_files(stories_dir)
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
 
@@ -736,7 +934,7 @@ def run_user_story_tests(
     return all_passed, results, total_cost, model_name
 
 
-def run_user_story_fix(
+def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
     *,
     ctx: object,
     story_file: str,
@@ -754,7 +952,7 @@ def run_user_story_fix(
     This runs detect_change on the story, then applies changes to each affected
     prompt by calling change_main with the story as the change prompt.
     """
-    from .change_main import change_main
+    from .change_main import change_main  # pylint: disable=import-outside-toplevel
 
     prompts_root = _resolve_prompts_dir(prompts_dir)
     prompt_files = discover_prompt_files(str(prompts_root))
@@ -848,6 +1046,12 @@ def run_user_story_fix(
         model_name = validation_model
 
     if not passed:
-        return False, "User story still failing after prompt updates.", total_cost, model_name, changed_files
+        return (
+            False,
+            "User story still failing after prompt updates.",
+            total_cost,
+            model_name,
+            changed_files,
+        )
 
     return True, "User story prompts updated successfully.", total_cost, model_name, changed_files

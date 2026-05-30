@@ -16,6 +16,7 @@ from ..core.utils import echo_model_line
 from .checkup_simplify import checkup_simplify
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
+from .drift import drift_cmd
 from .gate import gate_cmd
 from .prompt import prompt_lint
 
@@ -363,6 +364,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup coverage [OPTIONS] TARGET
     Evidence gate:
       pdd checkup gate [TARGET] [OPTIONS]  →  enforce evidence policy checks.
+    Regeneration drift:
+      pdd checkup drift <DEVUNIT> [OPTIONS]
     """
     ctx.ensure_object(dict)
 
@@ -371,6 +374,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "contract",
         "contracts",
         "coverage",
+        "drift",
         "gate",
         "simplify",
     }:
@@ -475,6 +479,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if exit_code:
             raise click.exceptions.Exit(exit_code)
         return None
+
     if target == "gate":
         gate_args = list(ctx.args)
         if show_help and not gate_args:
@@ -485,6 +490,23 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         exit_code = gate_cmd.main(
             args=gate_args,
             prog_name="pdd checkup gate",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "drift":
+        drift_args = list(ctx.args)
+        if not drift_args or show_help:
+            click.echo(
+                drift_cmd.get_help(click.Context(drift_cmd, info_name="pdd checkup drift"))
+            )
+            return None
+        exit_code = drift_cmd.main(
+            args=drift_args,
+            prog_name="pdd checkup drift",
             standalone_mode=False,
             obj=ctx.obj,
         )
