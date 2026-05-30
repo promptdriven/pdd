@@ -1843,7 +1843,7 @@ def _run_agentic_checkup_orchestrator_inner(
     # suppressed (``issue_number`` here is the PR number, so those posts would
     # otherwise land on — and flood — the PR thread). With a real issue,
     # behaviour is byte-for-byte unchanged.
-    has_issue = bool((issue_url or "").strip())
+    has_issue = bool((issue_url or "").strip()) and issue_url not in ("null", "None")
     if test_scope not in ("full", "targeted"):
         raise ValueError(
             f"test_scope must be 'full' or 'targeted', got {test_scope!r}"
@@ -4213,7 +4213,11 @@ def _run_agentic_checkup_orchestrator_inner(
         use_github_state=use_github_state,
     )
     if not _state_cleared:
-        _state_thread2 = "the PR" if not bool((issue_url or "").strip()) else "the issue"
+        _state_thread2 = (
+            "the issue"
+            if bool((issue_url or "").strip()) and issue_url not in ("null", "None")
+            else "the PR"
+        )
         _clear_warn = (
             f" (warning: could not confirm workflow-state cleanup — a rerun "
             f"may replay the cached completed state; delete the "
