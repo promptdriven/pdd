@@ -1281,7 +1281,7 @@ def _build_quick_start_lines(oauth_only_setup: bool) -> List[str]:
             "     pdd generate <prompt-file>",
             "     pdd test     <prompt>",
             "     pdd fix      <prompt>",
-            "     pdd sync     <prompt-or-issue>",
+            "     pdd sync     <prompt-file>",
             "   To enable these, re-run `pdd setup` and add an API key",
             "   (or use the post-setup options menu's \"Add a provider\").",
         ]
