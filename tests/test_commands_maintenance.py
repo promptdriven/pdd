@@ -776,11 +776,13 @@ def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
 
     def _spy(strength, base, df):
         captured["base"] = base
-        return [{
-            "model": base or "x", "provider": "p", "api_key": "",
-            "coding_arena_elo": 1, "avg_cost": 0.0, "structured_output": False,
-            "reasoning_type": "none", "max_reasoning_tokens": 0, "location": "",
-        }]
+        # Short-circuit before llm_invoke enters the candidate loop. We only need
+        # to assert the base model resolved at CALL time; letting the call proceed
+        # with a chatgpt/ base drives real get_model_info / token-refresh /
+        # completion attempts that hang in CI (no token) and trip the 60s
+        # pytest-timeout. llm_invoke catches this in its model-selection
+        # try/except and re-raises, which the test's `except Exception` swallows.
+        raise RuntimeError("stop after capturing base (hermetic test, #1269)")
 
     monkeypatch.setattr(li, "_select_model_candidates", _spy)
     # change the env AFTER import (as `pdd sync --model` does) and call:
