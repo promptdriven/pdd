@@ -2072,6 +2072,25 @@ def discover_gates(
     if trusted_git and _is_git_worktree(worktree, git_cmd=trusted_git):
         base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
         gates.append(_git_diff_check_gate(trusted_git, base_spec))
+        # doc-contract gate (Issue #1303)
+        gates.append(
+            Gate(
+                name="doc-contract",
+                cmd=[
+                    sys.executable,
+                    "-B",
+                    "-c",
+                    "from pdd.checkup_gates import run_doc_contract_check; import sys; sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))",
+                    str(worktree.absolute()),
+                    base_ref or "",
+                ],
+                source="README.md",
+                required_fix_hint=(
+                    "Verify that all added user-facing surfaces (CLI options, skip behaviors, "
+                    "environment variables, and .pddrc keys) are fully documented."
+                ),
+            )
+        )
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
     gates.extend(_discover_python_gates(worktree, changed_files, base_ref=base_ref))
     # Stable order: git-diff-check first, then language-specific gates
@@ -3217,11 +3236,261 @@ def gate_results_to_findings(
     return findings
 
 
+def extract_pddrc_defaults_keys(content: str) -> Set[str]:
+    """Helper to extract .pddrc keys from construct_paths.py content."""
+    match = re.search(r"_PDDRC_DEFAULTS_KEYS\s*=\s*\{([^}]+)\}", content)
+    if not match:
+        return set()
+    block = match.group(1)
+    keys = re.findall(r'["\']([^"\']+)["\']', block)
+    return {k.strip() for k in keys if k.strip()}
+
+
+def get_markdown_section(text: str, start_marker: str, end_markers: List[str]) -> str:
+    """Helper to extract a specific section from markdown text."""
+    start_idx = text.find(start_marker)
+    if start_idx == -1:
+        return ""
+    end_idx = len(text)
+    for marker in end_markers:
+        idx = text.find(marker, start_idx + len(start_marker))
+        if idx != -1 and idx < end_idx:
+            end_idx = idx
+    return text[start_idx:end_idx]
+
+
+def run_doc_contract_check(
+    worktree_path: Path | str, base_ref: Optional[str] = None
+) -> int:
+    """Enforces documentation consistency on newly added user-facing surfaces.
+
+    Issue #1303 product requirement.
+    """
+    worktree = Path(worktree_path)
+
+    # 1. Run git diff to get the added lines
+    trusted_git = _resolve_trusted_git(worktree)
+    if not trusted_git:
+        print("Error: Could not resolve git binary.", file=sys.stderr)
+        return 1
+
+    git_env = _build_subprocess_env(worktree)
+    base_spec = None
+    if base_ref:
+        base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
+    if not base_spec:
+        # Fall back to trying HEAD~1 if git repo
+        try:
+            res = subprocess.run(
+                [trusted_git, "-C", str(worktree), "rev-parse", "--verify", "HEAD~1"],
+                capture_output=True,
+                env=git_env,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                base_spec = "HEAD~1"
+        except Exception:
+            pass
+
+    diff_args = [trusted_git, "-C", str(worktree), "diff"]
+    if base_spec:
+        if base_spec == "HEAD~1":
+            diff_args.append("HEAD~1")
+        else:
+            diff_args.append(f"{base_spec}...")
+
+    try:
+        res = subprocess.run(
+            diff_args,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if res.returncode != 0:
+            print(
+                f"Error: git diff failed with code {res.returncode}: {res.stderr}",
+                file=sys.stderr,
+            )
+            return 1
+        diff_text = res.stdout
+    except Exception as exc:
+        print(f"Error executing git diff: {exc}", file=sys.stderr)
+        return 1
+
+    # 2. Parse diff into files and added lines
+    added_lines_by_file: Dict[str, List[str]] = {}
+    current_file = None
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            match = re.search(r" b/(\S+)", line)
+            if match:
+                current_file = match.group(1)
+                added_lines_by_file[current_file] = []
+        elif line.startswith("+++ "):
+            pass
+        elif line.startswith("+") and not line.startswith("+++"):
+            if current_file:
+                added_lines_by_file[current_file].append(line[1:])
+
+    # 3. Detect added user-facing surfaces
+    added_pddrc_keys = set()
+    added_click_options = set()
+    added_skip_behaviors = set()
+    added_env_vars = set()
+
+    # .pddrc keys
+    pddrc_keys_now = set()
+    pddrc_keys_then = set()
+    construct_paths_path = worktree / "pdd/construct_paths.py"
+    if construct_paths_path.is_file():
+        try:
+            content_now = construct_paths_path.read_text(encoding="utf-8")
+            pddrc_keys_now = extract_pddrc_defaults_keys(content_now)
+        except Exception:
+            pass
+
+    if base_spec:
+        try:
+            res_show = subprocess.run(
+                [
+                    trusted_git,
+                    "-C",
+                    str(worktree),
+                    "show",
+                    f"{base_spec}:pdd/construct_paths.py",
+                ],
+                capture_output=True,
+                env=git_env,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if res_show.returncode == 0:
+                pddrc_keys_then = extract_pddrc_defaults_keys(res_show.stdout)
+        except Exception:
+            pass
+
+    added_pddrc_keys = pddrc_keys_now - pddrc_keys_then
+
+    # Click options, Skip behaviors, and Env vars
+    for file_path, lines in added_lines_by_file.items():
+        if file_path.endswith(".py"):
+            has_click = False
+            full_path = worktree / file_path
+            if full_path.is_file():
+                try:
+                    content = full_path.read_text(encoding="utf-8")
+                    if "import click" in content or "click." in content:
+                        has_click = True
+                except Exception:
+                    pass
+
+            for line in lines:
+                # 1. Click options
+                if has_click:
+                    if "click.option" in line:
+                        opts = re.findall(r'["\'](--[a-zA-Z0-9-]+)["\']', line)
+                        added_click_options.update(opts)
+                    else:
+                        opt_match = re.match(r'^\s*["\'](--[a-zA-Z0-9-]+)["\']', line)
+                        if opt_match:
+                            added_click_options.add(opt_match.group(1))
+
+                # 2. Skip behaviors / operation names
+                match = re.search(r"operation\s*==\s*['\"]([a-zA-Z0-9_-]+)['\"]", line)
+                if match:
+                    added_skip_behaviors.add(match.group(1))
+                match_skip = re.search(r"['\"]skip:([a-zA-Z0-9_-]+)['\"]", line)
+                if match_skip:
+                    added_skip_behaviors.add(match_skip.group(1))
+
+        # 3. Environment variables
+        if (
+            file_path.endswith(".py")
+            or file_path.endswith(".sh")
+            or file_path.endswith(".prompt")
+        ):
+            for line in lines:
+                env_matches = re.findall(r"\b(PDD_[A-Z0-9_]+)\b", line)
+                for env in env_matches:
+                    added_env_vars.add(env)
+
+    # 4. Read documentation files
+    readme_path = worktree / "README.md"
+    readme_content = ""
+    if readme_path.is_file():
+        readme_content = readme_path.read_text(encoding="utf-8")
+
+    prompt_path = worktree / "pdd/prompts/sync_orchestration_python.prompt"
+    prompt_content = ""
+    if prompt_path.is_file():
+        prompt_content = prompt_path.read_text(encoding="utf-8")
+
+    # Extract markdown sections for verification
+    pddrc_section = get_markdown_section(
+        readme_content,
+        "**Available Context Settings**:",
+        ["**Path Behavior**:", "###", "##"],
+    )
+
+    env_section = get_markdown_section(
+        readme_content, "### Environment Variables", ["## Error Handling", "## "]
+    )
+
+    prompt_ops_section = get_markdown_section(
+        prompt_content, "## Workflow Operations", ["## "]
+    )
+
+    # 5. Perform the contract checks
+    errors = []
+
+    for key in added_pddrc_keys:
+        if f"`{key}`" not in pddrc_section and key not in pddrc_section:
+            errors.append(
+                f".pddrc key '{key}' is not documented in README.md under 'Available Context Settings' section."
+            )
+
+    for opt in added_click_options:
+        if opt not in readme_content:
+            errors.append(f"Click option '{opt}' is not documented in README.md.")
+
+    for op in added_skip_behaviors:
+        if op not in readme_content:
+            errors.append(
+                f"Skip behavior / sync step '{op}' is not documented in README.md."
+            )
+        if op not in prompt_ops_section:
+            errors.append(
+                f"Sync step '{op}' is not documented in pdd/prompts/sync_orchestration_python.prompt under 'Workflow Operations' section."
+            )
+
+    for env in added_env_vars:
+        if env in {"PDD_DIR", "PDD_PHASE"}:
+            continue
+        if f"`{env}`" not in env_section and env not in env_section:
+            errors.append(
+                f"Environment variable '{env}' is not documented in README.md under 'Environment Variables' section."
+            )
+
+    if errors:
+        for err in errors:
+            print(f"Doc Contract Failure: {err}", file=sys.stderr)
+        return 1
+
+    print("Doc Contract Check: Passed.", file=sys.stdout)
+    return 0
+
+
 __all__ = [
     "DEFAULT_GATE_TIMEOUT_SECONDS",
     "Gate",
     "GateResult",
     "discover_gates",
     "gate_results_to_findings",
+    "run_doc_contract_check",
     "run_gates",
 ]

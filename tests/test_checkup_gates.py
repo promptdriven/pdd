@@ -4560,3 +4560,145 @@ class TestGateResultsToFindings:
         # operator can still see the actual failure detail.
         assert "PermissionError" in r1[0].evidence
         assert "/tmp/round-1-review-gate-persist-fail.txt" in r1[0].evidence
+
+
+class TestDocContractCheck:
+    """Tests for the doc-contract gate discovery and run_doc_contract_check verification logic."""
+
+    def test_discover_emits_doc_contract_gate(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "doc-contract" in names
+
+    def test_run_doc_contract_check_passes_when_no_changes(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        # Create dummy README.md and prompts files so they exist
+        (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text("", encoding="utf-8")
+        (tmp_path / "pdd" / "construct_paths.py").write_text("_PDDRC_DEFAULTS_KEYS = set()\n", encoding="utf-8")
+
+        # Commit them so diff is clean
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "add docs", "-q"], cwd=tmp_path, check=True)
+
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD")
+        assert res == 0
+
+    def test_run_doc_contract_check_detects_undocumented_pddrc_key(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        
+        # Initial commit with files
+        (tmp_path / "README.md").write_text("**Available Context Settings**:\n- `existing_key`\n", encoding="utf-8")
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "construct_paths.py").write_text('_PDDRC_DEFAULTS_KEYS = {"existing_key"}\n', encoding="utf-8")
+        
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init docs", "-q"], cwd=tmp_path, check=True)
+
+        # Modify to add a new key, undocumented in README
+        (tmp_path / "pdd" / "construct_paths.py").write_text('_PDDRC_DEFAULTS_KEYS = {"existing_key", "undocumented_key"}\n', encoding="utf-8")
+
+        # Should fail
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 1
+
+        # Document it in README
+        (tmp_path / "README.md").write_text("**Available Context Settings**:\n- `existing_key`\n- `undocumented_key`\n", encoding="utf-8")
+        
+        # Should now pass
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 0
+
+    def test_run_doc_contract_check_detects_undocumented_click_option(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        
+        (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
+        (tmp_path / "cli.py").write_text("import click\n@click.command()\n", encoding="utf-8")
+        
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init cli", "-q"], cwd=tmp_path, check=True)
+
+        # Add undocumented Click option
+        (tmp_path / "cli.py").write_text("import click\n@click.command()\n@click.option('--new-opt')\n", encoding="utf-8")
+
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 1
+
+        # Document it in README
+        (tmp_path / "README.md").write_text("# README\n--new-opt is here\n", encoding="utf-8")
+        
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 0
+
+    def test_run_doc_contract_check_detects_undocumented_skip_behavior(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        
+        (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text("## Workflow Operations\n", encoding="utf-8")
+        (tmp_path / "sync.py").write_text("def run():\n    pass\n", encoding="utf-8")
+        
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init sync", "-q"], cwd=tmp_path, check=True)
+
+        # Add undocumented skip behavior in code
+        (tmp_path / "sync.py").write_text("def run():\n    if operation == 'skip:new_op':\n        pass\n", encoding="utf-8")
+
+        # Fails because undocumented in both README and prompts
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 1
+
+        # Document in README but not in prompts -> still fails
+        (tmp_path / "README.md").write_text("# README\nnew_op\n", encoding="utf-8")
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 1
+
+        # Document in prompts but not in README -> still fails
+        (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text("## Workflow Operations\nnew_op\n", encoding="utf-8")
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 1
+
+        # Document in both -> passes
+        (tmp_path / "README.md").write_text("# README\nnew_op\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text("## Workflow Operations\nnew_op\n", encoding="utf-8")
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 0
+
+    def test_run_doc_contract_check_detects_undocumented_env_var(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        
+        (tmp_path / "README.md").write_text("### Environment Variables\n", encoding="utf-8")
+        (tmp_path / "helper.py").write_text("def run():\n    pass\n", encoding="utf-8")
+        
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init helper", "-q"], cwd=tmp_path, check=True)
+
+        # Add undocumented PDD_* env var
+        (tmp_path / "helper.py").write_text("def run():\n    os.environ.get('PDD_MY_NEW_VAR')\n", encoding="utf-8")
+
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 1
+
+        # Document it in README
+        (tmp_path / "README.md").write_text("### Environment Variables\n- `PDD_MY_NEW_VAR` is here\n", encoding="utf-8")
+        
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 0
+
