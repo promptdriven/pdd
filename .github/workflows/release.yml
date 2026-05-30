@@ -102,6 +102,11 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ github.ref_name }}"
+          # Preserve GitHub's auto-generated notes (created by the previous
+          # step) so we can append their contributor attribution
+          # ("What's Changed", PR authors, "New Contributors") below the AI
+          # summary instead of discarding it.
+          auto_notes=$(gh release view "$tag" --json body --jq .body 2>/dev/null || true)
           prev_tag=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
           if [ -z "$prev_tag" ]; then
             echo "No previous tag found; keeping auto-generated notes."
@@ -163,10 +168,21 @@ jobs:
             exit 0
           fi
 
+          # Append GitHub's auto-generated attribution (What's Changed /
+          # New Contributors / Full Changelog) below the AI summary so
+          # contributor credit is preserved.
+          final_file=$(mktemp --suffix=.md)
+          {
+            cat "$notes_file"
+            if [ -n "$auto_notes" ]; then
+              printf '\n\n---\n\n%s\n' "$auto_notes"
+            fi
+          } >"$final_file"
+
           echo "--- New release notes ---"
-          cat "$notes_file"
+          cat "$final_file"
           echo "-------------------------"
-          gh release edit "$tag" --notes-file "$notes_file"
+          gh release edit "$tag" --notes-file "$final_file"
           echo "Updated release notes for $tag."
 
       - name: Post release notes to Discord
