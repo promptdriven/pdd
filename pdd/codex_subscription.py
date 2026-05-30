@@ -115,45 +115,66 @@ def _write_private_json(path: Path, payload: Dict[str, Any]) -> None:
         pass
 
 
+def _auth_filename() -> str:
+    """The auth filename litellm's ChatGPT authenticator reads (honors CHATGPT_AUTH_FILE)."""
+    return os.environ.get("CHATGPT_AUTH_FILE", "auth.json")
+
+
+def _token_dir_has_usable_auth(token_dir: Path) -> bool:
+    """True only when ``token_dir`` holds an auth file with a usable access_token.
+
+    Existence alone is NOT enough — litellm needs a real token bundle, so a
+    garbage/empty file must read as 'no usable auth' (otherwise the --force
+    safety gate in ``_ensure_api_key`` is bypassed and litellm fails at call
+    time).
+    """
+    auth_file = token_dir / _auth_filename()
+    if not auth_file.is_file():
+        return False
+    try:
+        return _flatten_codex_tokens(json.loads(auth_file.read_text())) is not None
+    except Exception:
+        return False
+
+
 def bridge_codex_auth_for_litellm() -> bool:
     """Make a ``codex login`` token usable by litellm's ``chatgpt/`` provider.
 
-    Idempotent and best-effort. Returns ``True`` when a usable token is staged
-    (so ``chatgpt/`` models can be invoked), ``False`` otherwise. Never raises.
+    Idempotent and best-effort. Returns ``True`` only when a token with a usable
+    ``access_token`` is staged where litellm will read it
+    (``$CHATGPT_TOKEN_DIR/$CHATGPT_AUTH_FILE``). Never raises.
 
     Resolution order:
 
-    1. If the user pointed ``CHATGPT_TOKEN_DIR`` at a directory other than
-       PDD's own bridged dir, respect it untouched.
+    1. If the user pointed ``CHATGPT_TOKEN_DIR`` at a directory other than PDD's
+       own bridged dir AND it holds a *usable* auth file, respect it untouched.
+       (A present-but-invalid file is NOT treated as usable — that would bypass
+       the ``--force`` credential gate.)
     2. Otherwise read ``$CODEX_HOME/auth.json``, flatten the nested ``tokens``
-       object, and write it to a private PDD-managed directory whose path is
-       exported via ``CHATGPT_TOKEN_DIR``.
+       object, and write it (under the ``CHATGPT_AUTH_FILE`` name) to a private
+       PDD-managed directory whose path is exported via ``CHATGPT_TOKEN_DIR``.
 
     The bridged file is refreshed when the source codex ``auth.json`` is newer,
     so token rotations performed by ``codex`` are picked up on the next call.
     """
     try:
         dest_dir = _bridged_token_dir()
-        dest = dest_dir / "auth.json"
+        auth_name = _auth_filename()
+        dest = dest_dir / auth_name
 
-        # 1. Respect a CHATGPT_TOKEN_DIR the user pointed elsewhere themselves.
-        #    A directory equal to our bridged dir is NOT treated as
-        #    user-supplied, so we always fall through to the rotation-aware
-        #    refresh below — otherwise a long-running worker would serve a
-        #    stale token after `codex` rotates it.
+        # 1. Respect a CHATGPT_TOKEN_DIR the user pointed elsewhere themselves,
+        #    but ONLY when it actually holds a usable token (existence alone is
+        #    insufficient — see _token_dir_has_usable_auth).
         existing_dir = os.environ.get("CHATGPT_TOKEN_DIR")
         if existing_dir and Path(existing_dir).expanduser() != dest_dir:
-            existing_file = Path(existing_dir).expanduser() / os.environ.get(
-                "CHATGPT_AUTH_FILE", "auth.json"
-            )
-            if existing_file.is_file():
+            if _token_dir_has_usable_auth(Path(existing_dir).expanduser()):
                 return True
-            # Configured but empty: fall through and populate from codex below.
+            # Configured but unusable: fall through and populate from codex below.
 
         source = _codex_auth_path()
         if not source.is_file():
-            # No codex token to bridge; a previously staged file is still usable.
-            if dest.is_file():
+            # No codex token to bridge; a previously staged *usable* file still works.
+            if _token_dir_has_usable_auth(dest_dir):
                 os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
                 return True
             return False
@@ -163,12 +184,16 @@ def bridge_codex_auth_for_litellm() -> bool:
         if not (dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime):
             flat = _flatten_codex_tokens(json.loads(source.read_text()))
             if flat is None:
-                return dest.is_file()
+                # source unusable; only succeed if a prior usable staged copy exists
+                return _token_dir_has_usable_auth(dest_dir)
             _write_private_json(dest, flat)
             logger.debug(
                 "Bridged codex auth from %s to %s for litellm chatgpt/ provider.", source, dest
             )
 
+        # Final guard: only claim success if what we staged is actually usable.
+        if not _token_dir_has_usable_auth(dest_dir):
+            return False
         os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
         return True
     except Exception as exc:  # pragma: no cover - defensive; never break callers
@@ -179,30 +204,23 @@ def bridge_codex_auth_for_litellm() -> bool:
 def has_codex_subscription_auth() -> bool:
     """Return ``True`` when a usable ChatGPT subscription token is available.
 
-    Checks an explicitly-configured ``CHATGPT_TOKEN_DIR`` first, then the codex
-    CLI's ``auth.json``. Used by the credential check so a ``chatgpt/`` model is
-    skipped cleanly in non-interactive (``PDD_FORCE``) runs instead of hanging
-    litellm on an interactive device-login flow.
+    Checks an explicitly-configured ``CHATGPT_TOKEN_DIR`` (honoring
+    ``CHATGPT_AUTH_FILE``) first, then the codex CLI's ``auth.json``. "Usable"
+    means a real ``access_token`` is present — a garbage/empty file reads as
+    unavailable. Used by the credential check so a ``chatgpt/`` model is skipped
+    cleanly in non-interactive (``PDD_FORCE``) runs instead of hanging litellm on
+    an interactive device-login flow.
     """
     try:
         existing_dir = os.environ.get("CHATGPT_TOKEN_DIR")
-        if existing_dir:
-            existing_file = Path(existing_dir).expanduser() / os.environ.get(
-                "CHATGPT_AUTH_FILE", "auth.json"
-            )
-            if existing_file.is_file():
-                try:
-                    if _flatten_codex_tokens(json.loads(existing_file.read_text())):
-                        return True
-                except Exception:
-                    pass
+        if existing_dir and _token_dir_has_usable_auth(Path(existing_dir).expanduser()):
+            return True
         source = _codex_auth_path()
         if source.is_file():
             return _flatten_codex_tokens(json.loads(source.read_text())) is not None
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Codex auth detection skipped (%s): %s", type(exc).__name__, exc)
     return False
-
 
 class _RawResponseProxy:
     """Wrap an httpx-style response, overriding only ``.text``.

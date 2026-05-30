@@ -376,3 +376,41 @@ def test_empty_api_key_row_usable_gates_chatgpt_on_codex_auth(monkeypatch):
 
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
     assert st._empty_api_key_row_usable(chatgpt_row) is True
+
+
+# --------------------------------------------------------------------------- #
+# Auth-state edge cases (review round 3, P1)
+# --------------------------------------------------------------------------- #
+
+def test_bridge_rejects_invalid_user_token_dir(tmp_path, monkeypatch):
+    """P1a: a user CHATGPT_TOKEN_DIR holding a present-but-invalid auth.json must
+    NOT be treated as usable — otherwise the --force credential gate is bypassed
+    and litellm fails at call time. bridge() and has_auth() must agree (both False)."""
+    bad = tmp_path / "userdir"
+    bad.mkdir()
+    (bad / "auth.json").write_text(json.dumps({"garbage": True}))  # no access_token
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(bad))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty-codex"))  # no source token
+    monkeypatch.delenv("PDD_CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+    assert cs.bridge_codex_auth_for_litellm() is False
+    assert cs.has_codex_subscription_auth() is False
+
+
+def test_bridge_honors_chatgpt_auth_file_name(tmp_path, monkeypatch):
+    """P1b: when CHATGPT_AUTH_FILE names a custom file, the bridge must stage the
+    token under THAT name (litellm reads $CHATGPT_TOKEN_DIR/$CHATGPT_AUTH_FILE)."""
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(json.dumps(_nested_auth()))
+    bridged = tmp_path / "bridged"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", str(bridged))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "custom.json")
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+
+    assert cs.bridge_codex_auth_for_litellm() is True
+    assert (bridged / "custom.json").is_file()       # staged under the custom name
+    assert not (bridged / "auth.json").is_file()      # not the default name
+    assert os.environ["CHATGPT_TOKEN_DIR"] == str(bridged)
