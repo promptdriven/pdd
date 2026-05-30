@@ -175,7 +175,19 @@ def sync(
     # the base model from this env var at CALL time, so every downstream path
     # uses the chosen model for this run only.
     if model:
+        # Scope the override to THIS invocation: restore the prior value when
+        # the command's Click context closes, so a long-lived in-process caller
+        # (CliRunner, embedding) does not leak the model into later runs (#1269).
+        _prev_model_default = os.environ.get("PDD_MODEL_DEFAULT")
         os.environ["PDD_MODEL_DEFAULT"] = model
+
+        def _restore_model_default(_prev=_prev_model_default):
+            if _prev is None:
+                os.environ.pop("PDD_MODEL_DEFAULT", None)
+            else:
+                os.environ["PDD_MODEL_DEFAULT"] = _prev
+
+        ctx.call_on_close(_restore_model_default)
     # Handle deprecated --log flag
     if log:
         click.echo(

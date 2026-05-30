@@ -908,6 +908,7 @@ Arguments:
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
+- `--model NAME`: Override the base model for this sync run (sets PDD_MODEL_DEFAULT for the invocation, e.g. `chatgpt/gpt-5.3-codex`). Restored after the run.
 - `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing

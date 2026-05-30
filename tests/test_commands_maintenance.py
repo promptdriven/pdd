@@ -770,6 +770,7 @@ def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
     including precedence over a different value present at startup."""
     import pdd.llm_invoke as li
 
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")  # never touch the cloud auth flow
     monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
     captured = {}
 
