@@ -723,3 +723,41 @@ def test_sync_architecture_uses_nearest_cwd_project(mock_auto_update, runner, tm
     assert "Updated 1 module(s); skipped 0." in result.output
     assert json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Original root reason"
     assert json.loads((nested_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Updated nested reason"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_model_flag_sets_pdd_model_default(mock_sync_main, mock_auto_update, runner, monkeypatch):
+    """`pdd sync <basename> --model X` sets PDD_MODEL_DEFAULT for the run so the
+    selection resolver (which reads it at call time) routes to X — the public-CLI
+    way to force, e.g., the chatgpt/ subscription family (issue #1269)."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def _capture(*args, **kwargs):
+        seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ("success", 0.0, "chatgpt/gpt-5.3-codex")
+
+    mock_sync_main.side_effect = _capture
+    result = runner.invoke(
+        cli.cli, ["sync", "test_module", "--model", "chatgpt/gpt-5.3-codex"]
+    )
+    assert result.exit_code == 0, result.output
+    assert seen.get("model_default") == "chatgpt/gpt-5.3-codex"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_without_model_flag_leaves_default_unset(mock_sync_main, mock_auto_update, runner, monkeypatch):
+    """Without --model, sync must not invent a PDD_MODEL_DEFAULT."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def _capture(*args, **kwargs):
+        seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ("success", 0.0, "x")
+
+    mock_sync_main.side_effect = _capture
+    result = runner.invoke(cli.cli, ["sync", "test_module"])
+    assert result.exit_code == 0, result.output
+    assert seen.get("model_default") is None

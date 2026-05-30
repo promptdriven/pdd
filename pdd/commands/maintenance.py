@@ -1,6 +1,7 @@
 """
 Maintenance commands (sync, auto_deps, setup).
 """
+import os
 import click
 from typing import Any, Dict, Optional, Tuple
 from pathlib import Path
@@ -128,6 +129,14 @@ DEFAULT_SYNC_BUDGET = 20.0
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option(
+    "--model",
+    "model",
+    default=None,
+    help="Override the base model for this sync run (sets PDD_MODEL_DEFAULT "
+         "for the invocation, e.g. --model chatgpt/gpt-5.3-codex). Takes "
+         "precedence over the PDD_MODEL_DEFAULT env var for this run only.",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -151,6 +160,7 @@ def sync(
     no_resume: bool,
     durable_max_parallel: Optional[int],
     evidence: bool,
+    model: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -159,6 +169,12 @@ def sync(
     'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
     multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
+    # Honor an explicit per-run model override (CLI > env). The selection
+    # resolver reads PDD_MODEL_DEFAULT at call time, so setting it here makes
+    # every downstream path (global/agentic/single sync) use the chosen model
+    # for this invocation only (issue #1269).
+    if model:
+        os.environ["PDD_MODEL_DEFAULT"] = model
     # Handle deprecated --log flag
     if log:
         click.echo(
