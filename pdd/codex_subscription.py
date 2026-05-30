@@ -184,8 +184,13 @@ def bridge_codex_auth_for_litellm() -> bool:
         if not (dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime):
             flat = _flatten_codex_tokens(json.loads(source.read_text()))
             if flat is None:
-                # source unusable; only succeed if a prior usable staged copy exists
-                return _token_dir_has_usable_auth(dest_dir)
+                # Source unusable; only succeed if a prior usable staged copy
+                # exists — and if so, export CHATGPT_TOKEN_DIR so litellm can
+                # actually find it (the bug: returning True without exporting).
+                if _token_dir_has_usable_auth(dest_dir):
+                    os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
+                    return True
+                return False
             _write_private_json(dest, flat)
             logger.debug(
                 "Bridged codex auth from %s to %s for litellm chatgpt/ provider.", source, dest
@@ -214,6 +219,12 @@ def has_codex_subscription_auth() -> bool:
     try:
         existing_dir = os.environ.get("CHATGPT_TOKEN_DIR")
         if existing_dir and _token_dir_has_usable_auth(Path(existing_dir).expanduser()):
+            return True
+        # Also honor a token PDD previously staged in its private bridge dir:
+        # the runtime bridge treats that staged copy as usable, so setup/auth
+        # detection must agree (otherwise a working subscription is hidden from
+        # setup/curation/smoke while llm_invoke can use it).
+        if _token_dir_has_usable_auth(_bridged_token_dir()):
             return True
         source = _codex_auth_path()
         if source.is_file():

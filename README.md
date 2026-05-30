@@ -1001,6 +1001,7 @@ pdd sync --one-session factorial_calculator
 
 # Agentic sync (one-session is the default)
 pdd sync https://github.com/myorg/myrepo/issues/100
+pdd sync calculator --model chatgpt/gpt-5.3-codex  # force a specific model for this run
 
 # Disable one-session for agentic sync
 pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
@@ -3783,6 +3784,6 @@ If you have a ChatGPT subscription, PDD can use it for LLM calls when no API key
 codex login
 ```
 
-PDD reads the resulting `~/.codex/auth.json` and routes fallback calls through the `chatgpt/gpt-5.3-codex` model on your subscription (flat-rate, no per-token API billing). This is for your own personal subscription only — do not share or pool a single subscription across users.
+PDD reads the resulting `~/.codex/auth.json` and routes fallback calls through the `chatgpt/*` model family on your subscription (flat-rate, no per-token API billing). This is for your own personal subscription only — do not share or pool a single subscription across users.
 
 **Available subscription models** (selectable via `PDD_MODEL_DEFAULT` or `pdd setup`): `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`, `chatgpt/gpt-5.3-codex-spark`. `--strength` picks a higher- or lower-ranked model within the family, just like the Anthropic models. Codex is opt-in; the shipped default engine is unchanged. (Exact models depend on what your ChatGPT plan serves.)

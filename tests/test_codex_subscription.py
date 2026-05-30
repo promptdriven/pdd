@@ -414,3 +414,45 @@ def test_bridge_honors_chatgpt_auth_file_name(tmp_path, monkeypatch):
     assert (bridged / "custom.json").is_file()       # staged under the custom name
     assert not (bridged / "auth.json").is_file()      # not the default name
     assert os.environ["CHATGPT_TOKEN_DIR"] == str(bridged)
+
+
+# --------------------------------------------------------------------------- #
+# Auth-state consistency (review round 4, P1)
+# --------------------------------------------------------------------------- #
+
+def test_bridge_exports_token_dir_on_staged_copy_success(tmp_path, monkeypatch):
+    """P1: when the codex source is unusable but a prior staged copy is valid,
+    bridge() must still EXPORT CHATGPT_TOKEN_DIR — returning True without it
+    leaves litellm unable to find the token (call-time failure)."""
+    codex = tmp_path / "codex"; codex.mkdir()
+    (codex / "auth.json").write_text(json.dumps({"garbage": True}))  # unusable source
+    bridged = tmp_path / "bridged"; bridged.mkdir()
+    (bridged / "auth.json").write_text(json.dumps(_nested_auth()))   # valid staged copy
+    import os as _os
+    _os.utime(bridged / "auth.json", (1, 1))  # older -> enters re-stage path
+    monkeypatch.setenv("CODEX_HOME", str(codex))
+    monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", str(bridged))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+    assert cs.bridge_codex_auth_for_litellm() is True
+    assert os.environ.get("CHATGPT_TOKEN_DIR") == str(bridged)
+
+
+def test_has_auth_agrees_with_bridge_on_staged_copy(tmp_path, monkeypatch):
+    """P1: has_codex_subscription_auth() must see a token staged in PDD's private
+    bridge dir even when ~/.codex/auth.json is absent and CHATGPT_TOKEN_DIR is
+    unset — otherwise setup/curation/smoke hide a subscription llm_invoke can use."""
+    codex = tmp_path / "codex"; codex.mkdir()  # no auth.json -> no source
+    bridged = tmp_path / "bridged"; bridged.mkdir()
+    (bridged / "auth.json").write_text(json.dumps(_nested_auth()))
+    monkeypatch.setenv("CODEX_HOME", str(codex))
+    monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", str(bridged))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+    # bridge treats the staged copy as usable...
+    assert cs.bridge_codex_auth_for_litellm() is True
+    # ...and detection must agree even after the exported env is cleared.
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    assert cs.has_codex_subscription_auth() is True
