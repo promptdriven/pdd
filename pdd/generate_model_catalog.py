@@ -1626,11 +1626,13 @@ def build_rows(
 
     print(f"  Post-processing: {initial_count} -> {len(rows)} rows.")
 
+    # Issue #1269: preserve the hand-managed ChatGPT subscription family
+    # (intentionally skipped during litellm-derived generation above) BEFORE
+    # the final sort, so the rows land under their "OpenAI ChatGPT" provider
+    # block deterministically rather than appended after the last provider.
+    rows = _merge_chatgpt_subscription_rows(rows)
     # Sort: provider ascending, then ELO descending within each provider
     rows.sort(key=lambda r: (r["provider"], -r["coding_arena_elo"], r["model"]))
-    # Issue #1269: preserve the hand-managed ChatGPT subscription family,
-    # intentionally skipped during litellm-derived generation above.
-    rows = _merge_chatgpt_subscription_rows(rows)
     return rows
 
 

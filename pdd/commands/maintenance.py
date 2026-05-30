@@ -134,8 +134,10 @@ DEFAULT_SYNC_BUDGET = 20.0
     "model",
     default=None,
     help="Override the base model for this sync run (sets PDD_MODEL_DEFAULT "
-         "for the invocation, e.g. --model chatgpt/gpt-5.3-codex). Takes "
-         "precedence over the PDD_MODEL_DEFAULT env var for this run only.",
+         "for the invocation, e.g. --model chatgpt/gpt-5.3-codex). Applies to "
+         "the local llm_invoke route; for a chatgpt/* subscription model on a "
+         "cloud-enabled install, also pass --local. Takes precedence over the "
+         "PDD_MODEL_DEFAULT env var for this run only.",
 )
 @click.pass_context
 @track_cost
