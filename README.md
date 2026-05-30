@@ -648,7 +648,7 @@ graph TB
 ### Agentic Commands (Issue-Driven)
 - **[`change`](#8-change)**: Implement feature requests from GitHub issues (13-step workflow)
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
-- **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or verify existing PRs against source issues
+- **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or review/verify existing PRs (optionally against a source issue)
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
 - **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename). This mode still requires API-key-backed LiteLLM for its generate phase; stored CLI OAuth alone is not sufficient.
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (18-step workflow in agentic mode)

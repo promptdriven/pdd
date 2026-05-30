@@ -396,7 +396,7 @@ def run_agentic_checkup(
     #    with no issue the PR is reviewed on its own merits, the issue fetch
     #    is skipped, and the issue context stays empty (never the literal
     #    "None") so the step prompts do merit review.
-    has_issue = issue_url is not None
+    has_issue = bool(issue_url)  # None and "" both mean merit-review mode
     if has_issue:
         parsed = _parse_issue_url(issue_url)
         if not parsed:

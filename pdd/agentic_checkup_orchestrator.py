@@ -2804,11 +2804,12 @@ def _run_agentic_checkup_orchestrator_inner(
                     use_github_state=use_github_state,
                 )
                 if not _cleared:
+                    _state_thread = "the PR" if not has_issue else "the issue"
                     _clear_warn = (
-                        " (warning: could not confirm workflow-state "
-                        "cleanup — a rerun may replay the cached Step 5 "
-                        "result; delete the PDD_WORKFLOW_STATE comment "
-                        "on the issue manually if the refusal repeats)"
+                        f" (warning: could not confirm workflow-state "
+                        f"cleanup — a rerun may replay the cached Step 5 "
+                        f"result; delete the PDD_WORKFLOW_STATE comment "
+                        f"on {_state_thread} manually if the refusal repeats)"
                     )
                     if not quiet:
                         console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
@@ -4212,11 +4213,12 @@ def _run_agentic_checkup_orchestrator_inner(
         use_github_state=use_github_state,
     )
     if not _state_cleared:
+        _state_thread2 = "the PR" if not bool((issue_url or "").strip()) else "the issue"
         _clear_warn = (
-            " (warning: could not confirm workflow-state cleanup — a rerun "
-            "may replay the cached completed state; delete the "
-            "PDD_WORKFLOW_STATE comment on the issue manually if a stale "
-            "verdict reappears)"
+            f" (warning: could not confirm workflow-state cleanup — a rerun "
+            f"may replay the cached completed state; delete the "
+            f"PDD_WORKFLOW_STATE comment on {_state_thread2} manually if a stale "
+            f"verdict reappears)"
         )
         if not quiet:
             console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
