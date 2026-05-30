@@ -6540,6 +6540,11 @@ def test_startup_model_seeded_from_env_issue_1306(mock_dependencies, temp_cwd, m
     when the workflow stops before any step's provider runs."""
     for var in _SEED_ENV_VARS_1306:
         monkeypatch.delenv(var, raising=False)
+    # seed_startup_model() filters by get_available_agents(); stub it for
+    # cross-machine determinism (all available -> preference order applies).
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")  # deterministic: prefer ANTIGRAVITY_MODEL for google slot
     monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
     # Stop at the Step 1 template load — this happens before run_agentic_task,
     # so model_used is still the startup seed.
@@ -6562,6 +6567,10 @@ def test_startup_model_seeded_from_state_on_resume_issue_1306(mock_dependencies,
     model persisted in state rather than 'unknown'."""
     for var in _SEED_ENV_VARS_1306:
         monkeypatch.delenv(var, raising=False)
+    # seed_startup_model() filters by get_available_agents(); stub it for
+    # cross-machine determinism (all available -> preference order applies).
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
     mock_dependencies["load_state"].return_value = (
         {"last_completed_step": 0, "step_outputs": {}, "model_used": "anthropic"},
         555,
@@ -6584,6 +6593,11 @@ def test_startup_banner_shows_seeded_model_issue_1306(mock_dependencies, temp_cw
     'unknown' — this is the exact user-visible symptom from issue #1306."""
     for var in _SEED_ENV_VARS_1306:
         monkeypatch.delenv(var, raising=False)
+    # seed_startup_model() filters by get_available_agents(); stub it for
+    # cross-machine determinism (all available -> preference order applies).
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
+    monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")  # deterministic: prefer ANTIGRAVITY_MODEL for google slot
     monkeypatch.setenv("ANTIGRAVITY_MODEL", "gemini-3.5-flash")
     # Let Step 1 fail fast (after the unconditional startup banner is posted).
     mock_dependencies["template_loader"].return_value = None

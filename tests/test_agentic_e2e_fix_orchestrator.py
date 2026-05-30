@@ -10736,6 +10736,8 @@ def test_startup_banner_shows_seeded_model_issue_1306(
     for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL",
                 "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
     monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
 
     def side_effect(*args, **kwargs):

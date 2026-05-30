@@ -8090,6 +8090,8 @@ def test_startup_model_seeded_from_env_issue_1306(mock_dependencies, default_arg
     mock_run, mock_load, _ = mock_dependencies
     for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
     monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")
     # Stop at the Step 1 template load — before run_agentic_task — so
     # model_used is still the startup seed.
@@ -8109,6 +8111,8 @@ def test_startup_model_seeded_from_state_on_resume_issue_1306(mock_dependencies,
     mock_run, mock_load, _ = mock_dependencies
     for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
     with patch("pdd.agentic_bug_orchestrator.load_workflow_state",
                return_value=({"last_completed_step": 0, "step_outputs": {}, "model_used": "anthropic"}, 777)):
         # Stop at the Step 1 template load — before run_agentic_task — so

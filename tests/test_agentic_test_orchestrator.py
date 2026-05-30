@@ -1246,6 +1246,8 @@ def test_startup_model_seeded_before_any_provider_issue_1306(mock_deps, default_
 
     for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
     monkeypatch.setenv("CODEX_MODEL", "gpt-5.3-codex")
 
     order = []
@@ -1281,6 +1283,8 @@ def test_startup_model_seeded_from_state_on_resume_issue_1306(mock_deps, default
 
     for var in ("PDD_AGENTIC_PROVIDER", "ANTIGRAVITY_MODEL", "GEMINI_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENCODE_MODEL"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents",
+                        lambda: {"anthropic", "google", "openai", "opencode"})
     mock_deps["load"].return_value = (
         {"last_completed_step": 0, "step_outputs": {}, "model_used": "anthropic"},
         777,

@@ -729,46 +729,67 @@ def _is_meaningful_model_label(value: Optional[str]) -> bool:
     return bool(text) and text.lower() != "unknown"
 
 
+def _google_slot_is_legacy_gemini() -> bool:
+    """True when the resolved Google CLI is legacy ``gemini`` (not ``agy``).
+
+    ``agy`` has no ``--model`` flag — its model lives in ``ANTIGRAVITY_MODEL`` —
+    so the startup banner prefers ``ANTIGRAVITY_MODEL`` for the google slot
+    UNLESS the resolved binary is legacy ``gemini`` (which uses ``GEMINI_MODEL``).
+    Uses ``_get_google_cli_name()`` when a binary is installed (so auto-mode that
+    resolves to ``gemini`` is honored, not just an explicit ``PDD_GOOGLE_CLI=gemini``);
+    falls back to the cheap ``PDD_GOOGLE_CLI`` signal when neither binary is
+    installed so an env-only setup still resolves without probing surprises.
+    """
+    name = _get_google_cli_name()
+    if name is not None:
+        return name == "gemini"
+    return (os.environ.get("PDD_GOOGLE_CLI") or "auto").strip().lower() == "gemini"
+
+
 def seed_startup_model(state: Optional[Dict[str, Any]] = None) -> str:
-    """Return a best-effort requested-model label for the startup banner.
+    """Return a best-effort label for the model the run is about to use.
 
     Issue #1306: the agentic orchestrators set ``model_used`` only after a
     step's provider responds, so the Step 0 "Workflow Startup" banner reads a
     hard-coded ``"unknown"``. Seed it instead from the requested-model env var
     of the provider that will actually run.
 
-    Resolution walks ``get_agent_provider_preference()`` order (which honors
-    ``PDD_AGENTIC_PROVIDER``) and returns the first provider's requested model
-    via ``_get_provider_model`` — so the banner can't advertise, say, a Gemini
-    model when the run is pinned to Anthropic, and OpenCode (``OPENCODE_MODEL``)
-    is covered for free. For the ``google`` slot, ``ANTIGRAVITY_MODEL`` is
-    consulted before ``GEMINI_MODEL`` because ``agy`` (Antigravity) has no
-    ``--model`` flag — its model lives in ``ANTIGRAVITY_MODEL`` / settings.json,
-    never in the provider's reported model, so it would otherwise be
-    permanently "unknown" on the Antigravity path.
+    Mirrors ``run_agentic_task``'s provider selection: it intersects
+    ``get_agent_provider_preference()`` (which honors ``PDD_AGENTIC_PROVIDER``)
+    with the *available* providers from ``get_available_agents()`` and walks
+    them in preference order, returning the first provider's requested model via
+    ``_get_provider_model`` — so the banner can't advertise a model for a
+    preferred-but-unavailable provider, and OpenCode (``OPENCODE_MODEL``) is
+    covered for free. When no provider is available (e.g. the probe found no
+    CLIs), it degrades to the raw preference order so the banner still shows the
+    requested model rather than ``"unknown"``. For the ``google`` slot,
+    ``ANTIGRAVITY_MODEL`` is consulted before ``GEMINI_MODEL`` unless the
+    resolved binary is legacy ``gemini`` (see ``_google_slot_is_legacy_gemini``).
 
     When no provider env var yields a meaningful value, fall back to a
     meaningful model carried in resumed *state*, then ``"unknown"``. A value
     is "meaningful" when it is non-empty after stripping and not a
     case-insensitive ``"unknown"``.
 
-    This is a display/seed label only — it does not change provider selection
-    or the post-step ``model_used`` (the provider that actually served each
-    step).
+    This is a best-effort pre-flight label only — it does not change provider
+    selection, and the authoritative per-step provider/model is the post-step
+    ``model_used`` and the ``.pdd/agentic-logs`` audit record. A statically
+    "available" provider can still fail at call time and fall through to the
+    next, so treat this as the requested model, not a guarantee.
     """
-    for provider in get_agent_provider_preference():
-        if provider == "google":
-            # agy carries its model in ANTIGRAVITY_MODEL; legacy gemini in
-            # GEMINI_MODEL (handled by _get_provider_model below). Only consult
-            # ANTIGRAVITY_MODEL when the resolved Google binary is NOT explicitly
-            # legacy gemini, so a `PDD_GOOGLE_CLI=gemini` run does not show a
-            # stale agy label. (A cheap env check, not _get_google_cli_name(),
-            # avoids filesystem probing and does not drop a user-set
-            # ANTIGRAVITY_MODEL when neither binary is installed.)
-            if (os.environ.get("PDD_GOOGLE_CLI") or "auto").strip().lower() != "gemini":
-                agy_model = (os.environ.get("ANTIGRAVITY_MODEL") or "").strip()
-                if _is_meaningful_model_label(agy_model):
-                    return agy_model
+    preference = get_agent_provider_preference()
+    try:
+        available = get_available_agents()
+    except Exception:  # pragma: no cover - availability probe is best-effort
+        available = []
+    # Prefer providers that are actually available (matches run_agentic_task);
+    # degrade to the raw preference when availability info is empty/unknown.
+    candidates = [p for p in preference if p in available] or list(preference)
+    for provider in candidates:
+        if provider == "google" and not _google_slot_is_legacy_gemini():
+            agy_model = (os.environ.get("ANTIGRAVITY_MODEL") or "").strip()
+            if _is_meaningful_model_label(agy_model):
+                return agy_model
         candidate = _get_provider_model(provider)
         if _is_meaningful_model_label(candidate):
             return candidate

@@ -8201,7 +8201,7 @@ _SEED_ENV_VARS = (
 )
 
 
-def _clear_seed_env(monkeypatch):
+def _clear_seed_env(monkeypatch, available=("anthropic", "google", "openai", "opencode")):
     # Clearing PDD_AGENTIC_PROVIDER makes the default provider preference
     # (anthropic -> google -> openai -> opencode) apply deterministically.
     for var in _SEED_ENV_VARS:
@@ -8212,6 +8212,12 @@ def _clear_seed_env(monkeypatch):
     # mutation would leak across tests. setenv always records the original
     # state, so pin a neutral default here and let teardown restore it.
     monkeypatch.setenv("PDD_GOOGLE_CLI", "auto")
+    # seed_startup_model() filters provider preference by get_available_agents()
+    # (a filesystem CLI/credential probe). Stub it so tests are deterministic
+    # across machines/CI; default = all available, so preference order applies.
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: set(available)
+    )
 
 
 def test_seed_startup_model_default_order_is_provider_preference(monkeypatch):
@@ -8337,3 +8343,23 @@ def test_seed_startup_model_legacy_gemini_binary_prefers_gemini_model(monkeypatc
     # With the agy binary selected, ANTIGRAVITY_MODEL wins for the google slot.
     monkeypatch.setenv("PDD_GOOGLE_CLI", "agy")
     assert seed_startup_model() == "agy-only-stale"
+
+
+def test_seed_startup_model_skips_unavailable_preferred_provider(monkeypatch):
+    """Issue #1306 (review finding): the seed must reflect the provider that
+    will actually run — a preferred-but-unavailable provider's model is skipped,
+    matching run_agentic_task's preference ∩ availability selection."""
+    from pdd.agentic_common import seed_startup_model
+
+    # Default preference is anthropic-first, but only google is available.
+    _clear_seed_env(monkeypatch, available=("google",))
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")  # anthropic: unavailable
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")       # google: available
+    assert seed_startup_model() == "gemini-2.0"
+
+    # Degradation: when nothing is available (probe found no CLIs), fall back to
+    # raw preference order (anthropic first) so the banner still shows a model.
+    _clear_seed_env(monkeypatch, available=())
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-8")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.0")
+    assert seed_startup_model() == "claude-opus-4-8"
