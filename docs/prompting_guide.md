@@ -589,6 +589,10 @@ List outcomes this story protects against.
 For MUST NOT rules, this section is required.
 For ordinary positive stories, this section may be empty or omitted.
 
+*(The canonical on-disk template at `user_stories/story__template.md` and story
+generation from `pdd test <*.prompt>` use **## Negative Cases** for this section —
+same intent, different heading.)*
+
 ## Non-Goals
 
 What this story explicitly does not cover.
