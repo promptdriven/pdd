@@ -76,6 +76,8 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
 
 % Output
 
+Source issue present: `{has_issue}`. When this value is `false` (PR-only review with no linked issue, #1292), do NOT post any GitHub comment in this step — the orchestrator posts the single canonical report on the PR; skip the `gh issue comment` instruction below. When it is `true` (or in issue mode), post as described:
+
 After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
 
 ```
@@ -144,6 +146,6 @@ Notes:
 - Run the actual tests and capture real output
 - If tests take too long, use a timeout and report partial results; never present targeted-only PR-mode tests as a full-suite pass
 - In PR mode, `targeted` test scope is opt-in. `full` (the default) means the user expects comprehensive verification — do NOT silently downgrade to targeted because the suite is large; instead report the skipped command honestly
-- Always post your findings as a GitHub comment before completing
+- Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
 - IMPORTANT: The `failure_signal` block is REQUIRED on every Step 5 response — Step 6 will reject failures that lack it

@@ -80,7 +80,8 @@ from .prompt import prompt_lint
         "PR-mode: run the full checkup against this existing pull request "
         "instead of creating a new one. Unless --no-fix is set, eligible "
         "generated fixes are committed and pushed back to the PR head ref. "
-        "Requires --issue. TARGET must NOT be passed."
+        "With no --issue the PR is reviewed on its own merits. TARGET must "
+        "NOT be passed."
     ),
 )
 @click.option(
@@ -89,8 +90,10 @@ from .prompt import prompt_lint
     type=str,
     default=None,
     help=(
-        "PR-mode companion to --pr: the original GitHub issue the PR is meant to "
-        "resolve. Used as issue context for verification."
+        "Optional PR-mode companion to --pr: the original GitHub issue the PR "
+        "is meant to resolve. When provided, the PR is also verified for "
+        "issue alignment; when omitted, the PR is reviewed on its own merits. "
+        "Required with --review-loop. Cannot be passed without --pr."
     ),
 )
 @click.option(
@@ -346,11 +349,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     \b
     GitHub mode (default): TARGET is an issue URL.
-    PR mode: pass --pr <pr-url> and --issue <issue-url> to run the full
-             checkup against an existing PR. Unless --no-fix is set, the
-             fix/verify loop runs against the PR worktree and any eligible
-             generated fixes are committed and pushed back to the PR head
-             ref. Step 8 (create PR) is skipped — no second PR is opened.
+    PR mode: pass --pr <pr-url> to run the full checkup against an existing
+             PR. With no --issue the PR is reviewed on its own merits;
+             add --issue <issue-url> to also verify the PR resolves that
+             issue. Unless --no-fix is set, the fix/verify loop runs against
+             the PR worktree and any eligible generated fixes are committed
+             and pushed back to the PR head ref. Step 8 (create PR) is
+             skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
     Contract checks:
@@ -510,14 +515,29 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
 
-    # PR-mode argument validation
-    pr_mode = pr_url is not None or issue_url_opt is not None
+    # PR-mode argument validation.
+    #
+    # Issue #1292: ``--issue`` is OPTIONAL in ``--pr`` mode. PR mode is keyed
+    # solely on ``--pr``; with no ``--issue`` the PR is reviewed on its own
+    # merits (the issue-alignment gate is skipped downstream). A lone
+    # ``--issue`` (no ``--pr``) is rejected — a standalone issue belongs in
+    # default issue mode as the positional TARGET, not the ``--pr`` companion.
+    pr_mode = pr_url is not None
     if test_scope == "targeted" and not pr_mode:
         raise click.BadParameter(
             "--test-scope targeted requires --pr (PR mode).",
             param_hint="'--test-scope'",
         )
-    if review_loop and not pr_mode:
+    if issue_url_opt is not None and pr_url is None:
+        raise click.BadParameter(
+            "--issue requires --pr. To check an issue directly, pass it as "
+            "TARGET (e.g., `pdd checkup <issue-url>`).",
+            param_hint="'--issue'",
+        )
+    # ``--review-loop`` still requires BOTH ``--pr`` and ``--issue``: the
+    # reviewer/report path is issue-coupled, so review-loop-without-issue is
+    # deferred as a follow-up (#1292 sanctions deferring it).
+    if review_loop and (not pr_mode or issue_url_opt is None):
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
@@ -558,30 +578,27 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "Do not pass TARGET when using --pr/--issue; they are mutually exclusive.",
                 param_hint="'TARGET'",
             )
-        if pr_url is None or issue_url_opt is None:
-            raise click.BadParameter(
-                "--pr and --issue must both be provided in PR mode.",
-                param_hint="'--pr/--issue'",
-            )
         if _parse_pr_url(pr_url) is None:
             raise click.BadParameter(
                 "--pr must be a GitHub pull-request URL "
                 "(e.g., https://github.com/org/repo/pull/123).",
                 param_hint="'--pr'",
             )
-        if not _is_github_issue_url(issue_url_opt):
+        # ``--issue`` is optional; validate its format only when supplied.
+        if issue_url_opt is not None and not _is_github_issue_url(issue_url_opt):
             raise click.BadParameter(
                 "--issue must be a GitHub issue URL "
                 "(e.g., https://github.com/org/repo/issues/123).",
                 param_hint="'--issue'",
             )
+        # May be ``None`` → orchestrator reviews the PR on its own merits.
         effective_issue_url = issue_url_opt
     else:
         if not target:
             raise click.UsageError(
                 "Missing argument 'TARGET'. For local checks use "
-                "`pdd checkup --validate-arch-includes`. For PR verification use "
-                "`pdd checkup --pr <pr-url> --issue <issue-url>`."
+                "`pdd checkup --validate-arch-includes`. To review a PR use "
+                "`pdd checkup --pr <pr-url> [--issue <issue-url>]`."
             )
 
         if not _is_github_issue_url(target):
