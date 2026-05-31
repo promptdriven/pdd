@@ -143,17 +143,28 @@ class TestCliValidation:
         assert result.exit_code == 2
         assert "Missing argument 'TARGET'" in result.output
 
-    def test_only_pr_rejected(self, runner: CliRunner) -> None:
-        result = runner.invoke(checkup, ["--pr", "https://github.com/o/r/pull/1"])
-        assert result.exit_code == 2
-        assert "must both be provided" in result.output
+    def test_only_pr_accepted_merit_review(self, runner: CliRunner) -> None:
+        # #1292: --pr alone is now valid — the PR is reviewed on its own merits
+        # (issue_url forwarded as None), no longer rejected.
+        with patch(
+            "pdd.commands.checkup.run_agentic_checkup",
+            return_value=(True, "clean", 0.1, "codex"),
+        ) as run_checkup:
+            result = runner.invoke(
+                checkup,
+                ["--pr", "https://github.com/o/r/pull/1"],
+                obj={"quiet": True, "verbose": False},
+            )
+        assert result.exit_code == 0, result.output
+        assert run_checkup.call_args.kwargs["issue_url"] is None
 
     def test_only_issue_opt_rejected(self, runner: CliRunner) -> None:
+        # #1292: a lone --issue (no --pr) is rejected with a targeted message.
         result = runner.invoke(
             checkup, ["--issue", "https://github.com/o/r/issues/1"]
         )
         assert result.exit_code == 2
-        assert "must both be provided" in result.output
+        assert "--issue requires --pr" in result.output
 
     def test_pr_plus_target_rejected(self, runner: CliRunner) -> None:
         result = runner.invoke(
