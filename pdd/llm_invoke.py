@@ -2904,6 +2904,26 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
+
+def _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode,
+                                  model_name, output_pydantic, output_schema):
+    """Rebuild retry/repair messages, re-injecting the schema for chatgpt/ models.
+
+    The cache-bypass / malformed-JSON / invalid-code retry paths rebuild messages
+    from scratch via :func:`_format_messages`. For chatgpt/ subscription models the
+    backend ignores ``response_format`` (dropped on those calls), so the in-prompt
+    schema is the ONLY structured-output enforcement — it must be re-injected on
+    every retry or the retry returns prose (issue #1269). Non-chatgpt models and
+    non-structured calls are unaffected.
+    """
+    messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+    if not use_batch_mode and str(model_name).lower().startswith("chatgpt/"):
+        schema = output_pydantic.model_json_schema() if output_pydantic else output_schema
+        if schema is not None:
+            from pdd.codex_subscription import inject_chatgpt_schema_instruction
+            messages = inject_chatgpt_schema_instruction(messages, schema)
+    return messages
+
 # --- JSON Extraction Helpers ---
 
 def _extract_fenced_json_block(text: str) -> Optional[str]:
@@ -3596,6 +3616,26 @@ def llm_invoke(
         # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
         # `pdd sync --model` takes effect this run (issue #1269).
         _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
+        # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
+        # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
+        # catalog, so an existing install with an older user/project CSV will not
+        # contain the curated OpenAI ChatGPT (chatgpt/*) rows. Without a clear
+        # message, `--model chatgpt/...` silently falls through to other models.
+        if str(_effective_default_model).lower().startswith("chatgpt/"):
+            try:
+                _has_family = model_df["model"].astype(str).str.lower().str.startswith("chatgpt/").any()
+            except Exception:
+                _has_family = True  # don't block on an unexpected df shape
+            if not _has_family:
+                logger.error(
+                    "Requested model %r but the active model catalog (%s) has no "
+                    "chatgpt/ rows. A user/project llm_model.csv is shadowing the "
+                    "packaged catalog. Add the 'OpenAI ChatGPT' family rows to that "
+                    "CSV (or remove the file to use the packaged catalog). See the "
+                    "README 'ChatGPT/Codex subscription' section.",
+                    _effective_default_model,
+                    LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
+                )
         candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
@@ -3928,7 +3968,7 @@ def llm_invoke(
                     # (it returns prose), so enforce the schema in-band and drop the
                     # ignored response_format. Mirrors the Groq handling above. (#1269)
                     if is_chatgpt_subscription:
-                        from pdd.codex_subscription import build_chatgpt_schema_instruction
+                        from pdd.codex_subscription import inject_chatgpt_schema_instruction
                         _schema_dict = None
                         if output_pydantic:
                             _schema_dict = output_pydantic.model_json_schema()
@@ -3936,17 +3976,12 @@ def llm_invoke(
                             _schema_dict = output_schema
                         litellm_kwargs.pop("response_format", None)
                         if _schema_dict is not None:
-                            _instruction = build_chatgpt_schema_instruction(_schema_dict)
-                            _messages_list = litellm_kwargs.get("messages", [])
-                            if (
-                                _messages_list
-                                and isinstance(_messages_list[0], dict)
-                                and _messages_list[0].get("role") == "system"
-                            ):
-                                _messages_list[0]["content"] += _instruction
-                            elif _messages_list and isinstance(_messages_list[0], dict):
-                                _messages_list.insert(0, {"role": "system", "content": _instruction})
-                            litellm_kwargs["messages"] = _messages_list
+                            # Shared helper — used here AND in the retry/repair paths
+                            # (via _build_chatgpt_retry_messages) so a chatgpt/ retry
+                            # never loses the schema instruction (issue #1269).
+                            litellm_kwargs["messages"] = inject_chatgpt_schema_instruction(
+                                litellm_kwargs.get("messages", []), _schema_dict
+                            )
                             if verbose:
                                 logger.info("[INFO] ChatGPT subscription structured output via schema-in-prompt")
                     # As a fallback, one could use:
@@ -4470,7 +4505,7 @@ def llm_invoke(
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
                                     litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
@@ -4540,7 +4575,7 @@ def llm_invoke(
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
                                     original_cache = litellm.cache
                                     litellm.cache = None
@@ -4810,7 +4845,7 @@ def llm_invoke(
                                     # Add a small variation to bypass cache
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
-                                        retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                        retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                         # Disable cache for retry
                                         original_cache = litellm.cache
                                         litellm.cache = None

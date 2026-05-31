@@ -253,6 +253,110 @@ class _RawResponseProxy:
         return getattr(self._inner, name)
 
 
+# SSE event-type strings emitted by the Codex backend. These equal litellm's
+# ResponsesAPIStreamEvents enum *values*; kept as plain strings so the splice is
+# testable without importing litellm.
+_SSE_OUTPUT_ITEM_DONE = "response.output_item.done"
+_SSE_RESPONSE_COMPLETED = "response.completed"
+
+
+def _strip_sse_data(line: str) -> Optional[str]:
+    """Return the payload of an SSE ``data:`` line, else None.
+
+    Prefers litellm's own stripper (handles odd framing) and falls back to a
+    manual ``data:`` strip so this stays usable/testable when litellm internals
+    are unavailable.
+    """
+    try:
+        from litellm.utils import CustomStreamWrapper
+        stripped = CustomStreamWrapper._strip_sse_data_from_chunk(line)
+        if stripped is not None:
+            return stripped
+    except Exception:
+        pass
+    line = line.strip()
+    return line[len("data:"):] if line.startswith("data:") else None
+
+
+def _collapse_codex_output(collected: list) -> list:
+    """Collapse collected ``output_item.done`` items to the single answer message.
+
+    Codex (gpt-5.x) can emit several message items — e.g. an empty
+    ``phase='commentary'`` preamble plus the real ``phase='final_answer'``.
+    litellm's responses->chat transform mishandles multiple/empty message items
+    and yields a response with no usable ``.choices`` (issue #1269). Prefer the
+    ``final_answer`` message (else the last non-empty), matching the
+    single-message shape litellm converts correctly. Fall back to the raw items
+    only if no message carried text.
+    """
+    def _item_text(item: Dict[str, Any]) -> str:
+        return "".join(
+            part.get("text", "")
+            for part in (item.get("content") or [])
+            if isinstance(part, dict)
+        )
+
+    messages = [it for it in collected if isinstance(it, dict) and it.get("type") == "message"]
+    nonempty = [it for it in messages if _item_text(it).strip()]
+    if nonempty:
+        finals = [it for it in nonempty if it.get("phase") == "final_answer"]
+        return [finals[-1] if finals else nonempty[-1]]
+    return collected
+
+
+def splice_codex_output_into_sse(
+    body_text: str,
+    item_done_type: Any = _SSE_OUTPUT_ITEM_DONE,
+    completed_type: Any = _SSE_RESPONSE_COMPLETED,
+) -> Optional[str]:
+    """Repair an empty ``response.completed.output`` in a Codex SSE body.
+
+    The Codex backend streams content via ``response.output_item.done`` events
+    and sends a ``response.completed`` event whose ``output`` array is empty
+    (upstream BerriAI/litellm#25429). This collects the done items and, if the
+    completed event's ``output`` is empty, splices in the collapsed output (the
+    single usable message — see :func:`_collapse_codex_output`). Returns the
+    rewritten body, or ``None`` when there is nothing to fix. Pure string->string;
+    safe to unit-test with synthetic SSE.
+    """
+    lines = body_text.splitlines()
+    collected: list = []
+    completed_idx = None
+    completed_payload = None
+    for idx, raw_line in enumerate(lines):
+        stripped = _strip_sse_data(raw_line)
+        if not stripped:
+            continue
+        stripped = stripped.strip()
+        if not stripped or stripped == "[DONE]":
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        event_type = parsed.get("type")
+        if event_type == item_done_type:
+            item = parsed.get("item")
+            if isinstance(item, dict):
+                collected.append(item)
+        elif event_type == completed_type:
+            completed_idx = idx
+            completed_payload = parsed
+    if completed_idx is None or completed_payload is None or not collected:
+        return None
+    response_obj = completed_payload.get("response")
+    if not isinstance(response_obj, dict) or response_obj.get("output"):
+        return None  # nothing to fix — backend already populated output
+    response_obj = dict(response_obj)
+    response_obj["output"] = _collapse_codex_output(collected)
+    completed_payload = dict(completed_payload)
+    completed_payload["response"] = response_obj
+    lines[completed_idx] = "data: " + json.dumps(completed_payload)
+    return "\n".join(lines)
+
+
 def apply_litellm_chatgpt_output_patch() -> bool:
     """Work around litellm's empty ``chatgpt/`` Responses output (upstream #25429).
 
@@ -294,69 +398,14 @@ def apply_litellm_chatgpt_output_patch() -> bool:
 
     original = cfg.transform_response_api_response
 
-    def _splice_output_into_body(body_text: str) -> Optional[str]:
-        """Return a body whose completed event carries the collected items, else None."""
-        lines = body_text.splitlines()
-        collected = []
-        completed_idx = None
-        completed_payload = None
-        for idx, raw_line in enumerate(lines):
-            stripped = CustomStreamWrapper._strip_sse_data_from_chunk(raw_line)
-            if not stripped:
-                continue
-            stripped = stripped.strip()
-            if not stripped or stripped == "[DONE]":
-                continue
-            try:
-                parsed = json.loads(stripped)
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            event_type = parsed.get("type")
-            if event_type == item_done:
-                item = parsed.get("item")
-                if isinstance(item, dict):
-                    collected.append(item)
-            elif event_type == completed:
-                completed_idx = idx
-                completed_payload = parsed
-        if completed_idx is None or completed_payload is None or not collected:
-            return None
-        response_obj = completed_payload.get("response")
-        if not isinstance(response_obj, dict) or response_obj.get("output"):
-            return None  # nothing to fix — backend already populated output
-        response_obj = dict(response_obj)
-        # Codex (gpt-5.x) can emit several message items — e.g. an empty
-        # phase='commentary' preamble plus the real phase='final_answer'. litellm's
-        # responses->chat transform mishandles multiple/empty message items and
-        # returns a response with no usable ``.choices`` (issue #1269). Collapse to
-        # the single message that actually carries the answer (prefer
-        # phase='final_answer', else the last non-empty message), matching the
-        # single-message shape litellm converts correctly. Fall back to the raw
-        # collected items only if no message carried text.
-        def _item_text(item: Dict[str, Any]) -> str:
-            return "".join(
-                part.get("text", "")
-                for part in (item.get("content") or [])
-                if isinstance(part, dict)
-            )
-
-        messages = [it for it in collected if it.get("type") == "message"]
-        nonempty = [it for it in messages if _item_text(it).strip()]
-        if nonempty:
-            finals = [it for it in nonempty if it.get("phase") == "final_answer"]
-            response_obj["output"] = [finals[-1] if finals else nonempty[-1]]
-        else:
-            response_obj["output"] = collected
-        completed_payload = dict(completed_payload)
-        completed_payload["response"] = response_obj
-        lines[completed_idx] = "data: " + json.dumps(completed_payload)
-        return "\n".join(lines)
-
     def patched(self, model, raw_response, logging_obj):  # noqa: ANN001
+        # Splice logic lives in module-level splice_codex_output_into_sse() so it
+        # is unit-testable with synthetic SSE (issue #1269). Pass the resolved
+        # enum members so matching is identical to litellm's own event types.
         try:
-            new_body = _splice_output_into_body(raw_response.text or "")
+            new_body = splice_codex_output_into_sse(
+                raw_response.text or "", item_done_type=item_done, completed_type=completed
+            )
         except Exception:  # pragma: no cover - defensive; fall back to original
             new_body = None
         if new_body is not None:
@@ -384,3 +433,27 @@ def build_chatgpt_schema_instruction(schema: Dict[str, Any]) -> str:
         f"```json\n{json.dumps(schema, indent=2)}\n```\n"
         "Respond ONLY with the JSON object — no prose, no markdown fences, no commentary."
     )
+
+
+def inject_chatgpt_schema_instruction(messages: Any, schema: Optional[Dict[str, Any]]) -> Any:
+    """Inject the JSON-coercion instruction into a (non-batch) ``messages`` list.
+
+    Appends :func:`build_chatgpt_schema_instruction` to an existing leading
+    ``system`` message, else inserts a new ``system`` message. Returns the
+    (mutated) list. No-op when ``schema`` is None or ``messages`` is empty / not a
+    flat list of dicts. Used for BOTH the initial structured call and the
+    retry/repair paths so a ``chatgpt/`` retry never loses the schema (issue
+    #1269) — the subscription backend ignores ``response_format``, so the
+    in-prompt schema is the only enforcement.
+    """
+    if schema is None or not isinstance(messages, list) or not messages:
+        return messages
+    first = messages[0]
+    if not isinstance(first, dict):
+        return messages
+    instruction = build_chatgpt_schema_instruction(schema)
+    if first.get("role") == "system":
+        first["content"] = (first.get("content") or "") + instruction
+    else:
+        messages.insert(0, {"role": "system", "content": instruction})
+    return messages

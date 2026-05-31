@@ -296,10 +296,11 @@ def test_anthropic_outranks_codex_so_default_unchanged():
 
 
 def test_chatgpt_structured_never_sends_response_format(monkeypatch):
-    """P1b: chatgpt/ structured calls must never send response_format — not the
-    initial call (popped) nor the retry/repair calls (the subscription backend
-    ignores it; schema is enforced in-prompt). Force non-JSON so retry/repair fire,
-    then assert response_format is absent from every recorded completion call."""
+    """P1b (#1269, Greg review): EVERY chatgpt/ structured completion attempt —
+    the initial call AND the retry/repair calls — must (a) omit response_format
+    (the subscription backend ignores it) and (b) carry the in-prompt schema
+    instruction (the ONLY structured-output enforcement). Force non-JSON so the
+    repair retry fires, then assert both invariants on every recorded call."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
@@ -318,11 +319,20 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
     df["avg_cost"] = 0.0
     df["structured_output"] = df["structured_output"].astype(bool)
 
-    seen = []
+    # Marker from build_chatgpt_schema_instruction().
+    SCHEMA_MARKER = "valid JSON object matching this schema"
+    seen = []  # one entry per attempt: {"rf": bool, "schema": bool}
 
     def fake_completion(**kwargs):
-        seen.append("response_format" in kwargs)
-        msg = type("M", (), {"content": "definitely not json", "role": "assistant"})()
+        msgs = kwargs.get("messages") or []
+        has_schema = any(
+            isinstance(m, dict) and SCHEMA_MARKER in (m.get("content") or "")
+            for m in msgs
+        )
+        seen.append({"rf": "response_format" in kwargs, "schema": has_schema})
+        # Return None content to force the cache-bypass retry path (one of the
+        # three retry sites), so we verify the retry call re-injects the schema.
+        msg = type("M", (), {"content": None, "role": "assistant"})()
         choice = type("C", (), {"message": msg, "finish_reason": "stop"})()
         usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10})()
         return type("R", (), {"choices": [choice], "usage": usage})()
@@ -338,7 +348,62 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
             pass
 
     assert seen, "litellm.completion was never called"
-    assert not any(seen), f"chatgpt/ call(s) sent response_format: {seen}"
+    assert len(seen) >= 2, f"expected initial + at least one retry attempt, got {seen}"
+    assert not any(s["rf"] for s in seen), f"chatgpt/ call(s) sent response_format: {seen}"
+    assert all(s["schema"] for s in seen), (
+        f"a chatgpt/ structured attempt lacked the schema instruction (retry regressed): {seen}"
+    )
+
+
+def test_splice_collapses_gpt54_multi_message_output():
+    """#1269 (Greg review): gpt-5.4 emits an empty phase='commentary' message plus
+    the real phase='final_answer'; splice_codex_output_into_sse must collapse the
+    empty response.completed.output to the single final_answer message (litellm's
+    responses->chat transform mishandles multiple/empty message items)."""
+    import json as _json
+    from pdd.codex_subscription import splice_codex_output_into_sse
+
+    def _data(obj):
+        return "data: " + _json.dumps(obj)
+
+    body = "\n".join([
+        _data({"type": "response.created"}),
+        _data({"type": "response.output_item.done", "item": {
+            "type": "message", "phase": "commentary",
+            "content": [{"type": "output_text", "text": ""}]}}),
+        _data({"type": "response.output_item.done", "item": {
+            "type": "message", "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "def add(a, b): return a + b"}]}}),
+        _data({"type": "response.completed", "response": {"output": []}}),
+        "data: [DONE]",
+    ])
+
+    out = splice_codex_output_into_sse(body)
+    assert out is not None, "splice should rewrite the empty completed.output"
+
+    completed = None
+    for line in out.splitlines():
+        s = line[len("data:"):].strip() if line.startswith("data:") else None
+        if not s or s == "[DONE]":
+            continue
+        ev = _json.loads(s)
+        if ev.get("type") == "response.completed":
+            completed = ev
+    assert completed is not None
+    output = completed["response"]["output"]
+    assert len(output) == 1, f"expected a single collapsed message, got {output}"
+    assert output[0].get("phase") == "final_answer"
+    text = "".join(p.get("text", "") for p in output[0].get("content", []))
+    assert "def add" in text
+
+    # No-op when the backend already populated completed.output.
+    already = "\n".join([
+        _data({"type": "response.output_item.done", "item": {
+            "type": "message", "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "x"}]}}),
+        _data({"type": "response.completed", "response": {"output": [{"type": "message"}]}}),
+    ])
+    assert splice_codex_output_into_sse(already) is None
 
 
 def test_catalog_generator_preserves_chatgpt_family():
