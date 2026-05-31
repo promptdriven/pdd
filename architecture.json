@@ -9364,6 +9364,50 @@
     }
   },
   {
+    "reason": "Bridges a ChatGPT/Codex subscription (codex login token in ~/.codex/auth.json) into litellm's chatgpt/ provider so llm_invoke can use it as a flat-rate fallback when ANTHROPIC_API_KEY is missing or rate-limited (issue #1269).",
+    "description": "ChatGPT/Codex subscription support for llm_invoke: bridges ~/.codex/auth.json into litellm's chatgpt/ provider auth dir, applies the litellm empty-output workaround (#25429/PR#27562), detects subscription auth for the credential gate, and builds the schema-in-prompt instruction for structured output.",
+    "dependencies": [],
+    "priority": 236,
+    "filename": "codex_subscription_python.prompt",
+    "filepath": "pdd/codex_subscription.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "is_chatgpt_subscription_model",
+            "signature": "(model_name)",
+            "returns": "bool"
+          },
+          {
+            "name": "bridge_codex_auth_for_litellm",
+            "signature": "()",
+            "returns": "bool"
+          },
+          {
+            "name": "has_codex_subscription_auth",
+            "signature": "()",
+            "returns": "bool"
+          },
+          {
+            "name": "apply_litellm_chatgpt_output_patch",
+            "signature": "()",
+            "returns": "bool"
+          },
+          {
+            "name": "build_chatgpt_schema_instruction",
+            "signature": "(schema)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Parses prompt contract sections into a deterministic IR.",
     "description": "Extracts contract_rules, coverage, waivers, vocabulary, capabilities, and related metadata from .prompt files and stories for downstream deterministic checks.",
     "dependencies": [],
