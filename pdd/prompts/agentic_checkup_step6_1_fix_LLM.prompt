@@ -122,6 +122,8 @@ Fix all issues discovered in Steps 2-5, in order of severity (critical first):
 
 % Output
 
+Source issue present: `{has_issue}`. When this value is `false` (PR-only review with no linked issue, #1292), do NOT post any GitHub comment in this step — the orchestrator posts the single canonical report on the PR; skip the `gh issue comment` instruction below. When it is `true` (or in issue mode), post as described:
+
 After completing your work, use `gh issue comment` to post your findings to issue #{issue_number}:
 
 ```
@@ -154,5 +156,5 @@ FILES_MODIFIED: path/to/file3, path/to/file4
 
 - Fix issues in order of severity (critical first)
 - If a test assertion correctly detects a real bug, fix the CODE, not the test
-- Always post your findings as a GitHub comment before completing
+- Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
