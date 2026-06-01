@@ -2553,6 +2553,14 @@ def _select_model_candidates(
         # For now, let's raise an error as it likely indicates a CSV issue.
         raise ValueError("No models available after initial filtering (all had NaN 'api_key'?).")
 
+    # Issue #1330: the provider implied by a provider-prefixed configured base
+    # model name (e.g. vertex_ai/...). When set, both the surrogate-base choice
+    # AND the final candidate ordering keep this provider's rows ahead of others,
+    # so a Google/Vertex-configured job never attempts Anthropic-keyed rows by
+    # CSV-ranking accident — across ALL strength branches, including the default
+    # strength=1.0 path the sync command uses.
+    preferred_provider = _provider_for_base_model_name(base_model_name)
+
     # 2. Find Base Model
     base_model_row = available_df[available_df['model'] == base_model_name]
     if base_model_row.empty:
@@ -2604,7 +2612,6 @@ def _select_model_candidates(
             # within the configured provider family; only fall back to the
             # global first row when no same-provider row exists.
             base_model = None
-            preferred_provider = _provider_for_base_model_name(base_model_name)
             if preferred_provider is not None:
                 same_provider = available_df[available_df['provider'] == preferred_provider]
                 if not same_provider.empty:
@@ -2689,6 +2696,19 @@ def _select_model_candidates(
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    # Issue #1330: when the configured base model carries a provider prefix,
+    # keep that provider's rows ahead of every other provider — across ALL
+    # strength branches (the strength==0.5 branch already promotes the base, but
+    # the default strength=1.0 / >0.5 and <0.5 branches sort purely by metric, so
+    # tied top-ELO rows fall back to the provider-sorted CSV order and put the
+    # Anthropic-keyed Bedrock row first). This is a STABLE reordering: it only
+    # moves preferred-provider rows forward and preserves the metric ordering
+    # within each provider group, so the strength semantics still hold within the
+    # configured provider while other providers remain as later fallbacks. No-op
+    # for bare/unprefixed configured names (preferred_provider is None).
+    if preferred_provider is not None:
+        candidates.sort(key=lambda c: 0 if c.get('provider') == preferred_provider else 1)
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints

@@ -5040,6 +5040,73 @@ class TestProviderAwareSurrogateBase:
             f"surrogate base requires an Anthropic API key: {base['model']}"
         )
 
+    @staticmethod
+    def _assert_vertex_first(candidates):
+        """No Bedrock/direct-Anthropic (key-bearing) row may be attempted before
+        the first Google Vertex AI candidate; candidates[0] must be Vertex."""
+        models = [c["model"] for c in candidates]
+        assert candidates[0]["provider"] == "Google Vertex AI", models
+        first_vertex = next(
+            i for i, c in enumerate(candidates) if c["provider"] == "Google Vertex AI"
+        )
+        preceding = candidates[:first_vertex]
+        offenders = [
+            c["model"] for c in preceding
+            if "ANTHROPIC_API_KEY" in str(c["api_key"]) or "AWS_" in str(c["api_key"])
+        ]
+        assert not offenders, f"Anthropic/Bedrock attempted before Vertex: {offenders}"
+
+    def test_default_strength_missing_vertex_base_routes_to_vertex(self, llm_mod, tmp_path, monkeypatch):
+        # Issue #1330 review r2: the DEFAULT strength is 1.0 (PDD_STRENGTH_DEFAULT),
+        # which the sync path forwards. The configured Vertex model is absent from
+        # the CSV; the surrogate + provider-scoped ordering must still put Vertex
+        # first at strength 1.0 (the >0.5 branch previously sorted purely by ELO
+        # and let the tied-ELO Bedrock row win).
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        self._assert_vertex_first(
+            llm_mod._select_model_candidates(1.0, "vertex_ai/gemini-3.5-flash", df)
+        )
+
+    def test_default_strength_configured_vertex_model_present_routes_to_vertex(self, llm_mod, tmp_path, monkeypatch):
+        # The reviewer's "configured-model-present" case: the same default-strength
+        # ordering bug reproduces even when the configured Vertex model exists.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        self._assert_vertex_first(
+            llm_mod._select_model_candidates(1.0, "vertex_ai/gemini-3-flash-preview", df)
+        )
+
+    def test_default_strength_top_elo_tie_does_not_route_to_bedrock(self, llm_mod, tmp_path, monkeypatch):
+        # The tie the reviewer flagged: Vertex claude-opus-4-8 (1570) vs Bedrock
+        # anthropic.claude-opus-4-8 (1575). At strength 1.0 the configured Vertex
+        # provider must still win the ordering rather than the higher-ELO Bedrock row.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        self._assert_vertex_first(
+            llm_mod._select_model_candidates(1.0, "vertex_ai/claude-opus-4-8", df)
+        )
+
+    def test_provider_scoping_preserves_other_providers_as_fallback(self, llm_mod, tmp_path, monkeypatch):
+        # Provider scoping reorders, it does not exclude: non-Vertex rows remain in
+        # the cascade as later fallbacks so a Vertex outage can still degrade.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        cands = llm_mod._select_model_candidates(1.0, "vertex_ai/gemini-3.5-flash", df)
+        provs = [c["provider"] for c in cands]
+        assert "AWS Bedrock" in provs and "Anthropic" in provs, provs
+        # ...but only after every Vertex row.
+        last_vertex = max(i for i, p in enumerate(provs) if p == "Google Vertex AI")
+        assert all(p == "Google Vertex AI" for p in provs[: last_vertex + 1]), provs
+
+    def test_bare_configured_name_ordering_unchanged(self, llm_mod, tmp_path, monkeypatch):
+        # No provider prefix => no provider scoping => original behavior (highest
+        # ELO first, which is the Bedrock row in this fixture).
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        cands = llm_mod._select_model_candidates(1.0, "claude-opus-4-8", df)
+        assert cands[0]["model"] == "anthropic.claude-opus-4-8"  # AWS Bedrock, top ELO
+
     def test_no_same_provider_row_falls_back_to_first_row(self, llm_mod, tmp_path):
         # Backward-compat (issue #296): a prefix with no matching provider rows
         # still falls back to the first available CSV row.
