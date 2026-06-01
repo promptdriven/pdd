@@ -32,19 +32,30 @@ def main() -> None:
          patch("pdd.agentic_checkup._run_gh_command", return_value=(True, issue_payload)), \
          patch("pdd.agentic_checkup._fetch_comments", return_value="No comments."), \
          patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator") as mock_orchestrator:
-        # Simulate successful checkup
-        mock_orchestrator.return_value = (
-            True,  # success
-            "Checkup complete. Issues fixed.",  # message
-            2.50,  # total_cost
-            "anthropic",  # model_used
-        )
+        mock_orchestrator.return_value = (True, "Checkup complete. Issues fixed.", 2.50, "anthropic")
 
+        # Issue mode: review a project health issue.
         success, message, cost, model = run_agentic_checkup(
             issue_url=issue_url,
             verbose=True,
             quiet=False,
             no_fix=False,
+        )
+
+    # PR-only / no-issue mode (#1292): review a PR on its own merits.
+    # Pass issue_url=None (or "") to skip issue alignment and review the diff
+    # for correctness and quality only.
+    pr_url = "https://github.com/example/repo/pull/7"
+    with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), \
+         patch("pdd.agentic_checkup._fetch_pr_context", return_value="PR context."), \
+         patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator") as mock_orch_pr:
+        mock_orch_pr.return_value = (True, "PR looks good.", 1.20, "anthropic")
+
+        success, message, cost, model = run_agentic_checkup(
+            issue_url=None,           # no issue — review the PR on its own merits
+            pr_url=pr_url,
+            no_fix=True,
+            use_github_state=False,
         )
 
     # Output the results

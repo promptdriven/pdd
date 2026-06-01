@@ -76,6 +76,8 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
 
 % Output
 
+Source issue present: `{has_issue}`. When this value is `false` (PR-only review with no linked issue, #1292), do NOT post any GitHub comment in this step — the orchestrator posts the single canonical report on the PR; skip the `gh issue comment` instruction below. When it is `true` (or in issue mode), post as described:
+
 After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
 
 ```
@@ -106,11 +108,44 @@ Your comment should follow this format:
 *Proceeding to Step 6: Fix Issues*
 ```
 
+% Required: Structured Failure-Signal Block
+
+REGARDLESS of whether tests pass or fail, the LAST block of your final
+response MUST be a fenced ```failure_signal``` block in the exact shape
+below. Step 6 receives this block verbatim and uses it to scope fixes;
+omitting or paraphrasing it forces Step 6 to invent context and produces
+unrelated changes.
+
+```failure_signal
+command: <exact test command you ran>
+exit_code: <integer exit code, or "skipped" if the command was not run>
+status: <pass | fail | skipped | error>
+failing_ids: <comma-separated test IDs, e.g. tests/test_main.py::test_x; empty when no failures>
+artifact_path: <relative path to a saved full log on disk, or "inline">
+output: |
+  <raw stdout/stderr of the failing tests, redacted of any tokens or
+  credentials. Cap at ~200 lines; if longer, point at artifact_path
+  instead. Include FAILED lines, tracebacks, and short test summary
+  info. NEVER omit this when status is fail or error.>
+```
+
+Notes:
+- When `artifact_path` is a file, the file MUST contain the full output and
+  the inline `output:` may be empty.
+- When the test command could not be run at all (time budget, missing
+  scope), set `status: skipped`, `exit_code: skipped`, and put the exact
+  command that was not run in `command`. The `output:` field may then be
+  a one-line explanation.
+- Do NOT include API tokens, Bearer headers, or `https://user:token@host`
+  URLs in `output:` or anywhere else in this block — Step 5 output is
+  surfaced verbatim to operator-visible logs.
+
 % Important
 
 - Discover the correct test command from the project — do NOT assume pytest or jest
 - Run the actual tests and capture real output
 - If tests take too long, use a timeout and report partial results; never present targeted-only PR-mode tests as a full-suite pass
 - In PR mode, `targeted` test scope is opt-in. `full` (the default) means the user expects comprehensive verification — do NOT silently downgrade to targeted because the suite is large; instead report the skipped command honestly
-- Always post your findings as a GitHub comment before completing
+- Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
+- IMPORTANT: The `failure_signal` block is REQUIRED on every Step 5 response — Step 6 will reject failures that lack it

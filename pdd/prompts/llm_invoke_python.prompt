@@ -121,15 +121,17 @@
     - Single var: check `os.getenv(var)`, pass as `api_key=` to litellm. If missing, prompt interactively.
     - Multi var (pipe-delimited): check all env vars. Do NOT pass `api_key=` to litellm — it reads them from os.environ automatically. If any missing, log error and direct user to `pdd setup`.
     - Empty: device flow or local model — no key needed, skip check. Exception: `github_copilot/` models in `PDD_FORCE` mode must check for an existing OAuth token at the path resolved from `GITHUB_COPILOT_TOKEN_DIR` (default `~/.config/litellm/github_copilot`) / `GITHUB_COPILOT_API_KEY_FILE` (default `api-key.json`). If the token file does not exist, skip the model to prevent litellm from hanging on an interactive device flow.
+   - `chatgpt/` models authenticate with a ChatGPT subscription via the `codex login` token (issue #1269), enabling a flat-rate fallback when `ANTHROPIC_API_KEY` is missing or rate-limited. In `_ensure_api_key`, bridge the codex `auth.json` (`$CODEX_HOME/auth.json`, default `~/.codex/auth.json`; its OAuth fields are nested under `tokens` and must be flattened to the top level into a private `CHATGPT_TOKEN_DIR`) and apply the litellm `chatgpt/` empty-output workaround (upstream BerriAI/litellm#25429 / PR #27562) before the call. In `PDD_FORCE` mode, skip the model when no subscription token is present so litellm never blocks on an interactive device-login flow. The subscription backend ignores `response_format`/`json_schema`, so for `chatgpt/` models requesting structured output, drop `response_format` and instead inject the JSON schema as an in-band system-message instruction (mirroring the Groq handling). This auth/patch/coercion logic lives in `pdd/codex_subscription.py`. The ChatGPT subscription is a first-class provider FAMILY (CSV provider `OpenAI ChatGPT`): multiple `chatgpt/*` model rows (e.g. `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`) with empty `api_key` and ELOs mirrored to their API-keyed twins, so `--strength` interpolates within the family like Anthropic's models. These are distinct from the API-keyed `OpenAI` provider rows (which need `OPENAI_API_KEY`) — litellm routes the subscription rows by the `chatgpt/` prefix. Bring-your-own-subscription only — never pool one subscription across users.
     - If missing and `PDD_FORCE` env var is set, skip model (non-interactive mode).
     - For single-var: prompt user via `input()`, sanitize key, set env var, save to .env file.
     - .env save: Replace key in-place (no comment + append). Remove old commented versions of the same key. Preserve all other content.
     - Mark key as newly acquired for retry logic on auth errors.
 
 % Reasoning Parameters:
-    - CSV columns: reasoning_type ('budget', 'effort', 'none'), max_reasoning_tokens.
+    - CSV columns: reasoning_type ('budget', 'effort', 'adaptive', 'none'), max_reasoning_tokens.
     - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param with type="enabled").
     - 'effort': Map time to "low"/"medium"/"high". OpenAI gpt-5*: pass reasoning={effort, summary:"auto"} for Responses API. Other models: pass reasoning_effort.
+    - 'adaptive': Anthropic Claude Opus 4.7+ only. Map time to effort and send thinking={type:"adaptive", display:"summarized"} plus reasoning_effort (LiteLLM derives output_config.effort). Legacy thinking.type="enabled" 400s on these models.
     - 'none': No reasoning parameters.
 
 % LLM Invocation:
@@ -309,6 +311,7 @@
     - Register a success callback with litellm.success_callback.
     - Extract token usage and finish reason.
     - Calculate cost using litellm.completion_cost(); fall back to CSV rates (_MODEL_RATE_MAP) if LiteLLM fails.
+    - When registering CSV-only models with LiteLLM (litellm.register_model) so completion_cost works, derive litellm_provider from the model id prefix when present (e.g. 'vertex_ai/...'), otherwise map the CSV 'provider' column to the litellm provider token for the known direct/relay providers (e.g. Anthropic -> 'anthropic', AWS Bedrock -> 'bedrock'), keeping 'openai' only as the residual fallback for providers not in the mapping. The point is to not let a litellm-unknown bare-named non-OpenAI model (e.g. a new direct-Anthropic or Bedrock Opus) fall through to OpenAI, which would misroute it (wrong provider + wrong key -> auth failure -> silent fallback).
     - Store in module-level _LAST_CALLBACK_DATA and include finish_reason in the returned dictionary.
 
 % WSL Diagnostics:

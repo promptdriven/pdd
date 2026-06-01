@@ -1,3 +1,64 @@
+"""
+================================================================================
+TEST PLAN FOR FIX_ERROR_LOOP.PY
+================================================================================
+
+This test suite covers all behavioral rules, constraints, edge cases, and parameters
+of the `fix_error_loop` module in `pdd/fix_error_loop.py`.
+
+Requirements & Associated Test Functions:
+1. Iterative Fixing Logic
+   - test_successful_fix
+   - test_max_attempts_exceeded
+2. Failure-Aware Early Exit
+   - Timeout/flaky exit: test_early_exit_timeout_flaky (implicit or targeted)
+   - Syntax/import exit: test_early_exit_syntax_import (implicit or targeted)
+   - Assertion/logic stagnant exit: test_early_exit_assertion_logic_stagnant
+3. Statistics & Improvement Tracking
+   - test_already_passing
+   - test_successful_fix
+4. Structured XML Logging
+   - test_error_log_includes_model_name
+   - test_error_log_contains_analysis_and_model
+   - test_format_log_for_output
+5. Best State Recovery
+   - test_fix_error_loop_best_state_recovery
+   - test_z3_best_state_logic
+   - test_z3_best_iteration_logic
+6. Verification Step & Restoration
+   - test_verification_failure
+   - test_fix_error_loop_verification_fails_restores_backup
+7. Agentic Fallback Triggering
+   - Normal loop exhaustion: test_agentic_fallback_triggered
+   - Error during backup/file-read: test_backup_creation_error_triggers_agentic_fallback, test_file_read_error_triggers_agentic_fallback
+   - Initial test exception: test_initial_test_exception_triggers_agentic_fallback, test_initial_exception_triggers_agentic
+8. Non-Python Support
+   - test_non_python_triggers_agentic_fallback_success
+   - test_non_python_triggers_agentic_fallback_failure
+   - test_fix_error_loop_non_python_subprocess_has_cwd
+9. Cost & Budget Management
+   - test_fix_error_loop_budget_exceeded
+   - test_z3_budget_constraint
+10. Cloud Execution & Prepending
+    - test_cloud_fix_errors_success
+    - test_fix_error_loop_cloud_mode
+11. Output Contract
+    - test_fix_error_loop_initially_passing
+12. Result Normalization (2/3/4/5-tuples)
+    - test_normalize_agentic_result
+
+Code Path & Param Coverage:
+- Parameter forwarding: test_cloud_fix_errors_success, test_fix_error_loop_cloud_mode
+- Boolean parameters (verbose=True/False, agentic_fallback=True/False):
+  - test_already_passing (verbose=True, agentic_fallback=False)
+  - test_successful_fix (verbose=False, agentic_fallback=False)
+- Return shapes and type safety: test_normalize_agentic_result
+- Regression test for stagnant assertion/logic early exit:
+  - test_early_exit_assertion_logic_stagnant (verifies the early-exit bug fix/feature added in Step 2-3)
+
+================================================================================
+"""
+
 import os
 import shutil
 from pathlib import Path
@@ -15,6 +76,7 @@ from pdd.fix_error_loop import (
     _normalize_agentic_result,
     escape_brackets
 )
+from pdd.fix_focus import FocusedInputs, FunctionSlice
 
 
 @pytest.fixture
@@ -253,7 +315,8 @@ def test_max_attempts_exceeded(setup_files):
                 max_attempts=3,           # max_attempts
                 budget=10.0,
                 error_log_file=str(files["error_log"]),
-                agentic_fallback=False
+                agentic_fallback=False,
+                failure_aware_retries=False
             )
 
     assert success is False
@@ -1248,6 +1311,50 @@ def test_cloud_fix_errors_success(mock_cloud_config, mock_requests):
     assert result == (True, True, "new_test", "new_code", "fixed it", 0.05, "cloud-gpt")
     mock_requests.post.assert_called_once()
 
+def test_cloud_fix_errors_uses_fix_code_camel_case_payload(mock_cloud_config, mock_requests):
+    """Regression: loop cloud fixCode payload must keep the backend contract."""
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "updateUnitTest": False,
+        "updateCode": True,
+        "fixedUnitTest": "test",
+        "fixedCode": "code",
+        "analysis": "fixed",
+        "totalCost": 0.25,
+        "modelName": "cloud-model",
+    }
+    mock_requests.post.return_value = mock_response
+
+    cloud_fix_errors(
+        "test",
+        "code",
+        "prompt",
+        "error",
+        "err_file",
+        0.6,
+        0.2,
+        verbose=True,
+        time=0.7,
+        code_file_ext=".py",
+        protect_tests=True,
+        failure_classification="syntax/import failure",
+    )
+
+    payload = mock_requests.post.call_args.kwargs["json"]
+    assert payload["unitTest"] == "test"
+    assert payload["errors"].startswith("[PDD failure classification] syntax/import failure")
+    assert payload["language"].lower() == "python"
+    assert payload["time"] == 0.7
+    assert payload["verbose"] is True
+    assert payload["protectTests"] is True
+    assert payload["codeFileExt"] == ".py"
+    assert "unit_test" not in payload
+    assert "protect_tests" not in payload
+    assert "code_file_ext" not in payload
+
 def test_cloud_fix_errors_no_token(mock_cloud_config):
     """Test error when no JWT token is available."""
     mock_cloud_config.get_jwt_token.return_value = None
@@ -1376,6 +1483,38 @@ def test_fix_error_loop_cloud_mode(mock_subprocess, mock_cloud, mock_pytest, moc
     assert attempts == 1
     assert cost == 0.2
     mock_cloud.assert_called_once()
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.cloud_fix_errors")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+def test_fix_error_loop_cloud_no_local_fallback_stops_without_local_llm(
+    mock_local_fix, mock_cloud, mock_pytest, mock_files, tmp_path
+):
+    """Regression: cloud-only loop mode must not silently spend local LLM budget."""
+    code, test, prompt = mock_files
+    mock_pytest.return_value = (1, 0, 0, "Fail")
+    mock_cloud.side_effect = RuntimeError("Cloud authentication failed")
+
+    success, _, _, attempts, _, _ = fix_error_loop(
+        test,
+        code,
+        prompt,
+        "prompt",
+        "verify.py",
+        0.5,
+        0.1,
+        3,
+        1.0,
+        error_log_file=str(tmp_path / "error_log.txt"),
+        use_cloud=True,
+        no_local_fallback=True,
+        agentic_fallback=True,
+    )
+
+    assert success is False
+    assert attempts == 1
+    mock_cloud.assert_called_once()
+    mock_local_fix.assert_not_called()
 
 @patch("pdd.fix_error_loop.run_pytest_on_file")
 @patch("pdd.fix_error_loop._safe_run_agentic_fix")
@@ -1744,6 +1883,368 @@ def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_
             "Test file should NOT be modified when protect_tests=True"
 
 
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_focused_loop_protects_full_test_file_and_forwards_local_kwargs(
+    mock_subprocess, mock_fix, mock_pytest, mock_files, tmp_path
+):
+    """
+    Regression: focused loop mode sends a sliced test to the LLM, but it must
+    never write that slice over the user's full test file. The local LLM call
+    must also receive the real keyword arguments instead of shifting `verbose`
+    into the `time` positional slot.
+    """
+    code, test, prompt = mock_files
+    original_test = "def test_foo(): assert foo() == 1\n\ndef test_unrelated(): assert True\n"
+    Path(test).write_text(original_test, encoding="utf-8")
+    Path(code).write_text("def foo():\n    return 0\n", encoding="utf-8")
+
+    focused = FocusedInputs(
+        focused_code="def foo():\n    return 0\n",
+        focused_tests="def test_foo(): assert foo() == 1\n",
+        slices=[
+            FunctionSlice(
+                name="foo",
+                qualname="foo",
+                start_line=1,
+                end_line=2,
+                source="def foo():\n    return 0\n",
+                indent=0,
+            )
+        ],
+    )
+
+    mock_pytest.side_effect = [
+        (1, 0, 0, "SyntaxError: invalid syntax\n  File \"code.py\", line 1\n"),
+        (0, 0, 0, "Pass"),
+    ]
+    mock_fix.return_value = (
+        True,
+        True,
+        "def test_foo(): assert foo() == 2\n",
+        "def foo():\n    return 1\n",
+        "analysis",
+        0.1,
+        "mock-model",
+    )
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.fix_error_loop.is_large", return_value=True), \
+         patch("pdd.fix_error_loop.prepare_focused_inputs", return_value=focused), \
+         patch("pdd.fix_error_loop.reconstruct_code", return_value="def foo():\n    return 1\n"):
+        success, final_test, _, attempts, _, _ = fix_error_loop(
+            test,
+            code,
+            prompt,
+            "prompt text",
+            "verify.py",
+            strength=0.6,
+            temperature=0.2,
+            max_attempts=3,
+            budget=1.0,
+            error_log_file=str(tmp_path / "error_log.txt"),
+            verbose=True,
+            time=0.7,
+            protect_tests=False,
+            agentic_fallback=False,
+        )
+
+    assert success is True
+    assert attempts == 1
+    assert Path(test).read_text(encoding="utf-8") == original_test
+    assert final_test == original_test
+
+    args, kwargs = mock_fix.call_args
+    assert args[0] == focused.focused_tests
+    assert args[1] == focused.focused_code
+    assert args[2] == "prompt text"
+    assert "SyntaxError" in args[3]
+    assert args[4] == str(tmp_path / "error_log.txt")
+    assert kwargs["strength"] == 0.6
+    assert kwargs["temperature"] == 0.2
+    assert kwargs["time"] == 0.7
+    assert kwargs["verbose"] is True
+    assert kwargs["protect_tests"] is True
+    assert kwargs["language"] == "python"
+    assert kwargs["failure_classification"] is not None
+
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+def test_focused_loop_integrates_phase1_slice_reconstruct_and_full_test_protection(
+    mock_fix, mock_pytest, mock_files, tmp_path, monkeypatch
+):
+    """
+    Integration regression for Issue #888: when the traceback only names a
+    failing test function, focused repair must run Phase 1 diagnosis, send the
+    diagnosed product-code slice plus the relevant test context to the LLM,
+    reconstruct the full source file, and keep the full test file intact.
+    """
+    code, test, prompt = mock_files
+    original_code = "\n".join(
+        [
+            "def target(value):",
+            "    return value + 1",
+            "",
+            "def unrelated():",
+            "    return 99",
+            "",
+            *[f"# filler {i}" for i in range(520)],
+        ]
+    )
+    original_test = """\
+CASES = [1]
+
+class Case:
+    def __init__(self, value):
+        self.value = value
+
+def make_case(value):
+    return Case(value)
+
+def test_compute():
+    assert target(make_case(CASES[0]).value) == 1
+
+def test_unrelated():
+    assert unrelated() == 99
+"""
+    Path(code).write_text(original_code, encoding="utf-8")
+    Path(test).write_text(original_test, encoding="utf-8")
+
+    pytest_failure = (
+        "FAILED tests/test_code.py::test_compute - AssertionError\n"
+        "Traceback (most recent call last):\n"
+        '  File "tests/test_code.py", line 11, in test_compute\n'
+        "    assert target(make_case(CASES[0]).value) == 1\n"
+        "AssertionError\n"
+    )
+    mock_pytest.side_effect = [
+        (1, 0, 0, pytest_failure),
+        (0, 0, 0, "1 passed"),
+    ]
+    mock_fix.return_value = (
+        True,
+        True,
+        "def test_compute():\n    assert False\n",
+        "def target(value):\n    return value\n",
+        "analysis",
+        0.1,
+        "mock-model",
+    )
+
+    diagnose_calls = []
+
+    def fake_diagnose(**kwargs):
+        diagnose_calls.append(kwargs)
+        return ["target"]
+
+    monkeypatch.setattr("pdd.fix_focus._diagnose_broken_functions", fake_diagnose)
+
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        test,
+        code,
+        prompt,
+        "Fix the implementation",
+        "",
+        strength=0.6,
+        temperature=0.2,
+        max_attempts=3,
+        budget=1.0,
+        error_log_file=str(tmp_path / "error_log.txt"),
+        verbose=True,
+        time=0.7,
+        protect_tests=False,
+        agentic_fallback=False,
+    )
+
+    assert success is True
+    assert attempts == 1
+    assert cost == 0.1
+    assert model == "mock-model"
+    assert diagnose_calls, "Phase 1 should run when traceback names only test functions"
+
+    sent_test, sent_code = mock_fix.call_args.args[:2]
+    assert "def target(value):" in sent_code
+    assert "def unrelated()" not in sent_code
+    assert "CASES = [1]" in sent_test
+    assert "class Case:" in sent_test
+    assert "def make_case(value):" in sent_test
+    assert "def test_compute():" in sent_test
+    assert "def test_unrelated():" not in sent_test
+    assert mock_fix.call_args.kwargs["protect_tests"] is True
+
+    disk_code = Path(code).read_text(encoding="utf-8")
+    disk_test = Path(test).read_text(encoding="utf-8")
+    assert "def target(value):\n    return value\n" in disk_code
+    assert "def unrelated():\n    return 99" in disk_code
+    assert disk_test == original_test
+    assert final_code == disk_code
+    assert final_test == original_test
+
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+def test_focused_loop_fast_path_uses_traceback_product_function_without_phase1(
+    mock_fix, mock_pytest, mock_files, tmp_path, monkeypatch
+):
+    """
+    Integration regression for Issue #888: when the traceback names the broken
+    product function, fix_error_loop should use fix_focus's fast path, send only
+    that function plus failing-test context, and skip the diagnosis LLM call.
+    """
+    code, test, prompt = mock_files
+    original_code = "\n".join(
+        [
+            "def target(value):",
+            "    raise ValueError('boom')",
+            "",
+            "def unrelated():",
+            "    return 99",
+            "",
+            *[f"# filler {i}" for i in range(520)],
+        ]
+    )
+    original_test = """\
+HELPER_VALUE = 1
+
+def helper():
+    return HELPER_VALUE
+
+def test_compute():
+    assert target(helper()) == 1
+
+def test_unrelated():
+    assert unrelated() == 99
+"""
+    Path(code).write_text(original_code, encoding="utf-8")
+    Path(test).write_text(original_test, encoding="utf-8")
+
+    pytest_failure = (
+        "FAILED tests/test_code.py::test_compute - ValueError: boom\n"
+        "Traceback (most recent call last):\n"
+        '  File "tests/test_code.py", line 7, in test_compute\n'
+        "    assert target(helper()) == 1\n"
+        '  File "code.py", line 2, in target\n'
+        "    raise ValueError('boom')\n"
+        "ValueError: boom\n"
+    )
+    mock_pytest.side_effect = [
+        (1, 0, 0, pytest_failure),
+        (0, 0, 0, "1 passed"),
+    ]
+    mock_fix.return_value = (
+        True,
+        True,
+        "def test_compute():\n    assert False\n",
+        "def target(value):\n    return value\n",
+        "analysis",
+        0.1,
+        "mock-model",
+    )
+
+    def fail_if_phase1_runs(**_kwargs):
+        pytest.fail("Phase 1 diagnosis should be skipped when traceback names target")
+
+    monkeypatch.setattr("pdd.fix_focus._diagnose_broken_functions", fail_if_phase1_runs)
+
+    success, final_test, final_code, attempts, _, _ = fix_error_loop(
+        test,
+        code,
+        prompt,
+        "Fix the implementation",
+        "",
+        strength=0.6,
+        temperature=0.2,
+        max_attempts=3,
+        budget=1.0,
+        error_log_file=str(tmp_path / "error_log.txt"),
+        verbose=True,
+        time=0.7,
+        protect_tests=False,
+        agentic_fallback=False,
+    )
+
+    assert success is True
+    assert attempts == 1
+
+    sent_test, sent_code = mock_fix.call_args.args[:2]
+    assert "def target(value):" in sent_code
+    assert "def unrelated()" not in sent_code
+    assert "HELPER_VALUE = 1" in sent_test
+    assert "def helper():" in sent_test
+    assert "def test_compute():" in sent_test
+    assert "def test_unrelated():" not in sent_test
+    assert mock_fix.call_args.kwargs["protect_tests"] is True
+
+    assert "def target(value):\n    return value\n" in final_code
+    assert "def unrelated():\n    return 99" in final_code
+    assert final_test == original_test
+    assert Path(test).read_text(encoding="utf-8") == original_test
+
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+def test_focused_loop_falls_back_to_full_file_when_focus_preparation_fails(
+    mock_fix, mock_pytest, mock_files, tmp_path
+):
+    """
+    Integration regression for Issue #888: if the focused helper cannot parse a
+    large source file, fix_error_loop should silently use the existing full-file
+    repair path instead of failing before the LLM call.
+    """
+    code, test, prompt = mock_files
+    original_code = "def target(:\n    pass\n" + ("\n# filler\n" * 520)
+    original_test = "def test_target():\n    assert target() == 1\n"
+    fixed_code = "def target():\n    return 1\n"
+    fixed_test = "def test_target():\n    assert target() == 1\n"
+    Path(code).write_text(original_code, encoding="utf-8")
+    Path(test).write_text(original_test, encoding="utf-8")
+
+    mock_pytest.side_effect = [
+        (0, 1, 0, 'SyntaxError: invalid syntax\n  File "code.py", line 1\n'),
+        (0, 0, 0, "1 passed"),
+    ]
+    mock_fix.return_value = (
+        True,
+        True,
+        fixed_test,
+        fixed_code,
+        "analysis",
+        0.1,
+        "mock-model",
+    )
+
+    success, final_test, final_code, attempts, _, _ = fix_error_loop(
+        test,
+        code,
+        prompt,
+        "Fix the syntax",
+        "",
+        strength=0.6,
+        temperature=0.2,
+        max_attempts=3,
+        budget=1.0,
+        error_log_file=str(tmp_path / "error_log.txt"),
+        protect_tests=False,
+        agentic_fallback=False,
+    )
+
+    assert success is True
+    assert attempts == 1
+
+    sent_test, sent_code = mock_fix.call_args.args[:2]
+    assert sent_code == original_code
+    assert sent_test == original_test
+    assert mock_fix.call_args.kwargs["protect_tests"] is False
+    assert final_code == fixed_code
+    assert final_test == fixed_test
+    assert Path(code).read_text(encoding="utf-8") == fixed_code
+    assert Path(test).read_text(encoding="utf-8") == fixed_test
+
+
 # ============================================================================
 # Bug Fix Tests - Issue #485: Warnings block success gate
 # ============================================================================
@@ -1852,3 +2353,204 @@ def test_fix_error_loop_non_python_subprocess_has_cwd(
         f"got cwd={actual_cwd}. fix_error_loop must use TestCommand.cwd, "
         f"not Path(test_file).parent ({test_dir})."
     )
+
+
+# ============================================================================
+# Failure-aware retry: syntax/import early-exit and classification hint
+# ============================================================================
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_failure_aware_syntax_stops_after_one_attempt_when_signature_unchanged(
+    mock_subprocess, mock_fix, mock_pytest, mock_files, tmp_path
+):
+    """
+    Regression: when the initial failure is a syntax/import error, and the LLM
+    fix does not change the error signature, the loop must stop after exactly
+    one LLM attempt -- not two.
+
+    The bug was that last_syntax_signature started as "" so the first unchanged
+    signature never matched, burning a second LLM call before stopping.
+    """
+    code, test, prompt = mock_files
+
+    # A log string that classify_failure() recognises as SYNTAX_IMPORT and
+    # extract_failure_signature() yields a stable, non-empty signature for.
+    syntax_log = (
+        'FAILED tests/test_code.py\n'
+        'ImportError while loading conftest\n'
+        'E   ImportError: No module named "missing_dep"\n'
+        '  File "code.py", line 3, in <module>\n'
+        '    import missing_dep\n'
+    )
+
+    # Initial run: syntax error.  Post-fix run: identical syntax error.
+    mock_pytest.side_effect = [
+        (1, 0, 0, syntax_log),
+        (1, 0, 0, syntax_log),
+    ]
+
+    # LLM returns something (but the underlying failure is unchanged).
+    mock_fix.return_value = (False, True, "", "def foo(): pass", "analysis", 0.1, "mock-model")
+
+    # Verification program succeeds so we don't short-circuit through that path.
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+    mock_subprocess.return_value.stderr = ""
+
+    fix_error_loop(
+        test, code, prompt, "prompt", "verify.py",
+        strength=0.5, temperature=0.0, max_attempts=5, budget=10.0,
+        failure_aware_retries=True,
+        agentic_fallback=False,
+        error_log_file=str(tmp_path / "error_log.txt"),
+    )
+
+    assert mock_fix.call_count == 1, (
+        f"Expected exactly 1 LLM attempt before stopping on unchanged syntax error, "
+        f"got {mock_fix.call_count}. The loop burned extra attempts because "
+        "last_syntax_signature was not seeded from the initial failure."
+    )
+
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_fix_errors_receives_failure_classification_hint(
+    mock_subprocess, mock_fix, mock_pytest, mock_files, tmp_path
+):
+    """
+    The local fix_errors_from_unit_tests call must receive failure_classification=
+    populated from failure_classification_hint() when failure_aware_retries=True.
+    Without this, the LLM prompt's <failure_classification> block says
+    'Not classified' even for known failure kinds.
+    The cloud fallback-to-local path must also pass the parameter.
+    """
+    code, test, prompt = mock_files
+
+    syntax_log = (
+        'SyntaxError: invalid syntax\n'
+        '  File "code.py", line 7\n'
+        '    def broken(\n'
+    )
+
+    # Initial fail, then pass so the loop exits cleanly after one attempt.
+    mock_pytest.side_effect = [
+        (1, 0, 0, syntax_log),
+        (0, 0, 0, "passed"),
+    ]
+
+    mock_fix.return_value = (False, True, "", "def foo(): pass", "analysis", 0.1, "mock-model")
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+    mock_subprocess.return_value.stderr = ""
+
+    fix_error_loop(
+        test, code, prompt, "prompt", "verify.py",
+        strength=0.5, temperature=0.0, max_attempts=3, budget=10.0,
+        failure_aware_retries=True,
+        agentic_fallback=False,
+        error_log_file=str(tmp_path / "error_log.txt"),
+    )
+
+    assert mock_fix.call_count >= 1, "fix_errors_from_unit_tests should have been called"
+
+    # Extract the failure_classification kwarg from the first call.
+    _, kwargs = mock_fix.call_args_list[0]
+    classification = kwargs.get("failure_classification")
+    assert classification is not None, (
+        "fix_errors_from_unit_tests was called without failure_classification=. "
+        "The LLM prompt's <failure_classification> block will say 'Not classified' "
+        "even for syntax/import failures."
+    )
+    assert "syntax" in classification.lower(), (
+        f"Expected classification hint to mention 'syntax', got: {classification!r}"
+    )
+def test_early_exit_assertion_logic_stagnant(setup_files):
+    """
+    Test that if assertion/logic failures are stagnant (no improvement in total fails+errors),
+    the loop exits early after 3 stagnant attempts when failure_aware_retries is True.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_run_pytest:
+        mock_run_pytest.side_effect = [
+            # Iteration 1
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # initial test fails
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails
+            # Iteration 2
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails (stagnant)
+            # Iteration 3
+            (1, 0, 0, "AssertionError: expected 5 but got 4"), # post-fix test fails (stagnant)
+        ]
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                False, False, "", "", "No analysis", 0.0, "mock-model"
+            )
+
+            success, final_test, final_code, attempts, cost, model = fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=5,           # max_attempts is 5, but we should exit early
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False,
+                failure_aware_retries=True
+            )
+
+    assert success is False
+    # Exited early after 3 stagnant attempts
+    assert attempts == 3
+
+
+def test_assertion_logic_convergence_runs_to_completion(setup_files):
+    """
+    When total failures strictly decrease each iteration, the stagnant assertion
+    breaker must not fire, and the loop converges to success in 5 iterations.
+
+    This covers the source bug from issue #1230: a sequence of 5→4→3→2→1→0
+    wording mismatches converging without the breaker firing.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_run_pytest:
+        mock_run_pytest.side_effect = [
+            (5, 0, 0, "AssertionError: wording mismatch"),  # initial
+            (4, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 1
+            (3, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 2
+            (2, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 3
+            (1, 0, 0, "AssertionError: wording mismatch"),  # post-fix iter 4
+            (0, 0, 0, ""),                                  # post-fix iter 5 (success)
+        ]
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                True, True,
+                files["test_file"].read_text(),
+                files["code_file"].read_text(),
+                "analysis", 0.01, "mock-model",
+            )
+
+            success, _, _, attempts, _, _ = fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=5,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False,
+                failure_aware_retries=True,
+            )
+
+    assert success is True
+    assert attempts == 5
+    assert mock_fix.call_count == 5

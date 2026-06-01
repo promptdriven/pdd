@@ -23,6 +23,17 @@ Focus on remaining/new problems that the previous iteration did not fix.
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 - Project Root: {project_root}
+- PR-verification mode: {pr_mode}
+- PR URL (PR mode only): {pr_url}
+- PR test scope (PR mode only): {pr_test_scope}
+- PR changed files for test selection (populated only under `targeted` scope):
+<pr_changed_files>
+{pr_changed_files}
+</pr_changed_files>
+- PR changed files for fixer scope (PR mode, ALWAYS populated — authoritative scope list):
+<pr_scope_changed_files>
+{pr_scope_changed_files}
+</pr_scope_changed_files>
 
 % User Request
 <issue_content>
@@ -49,6 +60,31 @@ Focus on remaining/new problems that the previous iteration did not fix.
 <step5_output>
 {step5_output}
 </step5_output>
+
+% Step 5 normalized failure signal (orchestrator-synthesised)
+%
+% The orchestrator parses the ```failure_signal``` block that Step 5 is
+% required to emit and, when it is missing or malformed, synthesises a
+% normalised structured block from the scrubbed raw failure output.
+% Always prefer this block over reparsing ``<step5_output>`` for the
+% concrete command, exit code, failing IDs, artifact path, and output —
+% it is the contract Step 6 relies on. When ``step5_failure_signal_missing``
+% is non-empty, treat the listed fields as untrusted and reason directly
+% from the embedded ``output:`` payload.
+<step5_failure_signal>
+{step5_failure_signal}
+</step5_failure_signal>
+<step5_failure_signal_missing>{step5_failure_signal_missing}</step5_failure_signal_missing>
+
+% PR Scope Guard (PR mode only)
+
+When `PR-verification mode` is `true`, you MUST constrain all file changes to the PR's scope:
+
+- The AUTHORITATIVE scope list is `<pr_scope_changed_files>` — it is populated in PR mode regardless of test scope. `<pr_changed_files>` is only populated under `targeted` test scope and is for test-selection only; do not rely on it for the scope guard when it is empty.
+- **Allowed**: Fix files listed in `<pr_scope_changed_files>`, their direct test files, and any files whose failures are directly caused by the PR's changed files (e.g., a shared utility that the PR broke).
+- **NOT allowed**: Create or modify files that are outside the PR's changed-file set and not causally connected to the `<step5_output>` failures. Do NOT generate new features, new plugins, new modules, or new test suites unrelated to the listed failures.
+- If a fix genuinely requires touching files outside `<pr_scope_changed_files>`, list them explicitly under `EXPANSION_ITEMS:` in your comment with a causal justification (e.g., "test_foo.py imports utils.py which was broken by the PR change to core.py").
+- If `<pr_scope_changed_files>` says PR changed files are unavailable, restrict fixes to files directly referenced in `<step5_output>` failure paths and the files identified in the issue.
 
 % Your Task
 
@@ -86,6 +122,8 @@ Fix all issues discovered in Steps 2-5, in order of severity (critical first):
 
 % Output
 
+Source issue present: `{has_issue}`. When this value is `false` (PR-only review with no linked issue, #1292), do NOT post any GitHub comment in this step — the orchestrator posts the single canonical report on the PR; skip the `gh issue comment` instruction below. When it is `true` (or in issue mode), post as described:
+
 After completing your work, use `gh issue comment` to post your findings to issue #{issue_number}:
 
 ```
@@ -118,5 +156,5 @@ FILES_MODIFIED: path/to/file3, path/to/file4
 
 - Fix issues in order of severity (critical first)
 - If a test assertion correctly detects a real bug, fix the CODE, not the test
-- Always post your findings as a GitHub comment before completing
+- Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"

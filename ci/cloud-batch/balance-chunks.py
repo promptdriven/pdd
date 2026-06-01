@@ -37,14 +37,19 @@ HEAVY_FILE_THRESHOLD_DEFAULT = 300.0
 
 
 def _should_include_test_file(path: Path) -> bool:
-    """Exclude fixture-only test trees that are not part of the runnable suite."""
-    parts = path.parts
-    if "fixtures" in parts:
-        fixtures_idx = parts.index("fixtures")
-        fixture_subtree = parts[fixtures_idx + 1 :]
-        if fixture_subtree[:1] == ("one_session_eval",):
-            return False
-    return True
+    """Exclude fixture-only test trees that are not part of the runnable suite.
+
+    Everything under ``tests/fixtures/`` is scenario/data input for higher-level
+    tests (e.g. ``test_coverage_contracts.py`` reads
+    ``tests/fixtures/coverage_contracts/fake_tests/`` by path). Some of those
+    fixtures are *intentionally* broken ``test_*.py`` files. The conftest guards
+    (``collect_ignore_glob = ["fixtures/*"]``) only apply during pytest's own
+    directory recursion — they are bypassed when a fixture file path is passed
+    to pytest explicitly, which is exactly what this chunker does. So the only
+    reliable place to keep these fixtures out of a chunk is here, by never
+    discovering any ``test_*.py`` under ``tests/fixtures/``.
+    """
+    return "fixtures" not in path.parts
 
 
 def discover_test_files(test_dir: str) -> list[str]:

@@ -33,7 +33,7 @@ match model identities at runtime.
    - `STATIC_ELO_FALLBACK` as an offline/local/niche fallback, not the primary score source.
    - `PRICE_OVERRIDES` for exact model-id pricing fixes in $/M tokens.
    - `PROVIDERS` for supported LiteLLM provider display names and API key env specs.
-   - Do not add ChatGPT subscription rows or ChatGPT auth behavior in this module; ChatGPT support is intentionally split out until the supported LiteLLM range can resolve `chatgpt/*` model IDs.
+   - Do not GENERATE ChatGPT subscription rows from `litellm.model_cost` (the `chatgpt/*` IDs are not curatable there, so `chatgpt` stays in `_SKIP_PROVIDER_ROOTS`), but DO PRESERVE the hand-managed ChatGPT subscription family so a catalog refresh never drops it (issue #1269): keep a `_CHATGPT_SUBSCRIPTION_ROWS` constant (provider `OpenAI ChatGPT`, empty `api_key` = device-flow/codex-login auth, flat 0.0 cost, ELOs mirroring each model's API twin) and a `_merge_chatgpt_subscription_rows(rows)` helper (model-keyed dedupe) that `build_rows` applies before returning — the same survival mechanism used for local-runner rows.
 3. Agentic score manifest:
    - The manifest schema is a JSON object with `schema_version`, `policy`, and `scores`.
    - Each score entry must include auditable provenance: `model: str`, `elo: int|float`, `source: str`, `source_url: str`, `raw_model_name: str`, `leaderboard: str`, `category: str`, `leaderboard_publish_date: str|null`, `retrieved_at: str`, `rank: int|null`, `rating: int|float`, `rating_lower: int|float|null`, `rating_upper: int|float|null`, `vote_count: int|float`, and `match_reason: str`; optional `aliases: list[str]` and `reviewed_by` may be present.
@@ -46,8 +46,8 @@ match model identities at runtime.
    - `_extract_base_model(model_id)`: conservative canonicalization by stripping provider/region/vendor/org/version routing noise, then longest-prefix match against `STATIC_ELO_FALLBACK` keys with safe remainders only.
    - `_get_elo(model_id, arena_index)`: resolution chain, returning the first non-zero hit: exact reviewed manifest alias, `STATIC_ELO_FALLBACK` exact, `STATIC_ELO_FALLBACK` canonical-prefix, legacy exact alias hook, then 0.
    - `_get_provider_root`, `_has_region`.
-   - `_infer_reasoning_type`: `"none"` if no reasoning support; `"budget"` for roots `anthropic`/`azure_ai`; otherwise `"effort"`.
-   - `_infer_max_reasoning_tokens`: `128000` only for reasoning-capable `anthropic`/`azure_ai`, else `0`.
+   - `_infer_reasoning_type`: `"none"` if no reasoning support; `"budget"` for roots `anthropic`/`azure_ai`, EXCEPT direct-Anthropic-provider Opus models in the adaptive allowlist (`claude-opus-4-7`, `claude-opus-4-8`) which return `"adaptive"` (Opus 4.7+ removed the legacy `thinking.type="enabled"` budget shape and 400 on it); otherwise `"effort"`. Azure AI / Bedrock / Vertex Claude relays stay on `budget`/`effort`.
+   - `_infer_max_reasoning_tokens`: `128000` for reasoning-capable `anthropic`/`azure_ai`, but `16000` for the adaptive-allowlist Opus models; else `0`.
    - `_is_deprecated`, `_is_placeholder`, and `_is_superseded_preview`.
 5. `build_rows(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None)`:
    - Lazy-import `litellm`; on ImportError print install hint to stderr and exit 1.

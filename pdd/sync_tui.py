@@ -1,6 +1,7 @@
 import threading
 import sys
 import os
+import re
 from typing import List, Optional, Callable, Any
 import io
 import asyncio
@@ -18,7 +19,6 @@ from rich.panel import Panel
 from rich.align import Align
 from rich.text import Text
 import time
-import re
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
@@ -29,6 +29,23 @@ from rich.style import Style
 
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
+CHARSET_SELECTOR_MARKERS = "()*+-./"
+STRING_CONTROL_MARKERS = "PX^_"
+C1_STRING_CONTROL_MARKERS = "\x90\x98\x9e\x9f"
+C1_CSI = "\x9b"
+C1_OSC = "\x9d"
+C1_ST = "\x9c"
+C1_CONTROL_STARTERS = "".join(chr(value) for value in range(0x80, 0xA0))
+C0_CONTROL_CHARS = "".join(
+    chr(value) for value in range(0x20)
+    if value not in {0x09, 0x0A, 0x0D, 0x1B}
+)
+CAN = "\x18"
+SUB = "\x1a"
+DEL = "\x7f"
+CONTROL_CHARS = C0_CONTROL_CHARS + DEL
+BEL = "\x07"
+ST = "\x1b\\"
 
 
 def _debug_swallow(context: str, exc: Exception) -> None:
@@ -66,6 +83,586 @@ def _is_headless_environment() -> bool:
     except Exception:
         return True
 
+
+def _text_from_ansi_output(text: str) -> Text:
+    """Parse ANSI text, including ANSI that Rich highlighted before capture."""
+    text = _restore_rich_highlighted_ansi(text)
+    text, _clean_text, _position_map, _has_ansi = _prepare_ansi_text(text)
+    rendered = Text.from_ansi(text)
+    reparse_text, clean_text, position_map, has_ansi = _prepare_ansi_text(
+        rendered.plain
+    )
+    if has_ansi:
+        reparsed = Text.from_ansi(reparse_text)
+        return _merge_reparsed_ansi_spans(
+            rendered,
+            reparsed,
+            clean_text,
+            position_map,
+        )
+    return rendered
+
+
+def _prepare_ansi_text(
+    text: str,
+) -> tuple[str, str, List[Optional[int]], bool]:
+    """Return Rich-compatible ANSI text, visible text, position map, and status."""
+    rich_parts: List[str] = []
+    clean_chars: List[str] = []
+    position_map: List[Optional[int]] = [None] * len(text)
+    has_ansi = False
+    index = 0
+    while index < len(text):
+        if (
+            text[index] != "\x1b"
+            and text[index] not in C1_CONTROL_STARTERS
+            and text[index] not in CONTROL_CHARS
+        ):
+            position_map[index] = len(clean_chars)
+            rich_parts.append(text[index])
+            clean_chars.append(text[index])
+            index += 1
+            continue
+
+        token_end, next_index, token_kind, terminator = _scan_ansi_token(
+            text,
+            index,
+        )
+        if token_end is not None:
+            has_ansi = True
+            rich_parts.append(
+                _rich_ansi_token(text, index, token_end, token_kind, terminator)
+            )
+            index = token_end
+            continue
+
+        has_ansi = True
+        index = max(next_index, index + 1)
+
+    return "".join(rich_parts), "".join(clean_chars), position_map, has_ansi
+
+
+def _scan_ansi_token(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], int, str, str]:
+    """Scan one ANSI escape token without rescanning malformed suffixes."""
+    if start >= len(text):
+        return None, start + 1, "", ""
+
+    if text[start] in CONTROL_CHARS:
+        return start + 1, start + 1, "single", ""
+    if text[start] in C1_STRING_CONTROL_MARKERS:
+        return _scan_string_control_token(text, start + 1)
+    if text[start] == C1_CSI:
+        return _scan_csi_token(text, start + 1)
+    if text[start] == C1_OSC:
+        return _scan_osc_token(text, start + 1)
+    if text[start] in C1_CONTROL_STARTERS:
+        return start + 1, start + 1, "single", ""
+
+    if text[start] != "\x1b" or start + 1 >= len(text):
+        return start + 1, start + 1, "single", ""
+
+    marker = text[start + 1]
+    if marker == "[":
+        return _scan_csi_token(text, start + 2)
+    if marker == "]":
+        return _scan_osc_token(text, start + 2)
+    if marker in STRING_CONTROL_MARKERS:
+        return _scan_string_control_token(text, start + 2)
+    if marker in CHARSET_SELECTOR_MARKERS:
+        if start + 2 < len(text):
+            return start + 3, start + 3, "single", ""
+        return None, start + 2, "", ""
+    return _scan_escape_sequence_token(text, start + 1)
+
+
+def _scan_escape_sequence_token(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], int, str, str]:
+    """Scan a non-CSI/non-string ESC sequence with optional intermediates."""
+    index = start
+    while index < len(text) and " " <= text[index] <= "/":
+        index += 1
+    if index < len(text) and "0" <= text[index] <= "~":
+        return index + 1, index + 1, "single", ""
+    return None, index, "", ""
+
+
+def _scan_csi_token(text: str, start: int) -> tuple[Optional[int], int, str, str]:
+    """Scan a CSI token body."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == "\x1b":
+            return None, index, "", ""
+        if _is_csi_cancel_char(char):
+            return index + 1, index + 1, "csi_cancel", char
+        index += 1
+        if "@" <= char <= "~":
+            return index, index, "csi", ""
+    return None, index, "", ""
+
+
+def _scan_osc_token(text: str, start: int) -> tuple[Optional[int], int, str, str]:
+    """Scan an OSC token body terminated by ST or BEL."""
+    token_end, terminator, next_index = _scan_osc_end(text, start)
+    if token_end is None:
+        return None, next_index, "", ""
+    return token_end, token_end, "osc", terminator
+
+
+def _scan_string_control_token(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], int, str, str]:
+    """Scan a string-control token body terminated by ST."""
+    token_end, terminator, next_index = _scan_string_control_end(text, start)
+    if token_end is None:
+        return None, next_index, "", ""
+    return token_end, token_end, "string", terminator
+
+
+def _scan_osc_end(text: str, start: int) -> tuple[Optional[int], str, int]:
+    """Return an OSC token end, terminator, and next index."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char in {CAN, SUB}:
+            return index + 1, char, index + 1
+        if char == BEL:
+            return index + 1, BEL, index + 1
+        if char == C1_ST:
+            return index + 1, C1_ST, index + 1
+        if char == "\x1b":
+            if text.startswith(ST, index):
+                return index + len(ST), ST, index + len(ST)
+            return None, "", index
+        index += 1
+    return None, "", index
+
+
+def _is_csi_cancel_char(char: str) -> bool:
+    """Return True when a C0 character cancels a CSI sequence."""
+    return char in {"\n", "\r", CAN, SUB} or char in C0_CONTROL_CHARS
+
+
+def _scan_string_control_end(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], str, int]:
+    """Return a string-control token end, terminator, and next index."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char in {CAN, SUB}:
+            return index + 1, char, index + 1
+        if char == C1_ST:
+            return index + 1, C1_ST, index + 1
+        if char == "\x1b":
+            if text.startswith(ST, index):
+                return index + len(ST), ST, index + len(ST)
+            return None, "", index
+        index += 1
+    return None, "", index
+
+
+def _rich_ansi_token(
+    text: str,
+    start: int,
+    end: int,
+    token_kind: str,
+    terminator: str,
+) -> str:
+    """Return the token form Rich can parse without exposing control payloads."""
+    if token_kind == "csi":
+        if text[start] == C1_CSI:
+            return "\x1b[" + text[start + 1:end]
+        return text[start:end]
+    if token_kind == "csi_cancel":
+        return ""
+    if token_kind == "osc":
+        body_start = start + 2 if text[start] == "\x1b" else start + 1
+        body_end = end - len(terminator)
+        body = text[body_start:body_end]
+        if "\n" in body or "\r" in body:
+            return ""
+        return "\x1b]" + body + ST
+    return ""
+
+
+def _restore_rich_highlighted_ansi(text: str) -> str:
+    """Repair ANSI escape sequences split by Rich's syntax highlighter."""
+    if "\x1b\x1b[" not in text:
+        return text
+
+    restored_parts: List[str] = []
+    index = 0
+    active_sgr = ""
+    while index < len(text):
+        if text[index] != "\x1b":
+            restored_parts.append(text[index])
+            index += 1
+            continue
+
+        sequence, next_index = _try_restore_highlighted_escape(
+            text,
+            index,
+            active_sgr,
+        )
+        if sequence is not None:
+            index = next_index
+            restored_parts.append(sequence)
+            continue
+
+        sgr_end = _consume_sgr_sequence(text, index)
+        if sgr_end is not None:
+            sequence = text[index:sgr_end]
+            active_sgr = _update_active_sgr(active_sgr, sequence)
+            restored_parts.append(sequence)
+            index = sgr_end
+            continue
+
+        restored_parts.append(text[index:next_index])
+        index = next_index
+
+    return "".join(restored_parts)
+
+
+def _try_restore_highlighted_escape(
+    text: str, start: int, active_sgr: str
+) -> tuple[Optional[str], int]:
+    """Restore one highlighted ANSI escape sequence starting at ``start``."""
+    if start >= len(text) or text[start] != "\x1b":
+        return None, start + 1
+
+    index = _skip_sgr_sequences(text, start + 1)
+    if index == start + 1 or index >= len(text):
+        return None, start + 1
+
+    marker = text[index]
+    if marker == "[":
+        return _restore_highlighted_csi(text, index + 1, active_sgr)
+    if marker == "]":
+        return _restore_highlighted_osc(text, index + 1)
+    if marker in STRING_CONTROL_MARKERS:
+        return _restore_highlighted_string_control(text, marker, index + 1)
+    if _is_single_escape_marker(marker):
+        return _restore_highlighted_single_escape(text, marker, index + 1)
+    return None, start + 1
+
+
+def _restore_highlighted_csi(
+    text: str,
+    start: int,
+    active_sgr: str,
+) -> tuple[Optional[str], int]:
+    """Restore a highlighted CSI sequence body."""
+    index = start
+    body: List[str] = []
+    while index < len(text):
+        char = text[index]
+        if char == "\x1b":
+            skipped = _skip_sgr_sequences(text, index)
+            if skipped != index:
+                index = skipped
+                continue
+            return None, index
+        body.append(char)
+        index += 1
+        if "@" <= char <= "~":
+            csi_sequence = "\x1b[" + "".join(body)
+            if _is_full_reset_csi("".join(body)):
+                return csi_sequence + active_sgr, index
+            return csi_sequence, index
+    return None, index
+
+
+def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]:
+    """Restore a highlighted OSC sequence body."""
+    index = start
+    body: List[str] = []
+    while index < len(text):
+        if text[index] in {CAN, SUB}:
+            return "\x1b]" + "".join(body) + text[index], index + 1
+        if text[index] == BEL:
+            return "\x1b]" + "".join(body) + BEL, index + 1
+        if text[index] == C1_ST:
+            return "\x1b]" + "".join(body) + C1_ST, index + 1
+        if text.startswith("\x1b\\", index):
+            return "\x1b]" + "".join(body) + "\x1b\\", index + 2
+        if text[index] == "\x1b":
+            skipped = _skip_sgr_sequences(text, index)
+            if skipped != index:
+                index = skipped
+                continue
+            return "\x1b]" + "".join(body) + CAN, index
+
+        body.append(text[index])
+        index += 1
+    return None, index
+
+
+def _restore_highlighted_string_control(
+    text: str,
+    marker: str,
+    start: int,
+) -> tuple[Optional[str], int]:
+    """Restore a highlighted DCS/SOS/PM/APC string-control sequence."""
+    index = start
+    body: List[str] = []
+    while index < len(text):
+        if text[index] in {CAN, SUB}:
+            return "\x1b" + marker + "".join(body) + text[index], index + 1
+        if text[index] == C1_ST:
+            return "\x1b" + marker + "".join(body) + C1_ST, index + 1
+        if text.startswith(ST, index):
+            return "\x1b" + marker + "".join(body) + ST, index + len(ST)
+        if text[index] == "\x1b":
+            skipped = _skip_sgr_sequences(text, index)
+            if skipped != index:
+                index = skipped
+                continue
+            return "\x1b" + marker + "".join(body) + CAN, index
+
+        body.append(text[index])
+        index += 1
+    return None, index
+
+
+def _restore_highlighted_single_escape(
+    text: str, marker: str, start: int
+) -> tuple[str, int]:
+    """Restore a highlighted non-CSI/non-OSC escape sequence."""
+    index = _skip_sgr_sequences(text, start)
+    if marker in CHARSET_SELECTOR_MARKERS and index < len(text):
+        return "\x1b" + marker + text[index], index + 1
+    return "\x1b" + marker, index
+
+
+def _is_single_escape_marker(marker: str) -> bool:
+    """Return True when ``marker`` is a Rich-compatible single escape marker."""
+    return (
+        marker in CHARSET_SELECTOR_MARKERS
+        or "@" <= marker <= "Z"
+        or "\\" <= marker <= "_"
+    )
+
+
+def _skip_sgr_sequences(text: str, start: int) -> int:
+    """Skip Rich highlighter SGR sequences at ``start``."""
+    index, _sequences = _consume_sgr_sequences(text, start)
+    return index
+
+
+def _consume_sgr_sequences(text: str, start: int) -> tuple[int, List[str]]:
+    """Return the index after a run of SGR sequences and the consumed strings."""
+    index = start
+    sequences: List[str] = []
+    while True:
+        next_index = _consume_sgr_sequence(text, index)
+        if next_index is None:
+            return index, sequences
+        sequences.append(text[index:next_index])
+        index = next_index
+
+
+def _consume_sgr_sequence(text: str, start: int) -> Optional[int]:
+    """Return the index after a CSI SGR sequence, if present."""
+    if not text.startswith("\x1b[", start):
+        return None
+
+    index = start + 2
+    while index < len(text):
+        char = text[index]
+        index += 1
+        if "@" <= char <= "~":
+            return index if char == "m" else None
+    return None
+
+
+def _update_active_sgr(active_sgr: str, sequence: str) -> str:
+    """Update active Rich outer-style SGR state with one direct SGR sequence."""
+    if _is_sgr_reset(sequence):
+        return ""
+    return active_sgr + sequence
+
+
+def _is_sgr_reset(sequence: str) -> bool:
+    """Return True when an SGR sequence resets the active terminal style."""
+    if not sequence.startswith("\x1b[") or not sequence.endswith("m"):
+        return False
+    return _is_full_reset_csi(sequence[2:])
+
+
+def _is_full_reset_csi(body: str) -> bool:
+    """Return True when a CSI SGR body fully resets terminal style."""
+    if not body.endswith("m"):
+        return False
+    params = body[:-1].replace(":", ";").split(";")
+    if not params:
+        return True
+    return any(param in {"", "0", "00"} for param in params)
+
+
+def _merge_reparsed_ansi_spans(
+    original: Text,
+    reparsed: Text,
+    clean_plain: Optional[str] = None,
+    position_map: Optional[List[Optional[int]]] = None,
+) -> Text:
+    """Merge ANSI reparsing spans without dropping existing non-ANSI spans."""
+    plain_text = original.plain
+    if clean_plain is None or position_map is None:
+        _reparse_text, clean_plain, position_map, _has_ansi = _prepare_ansi_text(
+            plain_text
+        )
+    if clean_plain != reparsed.plain:
+        return reparsed
+
+    merged = Text(clean_plain, style=original.style)
+    for span in original.spans:
+        mapped = _map_visible_span(span.start, span.end, position_map)
+        if mapped is not None:
+            merged.stylize(span.style, *mapped)
+    for span in reparsed.spans:
+        merged.stylize(span.style, span.start, span.end)
+
+    return merged
+
+
+def _map_visible_span(
+    start: int, end: int, position_map: List[Optional[int]]
+) -> Optional[tuple[int, int]]:
+    """Map a span from ANSI-bearing text to visible text coordinates."""
+    mapped_positions = [
+        mapped
+        for mapped in position_map[start:end]
+        if mapped is not None
+    ]
+    if not mapped_positions:
+        return None
+    return min(mapped_positions), max(mapped_positions) + 1
+
+
+def _split_complete_ansi_line(text: str) -> Optional[tuple[str, str]]:
+    """Split at the first newline that is not inside a string control."""
+    split_index = _find_visible_line_split(text)
+    if split_index is None:
+        return None
+    return text[:split_index], text[split_index + 1:]
+
+
+def _find_visible_line_split(text: str) -> Optional[int]:
+    """Return the first line split outside ANSI string-control payloads."""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\n":
+            return index
+        highlighted_end = _highlighted_string_control_end(text, index)
+        if highlighted_end is not None:
+            index = highlighted_end
+            continue
+        if _is_ansi_control_start(text, index):
+            token_end, next_index, _token_kind, _terminator = _scan_ansi_token(
+                text,
+                index,
+            )
+            if (
+                _token_kind == "csi_cancel"
+                and _terminator in {"\n", "\r", CAN, SUB}
+            ):
+                return token_end - 1
+            if _is_string_control_start(text, index):
+                if token_end is not None:
+                    index = token_end
+                    continue
+                if next_index >= len(text):
+                    return None
+                index = next_index
+                continue
+            index = token_end if token_end is not None else max(next_index, index + 1)
+            continue
+        index += 1
+    return None
+
+
+def _trim_to_after_last_visible_carriage_return(text: str) -> str:
+    """Apply carriage-return compaction outside ANSI string controls."""
+    carriage_return_index = _find_last_visible_carriage_return(text)
+    if carriage_return_index is None:
+        return text
+    return text[carriage_return_index + 1:]
+
+
+def _find_last_visible_carriage_return(text: str) -> Optional[int]:
+    """Return the last CR outside ANSI controls."""
+    last_carriage_return: Optional[int] = None
+    index = 0
+    while index < len(text):
+        if text[index] == "\r":
+            last_carriage_return = index
+            index += 1
+            continue
+        highlighted_end = _highlighted_string_control_end(text, index)
+        if highlighted_end is not None:
+            index = highlighted_end
+            continue
+        if _is_ansi_control_start(text, index):
+            token_end, next_index, _token_kind, _terminator = _scan_ansi_token(
+                text,
+                index,
+            )
+            index = token_end if token_end is not None else max(next_index, index + 1)
+            continue
+        index += 1
+    return last_carriage_return
+
+
+def _is_ansi_control_start(text: str, index: int) -> bool:
+    """Return True when ``text[index]`` can begin an ANSI control sequence."""
+    return (
+        text[index] == "\x1b"
+        or text[index] in C1_CONTROL_STARTERS
+        or text[index] in CONTROL_CHARS
+    )
+
+
+def _highlighted_string_control_end(text: str, index: int) -> Optional[int]:
+    """Return end index for a Rich-highlighted string control, if present."""
+    if index >= len(text) or text[index] != "\x1b":
+        return None
+    sequence, next_index = _try_restore_highlighted_escape(text, index, "")
+    if sequence is None or not _restored_sequence_is_string_control(sequence):
+        return None
+    return next_index
+
+
+def _restored_sequence_is_string_control(sequence: str) -> bool:
+    """Return True when a restored sequence is OSC/DCS/SOS/PM/APC."""
+    if not sequence:
+        return False
+    if sequence[0] in C1_STRING_CONTROL_MARKERS + C1_OSC:
+        return True
+    return (
+        sequence[0] == "\x1b"
+        and len(sequence) > 1
+        and sequence[1] in STRING_CONTROL_MARKERS + "]"
+    )
+
+
+def _is_string_control_start(text: str, index: int) -> bool:
+    """Return True when ``text[index]`` begins OSC/DCS/SOS/PM/APC payload."""
+    if text[index] in C1_STRING_CONTROL_MARKERS + C1_OSC:
+        return True
+    return (
+        text[index] == "\x1b"
+        and index + 1 < len(text)
+        and text[index + 1] in STRING_CONTROL_MARKERS + "]"
+    )
 
 
 class ChoiceScreen(ModalScreen[str]):
@@ -455,20 +1052,27 @@ class ThreadSafeRedirector(io.TextIOBase):
         # Handle carriage return for in-place updates (progress bars)
         # When buffer has \r but no \n, it's an intermediate progress update
         # Keep only content after the last \r (ready for next update or final \n)
-        if '\r' in self.buffer and '\n' not in self.buffer:
-            self.buffer = self.buffer.rsplit('\r', 1)[-1]
+        if (
+            '\r' in self.buffer
+            and _split_complete_ansi_line(self.buffer) is None
+        ):
+            self.buffer = _trim_to_after_last_visible_carriage_return(self.buffer)
             return len(s)
 
-        # Process complete lines
-        while '\n' in self.buffer:
-            line, self.buffer = self.buffer.split('\n', 1)
+        # Process complete lines. ANSI string-control payloads may contain
+        # newlines, so only split on visible newlines outside those controls.
+        while True:
+            split_line = _split_complete_ansi_line(self.buffer)
+            if split_line is None:
+                break
+            line, self.buffer = split_line
             # Handle \r within line: keep only content after last \r
             if '\r' in line:
-                line = line.rsplit('\r', 1)[-1]
-            self.captured_logs.append(line)  # Capture processed line
+                line = _trim_to_after_last_visible_carriage_return(line)
 
             # Convert ANSI codes to Rich Text
-            text = Text.from_ansi(line)
+            text = _text_from_ansi_output(line)
+            self.captured_logs.append(text.plain)  # Capture processed line
 
             # Check if the line looks like a log message and dim it
             # We strip ANSI codes for pattern matching to ensure the regex works
@@ -485,7 +1089,7 @@ class ThreadSafeRedirector(io.TextIOBase):
     def flush(self):
         # Write any remaining content in buffer
         if self.buffer:
-            text = Text.from_ansi(self.buffer)
+            text = _text_from_ansi_output(self.buffer)
             if self.log_pattern.match(text.plain):
                 text.style = Style(dim=True)
             self.app.call_from_thread(self.log_widget.write, text)
