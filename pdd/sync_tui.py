@@ -19,7 +19,6 @@ from rich.align import Align
 from rich.text import Text
 import time
 import re
-from rich.ansi import re_ansi as RICH_ANSI_RE
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
@@ -30,6 +29,18 @@ from rich.style import Style
 
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
+CHARSET_SELECTOR_MARKERS = "()*+-./"
+CHARSET_SELECTOR_RE = re.compile(r"\x1b[()*+\-./].")
+ANSI_ESCAPE_RE = re.compile(
+    r"""
+    (?:\x1b[()*+\-./].)|
+    (?:\x1b[0-?])|
+    (?:\x1b\].*?\x1b\\)|
+    (?:\x1b\[[0-?]*[ -/]*[@-~])|
+    (?:\x1b[@-Z\\-_])
+    """,
+    re.VERBOSE,
+)
 
 
 def _debug_swallow(context: str, exc: Exception) -> None:
@@ -72,8 +83,9 @@ def _text_from_ansi_output(text: str) -> Text:
     """Parse ANSI text, including ANSI that Rich highlighted before capture."""
     text = _restore_rich_highlighted_ansi(text)
     rendered = Text.from_ansi(text)
-    if RICH_ANSI_RE.search(rendered.plain):
-        reparsed = Text.from_ansi(rendered.plain)
+    if ANSI_ESCAPE_RE.search(rendered.plain):
+        reparsed_plain = CHARSET_SELECTOR_RE.sub("", rendered.plain)
+        reparsed = Text.from_ansi(reparsed_plain)
         return _merge_reparsed_ansi_spans(rendered, reparsed)
     return rendered
 
@@ -86,72 +98,80 @@ def _restore_rich_highlighted_ansi(text: str) -> str:
     restored_parts: List[str] = []
     index = 0
     while index < len(text):
-        restored = _try_restore_highlighted_escape(text, index)
-        if restored is not None:
-            sequence, index = restored
+        if text[index] != "\x1b":
+            restored_parts.append(text[index])
+            index += 1
+            continue
+
+        sequence, next_index = _try_restore_highlighted_escape(text, index)
+        if sequence is not None:
+            index = next_index
             restored_parts.append(sequence)
             continue
 
-        restored_parts.append(text[index])
-        index += 1
+        restored_parts.append(text[index:next_index])
+        index = next_index
 
     return "".join(restored_parts)
 
 
 def _try_restore_highlighted_escape(
     text: str, start: int
-) -> Optional[tuple[str, int]]:
+) -> tuple[Optional[str], int]:
     """Restore one highlighted ANSI escape sequence starting at ``start``."""
     if start >= len(text) or text[start] != "\x1b":
-        return None
+        return None, start + 1
 
     index = _skip_sgr_sequences(text, start + 1)
     if index == start + 1 or index >= len(text):
-        return None
+        return None, start + 1
 
     marker = text[index]
     if marker == "[":
         return _restore_highlighted_csi(text, index + 1)
     if marker == "]":
         return _restore_highlighted_osc(text, index + 1)
-    if marker in "(@-Z\\-_":
+    if _is_single_escape_marker(marker):
         return _restore_highlighted_single_escape(text, marker, index + 1)
-    return None
+    return None, start + 1
 
 
-def _restore_highlighted_csi(text: str, start: int) -> Optional[tuple[str, int]]:
+def _restore_highlighted_csi(text: str, start: int) -> tuple[Optional[str], int]:
     """Restore a highlighted CSI sequence body."""
     index = start
     body: List[str] = []
     while index < len(text):
-        skipped = _skip_sgr_sequences(text, index)
-        if skipped != index:
-            index = skipped
-            continue
-
         char = text[index]
+        if char == "\x1b":
+            skipped = _skip_sgr_sequences(text, index)
+            if skipped != index:
+                index = skipped
+                continue
+            return None, index
         body.append(char)
         index += 1
         if "@" <= char <= "~":
             return "\x1b[" + "".join(body), index
-    return None
+    return None, index
 
 
-def _restore_highlighted_osc(text: str, start: int) -> Optional[tuple[str, int]]:
+def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]:
     """Restore a highlighted OSC sequence body."""
     index = start
     body: List[str] = []
     while index < len(text):
-        skipped = _skip_sgr_sequences(text, index)
-        if skipped != index:
-            index = skipped
-            continue
         if text.startswith("\x1b\\", index):
             return "\x1b]" + "".join(body) + "\x1b\\", index + 2
+        if text[index] == "\x1b":
+            skipped = _skip_sgr_sequences(text, index)
+            if skipped != index:
+                index = skipped
+                continue
+            return None, index
 
         body.append(text[index])
         index += 1
-    return None
+    return None, index
 
 
 def _restore_highlighted_single_escape(
@@ -159,9 +179,18 @@ def _restore_highlighted_single_escape(
 ) -> tuple[str, int]:
     """Restore a highlighted non-CSI/non-OSC escape sequence."""
     index = _skip_sgr_sequences(text, start)
-    if marker == "(" and index < len(text):
+    if marker in CHARSET_SELECTOR_MARKERS and index < len(text):
         return "\x1b" + marker + text[index], index + 1
     return "\x1b" + marker, index
+
+
+def _is_single_escape_marker(marker: str) -> bool:
+    """Return True when ``marker`` is a Rich-compatible single escape marker."""
+    return (
+        marker in CHARSET_SELECTOR_MARKERS
+        or "@" <= marker <= "Z"
+        or "\\" <= marker <= "_"
+    )
 
 
 def _skip_sgr_sequences(text: str, start: int) -> int:
@@ -194,13 +223,10 @@ def _merge_reparsed_ansi_spans(original: Text, reparsed: Text) -> Text:
     position_map: List[Optional[int]] = [None] * len(plain_text)
     clean_chars: List[str] = []
     index = 0
-    for match in RICH_ANSI_RE.finditer(plain_text):
+    for match in ANSI_ESCAPE_RE.finditer(plain_text):
         start, end = match.span()
         if start < index:
             continue
-        _osc, sgr = match.groups()
-        if sgr == "(" and end < len(plain_text):
-            end += 1
         while index < match.start():
             position_map[index] = len(clean_chars)
             clean_chars.append(plain_text[index])
