@@ -161,10 +161,14 @@ def test_sync_exception_evidence_overwrites_stale_passing_manifest(
 
     monkeypatch.chdir(project)
 
-    def _raise_sync(**_kwargs: object) -> tuple[str, float, str]:
+    sync_calls: list[dict[str, object]] = []
+
+    def _raise_sync(**kwargs: object) -> tuple[str, float, str]:
+        sync_calls.append(dict(kwargs))
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("pdd.sync_main.sync_main", _raise_sync)
+    # maintenance.py binds sync_main at import time; patch the command's symbol.
+    monkeypatch.setattr("pdd.commands.maintenance.sync_main", _raise_sync)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -172,6 +176,11 @@ def test_sync_exception_evidence_overwrites_stale_passing_manifest(
         ["sync", "refund", "--evidence"],
         env={"PDD_SKIP_UPDATE_CHECK": "1", "CI": "1"},
     )
+
+    assert sync_calls, (
+        "expected sync command to call maintenance.sync_main stub, not real sync"
+    )
+    assert sync_calls[0].get("basename") == "refund"
 
     gate = run_gate_policy(project, target="refund")
     assert not gate.passed, result.output
