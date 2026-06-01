@@ -4761,16 +4761,26 @@ class TestDocContractCheck:
         # The snippet removes worktree-resolving entries from sys.path before importing pdd.
         assert "sys.path" in snippet
         assert "realpath" in snippet
+        # The final arg is the TRUSTED package root (parent of the running
+        # `pdd` package), so the child imports the base checker, not the
+        # worktree copy — and the gate stays functional off site-packages.
+        import pdd as _pdd
+
+        trusted_root = Path(_pdd.__file__).resolve().parent.parent
+        assert gate.cmd[-1] == str(trusted_root)
+        assert (trusted_root / "pdd").is_dir()
 
     def test_doc_contract_does_not_execute_worktree_pdd(self, tmp_path: Path) -> None:
         """Security (issue #1303 review): a PR-controlled ``pdd/checkup_gates.py``
-        inside the reviewed worktree must NOT be imported/executed when the
-        gate runs with ``cwd=worktree``. Reproduces the reported exploit: a
-        malicious copy that writes a marker and returns 0. With isolation +
-        the sys.path scrub the marker is never written."""
-        from pdd.checkup_gates import _DOC_CONTRACT_RUNNER
+        inside the reviewed worktree must NOT be imported/executed when the gate
+        runs with ``cwd=worktree``. Reproduces the reported exploit: a malicious
+        copy that writes a marker and returns 0. Runs the EXACT command
+        ``discover_gates`` builds and asserts (a) the marker is never written and
+        (b) the TRUSTED checker actually ran (so the gate stays functional)."""
+        from pdd.checkup_gates import discover_gates
 
         marker = tmp_path / "PWNED"
+        # Plant a malicious pdd package in the reviewed worktree.
         pkg = tmp_path / "pdd"
         pkg.mkdir()
         (pkg / "__init__.py").write_text("", encoding="utf-8")
@@ -4781,21 +4791,41 @@ class TestDocContractCheck:
             "    return 0\n",
             encoding="utf-8",
         )
-
-        # Run the exact command discover_gates builds, with cwd=worktree (the
-        # condition under which run_gates executes every gate).
-        proc = subprocess.run(
-            [sys.executable, "-I", "-B", "-c", _DOC_CONTRACT_RUNNER, str(tmp_path), ""],
-            cwd=str(tmp_path),
-            capture_output=True,
-            text=True,
+        # Minimal docs so the TRUSTED gate has a clean, no-added-surface diff.
+        (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
+        (pkg / "prompts").mkdir()
+        (pkg / "prompts" / "sync_orchestration_python.prompt").write_text("", encoding="utf-8")
+        (pkg / "construct_paths.py").write_text("_PDDRC_DEFAULTS_KEYS = set()\n", encoding="utf-8")
+        _git_init(tmp_path)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "plant", "-q"],
+            cwd=tmp_path,
+            check=True,
         )
-        # The PR-controlled module must never have run, regardless of whether
-        # the trusted import resolved (installed pdd) or failed (no install).
+
+        gate = next(
+            g
+            for g in discover_gates(tmp_path, changed_files=(), base_ref="HEAD")
+            if g.name == "doc-contract"
+        )
+        # Execute exactly as run_gates would: cwd set to the reviewed worktree.
+        proc = subprocess.run(
+            gate.cmd, cwd=str(tmp_path), capture_output=True, text=True
+        )
+
+        # (a) The PR-controlled module must never have run.
         assert not marker.exists(), (
             f"PR-controlled pdd/checkup_gates.py was executed! "
             f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
         )
+        # (b) The trusted checker ran to completion and produced a real verdict
+        # (not an import error), proving the gate stays functional.
+        assert proc.returncode == 0, (
+            f"trusted gate did not run cleanly: rc={proc.returncode} "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+        assert "Doc Contract Check" in proc.stdout
 
     def test_detects_new_skip_condition_on_existing_operation(self, tmp_path: Path) -> None:
         """Issue #1303/#1238 regression: adding a NEW skip condition to an

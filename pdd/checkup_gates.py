@@ -2041,15 +2041,25 @@ def _is_git_worktree(worktree: Path, *, git_cmd: Optional[str] = None) -> bool:
 
 
 # Trusted runner for the doc-contract gate. Executed as ``python -I -B -c
-# <this>`` with argv = [worktree, base_ref]. The leading ``sys.path`` scrub is
-# defense-in-depth on top of ``-I``: it removes any empty entry, the process
-# CWD, and any path resolving inside the reviewed worktree BEFORE importing
-# ``pdd``, so the gate is always run by the installed/base checker and never by
-# a PR-controlled copy living in the worktree (issue #1303 review).
+# <this>`` with argv = [worktree, base_ref, trusted_root].
+#
+# Two things make this run the TRUSTED checker, never a PR-controlled copy
+# living in the reviewed worktree (``run_gates`` executes every gate with
+# ``cwd=<worktree>``):
+#   * BEFORE importing ``pdd``, scrub ``sys.path`` of every empty entry, the
+#     process CWD, and anything resolving inside the worktree (defense in depth
+#     on top of ``-I``, which already keeps the CWD/script dir off the path).
+#   * Prepend ``trusted_root`` — the directory that contains the installed/base
+#     ``pdd`` package, computed by ``discover_gates`` in the trusted PARENT
+#     process from its own ``__file__`` (never from the worktree). This pins the
+#     import to the trusted checker AND keeps the gate functional when ``pdd`` is
+#     reachable only via a source/editable checkout rather than site-packages
+#     (issue #1303 review).
 _DOC_CONTRACT_RUNNER = (
     "import sys, os\n"
     "_wt = os.path.realpath(sys.argv[1])\n"
     "_cwd = os.path.realpath(os.getcwd())\n"
+    "_trusted = sys.argv[3] if len(sys.argv) > 3 else ''\n"
     "sys.path[:] = [\n"
     "    _p for _p in sys.path\n"
     "    if _p\n"
@@ -2057,6 +2067,8 @@ _DOC_CONTRACT_RUNNER = (
     "    and not os.path.realpath(_p).startswith(_wt + os.sep)\n"
     "    and os.path.realpath(_p) != _cwd\n"
     "]\n"
+    "if _trusted and os.path.isdir(_trusted):\n"
+    "    sys.path.insert(0, _trusted)\n"
     "from pdd.checkup_gates import run_doc_contract_check\n"
     "sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))"
 )
@@ -2109,13 +2121,17 @@ def discover_gates(
                     # letting the reviewed code bypass the gate or execute
                     # arbitrary code (issue #1303 review). The snippet below
                     # also defensively scrubs any worktree-resolving entry from
-                    # ``sys.path`` so the TRUSTED installed checker always runs.
+                    # ``sys.path`` and prepends ``trusted_root`` (this process's
+                    # own package dir) so the TRUSTED checker always runs.
                     "-I",
                     "-B",
                     "-c",
                     _DOC_CONTRACT_RUNNER,
                     str(worktree.absolute()),
                     base_ref or "",
+                    # Directory containing THIS (trusted/base) ``pdd`` package,
+                    # resolved in the parent process — never from the worktree.
+                    str(Path(__file__).resolve().parent.parent),
                 ],
                 source="README.md",
                 required_fix_hint=(
