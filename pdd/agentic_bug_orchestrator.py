@@ -2291,39 +2291,50 @@ def run_agentic_bug_orchestrator(
                 is_pdd_meta_artifact,
             )
 
-            if changed_files:
-                for filepath in changed_files:
-                    if is_pdd_meta_artifact(filepath):
-                        continue
-                    stage_result = subprocess.run(
-                        ["git", "add", filepath],
-                        cwd=current_work_dir,
-                        capture_output=True,
-                        text=True,
+            # Defensive guard: skip staging when the worktree directory does
+            # not exist on disk (e.g. unit tests with mocked worktree paths).
+            # finalize_pr_metadata pushd's into the repo root and would raise
+            # FileNotFoundError otherwise.
+            if not current_work_dir.exists():
+                if not quiet:
+                    console.print(
+                        f"[yellow]Warning: worktree {current_work_dir} does not exist; "
+                        f"skipping pre-Step 12 staging[/yellow]"
                     )
-                    if stage_result.returncode != 0 and not quiet:
-                        console.print(
-                            f"[yellow]Warning: failed to stage {filepath}: "
-                            f"{stage_result.stderr.strip()}[/yellow]"
+            else:
+                if changed_files:
+                    for filepath in changed_files:
+                        if is_pdd_meta_artifact(filepath):
+                            continue
+                        stage_result = subprocess.run(
+                            ["git", "add", filepath],
+                            cwd=current_work_dir,
+                            capture_output=True,
+                            text=True,
                         )
+                        if stage_result.returncode != 0 and not quiet:
+                            console.print(
+                                f"[yellow]Warning: failed to stage {filepath}: "
+                                f"{stage_result.stderr.strip()}[/yellow]"
+                            )
 
-            finalization = finalize_pr_metadata(
-                current_work_dir,
-                changed_paths=changed_files or None,
-                stage=True,
-            )
-            if not finalization.ok:
-                return (
-                    False,
-                    finalization.message,
-                    total_cost,
-                    model_used,
-                    changed_files,
+                finalization = finalize_pr_metadata(
+                    current_work_dir,
+                    changed_paths=changed_files or None,
+                    stage=True,
                 )
-            if finalization.metadata_paths:
-                changed_files.extend(finalization.metadata_paths)
-                changed_files = sorted(set(changed_files))
-                context["files_to_stage"] = ", ".join(changed_files)
+                if not finalization.ok:
+                    return (
+                        False,
+                        finalization.message,
+                        total_cost,
+                        model_used,
+                        changed_files,
+                    )
+                if finalization.metadata_paths:
+                    changed_files.extend(finalization.metadata_paths)
+                    changed_files = sorted(set(changed_files))
+                    context["files_to_stage"] = ", ".join(changed_files)
 
         # Load and preprocess template
         step_str = str(step_num).replace(".", "_")
