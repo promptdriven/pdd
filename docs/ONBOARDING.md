@@ -669,7 +669,7 @@ make release BUMP=minor   # minor bump
 make release BUMP=major   # major bump
 ```
 
-`make release` tags `HEAD` with the next `vX.Y.Z` and pushes the tag. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+`make release` tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. Set `PDS_CLI` if `pds` is not on `PATH`, and set `RELEASE_VIDEO_PROJECT_ID` when the PDS token is scoped to an existing project. Use `RELEASE_VIDEO=0` only for an emergency release that must skip paid video generation/upload. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
 
 ### 9. Troubleshooting Development Setup
 
