@@ -34,6 +34,13 @@ from .architecture_sync import (
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
+from .grounding_provenance import (
+    build_grounding_metadata,
+    grounding_reviewed_for_manifest,
+    review_pinned_examples_before_generation,
+    stash_grounding_overrides_on_ctx,
+    warn_cloud_examples_not_preapproved,
+)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -3100,7 +3107,10 @@ def code_generator_main(
             prompt_content = body
         else:
             prompt_content = raw_prompt_content
-        
+
+        if isinstance(ctx.obj, dict):
+            stash_grounding_overrides_on_ctx(ctx.obj, prompt_content)
+
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
         env_llm_raw = None
@@ -3687,10 +3697,29 @@ def code_generator_main(
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
-                    payload = {"promptContent": processed_prompt_for_cloud, "searchInput": prompt_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
+                    payload = {
+                        "promptContent": processed_prompt_for_cloud,
+                        "searchInput": prompt_content,
+                        "language": language,
+                        "strength": strength,
+                        "temperature": temperature,
+                        "verbose": verbose,
+                    }
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
+                        ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else None
+                        if ctx_obj is None:
+                            ctx.obj = {}
+                            ctx_obj = ctx.obj
+                        overrides = stash_grounding_overrides_on_ctx(ctx_obj, prompt_content)
+                        if cli_params.get("review_examples"):
+                            review_pinned_examples_before_generation(
+                                ctx_obj,
+                                prompt_content,
+                                force=force_overwrite,
+                                quiet=quiet,
+                            )
                         response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_request_timeout())
                         response.raise_for_status()
                         
@@ -3701,6 +3730,26 @@ def code_generator_main(
 
                         # Extract example information from examplesUsed array (cloud returns this)
                         examples_used = response_data.get("examplesUsed", [])
+                        if cli_params.get("review_examples"):
+                            warn_cloud_examples_not_preapproved(
+                                examples_used,
+                                cli_params.get("grounding_review_decisions"),
+                                quiet=quiet,
+                            )
+                        grounding_meta = build_grounding_metadata(
+                            mode="cloud",
+                            examples_used=examples_used,
+                            grounding_overrides=overrides,
+                            reviewed=grounding_reviewed_for_manifest(
+                                cli_params,
+                                examples_used,
+                            ),
+                        )
+                        if ctx.obj is None:
+                            ctx.obj = {}
+                        if isinstance(ctx.obj, dict):
+                            ctx.obj["last_grounding"] = grounding_meta
+
                         if examples_used:
                             selected_example_id = examples_used[0].get("id")
                             selected_example_title = examples_used[0].get("title")
@@ -3733,6 +3782,10 @@ def code_generator_main(
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
                              else:
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             if grounding_meta.get("selected_examples"):
+                                 console.print("[cyan]Grounding examples selected:[/cyan]")
+                                 for example in grounding_meta["selected_examples"]:
+                                     console.print(f"  - {example.get('module', 'unknown')}")
                     except requests.exceptions.Timeout:
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
@@ -4236,5 +4289,15 @@ def code_generator_main(
             console.print(traceback.format_exc())
 
         raise click.UsageError(f"An unexpected error occurred: {e}")
-        
+
+    if isinstance(ctx.obj, dict) and "last_grounding" not in ctx.obj:
+        overrides = ctx.obj.get("grounding_overrides") or stash_grounding_overrides_on_ctx(
+            ctx.obj, prompt_content
+        )
+        ctx.obj["last_grounding"] = build_grounding_metadata(
+            mode="unavailable",
+            grounding_overrides=overrides,
+            reviewed=grounding_reviewed_for_manifest(cli_params, []),
+        )
+
     return generated_code_content or "", was_incremental_operation, total_cost, model_name
