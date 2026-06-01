@@ -13,7 +13,7 @@ Test plan
 
 2. detect_and_bootstrap_cli — Selection table & input parsing
    2.1 Table shows all three CLIs with install/key status
-   2.2 Selecting "1" picks Claude CLI
+   2.2 Selecting "1" picks Codex CLI
    2.3 Comma-separated input "1,3" selects multiple CLIs
    2.4 Spaces in input "1, 3" are tolerated
    2.5 Duplicate input "1,1,3" is deduplicated
@@ -310,7 +310,7 @@ class TestBootstrapSelectionTable:
 
     def test_table_shows_all_three_clis(self, monkeypatch, tmp_path):
         output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
+            monkeypatch, tmp_path, ["q"],
             cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
         )
         assert "Claude CLI" in output
@@ -319,7 +319,7 @@ class TestBootstrapSelectionTable:
 
     def test_table_shows_install_and_key_status(self, monkeypatch, tmp_path):
         output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
+            monkeypatch, tmp_path, ["q"],
             cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
         )
         # Claude is installed with key
@@ -331,39 +331,40 @@ class TestBootstrapSelectionTable:
     def test_select_single_cli(self, monkeypatch, tmp_path):
         _, results = _run_bootstrap_capture(
             monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+            cli_paths={"codex": "/usr/local/bin/codex"},
+            env_keys={"OPENAI_API_KEY": "sk-oai-test"},
         )
         assert len(results) == 1
-        assert results[0].cli_name == "claude"
-        assert results[0].provider == "anthropic"
+        assert results[0].cli_name == "codex"
+        assert results[0].provider == "openai"
         assert results[0].api_key_configured is True
 
     def test_multi_select_comma_separated(self, monkeypatch, tmp_path):
-        # New ordering: 1=claude, 2=codex, 3=agy, 4=gemini, 5=opencode.
+        # New ordering: 1=codex, 2=agy, 3=gemini, 4=claude, 5=opencode.
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1,4"],
+            monkeypatch, tmp_path, ["1,3"],
             cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
         )
         assert len(results) == 2
-        assert results[0].cli_name == "claude"
+        assert results[0].cli_name == "codex"
         assert results[1].cli_name == "gemini"
 
     def test_multi_select_with_spaces(self, monkeypatch, tmp_path):
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1, 4"],
+            monkeypatch, tmp_path, ["1, 3"],
             cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
         )
         assert len(results) == 2
-        assert results[0].cli_name == "claude"
+        assert results[0].cli_name == "codex"
         assert results[1].cli_name == "gemini"
 
     def test_duplicate_input_deduplicated(self, monkeypatch, tmp_path):
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1,1,4"],
+            monkeypatch, tmp_path, ["1,1,3"],
             cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
         )
         assert len(results) == 2
-        assert results[0].cli_name == "claude"
+        assert results[0].cli_name == "codex"
         assert results[1].cli_name == "gemini"
 
     def test_empty_input_defaults_to_installed_with_key(self, monkeypatch, tmp_path):
@@ -416,9 +417,10 @@ class TestBootstrapInstallFlow:
         """If CLI is already found, no install prompt is shown."""
         output, results = _run_bootstrap_capture(
             monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+            cli_paths={"codex": "/usr/local/bin/codex"},
+            env_keys={"OPENAI_API_KEY": "sk-oai-test"},
         )
-        assert results[0].cli_name == "claude"
+        assert results[0].cli_name == "codex"
         assert "Install now?" not in output
 
     def test_not_installed_user_accepts_npm_succeeds(self, monkeypatch, tmp_path):
@@ -428,11 +430,11 @@ class TestBootstrapInstallFlow:
             ["1", "y", ""],  # select, accept install, skip key
             npm_available=True,
             install_succeeds=True,
-            install_then_found="/usr/local/bin/claude",
+            install_then_found="/usr/local/bin/codex",
         )
         assert len(results) == 1
-        assert results[0].cli_name == "claude"
-        assert results[0].cli_path == "/usr/local/bin/claude"
+        assert results[0].cli_name == "codex"
+        assert results[0].cli_path == "/usr/local/bin/codex"
         assert results[0].skipped is False
 
     def test_not_installed_npm_missing(self, monkeypatch, tmp_path):
@@ -490,7 +492,8 @@ class TestBootstrapApiKeyFlow:
         """If key is already in env, no prompt for it."""
         output, results = _run_bootstrap_capture(
             monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+            cli_paths={"codex": "/usr/bin/codex"},
+            env_keys={"OPENAI_API_KEY": "sk-oai-test"},
         )
         assert results[0].api_key_configured is True
         assert "Enter your" not in output
@@ -501,12 +504,12 @@ class TestBootstrapApiKeyFlow:
         bootstrap MUST skip the API-key prompt entirely. Otherwise OAuth
         users get pushed into the stale-key workflow this PR fixes.
 
-        Uses input ["1"] only (no API key) — would fail with
+        Uses one selection input only (no API key) — would fail with
         StopIteration if the prompt fired.
         """
         output, results = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1"],  # only select; no API key prompt expected
+            ["4"],  # only select; no API key prompt expected
             cli_paths=CLAUDE_ONLY,
             # No env_keys → no API key in environment.
             has_provider_oauth=lambda provider: provider == "anthropic",
@@ -516,14 +519,14 @@ class TestBootstrapApiKeyFlow:
         assert results[0].api_key_configured is False  # API key still not set
         # The status line should report OAuth, not "not set" red ✗.
         assert "OAuth/subscription/config credential configured" in output
-        # The credential prompt must NOT fire (user only provided 1 input).
+        # The credential prompt must NOT fire (user only provided one input).
         assert "Enter your" not in output
 
     def test_key_not_set_user_provides(self, monkeypatch, tmp_path):
         """User provides key when prompted."""
         _, results = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", "sk-new-key"],  # select, provide key
+            ["4", "sk-new-key"],  # select Claude, provide key
             cli_paths=CLAUDE_ONLY,
         )
         assert results[0].api_key_configured is True
@@ -533,7 +536,7 @@ class TestBootstrapApiKeyFlow:
         """Provided key is written to ~/.pdd/api-env.bash."""
         _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", "sk-saved-key"],
+            ["4", "sk-saved-key"],
             cli_paths=CLAUDE_ONLY,
         )
         api_env = tmp_path / ".pdd" / "api-env.bash"
@@ -545,7 +548,7 @@ class TestBootstrapApiKeyFlow:
         """Source line is added to ~/.bashrc."""
         _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", "sk-test"],
+            ["4", "sk-test"],
             cli_paths=CLAUDE_ONLY,
         )
         rc_content = (tmp_path / ".bashrc").read_text()
@@ -556,7 +559,7 @@ class TestBootstrapApiKeyFlow:
         """User presses Enter to skip key."""
         _, results = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", ""],  # select, skip key
+            ["4", ""],  # select Claude, skip key
             cli_paths=CLAUDE_ONLY,
         )
         assert results[0].api_key_configured is False
@@ -565,7 +568,7 @@ class TestBootstrapApiKeyFlow:
         """Skipping Anthropic key mentions subscription auth."""
         output, _ = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", ""],  # select, skip key
+            ["4", ""],  # select Claude, skip key
             cli_paths=CLAUDE_ONLY,
         )
         assert "subscription" in output.lower()
@@ -574,24 +577,33 @@ class TestBootstrapApiKeyFlow:
         """Skipping non-Anthropic key mentions limited functionality."""
         output, _ = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["2", ""],  # select codex, skip key
-            cli_paths={"codex": "/usr/bin/codex"},
+            ["3", ""],  # select gemini, skip key
+            cli_paths={"gemini": "/usr/bin/gemini"},
         )
         assert "limited functionality" in output.lower()
 
+    def test_codex_skip_shows_subscription_hint(self, monkeypatch, tmp_path):
+        """Skipping OpenAI API key points users at codex login."""
+        output, _ = _run_bootstrap_capture(
+            monkeypatch, tmp_path,
+            ["1", ""],  # select codex, skip key
+            cli_paths={"codex": "/usr/bin/codex"},
+        )
+        assert "codex login" in output.lower()
+
     def test_google_checks_gemini_key(self, monkeypatch, tmp_path):
-        """Google provider recognizes GEMINI_API_KEY (position 4 = gemini)."""
+        """Google provider recognizes GEMINI_API_KEY (position 3 = gemini)."""
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["4"],
+            monkeypatch, tmp_path, ["3"],
             cli_paths={"gemini": "/usr/bin/gemini"},
             env_keys={"GEMINI_API_KEY": "gm-test"},
         )
         assert results[0].api_key_configured is True
 
     def test_google_checks_google_api_key(self, monkeypatch, tmp_path):
-        """Google provider recognizes GOOGLE_API_KEY (position 4 = gemini)."""
+        """Google provider recognizes GOOGLE_API_KEY (position 3 = gemini)."""
         _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["4"],
+            monkeypatch, tmp_path, ["3"],
             cli_paths={"gemini": "/usr/bin/gemini"},
             env_keys={"GOOGLE_API_KEY": "gm-test"},
         )
@@ -610,7 +622,8 @@ class TestBootstrapCliTest:
         """CLI test always runs, output includes version info."""
         output, _ = _run_bootstrap_capture(
             monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+            cli_paths={"codex": "/usr/bin/codex"},
+            env_keys={"OPENAI_API_KEY": "sk-oai-test"},
             version_output="2.5.0",
         )
         assert "Testing" in output
@@ -690,7 +703,7 @@ class TestApiKeyPersistence:
                      "GEMINI_API_KEY"):
             monkeypatch.delenv(var, raising=False)
 
-        input_iter = iter(["1", "sk-fish-key"])
+        input_iter = iter(["4", "sk-fish-key"])
         monkeypatch.setattr(
             "pdd.cli_detector._prompt_input",
             lambda _prompt="": next(input_iter),
@@ -726,7 +739,7 @@ class TestApiKeyPersistence:
             monkeypatch.delenv(var, raising=False)
 
         # First save
-        input_iter = iter(["1", "sk-first"])
+        input_iter = iter(["4", "sk-first"])
         monkeypatch.setattr(
             "pdd.cli_detector._prompt_input",
             lambda _prompt="": next(input_iter),
@@ -743,7 +756,7 @@ class TestApiKeyPersistence:
 
         # Second save (overwrite key)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        input_iter2 = iter(["1", "sk-second"])
+        input_iter2 = iter(["4", "sk-second"])
         monkeypatch.setattr(
             "pdd.cli_detector._prompt_input",
             lambda _prompt="": next(input_iter2),

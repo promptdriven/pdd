@@ -88,9 +88,9 @@ PROVIDER_DISPLAY: Dict[str, str] = {
     "opencode": "OpenCode CLI",
 }
 
-# Table order: Claude, Codex, Antigravity, Gemini, OpenCode. Antigravity sits
-# immediately above the legacy Gemini CLI per the migration plan.
-CLI_PREFERENCE: List[str] = ["claude", "codex", "agy", "gemini", "opencode"]
+# Table order: Codex, Antigravity, Gemini, Claude, OpenCode. Codex is the
+# preferred no-API-key path; Anthropic is retained as explicit fallback.
+CLI_PREFERENCE: List[str] = ["codex", "agy", "gemini", "claude", "opencode"]
 
 CLI_LABEL: Dict[str, str] = {
     "claude": "Claude CLI",
@@ -384,19 +384,11 @@ def _has_provider_oauth(provider: str) -> bool:
                 continue
         return False
     if provider == "openai":
-        p = home / ".codex" / "auth.json"
-        if p.exists():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return bool(data)
-                if isinstance(data, list):
-                    return len(data) > 0
-                return bool(data)
-            except (OSError, json.JSONDecodeError):
-                return False
-        return False
+        try:
+            from pdd.codex_subscription import has_codex_subscription_auth
+            return has_codex_subscription_auth()
+        except Exception:
+            return False
     if provider == "opencode":
         auth = home / ".local" / "share" / "opencode" / "auth.json"
         if auth.exists():
@@ -900,6 +892,11 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
                             f"{key_name} not configured. Claude CLI can still "
                             "work via subscription auth (run `claude login`)."
                         )
+                    elif provider == "openai":
+                        console.print(
+                            f"{key_name} not configured. Codex can still work "
+                            "via ChatGPT subscription auth (run `codex login`)."
+                        )
                     else:
                         console.print(
                             f"{key_name} not configured — limited functionality."
@@ -977,8 +974,8 @@ def detect_cli_tools() -> None:
         )
     if not found:
         console.print(
-            "No CLI tools found. Quick start: install Claude CLI via "
-            "`npm install -g @anthropic-ai/claude-code`."
+            "No CLI tools found. Quick start: install Codex CLI via "
+            "`npm install -g @openai/codex`, then run `codex login`."
         )
 
 

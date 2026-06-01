@@ -141,7 +141,7 @@ def test_schema_instruction_contains_json_and_only_directive():
 # --------------------------------------------------------------------------- #
 
 def _chatgpt_row():
-    return {"model": "chatgpt/gpt-5.3-codex", "api_key": "", "provider": "OpenAI ChatGPT"}
+    return {"model": "chatgpt/gpt-5.5", "api_key": "", "provider": "OpenAI ChatGPT"}
 
 
 def test_ensure_api_key_chatgpt_ok_when_bridge_succeeds(monkeypatch):
@@ -169,7 +169,7 @@ def test_ensure_api_key_chatgpt_allowed_interactively_without_auth(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def _fake_model_df():
-    """Mimic _load_model_data output: an Anthropic row + the chatgpt row."""
+    """Mimic _load_model_data output: an Anthropic row + the default chatgpt row."""
     rows = [
         {
             "provider": "Anthropic", "model": "claude-sonnet-4-6",
@@ -179,8 +179,8 @@ def _fake_model_df():
             "reasoning_type": "none", "location": "",
         },
         {
-            "provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex",
-            "input": 0.0, "output": 0.0, "coding_arena_elo": 1407,
+            "provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.5",
+            "input": 0.0, "output": 0.0, "coding_arena_elo": 1450,
             "base_url": "", "api_key": "",
             "max_reasoning_tokens": 0, "structured_output": True,
             "reasoning_type": "none", "location": "",
@@ -195,7 +195,7 @@ def _fake_model_df():
 def test_chatgpt_row_present_in_candidates():
     cands = li._select_model_candidates(0.5, "claude-sonnet-4-6", _fake_model_df())
     models = [c["model"] for c in cands]
-    assert "chatgpt/gpt-5.3-codex" in models
+    assert "chatgpt/gpt-5.5" in models
 
 
 def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
@@ -221,7 +221,32 @@ def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
 
     # Anthropic row is skipped (missing key in --force); chatgpt is the first
     # model that actually reaches litellm.completion.
-    assert captured.get("model") == "chatgpt/gpt-5.3-codex"
+    assert captured.get("model") == "chatgpt/gpt-5.5"
+
+
+def test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present(monkeypatch):
+    """Issue #1318: Codex subscription auth must prevent default Anthropic billing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured["model"] = kwargs.get("model")
+        raise RuntimeError("STOP_AFTER_CAPTURE")
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        try:
+            li.llm_invoke(prompt="hi {x}", input_json={"x": "there"}, strength=1.0, verbose=False)
+        except Exception:
+            pass
+
+    assert captured.get("model") == "chatgpt/gpt-5.5"
 
 
 # --------------------------------------------------------------------------- #
@@ -248,6 +273,7 @@ def test_codex_family_present_in_packaged_csv():
     fam = df[df["provider"] == "OpenAI ChatGPT"]
     by_model = {r["model"]: r for _, r in fam.iterrows()}
     expected = {
+        "chatgpt/gpt-5.5": 1450,
         "chatgpt/gpt-5.4": 1437,
         "chatgpt/gpt-5.3-codex": 1407,
         "chatgpt/gpt-5.2": 1404,
@@ -276,23 +302,50 @@ def test_chatgpt_and_openai_api_models_do_not_collide():
 
 
 def test_codex_family_strength_orders_by_elo():
-    """Within the Codex family, high strength selects the top-ELO model (gpt-5.4),
+    """Within the Codex family, high strength selects the top-ELO model (gpt-5.5),
     mirroring Anthropic's haiku->opus spread. (Flat cost => ELO is the ordering key
     at strength>=0.5; same behavior as the GitHub Copilot family.)"""
     df = li._load_model_data(_packaged_csv_path())
     fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
-    cands = li._select_model_candidates(0.8, "chatgpt/gpt-5.3-codex", fam)
-    assert cands[0]["model"] == "chatgpt/gpt-5.4", [c["model"] for c in cands]
+    cands = li._select_model_candidates(1.0, "chatgpt/gpt-5.3-codex", fam)
+    assert cands[0]["model"] == "chatgpt/gpt-5.5", [c["model"] for c in cands]
 
 
-def test_anthropic_outranks_codex_so_default_unchanged():
-    """Promise to the user: Codex is opt-in, Anthropic stays the shipped default.
-    Guard it numerically so a future ELO bump to a codex row can't silently steal
-    the default-to-keep (which setup picks by highest ELO)."""
+def test_codex_subscription_default_excludes_anthropic_when_auth_exists(monkeypatch):
+    """With codex auth, default selection is constrained to chatgpt/*."""
     df = li._load_model_data(_packaged_csv_path())
-    amax = df[df["provider"] == "Anthropic"]["coding_arena_elo"].max()
-    cmax = df[df["provider"] == "OpenAI ChatGPT"]["coding_arena_elo"].max()
-    assert amax > cmax, f"Anthropic max {amax} must exceed Codex max {cmax}"
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
+    restricted, default_model, used = li._apply_codex_subscription_default(df, None)
+
+    assert used is True
+    assert default_model == "chatgpt/gpt-5.5"
+    assert set(restricted["provider"]) == {"OpenAI ChatGPT"}
+    assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
+
+
+def test_codex_subscription_maps_gpt55_default_to_chatgpt(monkeypatch):
+    """Cloud sets PDD_MODEL_DEFAULT=gpt-5.5; subscription auth should route chatgpt/gpt-5.5."""
+    df = li._load_model_data(_packaged_csv_path())
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
+    restricted, default_model, used = li._apply_codex_subscription_default(df, "gpt-5.5")
+
+    assert used is True
+    assert default_model == "chatgpt/gpt-5.5"
+    assert set(restricted["provider"]) == {"OpenAI ChatGPT"}
+
+
+def test_pdd_model_default_first_pins_configured_default(monkeypatch):
+    """PDD_MODEL_DEFAULT_FIRST keeps the configured default ahead of ELO interpolation."""
+    df = li._load_model_data(_packaged_csv_path())
+    fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
+    candidates = li._select_model_candidates(1.0, "chatgpt/gpt-5.3-codex", fam)
+    assert candidates[0]["model"] == "chatgpt/gpt-5.5"
+
+    monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
+    default_name = "chatgpt/gpt-5.3-codex"
+    candidates = li._pin_default_model_first(candidates, default_name)
+    assert candidates[0]["model"] == default_name
 
 
 def test_chatgpt_structured_never_sends_response_format(monkeypatch):
@@ -414,10 +467,12 @@ def test_catalog_generator_preserves_chatgpt_family():
     merged = gmc._merge_chatgpt_subscription_rows([{"model": "anthropic/claude", "provider": "Anthropic"}])
     cg = sorted(r["model"] for r in merged if str(r["model"]).startswith("chatgpt/"))
     assert cg == ["chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex",
-                  "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4"], cg
+                  "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4",
+                  "chatgpt/gpt-5.5"], cg
     again = gmc._merge_chatgpt_subscription_rows(merged)
-    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 4
+    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 5
     elos = {r["model"]: r["coding_arena_elo"] for r in again if str(r["model"]).startswith("chatgpt/")}
+    assert elos["chatgpt/gpt-5.5"] == "1450"
     assert elos["chatgpt/gpt-5.4"] == "1437"
     assert elos["chatgpt/gpt-5.3-codex"] == "1407"
 
