@@ -1,6 +1,7 @@
 import threading
 import sys
 import os
+import re
 from typing import List, Optional, Callable, Any
 import io
 import asyncio
@@ -18,7 +19,6 @@ from rich.panel import Panel
 from rich.align import Align
 from rich.text import Text
 import time
-import re
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
@@ -30,17 +30,8 @@ from rich.style import Style
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
 CHARSET_SELECTOR_MARKERS = "()*+-./"
-CHARSET_SELECTOR_RE = re.compile(r"\x1b[()*+\-./].")
-ANSI_ESCAPE_RE = re.compile(
-    r"""
-    (?:\x1b[()*+\-./].)|
-    (?:\x1b[0-?])|
-    (?:\x1b\].*?\x1b\\)|
-    (?:\x1b\[[0-?]*[ -/]*[@-~])|
-    (?:\x1b[@-Z\\-_])
-    """,
-    re.VERBOSE,
-)
+BEL = "\x07"
+ST = "\x1b\\"
 
 
 def _debug_swallow(context: str, exc: Exception) -> None:
@@ -82,12 +73,135 @@ def _is_headless_environment() -> bool:
 def _text_from_ansi_output(text: str) -> Text:
     """Parse ANSI text, including ANSI that Rich highlighted before capture."""
     text = _restore_rich_highlighted_ansi(text)
+    text, _clean_text, _position_map, _has_ansi = _prepare_ansi_text(text)
     rendered = Text.from_ansi(text)
-    if ANSI_ESCAPE_RE.search(rendered.plain):
-        reparsed_plain = CHARSET_SELECTOR_RE.sub("", rendered.plain)
-        reparsed = Text.from_ansi(reparsed_plain)
-        return _merge_reparsed_ansi_spans(rendered, reparsed)
+    reparse_text, clean_text, position_map, has_ansi = _prepare_ansi_text(
+        rendered.plain
+    )
+    if has_ansi:
+        reparsed = Text.from_ansi(reparse_text)
+        return _merge_reparsed_ansi_spans(
+            rendered,
+            reparsed,
+            clean_text,
+            position_map,
+        )
     return rendered
+
+
+def _prepare_ansi_text(
+    text: str,
+) -> tuple[str, str, List[Optional[int]], bool]:
+    """Return Rich-compatible ANSI text, visible text, position map, and status."""
+    rich_parts: List[str] = []
+    clean_chars: List[str] = []
+    position_map: List[Optional[int]] = [None] * len(text)
+    has_ansi = False
+    index = 0
+    while index < len(text):
+        if text[index] != "\x1b":
+            position_map[index] = len(clean_chars)
+            rich_parts.append(text[index])
+            clean_chars.append(text[index])
+            index += 1
+            continue
+
+        token_end, next_index, token_kind, terminator = _scan_ansi_token(
+            text,
+            index,
+        )
+        if token_end is not None:
+            has_ansi = True
+            rich_parts.append(
+                _rich_ansi_token(text, index, token_end, token_kind, terminator)
+            )
+            index = token_end
+            continue
+
+        while index < next_index:
+            position_map[index] = len(clean_chars)
+            rich_parts.append(text[index])
+            clean_chars.append(text[index])
+            index += 1
+
+    return "".join(rich_parts), "".join(clean_chars), position_map, has_ansi
+
+
+def _scan_ansi_token(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], int, str, str]:
+    """Scan one ANSI escape token without rescanning malformed suffixes."""
+    if start >= len(text) or text[start] != "\x1b":
+        return None, start + 1, "", ""
+    if start + 1 >= len(text):
+        return None, start + 1, "", ""
+
+    marker = text[start + 1]
+    if marker == "[":
+        return _scan_csi_token(text, start + 2)
+    if marker == "]":
+        return _scan_osc_token(text, start + 2)
+    if marker in CHARSET_SELECTOR_MARKERS:
+        if start + 2 < len(text):
+            return start + 3, start + 3, "single", ""
+        return None, start + 2, "", ""
+    if "0" <= marker <= "?" or "@" <= marker <= "Z" or "\\" <= marker <= "_":
+        return start + 2, start + 2, "single", ""
+    return None, start + 1, "", ""
+
+
+def _scan_csi_token(text: str, start: int) -> tuple[Optional[int], int, str, str]:
+    """Scan a CSI token body."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == "\x1b":
+            return None, index, "", ""
+        index += 1
+        if "@" <= char <= "~":
+            return index, index, "csi", ""
+    return None, index, "", ""
+
+
+def _scan_osc_token(text: str, start: int) -> tuple[Optional[int], int, str, str]:
+    """Scan an OSC token body terminated by ST or BEL."""
+    token_end, terminator, next_index = _scan_osc_end(text, start)
+    if token_end is None:
+        return None, next_index, "", ""
+    return token_end, token_end, "osc", terminator
+
+
+def _scan_osc_end(text: str, start: int) -> tuple[Optional[int], str, int]:
+    """Return an OSC token end, terminator, and next index."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == BEL:
+            return index + 1, BEL, index + 1
+        if char == "\x1b":
+            if text.startswith(ST, index):
+                return index + len(ST), ST, index + len(ST)
+            return None, "", index
+        index += 1
+    return None, "", index
+
+
+def _rich_ansi_token(
+    text: str,
+    start: int,
+    end: int,
+    token_kind: str,
+    terminator: str,
+) -> str:
+    """Return the token form Rich can parse without exposing control payloads."""
+    if token_kind == "csi":
+        return text[start:end]
+    if token_kind == "osc":
+        if terminator == BEL:
+            return text[start:end - 1] + ST
+        return text[start:end]
+    return ""
 
 
 def _restore_rich_highlighted_ansi(text: str) -> str:
@@ -160,6 +274,8 @@ def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]
     index = start
     body: List[str] = []
     while index < len(text):
+        if text[index] == BEL:
+            return "\x1b]" + "".join(body) + BEL, index + 1
         if text.startswith("\x1b\\", index):
             return "\x1b]" + "".join(body) + "\x1b\\", index + 2
         if text[index] == "\x1b":
@@ -217,27 +333,18 @@ def _consume_sgr_sequence(text: str, start: int) -> Optional[int]:
     return None
 
 
-def _merge_reparsed_ansi_spans(original: Text, reparsed: Text) -> Text:
+def _merge_reparsed_ansi_spans(
+    original: Text,
+    reparsed: Text,
+    clean_plain: Optional[str] = None,
+    position_map: Optional[List[Optional[int]]] = None,
+) -> Text:
     """Merge ANSI reparsing spans without dropping existing non-ANSI spans."""
     plain_text = original.plain
-    position_map: List[Optional[int]] = [None] * len(plain_text)
-    clean_chars: List[str] = []
-    index = 0
-    for match in ANSI_ESCAPE_RE.finditer(plain_text):
-        start, end = match.span()
-        if start < index:
-            continue
-        while index < match.start():
-            position_map[index] = len(clean_chars)
-            clean_chars.append(plain_text[index])
-            index += 1
-        index = end
-    while index < len(plain_text):
-        position_map[index] = len(clean_chars)
-        clean_chars.append(plain_text[index])
-        index += 1
-
-    clean_plain = "".join(clean_chars)
+    if clean_plain is None or position_map is None:
+        _reparse_text, clean_plain, position_map, _has_ansi = _prepare_ansi_text(
+            plain_text
+        )
     if clean_plain != reparsed.plain:
         return reparsed
 

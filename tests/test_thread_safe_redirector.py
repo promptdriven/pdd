@@ -354,20 +354,23 @@ def test_malformed_highlighted_ansi_restore_advances_linearly(monkeypatch):
 
 
 def test_malformed_osc_span_mapping_avoids_regex_rescan(monkeypatch):
-    """Fallback span mapping should not use suffix-scanning regex matching."""
+    """Fallback span mapping should scan malformed OSC fragments once."""
     malformed = "\x1b]8;;unterminated"
-    plain = "prefix " + malformed * 20 + " suffix"
+    repeat_count = 20
+    plain = "prefix " + malformed * repeat_count + " suffix"
     original = sync_tui.Text(plain)
     reparsed = sync_tui.Text(plain)
+    calls = 0
+    original_scan = sync_tui._scan_ansi_token
 
-    class SuffixScanningRegex:
-        """Detect accidental use of the regex fallback in span mapping."""
+    def counting_scan(text, start):
+        nonlocal calls
+        calls += 1
+        return original_scan(text, start)
 
-        def finditer(self, text):
-            raise AssertionError(f"regex finditer called for {len(text)} chars")
-
-    monkeypatch.setattr(sync_tui, "ANSI_ESCAPE_RE", SuffixScanningRegex())
+    monkeypatch.setattr(sync_tui, "_scan_ansi_token", counting_scan)
 
     merged = sync_tui._merge_reparsed_ansi_spans(original, reparsed)
 
     assert merged.plain == plain
+    assert calls <= repeat_count * 2
