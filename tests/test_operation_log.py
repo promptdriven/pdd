@@ -1188,3 +1188,84 @@ def test_log_operation_fallback_coerces_prompt_to_path_issue_1305(tmp_path):
     assert _is_hex_sha256(fp_data["prompt_hash"]), (
         f"prompt_hash should be a 64-char hex SHA-256, got: {fp_data['prompt_hash']!r}"
     )
+
+
+def test_log_operation_example_writes_test_hash_issue_1305(tmp_path):
+    """Issue #1305 (Cycle 2, Test 6): a `pdd example` run through @log_operation
+    must also populate `test_hash` — not just prompt/code/example.
+
+    The resolved Path dict includes a `test` key, so once the decorator passes the
+    full get_pdd_file_paths() set, calculate_current_hashes() hashes the on-disk
+    test file too. No existing issue_1305 test asserts test_hash, leaving a gap:
+    a fix that forgot the `test` key would still pass Tests 1-5 yet leave a null
+    test_hash, so a later sync that tracks the test file would re-detect drift.
+
+    On buggy code the decorator passes {"prompt": <str>}, so test_hash is null and
+    this assertion fails.
+    """
+    basename, language = "testhashmod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "example run must write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    assert fp_data["test_hash"] is not None, "test_hash must not be null after example"
+    assert _is_hex_sha256(fp_data["test_hash"]), (
+        f"test_hash should be a 64-char hex SHA-256, got: {fp_data['test_hash']!r}"
+    )
+
+
+def test_log_operation_second_pass_is_idempotent_issue_1305(tmp_path):
+    """Issue #1305 (Cycle 2, Test 7): the acceptance criterion that a SECOND
+    auto-heal pass on an unchanged tree produces no example rewrite.
+
+    Running the @log_operation-decorated command twice on the same unchanged files
+    must write the SAME non-null hashes both times. Equal, non-null hashes mean a
+    second sync/auto-heal pass sees no drift and does not rewrite the generated
+    example (the PR #1243 loop never starts).
+
+    On buggy code both passes write null hashes; the non-null guard fails (a bare
+    null==null equality would otherwise pass vacuously), so this test still catches
+    the bug.
+    """
+    basename, language = "idempotentmod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    def _run_and_read():
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+            run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+        fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+        with open(fp_path) as f:
+            return json.load(f)
+
+    first = _run_and_read()
+    second = _run_and_read()
+
+    hash_fields = ("prompt_hash", "code_hash", "example_hash", "test_hash")
+    # Non-null guard: a vacuous null==null match must not let the bug through.
+    for field in hash_fields:
+        assert first[field] is not None, f"first pass {field} must not be null"
+        assert second[field] is not None, f"second pass {field} must not be null"
+    # Idempotence: unchanged files -> identical hashes -> no drift -> no rewrite.
+    for field in hash_fields:
+        assert first[field] == second[field], (
+            f"{field} changed between passes ({first[field]} -> {second[field]}); "
+            "a second auto-heal pass would rewrite the example (PR #1243 loop)"
+        )

@@ -636,11 +636,35 @@ def log_operation(
                                 basename, language, paths=log_paths
                             )
                         if updates_fingerprint and fingerprint_allowed:
+                            # Issue #1305: save_fingerprint hashes only Path
+                            # values, and a bare {"prompt": <str>} hint yields
+                            # all-null hashes (the prompt string is skipped and
+                            # code/example/test keys are absent), so the
+                            # fingerprint never converges and CI auto-heal loops.
+                            # Resolve the authoritative, complete Path set here
+                            # so prompt/code/example/test hashes are real. Fall
+                            # back to a Path-coerced prompt hint (never a raw
+                            # string) if resolution fails, so anchoring still
+                            # works. The #983 contract is preserved: the caller
+                            # resolves the paths, so save_fingerprint does not.
+                            from .sync_determine_operation import get_pdd_file_paths
+                            try:
+                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
+                                    basename, language
+                                )
+                            except (ImportError, OSError, ValueError) as e:
+                                logger.warning(
+                                    "Could not resolve paths for %s/%s: %s",
+                                    basename,
+                                    language,
+                                    e,
+                                )
+                                fingerprint_paths = {"prompt": Path(prompt_file)}
                             save_fingerprint(
                                 basename,
                                 language,
                                 operation=operation,
-                                paths=log_paths,
+                                paths=fingerprint_paths,
                                 cost=cost,
                                 model=model,
                             )
