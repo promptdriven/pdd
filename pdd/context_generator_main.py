@@ -139,7 +139,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                         if language:
                             try:
                                 lang_ext = get_extension(language)
-                                if not lang_ext and (language or '').lower() != 'prompt':
+                                if not lang_ext:
                                     raise ValueError('empty extension')
                             except Exception:
                                 lang_key = language.lower()
