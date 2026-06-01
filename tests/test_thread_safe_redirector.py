@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 from rich.console import Console
 
+import pdd.sync_tui as sync_tui
 from pdd.sync_tui import ThreadSafeRedirector, TUIStdoutWrapper
 
 
@@ -302,3 +303,44 @@ def test_rich_printed_non_csi_escape_preserves_styles(redirector, captured_texts
         span.start <= 0 and span.end >= len("prefix") and span.style.bold
         for span in text.spans
     )
+
+
+def test_rich_printed_charset_selector_sibling_preserves_styles(redirector, captured_texts):
+    """Charset selector siblings such as ESC)0 should not leak raw escape text."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[bold]prefix[/bold] \x1b)0tail")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix tail"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+
+
+def test_malformed_highlighted_ansi_restore_advances_linearly(monkeypatch):
+    """Malformed highlighted OSC/CSI candidates should not rescan suffixes."""
+    malformed_osc = "\x1b\x1b[1m]\x1b[0m8;;unterminated"
+    malformed_csi = "\x1b\x1b[1m[\x1b[0m999"
+    repeat_count = 20
+    malformed = (malformed_osc + malformed_csi) * repeat_count
+    calls = 0
+    original_skip = sync_tui._skip_sgr_sequences
+
+    def counting_skip(text, start):
+        nonlocal calls
+        calls += 1
+        return original_skip(text, start)
+
+    monkeypatch.setattr(sync_tui, "_skip_sgr_sequences", counting_skip)
+
+    sync_tui._restore_rich_highlighted_ansi(malformed)
+
+    assert calls <= repeat_count * 20
