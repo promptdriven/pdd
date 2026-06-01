@@ -352,6 +352,60 @@ def test_rich_highlighter_style_not_replayed_after_osc_title(
     )
 
 
+def test_rich_highlighted_osc_interruption_does_not_leak_payload(
+    redirector,
+    captured_lines,
+):
+    """Rich-highlighted OSC payload should be hidden when interrupted by CSI."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;payload\x1b[31mRED\x1b[0mpost")
+
+    assert captured_lines == ["preREDpost"]
+
+
+def test_rich_highlighted_osc_cancellation_does_not_leak_payload(
+    redirector,
+    captured_lines,
+):
+    """Rich-highlighted OSC payload should be hidden when canceled by CAN."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;payload\x18post")
+
+    assert captured_lines == ["prepost"]
+
+
+def test_rich_highlighted_osc_newline_payload_stays_hidden(
+    redirector,
+    captured_lines,
+):
+    """Rich-highlighted multiline OSC payload should not split visible logs."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;ti\nmore\x1b\\post")
+
+    assert captured_lines == ["prepost"]
+
+
 def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
     """OSC hyperlinks and CSI color should not leak or drop existing Rich styles."""
     console = Console(
@@ -552,6 +606,13 @@ def test_malformed_csi_c0_terminators_do_not_leak_or_merge_lines(
 def test_standalone_c0_controls_do_not_leak(sequence, redirector, captured_lines):
     """Standalone C0 controls should be stripped from sync output."""
     redirector.write(sequence + "\n")
+
+    assert captured_lines == ["prepost"]
+
+
+def test_del_control_does_not_leak(redirector, captured_lines):
+    """DEL should be stripped alongside raw C0 controls."""
+    redirector.write("pre\x7fpost\n")
 
     assert captured_lines == ["prepost"]
 
