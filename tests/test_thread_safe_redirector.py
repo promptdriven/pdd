@@ -6,13 +6,13 @@ These tests verify:
 2. ThreadSafeRedirector properly handles \r for progress bar suppression
 3. Normal newline behavior is preserved
 """
-import pytest
-from unittest.mock import MagicMock, patch
 from typing import List
+from unittest.mock import MagicMock
 
+import pytest
 from rich.console import Console
 
-from pdd.sync_tui import ThreadSafeRedirector, TUIStdoutWrapper, TUIStdinRedirector
+from pdd.sync_tui import ThreadSafeRedirector, TUIStdoutWrapper
 
 
 class MockRichLog:
@@ -215,5 +215,6 @@ def test_rich_printed_ansi_output_does_not_show_escape_fragments(redirector, cap
     )
 
     console.print("\x1b[90mhello\x1b[0m")
+    console.print("\x1b[36m\x1b[1mcyan-bold\x1b[39;49;00m")
 
-    assert captured_lines == ["hello"]
+    assert captured_lines == ["hello", "cyan-bold"]

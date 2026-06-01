@@ -67,6 +67,13 @@ def _is_headless_environment() -> bool:
         return True
 
 
+def _text_from_ansi_output(text: str) -> Text:
+    """Parse ANSI text, including ANSI that Rich highlighted before capture."""
+    rendered = Text.from_ansi(text)
+    if "\x1b[" in rendered.plain:
+        return Text.from_ansi(rendered.plain)
+    return rendered
+
 
 class ChoiceScreen(ModalScreen[str]):
     """Modal choice picker with a default selection after a short timeout."""
@@ -465,10 +472,10 @@ class ThreadSafeRedirector(io.TextIOBase):
             # Handle \r within line: keep only content after last \r
             if '\r' in line:
                 line = line.rsplit('\r', 1)[-1]
-            self.captured_logs.append(line)  # Capture processed line
 
             # Convert ANSI codes to Rich Text
-            text = Text.from_ansi(line)
+            text = _text_from_ansi_output(line)
+            self.captured_logs.append(text.plain)  # Capture processed line
 
             # Check if the line looks like a log message and dim it
             # We strip ANSI codes for pattern matching to ensure the regex works
@@ -485,7 +492,7 @@ class ThreadSafeRedirector(io.TextIOBase):
     def flush(self):
         # Write any remaining content in buffer
         if self.buffer:
-            text = Text.from_ansi(self.buffer)
+            text = _text_from_ansi_output(self.buffer)
             if self.log_pattern.match(text.plain):
                 text.style = Style(dim=True)
             self.app.call_from_thread(self.log_widget.write, text)
