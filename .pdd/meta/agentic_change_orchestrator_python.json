@@ -1,9 +1,9 @@
 {
-  "pdd_version": "0.0.233",
-  "timestamp": "2026-05-26T00:00:00.000000+00:00",
+  "pdd_version": "0.0.258.dev0",
+  "timestamp": "2026-06-01T21:17:22.330549+00:00",
   "command": "fix",
-  "prompt_hash": "147aebab37557437b25ade6f4a78b72c77350aed19d5f1d6d900feeaf4eadca4",
-  "code_hash": "19d8f4174475e05699edd0de801f238b3df6edc799b1ee44c5367cbad978adce",
+  "prompt_hash": "11e8ccec47130d18cd7f2ee097e85d9a7d45ac65f8e65fddacfca5f3f6fa368d",
+  "code_hash": "378bfbdcda01de988ea494ad6603bd92d7b109e3006ac653499a2d7a63f90165",
   "example_hash": "fceaa9e9326bc78d10c74e519d756a09235b9606aba7b6e513fd3e2ebc56b4a2",
   "test_hash": "10833f31e7de88490aa42d807f609f8481bb567c55aea5172b91429e398a91c4",
   "test_files": {
@@ -13,7 +13,7 @@
     "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
     "context/get_extension_example.py": "def9c34c1416259a0a031a996b96aeff5e73a7012adff6af1cc557e74ba97cc8",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "pdd/agentic_common.py": "82e30c361de4d7b9a62928fe21d8f55df96691c461c73750b30595e3a04446f2",
+    "pdd/agentic_common.py": "52fc9cf376f881b3dcf55003b9cb801dace5f078705c4b93cbe774563faecf4c",
     "pdd/architecture_sync.py": "fb55dc87aed5eca7eb62918291a247f4f3cc6b67555cdc8c02e22ce90a980d70",
     "pdd/preprocess.py": "f95eedec5bcb4ca505d8682d4a38ea5d4b3eb07ac1d52a38ebffa9f89941a92e",
     "pdd/sync_order.py": "118e49a22b0be2ae3017fdfeb1e05715a878efb89fab7750868be2388f2eaad9"

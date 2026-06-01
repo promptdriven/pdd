@@ -14,6 +14,7 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>pr_metadata_finalizer_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
@@ -48,6 +49,7 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
 13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
 14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+14a. **PR Metadata Finalization**: Immediately before Step 13, refresh worktree changes, call `finalize_pr_metadata(current_work_dir, changed_paths=changed_files or None, stage=True)`, append returned fingerprint paths to `changed_files` / `files_to_stage`, and call `stage_paths_scoped(current_work_dir, changed_files)` so Step 13 starts from a scoped staged index. Do not stage arbitrary `.pdd/meta` paths.
 15. **Clean Restart Mode** (`clean_restart=True`): When set by the caller, the orchestrator MUST perform a clean restart for this issue *before* the normal state-load / PR-guard / step-loop entry path runs:
     - At entry (before `load_workflow_state`), call `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` to discard any persisted local + GitHub state from a prior run on this issue.
     - Skip the **Existing PR Guard** (Requirement 12) entirely — a clean restart explicitly wants to ignore the previously generated `change/issue-{N}` branch and PR.

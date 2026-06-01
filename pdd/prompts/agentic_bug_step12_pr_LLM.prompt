@@ -88,13 +88,14 @@ Do NOT create a new branch - just stage, commit, and push.
 1. **Prepare the commit**
    - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
    - **CRITICAL: Stage ONLY the files listed in `files_to_stage` above**
-   - This includes test files from Steps 5, 9, and 11, AND any prompt files fixed in Step 7
+   - This includes test files from Steps 5, 9, and 11, any prompt files fixed in Step 7, and any listed `.pdd/meta/<module>_<language>.json` fingerprint files already finalized by the orchestrator
    - Get the exact file paths from:
      - Step 5's `REPRO_FILES_CREATED:` output (reproduction tests)
      - Step 7's `PROMPT_FIXED:` output (prompt files)
      - Step 9's `FILES_CREATED:` or `FILES_MODIFIED:` output (unit tests)
      - Step 11's `E2E_FILES_CREATED:` or `E2E_FILES_MODIFIED:` output (E2E tests)
-   - Stage each file individually: `git add <exact_file_path>`
+   - Stage each non-metadata file individually: `git add <exact_file_path>`
+   - For listed `.pdd/meta` fingerprint files only, use `git add -f -- <exact_fingerprint_path>`
    - **DO NOT use `git add .` or `git add -A`** - these will stage unrelated files and pollute the PR
    - Verify only the intended files are staged: `git status --short`
    - Commit with a descriptive message referencing the issue
