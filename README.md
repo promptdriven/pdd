@@ -2127,6 +2127,19 @@ pdd [GLOBAL OPTIONS] fix --output-code src/factorial_calculator_fixed.py --outpu
 In this example, `pdd fix` will be run for each test file, and the fixed test files will be saved as `tests/test_factorial_calculator_fixed.py` and `tests/test_factorial_calculator_edge_cases_fixed.py`.
 
 
+#### Focused Repair for Large Dev Units
+
+For dev units where the code file exceeds 500 lines or the test file exceeds 1000 lines, `pdd fix` automatically switches to a two-phase focused-repair strategy instead of sending the entire file to the LLM in one shot.
+
+**How it Works:**
+
+1. **Fast-path:** If the pytest traceback directly names 1–3 functions, those function slices plus their failing tests are sent to the LLM immediately — no diagnosis step needed.
+2. **Phase 1 — Diagnose:** For all other large dev units, a code skeleton (function signatures only, no bodies) is sent along with the error log so the LLM can identify which functions are likely broken.
+3. **Phase 2 — Fix:** Only the identified function slices plus their failing tests are sent for the actual fix. The repaired bodies are spliced back into the original file at their original line offsets.
+4. **Automatic fallback:** If the focused-repair path encounters a parse error or returns an empty result, `pdd fix` silently falls back to the standard full-file behavior.
+
+This strategy is fully automatic and requires no flags. The threshold check and focused-repair path are internal to `pdd fix`; its public interface and all existing flags remain unchanged.
+
 #### Agentic Fallback Mode
 
 (This feature is also available for the `crash` and `verify` command.)
