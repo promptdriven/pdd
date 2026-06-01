@@ -10,6 +10,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 from typing import List
 
+from rich.console import Console
+
 from pdd.sync_tui import ThreadSafeRedirector, TUIStdoutWrapper, TUIStdinRedirector
 
 
@@ -200,3 +202,18 @@ def test_ansi_codes_preserved(redirector, captured_lines):
     assert len(captured_lines) == 1
     # The ANSI codes get converted to Rich Text, plain text should be just "Green text"
     assert "Green text" in captured_lines[0]
+
+
+def test_rich_printed_ansi_output_does_not_show_escape_fragments(redirector, captured_lines):
+    """ANSI output printed through Rich should not display raw escape fragments."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("\x1b[90mhello\x1b[0m")
+
+    assert captured_lines == ["hello"]
