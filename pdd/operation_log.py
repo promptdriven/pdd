@@ -273,6 +273,39 @@ def _prompts_dir_for_prompt(prompt_path: Path) -> Optional[str]:
     return context_config.get("prompts_dir") or None
 
 
+def _prompts_root_for_fingerprint(prompt_file: Union[str, Path]) -> Path:
+    """Return the absolute base ``prompts`` root directory containing ``prompt_file``.
+
+    Issue #1305 / #1211: ``get_pdd_file_paths`` re-resolves the prompts root from
+    the run CWD (via ``_find_pddrc_file()``), so a decorated command run from a
+    PARENT CWD for a nested subproject resolves to the parent — the prompt is not
+    found, code/example/test paths point at non-existent parent files (every hash
+    null), and the fingerprint is written to the parent ``.pdd/meta`` instead of
+    the subproject, splitting it from the sync log / run report. Passing this
+    value as ``prompts_dir`` re-anchors that resolution at the prompt file's
+    subproject.
+
+    This must be the *base* prompts directory (e.g. ``<subproject>/prompts``) —
+    the same root ``get_pdd_file_paths`` uses by default — NOT a deeper,
+    context-configured ``prompts_dir`` such as ``prompts/commands``.
+    ``get_pdd_file_paths`` searches for the prompt recursively under this root and
+    computes ``architecture.json`` lookup keys *relative to it*, so a deeper root
+    changes that key (``checkup_python.prompt`` instead of
+    ``commands/checkup_python.prompt``) and silently breaks filepath resolution.
+    The ``prompts`` component nearest the file is that base root (using the
+    outermost match would mis-anchor when the repo itself is checked out under an
+    ancestor directory literally named ``prompts``, e.g. ``~/prompts/myrepo``);
+    fall back to the prompt's own directory when the path has no ``prompts``
+    component.
+    """
+    prompt_path = Path(prompt_file).resolve()
+    parts = prompt_path.parts
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index] == "prompts":
+            return Path(*parts[: index + 1])
+    return prompt_path.parent
+
+
 def load_operation_log(
     basename: str,
     language: str,
@@ -636,22 +669,45 @@ def log_operation(
                                 basename, language, paths=log_paths
                             )
                         if updates_fingerprint and fingerprint_allowed:
-                            # Issue #1305: save_fingerprint hashes only Path
-                            # values, and a bare {"prompt": <str>} hint yields
-                            # all-null hashes (the prompt string is skipped and
-                            # code/example/test keys are absent), so the
-                            # fingerprint never converges and CI auto-heal loops.
-                            # Resolve the authoritative, complete Path set here
-                            # so prompt/code/example/test hashes are real. Fall
-                            # back to a Path-coerced prompt hint (never a raw
-                            # string) if resolution fails, so anchoring still
-                            # works. The #983 contract is preserved: the caller
-                            # resolves the paths, so save_fingerprint does not.
+                            # Issue #1305 + #1211: save_fingerprint hashes only
+                            # Path values, so a bare {"prompt": <str>} hint
+                            # yields all-null hashes (the prompt string is
+                            # skipped and code/example/test keys are absent) and
+                            # the fingerprint never converges (CI auto-heal
+                            # loops). Resolve the authoritative, complete Path
+                            # set here. get_pdd_file_paths re-resolves the
+                            # prompts root from the run CWD, so anchor it at the
+                            # prompt file's subproject via an absolute
+                            # prompts_dir — otherwise a command run from a PARENT
+                            # CWD for a nested subproject resolves to the parent
+                            # (null hashes again) and writes the fingerprint
+                            # outside the subproject, splitting it from the log /
+                            # run report that log_paths anchors. Fall back to a
+                            # Path-coerced prompt hint (never a raw string) if
+                            # resolution fails, so anchoring still works. The
+                            # #983 contract is preserved: the caller resolves the
+                            # paths, so save_fingerprint does not.
                             from .sync_determine_operation import get_pdd_file_paths
                             try:
-                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
-                                    basename, language
+                                prompts_root = _prompts_root_for_fingerprint(
+                                    prompt_file
                                 )
+                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
+                                    basename, language, prompts_dir=str(prompts_root)
+                                )
+                                # Existence-gate the resolution: if it silently
+                                # resolved the prompt to a path that is not on
+                                # disk (a mis-resolution that did not raise), the
+                                # other paths are wrong too, so the fingerprint
+                                # would be null and mis-anchored. Fall back to the
+                                # real prompt path so prompt_hash is real and the
+                                # write still anchors at the subproject.
+                                resolved_prompt = fingerprint_paths.get("prompt")
+                                if not (
+                                    isinstance(resolved_prompt, Path)
+                                    and resolved_prompt.exists()
+                                ):
+                                    fingerprint_paths = {"prompt": Path(prompt_file)}
                             except (ImportError, OSError, ValueError) as e:
                                 logger.warning(
                                     "Could not resolve paths for %s/%s: %s",
