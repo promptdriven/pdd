@@ -99,6 +99,15 @@ class TokenMatch:
         return True
 
 
+@dataclass
+class SteerEntry:
+    """Mid-run user steering entry (typically from GitHub issue comments)."""
+
+    comment_id: str
+    author: str
+    body: str
+
+
 def detect_control_token(
     output: Optional[str],
     token: str,
@@ -2148,6 +2157,7 @@ def run_agentic_task(
     deadline: Optional[float] = None,
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[SteerEntry]] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -2167,6 +2177,7 @@ def run_agentic_task(
             top-level ``pdd --time`` flag. When provided, overrides the
             ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
             means "fall back to env" so unplumbed call sites keep working.
+        steers: Optional list of mid-run steering entries to inject into the instruction.
 
     Returns:
         (success, output_text, cost_usd, provider_used)
@@ -2207,8 +2218,17 @@ def run_agentic_task(
             f"{user_feedback}\n"
         )
 
+    steering_section = ""
+    if steers:
+        steering_section = "\n\n## Steered user input (mid-run)\n"
+        steering_section += (
+            "The following comments arrived during this run. Factor them into this step:\n"
+        )
+        for steer in steers:
+            steering_section += f"- @{steer.author} ({steer.comment_id}): {steer.body}\n"
+
     full_instruction = (
-        f"{instruction}{feedback_section}\n\n"
+        f"{instruction}{feedback_section}{steering_section}\n\n"
         "You have full file access to explore and modify files as needed."
     )
 
@@ -4382,6 +4402,159 @@ def validate_cached_state(
 
 
 # --- High Level State Wrappers ---
+
+def drain_issue_steers(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+) -> List[SteerEntry]:
+    """Drain mid-run user steering inputs (env handoff or GitHub issue comments).
+
+    Sources (in priority order):
+    - ``PDD_STEER_JSON`` env var: JSON list of objects with ``comment_id``,
+      ``author``, and ``body`` fields.
+    - GitHub issue comments via ``gh api`` (when available).
+
+    Persists steering cursor fields in ``state`` for idempotency:
+    - ``last_steered_comment_id`` (str)
+    - ``last_steer_at`` (ISO timestamp from GitHub, best-effort)
+    - ``steer_generation`` (int, increments when new steers are applied)
+    """
+    steers: List[SteerEntry] = []
+
+    # 1) Env handoff (useful for local tests and cloud runners)
+    steer_json = os.environ.get("PDD_STEER_JSON")
+    if steer_json:
+        try:
+            entries = json.loads(steer_json)
+        except json.JSONDecodeError:
+            entries = None
+        if isinstance(entries, list):
+            try:
+                last_id_val = int(state.get("last_steered_comment_id") or -1)
+            except (ValueError, TypeError):
+                last_id_val = -1
+            max_id_val = last_id_val
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                cid_raw = entry.get("comment_id", "")
+                try:
+                    cid_val = int(cid_raw)
+                except (ValueError, TypeError):
+                    continue
+                if cid_val <= last_id_val:
+                    continue
+                steers.append(
+                    SteerEntry(
+                        comment_id=str(cid_val),
+                        author=str(entry.get("author", "unknown")),
+                        body=str(entry.get("body", "")),
+                    )
+                )
+                if cid_val > max_id_val:
+                    max_id_val = cid_val
+            if steers:
+                state["last_steered_comment_id"] = str(max_id_val)
+                state["steer_generation"] = state.get("steer_generation", 0) + 1
+                return steers
+
+    # 2) GitHub poll (best-effort)
+    if not _find_cli_binary("gh"):
+        return []
+
+    since = state.get("last_steer_at")
+    last_id = state.get("last_steered_comment_id")
+
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+        "--paginate",
+        "--slurp",
+    ]
+    if since:
+        cmd.extend(["-f", f"since={since}"])
+
+    try:
+        res = _subprocess_run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception:
+        return []
+
+    if res.returncode != 0:
+        return []
+
+    comments = _load_gh_paginated_comments(res.stdout)
+
+    try:
+        last_id_val = int(last_id) if last_id is not None else -1
+    except (ValueError, TypeError):
+        last_id_val = -1
+
+    max_id_val = last_id_val
+    latest_timestamp = since
+    new_steers: List[SteerEntry] = []
+
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        try:
+            cid_val = int(cid) if cid is not None else 0
+        except (ValueError, TypeError):
+            cid_val = 0
+        if cid_val <= last_id_val:
+            continue
+
+        user = comment.get("user", {}) or {}
+        if user.get("type") == "Bot":
+            continue
+
+        body = str(comment.get("body", "") or "")
+
+        # Filter out PDD state/progress markers and bot/status comments.
+        if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
+            continue
+        if "PDD-INCREMENTAL-STATUS" in body:
+            continue
+        if "PDD_WORKFLOW_STATE" in body:
+            continue
+        if re.search(r"^## Step \d+/\d+:", body, re.MULTILINE):
+            continue
+
+        created_at = comment.get("created_at")
+        author = str(user.get("login", "unknown") or "unknown")
+
+        new_steers.append(
+            SteerEntry(
+                comment_id=str(cid_val),
+                author=author,
+                body=body.strip(),
+            )
+        )
+
+        if cid_val > max_id_val:
+            max_id_val = cid_val
+        if latest_timestamp is None or (created_at and created_at > latest_timestamp):
+            latest_timestamp = created_at
+
+    if new_steers:
+        state["last_steered_comment_id"] = str(max_id_val)
+        state["last_steer_at"] = latest_timestamp
+        state["steer_generation"] = state.get("steer_generation", 0) + 1
+        return new_steers
+
+    return []
+
 
 def load_workflow_state(
     cwd: Path,

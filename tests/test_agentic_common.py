@@ -3278,6 +3278,143 @@ def test_pdd_user_feedback_not_injected_when_absent(mock_cwd, mock_env, mock_loa
 
 
 # ---------------------------------------------------------------------------
+# Mid-run Steering (SteerEntry) Injection Tests
+# ---------------------------------------------------------------------------
+
+
+def test_steer_injection_into_prompt(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that steers list is included in the agentic prompt."""
+    from pdd.agentic_common import SteerEntry
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    steers = [
+        SteerEntry(comment_id="123", author="alice", body="Try approach A"),
+        SteerEntry(comment_id="456", author="bob", body="Use library X"),
+    ]
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd, steers=steers)
+
+    assert success
+
+    args, kwargs = mock_subprocess.call_args
+    prompt_input = kwargs.get("input", "")
+    assert "## Steered user input (mid-run)" in prompt_input
+    assert "- @alice (123): Try approach A" in prompt_input
+    assert "- @bob (456): Use library X" in prompt_input
+
+
+def test_no_steer_injection_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that prompt is unchanged when steers list is absent."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd, steers=None)
+
+    assert success
+
+    args, kwargs = mock_subprocess.call_args
+    prompt_input = kwargs.get("input", "")
+    assert "## Steered user input (mid-run)" not in prompt_input
+
+
+def test_drain_issue_steers_from_env(mock_cwd):
+    """Test fetching steers from PDD_STEER_JSON env var."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [{"comment_id": "101", "author": "charlie", "body": "Hello"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert steers[0].author == "charlie"
+        assert steers[0].body == "Hello"
+        assert state["steer_generation"] == 1
+        assert state["last_steered_comment_id"] == "101"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_env_idempotent(mock_cwd):
+    """Same PDD_STEER_JSON comment_id is not returned twice after state update."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [{"comment_id": "101", "author": "charlie", "body": "Hello"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state = {}
+        first = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        second = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(first) == 1
+        assert len(second) == 0
+        assert state["last_steered_comment_id"] == "101"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shutil_which):
+    """Test fetching steers from GitHub comments."""
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+
+    mock_comments = [
+        {
+            "id": 1001,
+            "user": {"login": "user1", "type": "User"},
+            "body": "User feedback",
+            "created_at": "2026-06-01T12:00:00Z",
+        },
+        {
+            "id": 1002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "Bot message",
+            "created_at": "2026-06-01T12:01:00Z",
+        },
+        {
+            "id": 1003,
+            "user": {"login": "user2", "type": "User"},
+            "body": "## Step 1/13: ...",
+            "created_at": "2026-06-01T12:02:00Z",
+        },
+    ]
+
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(mock_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {"last_steered_comment_id": "1000"}
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert len(steers) == 1
+    assert steers[0].author == "user1"
+    assert steers[0].comment_id == "1001"
+    assert state["last_steered_comment_id"] == "1001"
+    assert state["steer_generation"] == 1
+
+
+# ---------------------------------------------------------------------------
 # GitHub State Persistence Tests — Issue #481
 # _find_state_comment() missing --paginate causes workflow state loss
 # on issues with 30+ comments
