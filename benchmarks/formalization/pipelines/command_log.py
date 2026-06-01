@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -25,6 +26,31 @@ def parse_cost_usd(stdout: str, stderr: str) -> float:
     for match in _COST_RE.finditer(text):
         total += float(match.group(1))
     return round(total, 6)
+
+
+def pdd_subprocess_env(
+    *,
+    model: Optional[str] = None,
+    force_local: bool = False,
+    cloud_only: bool = False,
+) -> dict[str, str]:
+    """Build env for benchmark ``pdd`` subprocesses (cloud vs local routing)."""
+    env = dict(os.environ)
+    if force_local:
+        env["PDD_FORCE_LOCAL"] = "1"
+    else:
+        env.pop("PDD_FORCE_LOCAL", None)
+    if cloud_only:
+        env["PDD_CLOUD_ONLY"] = "1"
+        env["PDD_NO_LOCAL_FALLBACK"] = "1"
+    else:
+        env.pop("PDD_CLOUD_ONLY", None)
+        env.pop("PDD_NO_LOCAL_FALLBACK", None)
+    if model:
+        env["PDD_MODEL_DEFAULT"] = model
+    else:
+        env.pop("PDD_MODEL_DEFAULT", None)
+    return env
 
 
 def run_logged_command(

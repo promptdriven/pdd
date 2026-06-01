@@ -123,12 +123,12 @@ def _run_cloud_generate(
         _with_strength(
             _pdd_base_cmd()
             + [
+                "--force",
                 "generate",
                 str(meta_prompt),
                 "--output",
                 str(output_path),
                 "--evidence",
-                "--force",
             ],
             pdd_strength,
         ),

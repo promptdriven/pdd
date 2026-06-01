@@ -73,6 +73,20 @@ def _load_formalization_tasks(task_ids: list[str]) -> list[dict[str, Any]]:
     return [by_id[tid] for tid in task_ids]
 
 
+def _fixtures_root(entry: dict[str, Any]) -> Optional[Path]:
+    """Resolve tier_gold pdd_generated fixtures (same convention as M2)."""
+    raw = entry.get("pdd_fixtures")
+    if raw:
+        path = (_FORMALIZATION_ROOT / raw).resolve()
+        return path if path.is_dir() else None
+    if entry.get("oracle_tests"):
+        path = (
+            _FORMALIZATION_ROOT / "corpus" / "tier_gold" / entry["id"] / "pdd_generated"
+        ).resolve()
+        return path if path.is_dir() else None
+    return None
+
+
 def _ensure_a1(
     *,
     entry: dict[str, Any],
@@ -93,12 +107,12 @@ def _ensure_a1(
     log = task_out / "formalize_commands.jsonl"
 
     if replay_a1 or not allow_llm:
-        fixtures = entry.get("pdd_fixtures")
-        if not fixtures:
+        fixtures_root = _fixtures_root(entry)
+        if not fixtures_root:
             raise FileNotFoundError(
-                f"No pdd_fixtures for {entry['id']}; use --allow-llm or add fixtures"
+                f"No pdd_fixtures for {entry['id']}; use --allow-llm or add tier_gold fixtures"
             )
-        recorded = (_FORMALIZATION_ROOT / fixtures / "A1.prompt").resolve()
+        recorded = (fixtures_root / "A1.prompt").resolve()
         cloud_formalize.replay_a1(recorded_a1=recorded, output_path=a1_path)
         append_note = task_out / "a1_provenance.json"
         append_note.write_text(
@@ -186,11 +200,7 @@ def run_m4(
             if entry.get("oracle_tests")
             else None
         )
-        pdd_fixtures_root = (
-            (_FORMALIZATION_ROOT / entry["pdd_fixtures"]).resolve()
-            if entry.get("pdd_fixtures")
-            else None
-        )
+        pdd_fixtures_root = _fixtures_root(entry)
 
         task_cells: list[dict[str, Any]] = []
         for run_index in range(runs_per_cell):

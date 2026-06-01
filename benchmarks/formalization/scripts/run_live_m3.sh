@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Live M2 generation + M3 drift (requires pdd setup + API keys).
+#
+# Underlying pdd commands:
+#   pdd --force generate <prompt> --output <code.py> --evidence
+#   pdd --force test <prompt> <code.py> --output <test_*.py> --evidence
+#   pdd fix <prompt> <code.py> <test_*.py>
+#   pdd checkup drift <devunit> --from-evidence <evidence.json> --code-file <code.py> --json
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-cd "$ROOT"
+# shellcheck source=_common.sh
+source "$(dirname "$0")/_common.sh"
 
 M1_DIR="${M1_DIR:-benchmarks/formalization/experiments/latest}"
 M2_DIR="${M2_DIR:-benchmarks/formalization/experiments/m2_live}"
@@ -16,7 +22,7 @@ echo "==> M1 dir: ${M1_DIR}"
 echo "==> Tasks: ${TASKS}"
 echo "==> Live M2 (pdd generate/test) + M3 (pdd checkup drift regen)"
 
-python benchmarks/formalization/pipelines/run_m3_pipeline.py \
+_run python benchmarks/formalization/pipelines/run_m3_pipeline.py \
   --allow-llm \
   --save-fixtures \
   --m1-dir "${M1_DIR}" \

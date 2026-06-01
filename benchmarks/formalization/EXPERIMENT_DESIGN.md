@@ -1,7 +1,9 @@
 # Experiment design — A0→A1 formalization benchmark
 
 This document is the **canonical map** from product workflow → benchmark milestones →
-commands. For runbooks see [EVALUATION.md](EVALUATION.md); for demos see [SHOWCASE.md](SHOWCASE.md).
+commands. For checkup command detail (purpose, flags, wrappers, exit codes) see
+[CHECKUP_CHEATSHEET.md](CHECKUP_CHEATSHEET.md). For runbooks see [EVALUATION.md](EVALUATION.md);
+for demos see [SHOWCASE.md](SHOWCASE.md).
 
 **Tracking:** [issue #1273](https://github.com/promptdriven/pdd/issues/1273) · epic [#833](https://github.com/promptdriven/pdd/issues/833)
 
@@ -74,10 +76,13 @@ gaps **visible and measurable** instead of discovered only after failed generati
 
 | Product command | What it checks | Benchmark script |
 |-----------------|----------------|------------------|
-| `pdd checkup lint` | Vague terms, missing vocabulary, weak verbs | `prompt_metrics.py`, `checkup_formalize.py` |
-| `pdd checkup contract check` | `R*` rules, modal MUST structure | `prompt_metrics.py`, `formalize_a1.py` |
-| `pdd checkup coverage` | Rule → story `## Covers` → tests | `checkup_formalize.py`, corpus stories (#820) |
+| [`pdd checkup lint`](CHECKUP_CHEATSHEET.md#pdd-checkup-lint) | Vague terms, missing vocabulary, weak verbs | `prompt_metrics.py`, `checkup_formalize.py` |
+| [`pdd checkup contract check`](CHECKUP_CHEATSHEET.md#pdd-checkup-contract-check) | `R*` rules, modal MUST structure | `prompt_metrics.py`, `formalize_a1.py` |
+| [`pdd checkup coverage`](CHECKUP_CHEATSHEET.md#pdd-checkup-coverage) | Rule → story `## Covers` → tests | `checkup_formalize.py`, corpus stories (#820) |
 | Story template (#820) | Oracle vs Non-Oracle acceptance criteria | `story_metrics.py` |
+
+Full per-command reference (CLI, wrappers, exit codes):
+[CHECKUP_CHEATSHEET.md § Phase 1](CHECKUP_CHEATSHEET.md#phase-1--prompt-quality-m1).
 
 **M1 batch entry:**
 
@@ -130,9 +135,14 @@ Enterprise buyers care whether AI output **stays aligned** when regenerated.
 
 | Product command | What it does | Benchmark script |
 |-----------------|--------------|------------------|
-| `pdd checkup gate` | Policy on evidence (stale code, missing verify) | Manual / future CI |
-| `pdd checkup drift` | Regen in temp dirs; compare API + behavior | `run_drift_benchmark.py` |
-| `pdd checkup simplify` | Post-gen cleanup with verify | Optional; not in harness |
+| [`pdd checkup gate`](CHECKUP_CHEATSHEET.md#pdd-checkup-gate) | Policy on evidence (stale code, missing verify) | Manual / future CI |
+| [`pdd checkup drift`](CHECKUP_CHEATSHEET.md#pdd-checkup-drift) | Regen in temp dirs; compare API + behavior | `run_drift_benchmark.py` |
+| [`pdd checkup simplify`](CHECKUP_CHEATSHEET.md#pdd-checkup-simplify-optional) | Post-gen cleanup with verify | Optional; not in harness |
+
+Full per-command reference (dry-run vs live, wrappers, exit codes):
+[CHECKUP_CHEATSHEET.md § Phase 3](CHECKUP_CHEATSHEET.md#phase-3--ship-and-stability-m3).
+Reference tables (flags, env vars, runtimes):
+[CHECKUP_CHEATSHEET.md § Reference tables](CHECKUP_CHEATSHEET.md#command-comparison-at-a-glance).
 
 M3 **requires M2 code** on disk. Drift re-runs `pdd generate` from the prompt and compares
 candidates to the baseline artifact.
@@ -185,6 +195,8 @@ must come from PDD Cloud (or committed replay of a cloud record).
 | Doc | Role |
 |-----|------|
 | [README.md](README.md) | Entry point |
+| [CHECKUP_CHEATSHEET.md](CHECKUP_CHEATSHEET.md) | `pdd checkup` commands — purpose, usage, wrappers, exit codes |
+| [COMMANDS.md](COMMANDS.md) | Copy-paste literals for every corpus task |
 | [EVALUATION.md](EVALUATION.md) | Step-by-step runbook |
 | [WORKFLOW.md](WORKFLOW.md) | Product PRs → commands (extended) |
 | [BUSINESS_VALUE.md](BUSINESS_VALUE.md) | Hypothesis and honest claims |

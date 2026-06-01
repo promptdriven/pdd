@@ -25,6 +25,22 @@ def business_value_block() -> dict[str, Any]:
     }
 
 
+M4_BUSINESS_HYPOTHESIS = (
+    "Formalized A1 prompts let budget cloud tiers reach smart-tier A0 quality "
+    "at lower cost-per-success."
+)
+
+
+def m4_business_value_block() -> dict[str, Any]:
+    """Static business framing for the model-efficiency (M4) experiment."""
+    return {
+        "hypothesis": M4_BUSINESS_HYPOTHESIS,
+        "primary_comparison": "budget_tier + A1 vs smart_tier + A0",
+        "m4_lever": "model_tier_and_token_cost_to_correct_code",
+        "doc": "benchmarks/model_efficiency/BUSINESS_VALUE.md",
+    }
+
+
 def economics_placeholders(*, milestone: int, reason: str) -> dict[str, Any]:
     """Null economics fields until M2/M3 pipelines populate them."""
     base: dict[str, Any] = {

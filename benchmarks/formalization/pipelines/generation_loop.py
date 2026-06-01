@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from command_log import append_jsonl, run_logged_command
+from command_log import append_jsonl, pdd_subprocess_env, run_logged_command
 from economics import economics_placeholders, evaluation_modes_summary
 from pdd_fixture_store import arm_has_fixtures, copy_arm_fixtures
 from pytest_metrics import run_pytest
@@ -35,6 +35,12 @@ def _find_pdd() -> str:
     raise RuntimeError("pdd CLI not found on PATH; run pip install -e .")
 
 
+def _with_strength(command: list[str], pdd_strength: Optional[float]) -> list[str]:
+    if pdd_strength is None:
+        return command
+    return command + ["--strength", str(pdd_strength)]
+
+
 def run_generation_loop(
     *,
     arm: str,
@@ -49,6 +55,10 @@ def run_generation_loop(
     harness_only: bool,
     baseline_src: Optional[Path],
     pdd_fixtures_root: Optional[Path] = None,
+    pdd_strength: Optional[float] = None,
+    pdd_model: Optional[str] = None,
+    pdd_force_local: bool = False,
+    pdd_cloud_only: bool = False,
 ) -> GenerationLoopResult:
     """Run generate/test/pytest for one prompt arm."""
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -72,6 +82,15 @@ def run_generation_loop(
     rounds: list[dict[str, Any]] = []
 
     loop_notes: list[str] = []
+    subprocess_env = (
+        pdd_subprocess_env(
+            model=pdd_model,
+            force_local=pdd_force_local,
+            cloud_only=pdd_cloud_only,
+        )
+        if not harness_only
+        else None
+    )
     if harness_only:
         if (
             pdd_fixtures_root
@@ -103,16 +122,26 @@ def run_generation_loop(
     else:
         if not allow_llm:
             raise RuntimeError("M2 generation requires --allow-llm (or use --harness-only for CI)")
-        gen_cmd = [
-            pdd,
-            "generate",
-            str(prompt_path),
-            "--output",
-            str(code_path),
-            "--force",
-            "--evidence",
-        ]
-        gen_entry = run_logged_command(gen_cmd, cwd=project_root, log_path=commands_log)
+        gen_cmd = _with_strength(
+            [
+                pdd,
+                "--force",
+                "generate",
+                str(prompt_path),
+                "--output",
+                str(code_path),
+                "--language",
+                "python",
+                "--evidence",
+            ],
+            pdd_strength,
+        )
+        gen_entry = run_logged_command(
+            gen_cmd,
+            cwd=project_root,
+            log_path=commands_log,
+            env=subprocess_env,
+        )
         rounds.append({"stage": "generate", **gen_entry})
         economics["generation_rounds"] = 1
         total_cost += float(gen_entry.get("cost_usd") or 0)
@@ -132,17 +161,27 @@ def run_generation_loop(
                 notes=["generate failed"] + loop_notes,
             )
 
-        test_cmd = [
-            pdd,
-            "test",
-            str(prompt_path),
-            str(code_path),
-            "--output",
-            str(test_path),
-            "--force",
-            "--evidence",
-        ]
-        test_entry = run_logged_command(test_cmd, cwd=project_root, log_path=commands_log)
+        test_cmd = _with_strength(
+            [
+                pdd,
+                "--force",
+                "test",
+                str(prompt_path),
+                str(code_path),
+                "--output",
+                str(test_path),
+                "--language",
+                "python",
+                "--evidence",
+            ],
+            pdd_strength,
+        )
+        test_entry = run_logged_command(
+            test_cmd,
+            cwd=project_root,
+            log_path=commands_log,
+            env=subprocess_env,
+        )
         rounds.append({"stage": "test", **test_entry})
         total_cost += float(test_entry.get("cost_usd") or 0)
         total_wall += float(test_entry.get("wall_clock_s") or 0)
@@ -155,8 +194,16 @@ def run_generation_loop(
                 break
             if fix_idx + 1 >= max_rounds:
                 break
-            fix_cmd = [pdd, "fix", str(prompt_path), str(code_path), str(test_path)]
-            fix_entry = run_logged_command(fix_cmd, cwd=project_root, log_path=commands_log)
+            fix_cmd = _with_strength(
+                [pdd, "fix", str(prompt_path), str(code_path), str(test_path)],
+                pdd_strength,
+            )
+            fix_entry = run_logged_command(
+                fix_cmd,
+                cwd=project_root,
+                log_path=commands_log,
+                env=subprocess_env,
+            )
             rounds.append({"stage": "fix", "round": fix_idx + 1, **fix_entry})
             fix_rounds += 1
             total_cost += float(fix_entry.get("cost_usd") or 0)
@@ -186,11 +233,14 @@ def run_generation_loop(
 
     economics["evaluation_modes"] = evaluation_modes_summary(economics)
 
-    economics["rounds_to_acceptable"] = (
+    rounds_to_green = (
         1
         if oracle_rate == 1.0 or gen_metrics.get("test_pass_rate") == 1.0
         else max_rounds + 1
     )
+    economics["rounds_to_acceptable"] = rounds_to_green
+    economics["rounds_to_green"] = rounds_to_green
+    economics["generation_success"] = oracle_rate == 1.0 or gen_metrics.get("test_pass_rate") == 1.0
     economics["wall_clock_s"] = round(total_wall, 3)
     economics["cost_usd"] = round(total_cost, 6)
     economics["milestone_measured"] = 2
