@@ -38,11 +38,21 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
 
 % Your Task
 
-1. **Stage all changes**
-   ```bash
-   cd {worktree_path}
-   git add -A
-   ```
+1. **Stage changes (scoped — never `git add -A`)**
+
+   The orchestrator has already finalized PDD metadata fingerprints at the PR boundary by calling `finalize_pr_metadata(...)` and folded the expected `.pdd/meta/<module>_<lang>.json` fingerprint paths into the authoritative `Files Changed` set (`{files_to_stage}`). Your job is to stage exactly that set — nothing more.
+
+   - DO NOT run `git add -A`, `git add .`, or any directory/glob pathspec. A blanket add would sweep in transient `.pdd` run-report/worktree state and unrelated fingerprints, defeating the scoped-staging guarantee.
+   - Stage each changed file from `{files_to_stage}` individually by its exact path:
+     ```bash
+     cd {worktree_path}
+     git add -f -- "<exact_file_path>"
+     ```
+   - The `-f` (force) flag is REQUIRED: target repos commonly gitignore `.pdd/meta`, so the fingerprint pathspecs would otherwise be silently skipped. `-f` is harmless for non-ignored prompt/code/doc files, so apply it uniformly to every path in the set.
+   - After staging, confirm the staged set matches expectations:
+     ```bash
+     git diff --cached --name-only
+     ```
 
 2. **Create commit**
    - Use a clear commit message referencing the issue

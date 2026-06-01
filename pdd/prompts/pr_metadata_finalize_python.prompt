@@ -1,0 +1,99 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Deterministically finalizes and scope-stages .pdd/meta fingerprints for PDD-owned files changed in a CLI-created PR worktree.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "finalize_pr_metadata",
+        "signature": "(worktree: Path, changed_files: Sequence[str], *, diff_base: Optional[str] = None, quiet: bool = False) -> PrMetadataFinalizeResult",
+        "returns": "PrMetadataFinalizeResult with finalized fingerprint paths, staged paths, and missing-fingerprint modules"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>sync_order_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/pr_metadata_finalize.py` — a single shared entry point that the CLI-created PR/update flows (`pdd bug`, `pdd fix`, `pdd change`, `pdd checkup --fix`) call at their PR boundary to deterministically finalize and scope-stage the `.pdd/meta/<module>_<lang>.json` fingerprints for every PDD-owned file the PR changed.
+
+% Role & Scope
+This module is the PR-boundary counterpart to the CI auto-heal `commit_and_push` staging logic in `pdd.ci_drift_heal`: it reuses the same deterministic metadata primitives (`run_metadata_sync`, `save_fingerprint`) and the same scoped-staging / fail-loud discipline, but is driven by an explicit list of files changed inside an agentic worktree rather than by drift detection. Its purpose is to guarantee that any CLI-created PR which touches a PDD-owned prompt/code/example/test file also carries the matching fresh fingerprint, so later `pdd sync`, drift detection, checkup, and auto-heal do not treat completed work as stale. It does NOT generate code, regenerate examples, run tests, commit, or push — staging is the furthest side effect it performs; the caller owns commit/push.
+
+% Vocabulary
+- PDD-owned file: a prompt (`prompts/<module>_<lang>.prompt` or `pdd/prompts/...`), or a generated code/example/test file that resolves to a known PDD module via `.pddrc` + path-resolution helpers. A doc-only (`.md`/`.rst`/`.txt`) or non-resolving file is NOT PDD-owned for this module's purposes.
+- Touched module: a `(basename, language)` identity resolved from one or more changed PDD-owned files in the PR worktree.
+- Expected fingerprint: the single `.pdd/meta/<safe_basename>_<language>.json` path produced by finalizing a touched module, using `pdd.operation_log` path semantics (subdirectory basenames such as `commands/foo` map to `.pdd/meta/commands_foo_python.json`).
+- Transient `.pdd` state: any `.pdd/...` path that is NOT an expected fingerprint returned by finalization (run reports, worktree state, unrelated module fingerprints).
+
+% Requirements
+1. **Single entry point** `finalize_pr_metadata(worktree, changed_files, *, diff_base=None, quiet=False) -> PrMetadataFinalizeResult`. All four CLI PR flows call this one function. `worktree` is the absolute path to the PR worktree; `changed_files` is the caller's authoritative changed-file list (worktree-relative or absolute paths).
+2. **Detect**: filter `changed_files` to PDD-owned prompt/code/example/test files. Normalize paths (replace `\\` with `/`) and resolve each against `worktree`. Skip doc-only files, temp files (`.agentic_prompt_*`), and any `.pdd/...` path. A changed prompt resolves directly via `extract_module_from_include` / `infer_module_identity`; a changed code/example/test file resolves to its owning module via `.pddrc` context detection plus the existing path-resolution helpers (`_find_pddrc_file`, `_load_pddrc_config`, `_detect_context`, `get_pdd_file_paths`). Deduplicate to a set of touched `(basename, language)` modules. Resolve each module to its prompt and code paths inside the worktree.
+3. **Finalize deterministically**: for each touched module, call `run_metadata_sync(prompt_path, code_path, repo_root=worktree)` from `pdd.metadata_sync` to finalize tags, architecture, run-report cleanup, and the fingerprint in fixed order. Build the `paths` hint from the resolved prompt/code paths and finalize the fingerprint via `save_fingerprint(...)` so the fingerprint anchors at the worktree subproject `.pdd/meta` directory. Fingerprints MUST be produced by this deterministic code path, never inferred from an LLM prompt convention.
+4. **Scope-stage only expected fingerprints**: for each successfully finalized module, stage its single expected `.pdd/meta/<safe_basename>_<language>.json` path with `git add -f -- <exact-fingerprint-path>` run with `cwd=worktree`. The `-f` is REQUIRED because target repos commonly gitignore `.pdd/meta`. Stage ONLY the exact fingerprint paths returned by finalization — never `git add -A`, never `git add .pdd` or any directory pathspec, never a glob. Each pathspec is the literal expected fingerprint path and nothing else.
+5. **Ignore transient `.pdd` state**: do not stage run reports, worktree state, or unrelated `.pdd/meta/*.json` fingerprints for modules the PR did not touch. The staged set is exactly the expected-fingerprint set from Requirement 4.
+6. **Final audit (fail loud)**: after staging, verify that every touched PDD-owned module has a fresh expected fingerprint present on disk and staged (confirm via `git diff --cached --name-only`, `cwd=worktree`). Collect any touched module whose expected fingerprint is missing-on-disk or missing-from-staged into `missing_modules`. The result's `ok` property is True iff `missing_modules` is empty. Callers treat `ok is False` as a hard PR-boundary failure (fail clearly or push a narrowly scoped follow-up), NOT silent success.
+7. **Result type** `PrMetadataFinalizeResult` — a Pydantic v2 model with: `finalized_modules: List[Tuple[str, str]]` (the `(basename, language)` pairs finalized), `staged_paths: List[str]` (expected fingerprint paths staged, worktree-relative), `missing_modules: List[Tuple[str, str]]`, and an `ok: bool` property (`len(missing_modules) == 0`). Include a `reason` field summarizing any failure.
+8. **No detected modules is success**: when `changed_files` contains no PDD-owned files, return an empty, `ok=True` result without invoking git. This is the normal case for doc-only or test-only PRs that touch no fingerprinted module.
+9. **`diff_base`** is accepted for parity with CI drift reclassification and may be used to confirm which side (code vs prompt) changed, but MUST NOT widen the touched-module set beyond what `changed_files` names. When omitted, finalize every touched module from `changed_files` directly.
+10. **Determinism & idempotency**: calling `finalize_pr_metadata` twice with the same worktree state must produce equivalent on-disk and staged state on the second call (fingerprints are content-hash idempotent; re-staging an already-staged path is a no-op).
+11. **Fail-soft per module, fail-loud in aggregate**: catch exceptions per module, record the module in `missing_modules` with a reason, and continue to the next module — one unresolved module must not abort finalization of the rest. The aggregate `ok` then surfaces the failure to the caller. Re-raise only `KeyboardInterrupt` and `SystemExit`.
+
+% Capabilities
+<capabilities>
+- MAY read prompt, code, example, and test files inside the worktree.
+- MAY call `run_metadata_sync` and `save_fingerprint` to finalize fingerprints.
+- MAY run `git add -f -- <exact-fingerprint-path>` and `git diff --cached --name-only` with `cwd=worktree`.
+- MUST NOT run `git add -A`, `git add .`, `git add .pdd`, or any directory/glob pathspec.
+- MUST NOT stage any path other than the exact expected fingerprint paths returned by finalization.
+- MUST NOT create commits, push, amend, or modify git history.
+- MUST NOT regenerate code, regenerate examples, run tests, or call `pdd generate`/`pdd example`/`pdd test`/`pdd sync`.
+- MUST NOT stage transient `.pdd` state or unrelated `.pdd/meta/*.json` fingerprints.
+</capabilities>
+
+% Contract Rules
+R1 - Fingerprint coverage
+For every PDD-owned prompt/code/example/test file changed in the worktree, the system MUST resolve the owning module and write a fresh `.pdd/meta/<safe_basename>_<language>.json` fingerprint via the deterministic primitives.
+This rule is violated if a changed PDD-owned module's PR omits its matching fresh fingerprint.
+
+R2 - Scoped staging only
+For every staged path, the system MUST stage it with `git add -f -- <exact-fingerprint-path>` and the path MUST be an expected fingerprint returned by finalization.
+This rule is violated if the system runs `git add -A`/`git add .`/blanket `.pdd` staging, or stages any non-fingerprint or unrelated-module fingerprint path.
+
+R3 - Fail loud on missing metadata
+For every touched module whose expected fingerprint is missing on disk or absent from the staged set after finalization, the system MUST record it in `missing_modules` so the caller fails clearly or pushes a scoped follow-up.
+This rule is violated if a missing/stale fingerprint is reported as success.
+
+R4 - Transient state isolation
+For every `.pdd` path that is not an expected fingerprint, the system MUST NOT stage it.
+This rule is violated if a run report, worktree-state file, or an unrelated module's `.pdd/meta/*.json` is staged.
+
+% Dependencies
+<module_dependencies>
+  <pdd.metadata_sync>
+    <include select="def:run_metadata_sync" mode="interface">pdd/metadata_sync.py</include>
+  </pdd.metadata_sync>
+  <pdd.operation_log>
+    <include select="def:save_fingerprint,def:infer_module_identity,def:get_fingerprint_path" mode="interface">pdd/operation_log.py</include>
+  </pdd.operation_log>
+  <pdd.sync_determine_operation>
+    <include select="def:get_pdd_file_paths,def:read_fingerprint" mode="interface">pdd/sync_determine_operation.py</include>
+  </pdd.sync_determine_operation>
+  <pdd.sync_order>
+    <include select="def:extract_module_from_include" mode="interface">pdd/sync_order.py</include>
+  </pdd.sync_order>
+  <pdd.construct_paths>
+    <include select="def:_find_pddrc_file,def:_load_pddrc_config,def:_detect_context" mode="interface">pdd/construct_paths.py</include>
+  </pdd.construct_paths>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/pr_metadata_finalize.py`
+- Public API: `finalize_pr_metadata`, `PrMetadataFinalizeResult`

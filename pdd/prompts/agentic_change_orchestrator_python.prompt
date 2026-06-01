@@ -14,6 +14,7 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>pr_metadata_finalize_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
@@ -65,6 +66,7 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
     - **Base branch**: the result of `_resolve_main_ref_name(git_root)` — returns the branch name (e.g. `"origin/main"`) not the commit SHA, so the reader can verify the workflow started from the correct branch. Falls back to `"HEAD"` when no ref resolves.
     - **Command**: `"pdd-issue (full change → sync flow)"`.
     Wrap the body as a `## Step 0/13: Workflow Startup` header so it aligns with the existing per-step success comment format. Failure to post (gh CLI missing, network error) MUST be log-and-continue; never raise into the orchestrator loop.
+17. **PR-Boundary Metadata Finalization (Issue #1317)**: After the review loop and Sync Order Generation complete, and immediately before Step 13 runs, the orchestrator MUST deterministically finalize and scope-stage the `.pdd/meta/<module>_<lang>.json` fingerprints for every PDD-owned file the PR changed by calling `finalize_pr_metadata(...)` (see "PR-Boundary Metadata Finalization" section below). This replaces the previous reliance on Step 13's LLM running `git add -A` to incidentally sweep in fingerprints. The expected fingerprint paths returned by the finalizer are folded into `files_to_stage` so Step 13's scoped `git add -f -- <path>` staging carries them, and a finalizer result with `ok is False` is a hard PR-boundary failure.
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -368,6 +370,30 @@ Step 10 now has two responsibilities: (a) update `architecture.json` metadata as
 
 5. Contract scope: the verifier only protects docs that `discover_associated_documents` actually found (i.e. declared via `<include>` or `<include-many>` in the modified prompts' graph or reachable through architecture BFS). Docs that *should* be referenced but aren't tagged are out of scope here — semantic auto-deps discovery is separate future work.
 
+% PR-Boundary Metadata Finalization (Issue #1317)
+
+After the review loop completes and Sync Order Generation has run, but BEFORE Step 13 creates the PR, deterministically finalize and scope-stage PDD fingerprints for the changed files so the PR cannot ship a touched module without its matching fresh `.pdd/meta/<module>_<lang>.json` fingerprint. This is the PR-boundary counterpart to CI auto-heal's metadata staging, driven by the workflow's authoritative changed-file list rather than drift detection.
+
+1. **Import**: `from pdd.pr_metadata_finalize import finalize_pr_metadata, PrMetadataFinalizeResult`.
+
+2. **Call site**: guarded by `if worktree_path and worktree_path.exists():`, after Sync Order Generation and before Step 13's prompt is formatted/run. Pass the authoritative changed-file set:
+   ```python
+   finalize_result = finalize_pr_metadata(
+       worktree=worktree_path,
+       changed_files=changed_files,   # the full files_to_stage set (prompts, code/example/test, sync_order.sh, docs)
+       quiet=quiet,
+   )
+   ```
+   `finalize_pr_metadata` filters `changed_files` down to PDD-owned prompt/code/example/test files, resolves each to its owning `(basename, language)` module, finalizes tags/architecture/run-report/fingerprint via the deterministic `run_metadata_sync` + `save_fingerprint` primitives, and scope-stages ONLY the exact expected fingerprint paths with `git add -f -- <exact-path>` (`cwd=worktree`). It NEVER runs `git add -A`, never stages transient `.pdd` state, never commits or pushes.
+
+3. **Fold fingerprints into the staged set**: append `finalize_result.staged_paths` (worktree-relative expected-fingerprint paths) to `changed_files` / `files_to_stage` (dedupe), so Step 13's scoped `git add -f -- <path>` staging carries the fingerprints alongside the prompts/code/docs. Step 13 already force-adds each path, which is required because target repos commonly gitignore `.pdd/meta`.
+
+4. **Fail loud on missing metadata**: when `finalize_result.ok is False` (i.e. `finalize_result.missing_modules` is non-empty — a touched module whose expected fingerprint is missing-on-disk or missing-from-staged), this is a hard PR-boundary failure, NOT silent success. Print a red banner naming `finalize_result.missing_modules` and `finalize_result.reason`, save state with the failure recorded, and return `(False, f"Stopped at PR boundary: metadata finalization incomplete for {finalize_result.missing_modules}", total_cost, model_used, changed_files)`. Do NOT proceed to Step 13 with half-synced metadata.
+
+5. **No detected modules is success**: when `changed_files` names no PDD-owned files (doc-only / sync-order-only PRs), `finalize_pr_metadata` returns an empty `ok=True` result without invoking git — proceed to Step 13 normally.
+
+6. **Log-and-continue on infra errors only**: a `KeyboardInterrupt`/`SystemExit` propagates; any other unexpected exception from the finalizer itself (not a per-module failure, which the finalizer already records in `missing_modules`) is logged and treated as a hard PR-boundary failure under the same fail-loud discipline as step 4 — never swallow it into a successful PR.
+
 % Git Worktree Isolation
 
 Before Step 9, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
@@ -475,6 +501,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`, `extract_step_report`, `post_step_comment_once`, `normalize_step_comments_state`
 Import from `pdd.preprocess`: `preprocess`
 Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
+Import from `pdd.pr_metadata_finalize`: `finalize_pr_metadata`, `PrMetadataFinalizeResult` (PR-boundary fingerprint finalization, see "PR-Boundary Metadata Finalization" section)
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
@@ -483,6 +510,7 @@ Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Tim
 <pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
 <pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 <pdd.architecture_sync><include select="def:_merge_interface_signatures,def:register_untracked_prompts">pdd/architecture_sync.py</include></pdd.architecture_sync>
+<pdd.pr_metadata_finalize><include select="def:finalize_pr_metadata" mode="interface">pdd/pr_metadata_finalize.py</include></pdd.pr_metadata_finalize>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`

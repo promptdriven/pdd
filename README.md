@@ -2359,7 +2359,7 @@ The 13-step workflow:
 10. **Architecture & Doc Sync**: Update `architecture.json` metadata and synchronize associated documents (verified by the doc-sync contract; see Step 10.5)
 11. **Identify Issues**: Review changes for problems (part of review loop)
 12. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
-13. **Create PR**: Create a pull request linking to the issue and surface any unresolved `MANUAL_REVIEW:` flags in the PR body
+13. **Create PR**: Finalize PDD metadata at the PR boundary — deterministically refresh and scope-stage the `.pdd/meta/<module>_<lang>.json` fingerprint for every PDD-owned file the change touched (see [CLI PR-Boundary Metadata Finalization](#cli-pr-boundary-metadata-finalization)) — then create a pull request linking to the issue and surface any unresolved `MANUAL_REVIEW:` flags in the PR body
 
 **Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
 
@@ -3678,6 +3678,23 @@ python -m pdd.ci_drift_heal \
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 
 **Key Insight**: This workflow automates the Code-to-Prompt Update pattern for CI, ensuring prompts stay in sync with code changes without manual intervention.
+
+### CLI PR-Boundary Metadata Finalization
+
+**Conceptual Flow**: `detect PDD-owned changed files → finalize fingerprints (deterministic) → scoped-stage → audit (fail loud) → commit/push`
+
+**Purpose**: Guarantee that any PR created by a CLI agentic workflow (`pdd change`, `pdd bug`, `pdd fix`, `pdd checkup --fix`) which touches a PDD-owned prompt/code/example/test file also carries the matching fresh `.pdd/meta/<module>_<lang>.json` fingerprint — so later `pdd sync`, drift detection, checkup, and CI auto-heal do not treat already-completed work as stale. This is the PR-boundary counterpart to [CI Drift Detection & Auto-Heal](#ci-drift-detection--auto-heal): it reuses the same deterministic metadata primitives (`run_metadata_sync`, `save_fingerprint`) and the same scoped-staging / fail-loud discipline, but is driven by the workflow's explicit changed-file list instead of by drift detection.
+
+**Process** (shared `pdd.pr_metadata_finalize.finalize_pr_metadata`, called at each workflow's PR boundary):
+1. **Detect**: filter the workflow's authoritative changed-file list to PDD-owned prompt/code/example/test files; resolve each to its owning `(basename, language)` module via `.pddrc` context detection and the path-resolution helpers. Doc-only files, temp files, and transient `.pdd/...` paths are skipped.
+2. **Finalize deterministically**: for each touched module, run the shared `run_metadata_sync` orchestrator (prompt → tags → architecture → run-report → fingerprint, in fixed order) and write the fingerprint via `save_fingerprint`. Fingerprints are produced by this deterministic code path — never inferred from an LLM convention.
+3. **Scoped staging**: stage ONLY the exact expected fingerprint paths with `git add -f -- <exact-fingerprint-path>` (`cwd=worktree`). The `-f` is required because target repos commonly gitignore `.pdd/meta`. `git add -A`, `git add .pdd`, directory pathspecs, and globs are explicitly rejected — the staged set is exactly the expected-fingerprint set, never transient run reports, worktree state, or unrelated modules' fingerprints.
+4. **Final audit (fail loud)**: after staging, verify via `git diff --cached --name-only` that every touched module's expected fingerprint is present on disk and staged. Any module whose fingerprint is missing-on-disk or missing-from-staged is collected into `missing_modules`; the result's `ok` is True iff `missing_modules` is empty. Callers treat `ok is False` as a hard PR-boundary failure (fail clearly or push a narrowly scoped follow-up), never silent success.
+5. **Commit/push** is owned by the caller — `finalize_pr_metadata` stops at staging and never commits, pushes, regenerates code/examples, or runs tests.
+
+**No detected modules is success**: a doc-only or test-only PR that touches no fingerprinted module returns an empty, `ok=True` result without invoking git. The function is deterministic and idempotent — calling it twice on the same worktree state produces equivalent on-disk and staged state (fingerprints are content-hash idempotent; re-staging an already-staged path is a no-op).
+
+**Key Insight**: CLI-created PRs no longer rely on an agent running `git add -A` to incidentally sweep in fingerprints. Metadata is finalized by deterministic PDD code and scope-staged exactly, so completed work ships with correct fingerprints and is not re-flagged as drift after merge.
 
 ### Critical Dependencies
 
