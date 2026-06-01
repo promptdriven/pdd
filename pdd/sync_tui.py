@@ -32,9 +32,10 @@ DEFAULT_STEER_TIMEOUT_S = 8.0
 CHARSET_SELECTOR_MARKERS = "()*+-./"
 STRING_CONTROL_MARKERS = "PX^_"
 C1_STRING_CONTROL_MARKERS = "\x90\x98\x9e\x9f"
+C1_CSI = "\x9b"
 C1_OSC = "\x9d"
-C1_CONTROL_STARTERS = C1_STRING_CONTROL_MARKERS + C1_OSC
 C1_ST = "\x9c"
+C1_CONTROL_STARTERS = "".join(chr(value) for value in range(0x80, 0xA0))
 BEL = "\x07"
 ST = "\x1b\\"
 
@@ -123,11 +124,8 @@ def _prepare_ansi_text(
             index = token_end
             continue
 
-        while index < next_index:
-            position_map[index] = len(clean_chars)
-            rich_parts.append(text[index])
-            clean_chars.append(text[index])
-            index += 1
+        has_ansi = True
+        index = max(next_index, index + 1)
 
     return "".join(rich_parts), "".join(clean_chars), position_map, has_ansi
 
@@ -142,11 +140,15 @@ def _scan_ansi_token(
 
     if text[start] in C1_STRING_CONTROL_MARKERS:
         return _scan_string_control_token(text, start + 1)
+    if text[start] == C1_CSI:
+        return _scan_csi_token(text, start + 1)
     if text[start] == C1_OSC:
         return _scan_osc_token(text, start + 1)
+    if text[start] in C1_CONTROL_STARTERS:
+        return start + 1, start + 1, "single", ""
 
     if text[start] != "\x1b" or start + 1 >= len(text):
-        return None, start + 1, "", ""
+        return start + 1, start + 1, "single", ""
 
     marker = text[start + 1]
     if marker == "[":
@@ -159,9 +161,20 @@ def _scan_ansi_token(
         if start + 2 < len(text):
             return start + 3, start + 3, "single", ""
         return None, start + 2, "", ""
-    if "0" <= marker <= "?" or "@" <= marker <= "Z" or "\\" <= marker <= "_":
-        return start + 2, start + 2, "single", ""
-    return None, start + 1, "", ""
+    return _scan_escape_sequence_token(text, start + 1)
+
+
+def _scan_escape_sequence_token(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], int, str, str]:
+    """Scan a non-CSI/non-string ESC sequence with optional intermediates."""
+    index = start
+    while index < len(text) and " " <= text[index] <= "/":
+        index += 1
+    if index < len(text) and "0" <= text[index] <= "~":
+        return index + 1, index + 1, "single", ""
+    return None, index, "", ""
 
 
 def _scan_csi_token(text: str, start: int) -> tuple[Optional[int], int, str, str]:
@@ -240,11 +253,16 @@ def _rich_ansi_token(
 ) -> str:
     """Return the token form Rich can parse without exposing control payloads."""
     if token_kind == "csi":
+        if text[start] == C1_CSI:
+            return "\x1b[" + text[start + 1:end]
         return text[start:end]
     if token_kind == "osc":
         body_start = start + 2 if text[start] == "\x1b" else start + 1
         body_end = end - len(terminator)
-        return "\x1b]" + text[body_start:body_end] + ST
+        body = text[body_start:body_end]
+        if "\n" in body or "\r" in body:
+            return ""
+        return "\x1b]" + body + ST
     return ""
 
 
@@ -496,6 +514,56 @@ def _map_visible_span(
     if not mapped_positions:
         return None
     return min(mapped_positions), max(mapped_positions) + 1
+
+
+def _split_complete_ansi_line(text: str) -> Optional[tuple[str, str]]:
+    """Split at the first newline that is not inside a string control."""
+    newline_index = _find_visible_newline(text)
+    if newline_index is None:
+        return None
+    return text[:newline_index], text[newline_index + 1:]
+
+
+def _find_visible_newline(text: str) -> Optional[int]:
+    """Return the first newline outside ANSI string-control payloads."""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\n":
+            return index
+        if _is_ansi_control_start(text, index):
+            token_end, next_index, _token_kind, _terminator = _scan_ansi_token(
+                text,
+                index,
+            )
+            if _is_string_control_start(text, index):
+                if token_end is not None:
+                    index = token_end
+                    continue
+                if next_index >= len(text):
+                    return None
+                index = next_index
+                continue
+            index = token_end if token_end is not None else max(next_index, index + 1)
+            continue
+        index += 1
+    return None
+
+
+def _is_ansi_control_start(text: str, index: int) -> bool:
+    """Return True when ``text[index]`` can begin an ANSI control sequence."""
+    return text[index] == "\x1b" or text[index] in C1_CONTROL_STARTERS
+
+
+def _is_string_control_start(text: str, index: int) -> bool:
+    """Return True when ``text[index]`` begins OSC/DCS/SOS/PM/APC payload."""
+    if text[index] in C1_STRING_CONTROL_MARKERS + C1_OSC:
+        return True
+    return (
+        text[index] == "\x1b"
+        and index + 1 < len(text)
+        and text[index + 1] in STRING_CONTROL_MARKERS + "]"
+    )
 
 
 class ChoiceScreen(ModalScreen[str]):
@@ -889,9 +957,13 @@ class ThreadSafeRedirector(io.TextIOBase):
             self.buffer = self.buffer.rsplit('\r', 1)[-1]
             return len(s)
 
-        # Process complete lines
-        while '\n' in self.buffer:
-            line, self.buffer = self.buffer.split('\n', 1)
+        # Process complete lines. ANSI string-control payloads may contain
+        # newlines, so only split on visible newlines outside those controls.
+        while True:
+            split_line = _split_complete_ansi_line(self.buffer)
+            if split_line is None:
+                break
+            line, self.buffer = split_line
             # Handle \r within line: keep only content after last \r
             if '\r' in line:
                 line = line.rsplit('\r', 1)[-1]
