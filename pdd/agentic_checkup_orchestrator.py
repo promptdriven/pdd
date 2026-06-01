@@ -272,6 +272,27 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
 
 
+def _prune_worktrees(cwd: Path) -> None:
+    """Drop registrations for worktrees whose directories no longer exist.
+
+    A crashed or out-of-band-cleaned-up checkup run can leave a
+    ``checkup/issue-N`` branch registered to a worktree directory that has since
+    been removed. Git then refuses to delete OR re-add that branch ("Cannot
+    delete branch ... checked out at <gone path>" / "a branch named ... already
+    exists"), which fails the whole checkup the next time it runs. Pruning the
+    stale registration lets the branch be deleted and recreated. Best-effort.
+    """
+    try:
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=cwd,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        pass
+
+
 def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
     """Return a PR worktree branch name scoped to this checkout root."""
     root_scope = hashlib.sha1(str(git_root.resolve()).encode("utf-8")).hexdigest()[:8]
@@ -1080,7 +1101,14 @@ def _setup_worktree(
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
-    # 2. Handle existing branch
+    # 2. Handle existing branch. Prune stale worktree registrations first: a
+    #    crashed or cleaned-up prior run can leave `checkup/issue-N` registered
+    #    to a worktree directory that no longer exists, which makes `git branch
+    #    -D` fail ("Cannot delete branch ... checked out at <gone path>") and the
+    #    later `git worktree add -b` fail ("a branch named ... already exists"),
+    #    failing the whole checkup whenever a stale checkup/issue-* branch is
+    #    present.
+    _prune_worktrees(git_root)
     has_branch = _branch_exists(git_root, branch_name)
     if has_branch:
         if resume_existing:
@@ -1089,8 +1117,20 @@ def _setup_worktree(
         else:
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            _delete_branch(git_root, branch_name)
-            has_branch = False
+            deleted, del_err = _delete_branch(git_root, branch_name)
+            if deleted:
+                has_branch = False
+            else:
+                # After pruning, a still-undeletable branch is genuinely checked
+                # out in another LIVE worktree. Surface a clear, actionable error
+                # instead of the cryptic "Failed to create worktree" that the
+                # `git worktree add -b` would otherwise raise.
+                return None, (
+                    f"Cannot reset stale branch '{branch_name}': {del_err.strip()}. "
+                    f"It is still checked out in another git worktree — remove that "
+                    f"worktree ('git worktree remove <path>' or 'git worktree prune') "
+                    f"and retry."
+                )
 
     # 3. Create worktree
     try:

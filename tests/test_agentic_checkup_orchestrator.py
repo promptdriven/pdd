@@ -6493,3 +6493,65 @@ class TestNoIssuePrModePosting:
         # ...and the final report posts to BOTH the PR and the issue thread.
         assert ppc.call_count == 1
         assert final_issue, "with a source issue, the issue-thread final report must still post"
+
+
+class TestSetupWorktreeStaleBranch:
+    """Regression for: checkup fails when a stale ``checkup/issue-*`` branch
+    already exists. A crashed/cleaned-up prior run can leave the branch
+    registered to a worktree directory that no longer exists; ``git branch -D``
+    then refuses ("checked out at <gone path>") and the subsequent
+    ``git worktree add -b`` fails with "a branch named ... already exists",
+    failing the whole checkup. ``_setup_worktree`` now prunes stale worktree
+    registrations first, and surfaces a clear error for a genuine live conflict.
+    """
+
+    @staticmethod
+    def _init_repo(path: Path):
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=path, capture_output=True, text=True
+            )
+        git("init", "-q")
+        git("config", "user.email", "t@x")
+        git("config", "user.name", "t")
+        (path / "f.txt").write_text("x\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        return git
+
+    def test_stale_branch_from_removed_worktree_is_recreated(self, tmp_path):
+        import shutil
+        from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+        git = self._init_repo(tmp_path)
+        # Branch left registered to a worktree dir that is then removed out of band.
+        stale = tmp_path / "old-wt"
+        git("worktree", "add", "-q", "-b", "checkup/issue-7", str(stale), "HEAD")
+        shutil.rmtree(stale)
+
+        wt, err = _setup_worktree(tmp_path, issue_number=7, quiet=True, resume_existing=False)
+        assert err is None, err
+        assert wt is not None and wt.exists()
+
+    def test_plain_leftover_branch_is_recreated(self, tmp_path):
+        from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+        git = self._init_repo(tmp_path)
+        git("branch", "checkup/issue-3")  # leftover ref, not checked out anywhere
+
+        wt, err = _setup_worktree(tmp_path, issue_number=3, quiet=True, resume_existing=False)
+        assert err is None, err
+        assert wt is not None and wt.exists()
+
+    def test_branch_checked_out_in_live_worktree_gives_clear_error(self, tmp_path):
+        from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+        git = self._init_repo(tmp_path)
+        live = tmp_path / "live-wt"
+        git("worktree", "add", "-q", "-b", "checkup/issue-9", str(live), "HEAD")
+
+        wt, err = _setup_worktree(tmp_path, issue_number=9, quiet=True, resume_existing=False)
+        assert wt is None
+        assert err and "another git worktree" in err
+        # Must NOT be the cryptic pre-fix message.
+        assert "Failed to create worktree" not in err
