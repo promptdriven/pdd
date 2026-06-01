@@ -278,6 +278,30 @@ def test_rich_printed_ansi_reset_preserves_outer_suffix_style(
     )
 
 
+def test_rich_printed_composite_ansi_reset_preserves_outer_suffix_style(
+    redirector,
+    captured_texts,
+):
+    """Composite SGR reset should restore an outer Rich style afterward."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[dim]\x1b[31mFAIL\x1b[0;39m after[/dim]")
+
+    text = captured_texts[0]
+    assert text.plain == "FAIL after"
+    assert any(
+        span.start <= len("FAIL ") and span.end >= len("FAIL after")
+        and span.style.dim
+        for span in text.spans
+    )
+
+
 def test_rich_highlighter_style_not_replayed_for_256_color_csi(
     redirector,
     captured_texts,
@@ -455,6 +479,98 @@ def test_string_control_payloads_can_span_newlines(
     assert captured_lines == []
 
     redirector.write("more" + end + "post\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b]0;ti\rtle\x1b\\post\n",
+        "pre\x1bPpay\rload\x1b\\post\n",
+    ],
+    ids=["osc-cr", "dcs-cr"],
+)
+def test_string_control_carriage_returns_do_not_leak_or_drop_prefix(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """CR inside string controls should not trigger progress-line compaction."""
+    redirector.write(sequence)
+
+    assert captured_lines == ["prepost"]
+
+
+def test_split_string_control_carriage_return_stays_hidden(
+    redirector,
+    captured_lines,
+):
+    """CR in a partial string-control payload should remain buffered."""
+    redirector.write("pre\x1bPpay\r")
+    assert captured_lines == []
+
+    redirector.write("load\x1b\\post\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b[?25\npost\n",
+        "pre\x1b[?25\rpost\n",
+        "pre\x1b[?25\x18post\n",
+        "pre\x1b[?25\x1apost\n",
+        "pre\x9b?25\npost\n",
+    ],
+    ids=["newline", "carriage-return", "can", "sub", "c1-newline"],
+)
+def test_malformed_csi_c0_terminators_do_not_leak_or_merge_lines(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """Malformed CSI should stop at C0/newline boundaries."""
+    redirector.write(sequence)
+
+    assert captured_lines == ["pre", "post"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x00post",
+        "pre\x08post",
+        "pre\x0bpost",
+        "pre\x0cpost",
+        "pre\x18post",
+        "pre\x1apost",
+    ],
+    ids=["nul", "bs", "vt", "ff", "can", "sub"],
+)
+def test_standalone_c0_controls_do_not_leak(sequence, redirector, captured_lines):
+    """Standalone C0 controls should be stripped from sync output."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b]0;payload\x18post\n",
+        "pre\x1bPpayload\x1apost\n",
+    ],
+    ids=["osc-can", "dcs-sub"],
+)
+def test_can_sub_cancel_string_control_payloads(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """CAN/SUB should cancel string controls and hide accumulated payload."""
+    redirector.write(sequence)
 
     assert captured_lines == ["prepost"]
 
