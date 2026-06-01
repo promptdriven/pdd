@@ -16,6 +16,7 @@ from pdd.architecture_sync import (
     sync_all_prompts_to_architecture,
     validate_contract_summary,
 )
+from pdd.evidence_manifest import write_evidence_manifest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_ROOT = REPO_ROOT / "examples" / "architecture_contract_summary_demo"
@@ -28,7 +29,24 @@ def demo_workspace(tmp_path: Path) -> Path:
     shutil.copytree(
         DEMO_ROOT,
         workspace,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        ignore=shutil.ignore_patterns(
+            "__pycache__",
+            "*.pyc",
+            ".pdd/evidence/devunits/*.latest.json",
+        ),
+    )
+    prompt = workspace / "prompts" / "refund_python.prompt"
+    output = workspace / "src" / "refund.py"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("def refund():\n    pass\n", encoding="utf-8")
+    write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        output_files=[output],
+        model="local-model",
+        cost_usd=0.0,
+        temperature=0.0,
+        project_root=workspace,
     )
     return workspace
 

@@ -14,7 +14,6 @@ import ast
 import hashlib
 import json
 import re
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -988,14 +987,49 @@ def _story_paths_from_coverage(
     return sorted(linked)
 
 
-def _prompt_file_sha256(prompt_path: Path) -> str:
+def _devunit_basename_for_prompt(prompt_path: Path) -> Optional[str]:
+    """Return the devunit evidence basename for a prompt (matches write_evidence_manifest)."""
+    from .operation_log import infer_module_identity
+
+    basename, _language = infer_module_identity(prompt_path)
+    return basename
+
+
+def _latest_evidence_manifest_path(project_root: Path, prompt_path: Path) -> Optional[Path]:
+    """Resolve ``.pdd/evidence/devunits/<basename>.latest.json`` for a prompt module."""
+    from .evidence_store import devunits_dir
+
+    basename = _devunit_basename_for_prompt(prompt_path)
+    if not basename:
+        return None
+    latest = devunits_dir(project_root) / f"{basename}.latest.json"
+    return latest if latest.is_file() else None
+
+
+def _prompt_file_sha256(prompt_path: Path, *, prompt_text: Optional[str] = None) -> str:
+    if prompt_text is not None:
+        return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     return hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+
+
+def _sync_module_result_row(filename: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize per-module sync output for CLI and API consumers."""
+    return {
+        "filename": filename,
+        "success": result["success"],
+        "updated": result["updated"],
+        "changes": result["changes"],
+        "error": result.get("error"),
+        "warnings": result.get("warnings", []),
+        "contract_summary": result.get("contract_summary"),
+    }
 
 
 def _extract_contract_summary(
     prompt_path: Path,
     project_root: Path,
     *,
+    prompt_text: Optional[str] = None,
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
@@ -1004,7 +1038,7 @@ def _extract_contract_summary(
     Returns (summary_dict, warning_messages). Uses build_coverage for rule status
     so architecture.json stays aligned with pdd coverage and evidence manifests.
     """
-    from .contract_ir import parse_prompt_contracts
+    from .contract_ir import parse_prompt_contracts, parse_prompt_contracts_text
     from .coverage_contracts import (
         STATUS_UNCHECKED,
         CoverageResult,
@@ -1035,8 +1069,12 @@ def _extract_contract_summary(
             prompt_path,
             resolved_stories,
             resolved_tests,
+            prompt_text=prompt_text,
         )
-        ir = parse_prompt_contracts(prompt_path)
+        if prompt_text is not None:
+            ir = parse_prompt_contracts_text(prompt_text, prompt_path)
+        else:
+            ir = parse_prompt_contracts(prompt_path)
 
         if coverage.error:
             summary_warnings.append(f"contract_summary: {coverage.error}")
@@ -1083,14 +1121,12 @@ def _extract_contract_summary(
         )
 
         evidence_status = "missing"
-        latest_evidence_path = (
-            project_root / ".pdd" / "evidence" / "devunits" / f"{prompt_path.stem}.latest.json"
-        )
-        if latest_evidence_path.exists():
+        latest_evidence_path = _latest_evidence_manifest_path(project_root, prompt_path)
+        if latest_evidence_path is not None:
             try:
                 manifest = json.loads(latest_evidence_path.read_text(encoding="utf-8"))
                 manifest_prompt_sha = manifest.get("prompt", {}).get("sha256")
-                actual_prompt_sha = _prompt_file_sha256(prompt_path)
+                actual_prompt_sha = _prompt_file_sha256(prompt_path, prompt_text=prompt_text)
                 if manifest_prompt_sha == actual_prompt_sha:
                     evidence_status = "fresh"
                 else:
@@ -1342,29 +1378,13 @@ def update_architecture_from_prompt(
                 updated = True
 
         project_root = find_project_root(prompts_dir)
-        summary_path = prompt_path
-        temp_prompt_path: Optional[Path] = None
-        if prompt_content_override is not None:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".prompt",
-                delete=False,
-                encoding="utf-8",
-            ) as tmp:
-                tmp.write(prompt_content_override)
-                temp_prompt_path = Path(tmp.name)
-            summary_path = temp_prompt_path
-
-        try:
-            new_summary, summary_warnings = _extract_contract_summary(
-                summary_path,
-                project_root,
-                stories_dir=stories_dir,
-                tests_dir=tests_dir,
-            )
-        finally:
-            if temp_prompt_path is not None:
-                temp_prompt_path.unlink(missing_ok=True)
+        new_summary, summary_warnings = _extract_contract_summary(
+            prompt_path,
+            project_root,
+            prompt_text=prompt_content_override,
+            stories_dir=stories_dir,
+            tests_dir=tests_dir,
+        )
 
         warnings.extend(summary_warnings)
         if new_summary.get("error"):
@@ -1416,6 +1436,7 @@ def update_architecture_from_prompt(
             'updated': False,
             'changes': {},
             'error': f'Unexpected error: {str(e)}',
+            'warnings': [],
             'contract_summary': None,
         }
 
@@ -1506,14 +1527,7 @@ def sync_all_prompts_to_architecture(
             errors.append(f"{filename}: {result['error']}")
 
         # Store detailed result
-        results.append({
-            'filename': filename,
-            'success': result['success'],
-            'updated': result['updated'],
-            'changes': result['changes'],
-            'error': result.get('error'),
-            'contract_summary': result.get('contract_summary'),
-        })
+        results.append(_sync_module_result_row(filename, result))
 
     return {
         'success': len(errors) == 0,
@@ -1733,15 +1747,7 @@ def sync_prompts_to_architecture(
                     architecture_path=resolved_architecture_path,
                     dry_run=dry_run,
                 )
-                results.append(
-                    {
-                        "filename": normalized_filename,
-                        "success": result["success"],
-                        "updated": result["updated"],
-                        "changes": result["changes"],
-                        "error": result.get("error"),
-                    }
-                )
+                results.append(_sync_module_result_row(normalized_filename, result))
                 if result["success"] and result["updated"]:
                     updated_count += 1
                 elif not result["success"]:
