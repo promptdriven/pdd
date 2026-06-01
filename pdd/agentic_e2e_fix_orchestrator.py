@@ -1536,16 +1536,27 @@ def _commit_and_push(
         else:
             return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
 
-    # Stage only workflow-changed files
-    for filepath in files_to_commit:
-        stage_result = subprocess.run(
-            ["git", "add", filepath],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
-        if stage_result.returncode != 0:
-            return False, f"Failed to stage {filepath}: {stage_result.stderr}"
+    from .pr_metadata_finalizer import (
+        finalize_pr_metadata,
+        is_pdd_meta_artifact,
+        stage_paths_scoped,
+    )
+
+    finalization = finalize_pr_metadata(cwd, changed_paths=files_to_commit, stage=True)
+    if not finalization.ok:
+        return False, finalization.message
+
+    files_to_stage = [
+        filepath
+        for filepath in files_to_commit
+        if not is_pdd_meta_artifact(filepath)
+    ]
+
+    # Stage only workflow-changed files. Expected PDD fingerprints have already
+    # been force-staged by finalize_pr_metadata.
+    stage_ok, stage_message = stage_paths_scoped(cwd, files_to_stage)
+    if not stage_ok:
+        return False, stage_message
 
     # Commit with message referencing issue
     commit_msg = f"fix: {issue_title}\n\nFixes #{issue_number}"

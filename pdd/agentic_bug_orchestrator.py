@@ -2286,16 +2286,45 @@ def run_agentic_bug_orchestrator(
         # Stage all tracked changed_files before Step 12 dispatch so the LLM
         # cannot selectively omit files. Follows _commit_and_push() precedent
         # in agentic_e2e_fix_orchestrator.py (line 788).
-        if step_num == 12 and changed_files:
-            for filepath in changed_files:
-                stage_result = subprocess.run(
-                    ["git", "add", filepath],
-                    cwd=current_work_dir,
-                    capture_output=True,
-                    text=True,
+        if step_num == 12:
+            from .pr_metadata_finalizer import (
+                finalize_pr_metadata,
+                is_pdd_meta_artifact,
+            )
+
+            if changed_files:
+                for filepath in changed_files:
+                    if is_pdd_meta_artifact(filepath):
+                        continue
+                    stage_result = subprocess.run(
+                        ["git", "add", filepath],
+                        cwd=current_work_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if stage_result.returncode != 0 and not quiet:
+                        console.print(
+                            f"[yellow]Warning: failed to stage {filepath}: "
+                            f"{stage_result.stderr.strip()}[/yellow]"
+                        )
+
+            finalization = finalize_pr_metadata(
+                current_work_dir,
+                changed_paths=changed_files or None,
+                stage=True,
+            )
+            if not finalization.ok:
+                return (
+                    False,
+                    finalization.message,
+                    total_cost,
+                    model_used,
+                    changed_files,
                 )
-                if stage_result.returncode != 0 and not quiet:
-                    console.print(f"[yellow]Warning: failed to stage {filepath}: {stage_result.stderr.strip()}[/yellow]")
+            if finalization.metadata_paths:
+                changed_files.extend(finalization.metadata_paths)
+                changed_files = sorted(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
 
         # Load and preprocess template
         step_str = str(step_num).replace(".", "_")
