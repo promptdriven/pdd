@@ -29,6 +29,7 @@ from rich.style import Style
 
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
+ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _debug_swallow(context: str, exc: Exception) -> None:
@@ -71,8 +72,55 @@ def _text_from_ansi_output(text: str) -> Text:
     """Parse ANSI text, including ANSI that Rich highlighted before capture."""
     rendered = Text.from_ansi(text)
     if "\x1b[" in rendered.plain:
-        return Text.from_ansi(rendered.plain)
+        reparsed = Text.from_ansi(rendered.plain)
+        return _merge_reparsed_ansi_spans(rendered, reparsed)
     return rendered
+
+
+def _merge_reparsed_ansi_spans(original: Text, reparsed: Text) -> Text:
+    """Merge ANSI reparsing spans without dropping existing non-ANSI spans."""
+    plain_text = original.plain
+    position_map: List[Optional[int]] = [None] * len(plain_text)
+    clean_chars: List[str] = []
+    index = 0
+    for match in ANSI_CSI_RE.finditer(plain_text):
+        while index < match.start():
+            position_map[index] = len(clean_chars)
+            clean_chars.append(plain_text[index])
+            index += 1
+        index = match.end()
+    while index < len(plain_text):
+        position_map[index] = len(clean_chars)
+        clean_chars.append(plain_text[index])
+        index += 1
+
+    clean_plain = "".join(clean_chars)
+    if clean_plain != reparsed.plain:
+        return reparsed
+
+    merged = Text(clean_plain, style=original.style)
+    for span in original.spans:
+        mapped = _map_visible_span(span.start, span.end, position_map)
+        if mapped is not None:
+            merged.stylize(span.style, *mapped)
+    for span in reparsed.spans:
+        merged.stylize(span.style, span.start, span.end)
+
+    return merged
+
+
+def _map_visible_span(
+    start: int, end: int, position_map: List[Optional[int]]
+) -> Optional[tuple[int, int]]:
+    """Map a span from ANSI-bearing text to visible text coordinates."""
+    mapped_positions = [
+        mapped
+        for mapped in position_map[start:end]
+        if mapped is not None
+    ]
+    if not mapped_positions:
+        return None
+    return min(mapped_positions), max(mapped_positions) + 1
 
 
 class ChoiceScreen(ModalScreen[str]):
