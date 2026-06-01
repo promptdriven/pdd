@@ -16,6 +16,7 @@ from ..core.utils import echo_model_line
 from .checkup_simplify import checkup_simplify
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
+from .gate import gate_cmd
 from .drift import drift_cmd
 from .prompt import prompt_lint
 
@@ -368,6 +369,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
+    Waiver policy gate:
+      pdd checkup gate [OPTIONS] [TARGET]
     Regeneration drift:
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
@@ -378,6 +381,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "contract",
         "contracts",
         "coverage",
+        "gate",
         "simplify",
         "drift",
     }:
@@ -476,6 +480,22 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         exit_code = coverage_cmd.main(
             args=list(ctx.args),
             prog_name="pdd checkup coverage",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "gate":
+        if show_help:
+            click.echo(
+                gate_cmd.get_help(click.Context(gate_cmd, info_name="pdd checkup gate"))
+            )
+            return None
+        exit_code = gate_cmd.main(
+            args=list(ctx.args),
+            prog_name="pdd checkup gate",
             standalone_mode=False,
             obj=ctx.obj,
         )

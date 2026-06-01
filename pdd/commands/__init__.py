@@ -20,7 +20,6 @@ from .templates import templates_group
 from .utility import install_completion_cmd, verify
 from .which import which
 from .firecrawl import firecrawl_cache
-from .gate import gate_cmd
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""
@@ -48,7 +47,6 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(install_completion_cmd, name="install_completion")
     cli.add_command(verify)
     cli.add_command(which)
-    cli.add_command(gate_cmd)
 
     # Register templates group directly to commands dict to handle nesting if needed,
     # or just add_command works for groups too.

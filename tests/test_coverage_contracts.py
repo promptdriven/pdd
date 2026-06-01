@@ -1014,7 +1014,14 @@ class TestFixtureIntegration:
         assert set(d.keys()) >= {"path", "has_contract_rules", "rules", "summary", "error"}
         for rule_dict in d["rules"]:
             assert set(rule_dict.keys()) >= {
-                "rule_id", "status", "stories", "tests", "waiver", "failures"
+                "rule_id",
+                "status",
+                "stories",
+                "tests",
+                "waiver",
+                "waiver_status",
+                "waiver_expires",
+                "failures",
             }
         assert set(d["summary"].keys()) >= {
             "total", "checked", "story_only", "test_only", "unchecked", "waived", "failed"

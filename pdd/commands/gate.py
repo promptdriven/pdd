@@ -1,4 +1,4 @@
-"""Policy gate for contract waivers."""
+"""Waiver policy gate for ``pdd checkup gate``."""
 from __future__ import annotations
 
 import json
@@ -21,7 +21,7 @@ def _discover_prompts(target: Path) -> list[Path]:
     )
 
 
-def _load_gate_policy(policy_file: Path) -> dict[str, bool]:
+def _load_gate_policy(policy_file: Path, *, explicit: bool) -> dict[str, bool]:
     defaults = {
         "allow_waivers": True,
         "forbid_waivers": False,
@@ -29,13 +29,27 @@ def _load_gate_policy(policy_file: Path) -> dict[str, bool]:
         "enforce_expiration": False,
     }
     if not policy_file.exists():
+        if explicit:
+            raise click.ClickException(f'Policy file not found: "{policy_file}"')
         return defaults
     try:
         raw = yaml.safe_load(policy_file.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, OSError):
+    except (yaml.YAMLError, OSError) as exc:
+        if explicit:
+            raise click.ClickException(
+                f'Policy file unreadable: "{policy_file}": {exc}'
+            ) from exc
+        click.echo(
+            f'Warning: ignoring unreadable policy file "{policy_file}": {exc}',
+            err=True,
+        )
         return defaults
     gate = raw.get("gate") if isinstance(raw, dict) else None
     if not isinstance(gate, dict):
+        if explicit:
+            raise click.ClickException(
+                f'Policy file "{policy_file}" has no top-level `gate:` mapping.'
+            )
         return defaults
     for key in tuple(defaults):
         value = gate.get(key)
@@ -51,9 +65,8 @@ def _load_gate_policy(policy_file: Path) -> dict[str, bool]:
     "--policy-file",
     "policy_file",
     type=click.Path(path_type=Path, dir_okay=False),
-    default=Path(".pddrc"),
-    show_default=True,
-    help="Policy source (YAML). Reads `gate.*` keys when present.",
+    default=None,
+    help="Policy source (YAML). Reads `gate.*` keys when present. Defaults to `.pddrc`.",
 )
 @click.option("--allow-waivers/--no-allow-waivers", default=None)
 @click.option("--forbid-waivers/--no-forbid-waivers", default=None)
@@ -62,7 +75,7 @@ def _load_gate_policy(policy_file: Path) -> dict[str, bool]:
 def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
     target: str,
     as_json: bool,
-    policy_file: Path,
+    policy_file: Path | None,
     allow_waivers: bool | None,
     forbid_waivers: bool | None,
     require_expiration: bool | None,
@@ -73,7 +86,8 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
     if not target_path.exists():
         raise click.ClickException(f'Path not found: "{target}"')
 
-    policy = _load_gate_policy(policy_file)
+    resolved_policy = policy_file or Path(".pddrc")
+    policy = _load_gate_policy(resolved_policy, explicit=policy_file is not None)
     overrides = {
         "allow_waivers": allow_waivers,
         "forbid_waivers": forbid_waivers,
@@ -98,7 +112,7 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
             status = str(waiver_row.get("status") or "")
             if status in {"malformed", "unknown-rule"}:
                 reasons.append(status)
-            if policy["forbid_waivers"]:
+            if not policy["allow_waivers"]:
                 reasons.append("waivers-forbidden")
             if policy["require_expiration"] and waiver_row.get("expires") is None:
                 reasons.append("missing-expiration")

@@ -116,6 +116,58 @@ JSON mode suppresses unrelated CLI noise on stdout (auto-update banners, etc.).
 ## Related commands
 
 - **Architecture alignment:** `pdd checkup --validate-arch-includes`.
+- **Contract coverage:** `pdd checkup coverage`.
+- **Waiver policy gate:** `pdd checkup gate` (see below).
+
+## Waiver policy gate (`pdd checkup gate`)
+
+Enforce project policy on `<waivers>` blocks across prompt files. This is the
+canonical gate command for issue #832 waiver workflows.
+
+```bash
+# Allow valid waivers (default)
+pdd checkup gate prompts/
+
+# Forbid any waiver
+pdd checkup gate prompts/ --forbid-waivers
+
+# Require every waiver to include a parseable Expires: date
+pdd checkup gate prompts/ --require-expiration
+
+# Fail on expired waivers
+pdd checkup gate prompts/ --enforce-expiration
+
+# Machine-readable output for CI
+pdd checkup gate prompts/ --json
+```
+
+### Policy file
+
+Read `gate.*` keys from `.pddrc` (or pass `--policy-file path/to/policy.yaml`):
+
+```yaml
+gate:
+  allow_waivers: true
+  forbid_waivers: false
+  require_expiration: false
+  enforce_expiration: true
+```
+
+When `--policy-file` is passed explicitly, a missing, unreadable, or malformed
+file fails closed instead of falling back to permissive defaults.
+
+CLI flags override file values. `--forbid-waivers` and `--no-allow-waivers`
+both reject any waiver (`waivers-forbidden`). Malformed waivers and waivers
+referencing unknown rule IDs always fail regardless of allow/forbid mode.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | No policy violations |
+| `1` | One or more waiver policy violations |
+
+JSON output shape: `{policy, waivers, violations, ok}`.
 
 ## Stretch goal (not in default CLI)
 
