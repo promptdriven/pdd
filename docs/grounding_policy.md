@@ -25,6 +25,12 @@ grounding:
 Module-slug matching is **exact and case-sensitive**. There is no substring
 or fuzzy match — `auth_service` does not match `auth`.
 
+`generation.grounding.reviewed` is `true` only when `--review-examples` was
+used, every cloud `examplesUsed` entry was pre-approved via a matching `<pin>`
+(module/slug/id) before the generate call, and no extra cloud examples were
+returned without a pre-approval. Post-generation prompts do not set
+`reviewed=true`.
+
 ## How it's evaluated
 
 `pdd.grounding_policy.check(policy, module, grounding)` returns a list of

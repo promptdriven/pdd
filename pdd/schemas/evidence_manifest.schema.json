@@ -99,6 +99,8 @@
             "required": ["module"],
             "properties": {
               "module": {"type": "string"},
+              "id": {"type": "string"},
+              "title": {"type": "string"},
               "prompt_sha256": {"type": "string"},
               "code_sha256": {"type": "string"},
               "similarity": {"type": "number"},

@@ -16,7 +16,7 @@ from pdd.evidence_manifest import write_evidence_manifest
 from pdd.grounding_policy import check, load_policy
 from pdd.grounding_provenance import (
     build_grounding_metadata,
-    review_grounding_examples_interactive,
+    review_pinned_examples_before_generation,
     reviewed_from_decisions,
     stash_grounding_overrides_on_ctx,
 )
@@ -147,7 +147,10 @@ def test_generate_review_examples_records_reviewed_in_evidence(
     output = tmp_path / "src" / "payments.py"
     prompt.parent.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
-    prompt.write_text("Generate payments.\n", encoding="utf-8")
+    prompt.write_text(
+        "Use <pin>payments</pin> for grounding.\n",
+        encoding="utf-8",
+    )
 
     examples_used = [{"slug": "payments", "title": "Payments example"}]
 
@@ -155,15 +158,17 @@ def test_generate_review_examples_records_reviewed_in_evidence(
         obj = ctx.obj if isinstance(ctx.obj, dict) else {}
         if obj.get("grounding_review_decisions") is None:
             obj["grounding_review_decisions"] = []
-        review_grounding_examples_interactive(
-            examples_used, obj, quiet=True, force=False
-        )
-        stash_grounding_overrides_on_ctx(obj, Path(prompt_file).read_text(encoding="utf-8"))
+        prompt_text = Path(prompt_file).read_text(encoding="utf-8")
+        review_pinned_examples_before_generation(obj, prompt_text, quiet=True, force=False)
+        stash_grounding_overrides_on_ctx(obj, prompt_text)
         obj["last_grounding"] = build_grounding_metadata(
             mode="cloud",
             examples_used=examples_used,
             grounding_overrides=obj.get("grounding_overrides"),
-            reviewed=reviewed_from_decisions(obj.get("grounding_review_decisions")),
+            reviewed=reviewed_from_decisions(
+                obj.get("grounding_review_decisions"),
+                examples_used=examples_used,
+            ),
         )
         return ("def pay():\n    pass\n", False, 0.01, "model")
 
@@ -186,3 +191,18 @@ def test_generate_review_examples_records_reviewed_in_evidence(
         )
     )
     assert manifest["generation"]["grounding"]["reviewed"] is True
+
+
+def test_cloud_id_title_selected_examples_not_empty() -> None:
+    """Regression for examplesUsed records that only expose id/title (issue #827)."""
+    selected = build_grounding_metadata(
+        mode="cloud",
+        examples_used=[{"id": "ex-123", "title": "Test Example Title"}],
+    )["selected_examples"]
+    assert selected == [
+        {
+            "module": "ex-123",
+            "id": "ex-123",
+            "title": "Test Example Title",
+        }
+    ]

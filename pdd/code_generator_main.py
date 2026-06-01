@@ -36,9 +36,10 @@ from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
 from .grounding_provenance import (
     build_grounding_metadata,
-    reviewed_from_decisions,
-    review_grounding_examples_interactive,
+    grounding_reviewed_for_manifest,
+    review_pinned_examples_before_generation,
     stash_grounding_overrides_on_ctx,
+    warn_cloud_examples_not_preapproved,
 )
 
 console = Console()
@@ -3704,11 +3705,21 @@ def code_generator_main(
                         "temperature": temperature,
                         "verbose": verbose,
                     }
-                    if cli_params.get("review_examples"):
-                        payload["reviewExamples"] = True
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
+                        ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else None
+                        if ctx_obj is None:
+                            ctx.obj = {}
+                            ctx_obj = ctx.obj
+                        overrides = stash_grounding_overrides_on_ctx(ctx_obj, prompt_content)
+                        if cli_params.get("review_examples"):
+                            review_pinned_examples_before_generation(
+                                ctx_obj,
+                                prompt_content,
+                                force=force_overwrite,
+                                quiet=quiet,
+                            )
                         response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_request_timeout())
                         response.raise_for_status()
                         
@@ -3720,26 +3731,18 @@ def code_generator_main(
                         # Extract example information from examplesUsed array (cloud returns this)
                         examples_used = response_data.get("examplesUsed", [])
                         if cli_params.get("review_examples"):
-                            review_grounding_examples_interactive(
+                            warn_cloud_examples_not_preapproved(
                                 examples_used,
-                                ctx.obj if isinstance(ctx.obj, dict) else None,
-                                force=force_overwrite,
+                                cli_params.get("grounding_review_decisions"),
                                 quiet=quiet,
                             )
-                        overrides = (
-                            ctx.obj.get("grounding_overrides")
-                            if isinstance(ctx.obj, dict)
-                            else stash_grounding_overrides_on_ctx(
-                                ctx.obj if isinstance(ctx.obj, dict) else None,
-                                prompt_content,
-                            )
-                        )
                         grounding_meta = build_grounding_metadata(
                             mode="cloud",
                             examples_used=examples_used,
                             grounding_overrides=overrides,
-                            reviewed=reviewed_from_decisions(
-                                cli_params.get("grounding_review_decisions")
+                            reviewed=grounding_reviewed_for_manifest(
+                                cli_params,
+                                examples_used,
                             ),
                         )
                         if ctx.obj is None:
@@ -4294,9 +4297,7 @@ def code_generator_main(
         ctx.obj["last_grounding"] = build_grounding_metadata(
             mode="unavailable",
             grounding_overrides=overrides,
-            reviewed=reviewed_from_decisions(
-                cli_params.get("grounding_review_decisions")
-            ),
+            reviewed=grounding_reviewed_for_manifest(cli_params, []),
         )
 
     return generated_code_content or "", was_incremental_operation, total_cost, model_name

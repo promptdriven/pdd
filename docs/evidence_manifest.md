@@ -64,6 +64,8 @@ few-shot examples (if any) were injected by PDD Cloud grounding, plus any
     "selected_examples": [
       {
         "module": "refund_payment",
+        "id": "ex-123",
+        "title": "Refund payment example",
         "prompt_sha256": "…",
         "code_sha256": "…",
         "similarity": 0.91,
@@ -82,8 +84,12 @@ few-shot examples (if any) were injected by PDD Cloud grounding, plus any
 - `selected_examples[].prompt_sha256` / `code_sha256` / `similarity` / `source`
   are populated when the cloud reports them; missing fields are omitted rather
   than guessed.
-- `reviewed` is `true` only when `--review-examples` was supplied AND the
-  reviewer recorded a decision for the run.
+- `reviewed` is `true` only when `--review-examples` was supplied, every
+  `examplesUsed` entry has a matching pre-generation accept (via `<pin>` tags
+  reviewed before the generate call), and cloud did not return additional
+  examples that were not pre-approved.
+- `selected_examples` preserves cloud `id` / `title` when present; `module` is
+  always set (`module`, `slug`, or `id`).
 - The legacy top-level `grounding_examples` array is preserved for backward
   compatibility and mirrors `generation.grounding.selected_examples` when
   present.

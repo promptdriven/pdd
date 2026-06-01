@@ -145,9 +145,12 @@ explicitly choose **at least one** of:
   cannot silently drift to a different prior implementation.
 - **`<exclude>old_module</exclude>`** — block any superseded or known-bad
   implementation from being retrieved.
-- **`pdd ... --review-examples`** — interactively review the selected examples
-  before generation; the decision is recorded in the run's evidence manifest
-  under `generation.grounding.reviewed`.
+- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
+  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
+  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
+  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
+  pinned and pre-approved are still recorded in the manifest but leave
+  `reviewed` false.
 
 These decisions land in the evidence manifest (`generation.grounding`, see
 `docs/evidence_manifest.md`), so reviewers can audit exactly which examples

@@ -972,14 +972,14 @@ def _llm_invoke_cloud(
                     mode="cloud",
                     examples_used=examples_used,
                     grounding_overrides=resolved_overrides,
-                    reviewed=reviewed_from_click_ctx(),
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
                 )
             except (TypeError, ValueError, KeyError) as exc:
                 logger.warning("Grounding metadata extraction failed: %s", exc)
                 grounding = build_grounding_metadata(
                     mode="unavailable",
                     grounding_overrides=resolved_overrides,
-                    reviewed=reviewed_from_click_ctx(),
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
                 )
 
             if verbose and grounding.get("selected_examples"):

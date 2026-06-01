@@ -68,8 +68,11 @@ def test_generate_evidence_forwards_cloud_grounding_from_ctx(tmp_path) -> None:
             obj={
                 "temperature": 0.0,
                 "quiet": True,
+                "review_examples": True,
                 "last_grounding": cloud_grounding,
-                "grounding_review_decisions": [{"module": "item", "decision": "accept"}],
+                "grounding_review_decisions": [
+                    {"module": "item", "decision": "accept", "phase": "pre"}
+                ],
             },
         )
     assert result.exit_code == 0, result.output

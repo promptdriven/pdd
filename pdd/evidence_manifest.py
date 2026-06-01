@@ -18,7 +18,7 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
-from .grounding_provenance import normalize_grounding, reviewed_from_decisions
+from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
 from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 2
@@ -383,8 +383,11 @@ def grounding_kwargs_from_ctx(
 ) -> dict[str, Any]:
     """Build write_evidence_manifest grounding kwargs from a Click ctx.obj mapping."""
     obj = dict(ctx_obj or {})
-    reviewed = reviewed_from_decisions(obj.get("grounding_review_decisions"))
     grounding = obj.get("last_grounding")
+    examples_used = None
+    if isinstance(grounding, Mapping):
+        examples_used = grounding.get("selected_examples")
+    reviewed = grounding_reviewed_for_manifest(obj, examples_used)
     return {"grounding": grounding, "reviewed": reviewed}
 
 

@@ -117,8 +117,16 @@ def test_write_evidence_manifest_serializes_cloud_grounding(tmp_path: Path) -> N
 def test_grounding_kwargs_from_ctx_merges_review_decisions() -> None:
     kwargs = grounding_kwargs_from_ctx(
         {
-            "last_grounding": {"mode": "cloud", "selected_examples": [], "pinned": [], "excluded": []},
-            "grounding_review_decisions": [{"module": "auth", "decision": "accept"}],
+            "review_examples": True,
+            "last_grounding": {
+                "mode": "cloud",
+                "selected_examples": [{"module": "auth"}],
+                "pinned": ["auth"],
+                "excluded": [],
+            },
+            "grounding_review_decisions": [
+                {"module": "auth", "decision": "accept", "phase": "pre"}
+            ],
         }
     )
     assert kwargs["reviewed"] is True

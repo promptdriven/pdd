@@ -33,8 +33,8 @@ def _lists_from_overrides(
 
 
 def _example_module_slug(raw: Mapping[str, Any]) -> Optional[str]:
-    """Return a stable module slug from a cloud example record."""
-    for key in ("module", "slug"):
+    """Return a stable module slug from a cloud examplesUsed record."""
+    for key in ("module", "slug", "id"):
         value = raw.get(key)
         if value is not None and str(value).strip():
             return str(value).strip()
@@ -42,7 +42,11 @@ def _example_module_slug(raw: Mapping[str, Any]) -> Optional[str]:
 
 
 def selected_examples_from_cloud(examples_used: Any) -> List[Dict[str, Any]]:
-    """Map a cloud examplesUsed array into evidence-manifest selected_examples entries."""
+    """Map a cloud examplesUsed array into evidence-manifest selected_examples entries.
+
+    Preserves the cloud record shape (``id``, ``title``, hashes, similarity) while
+    always emitting a stable ``module`` key for policy and display (module/slug/id).
+    """
     if not isinstance(examples_used, list):
         return []
 
@@ -54,6 +58,12 @@ def selected_examples_from_cloud(examples_used: Any) -> List[Dict[str, Any]]:
         if not module:
             continue
         entry: Dict[str, Any] = {"module": module}
+        example_id = raw.get("id")
+        title = raw.get("title")
+        if example_id is not None and str(example_id).strip():
+            entry["id"] = str(example_id).strip()
+        if title is not None and str(title).strip():
+            entry["title"] = str(title).strip()
         prompt_hash = raw.get("prompt_sha256") or raw.get("promptSha256")
         code_hash = raw.get("code_sha256") or raw.get("codeSha256")
         similarity = raw.get("similarity")
@@ -111,8 +121,14 @@ def normalize_grounding(
     selected: List[Dict[str, Any]] = []
     if isinstance(selected_raw, list):
         for item in selected_raw:
-            if isinstance(item, dict) and item.get("module"):
-                selected.append(dict(item))
+            if not isinstance(item, dict):
+                continue
+            module = item.get("module") or item.get("id")
+            if not module or not str(module).strip():
+                continue
+            normalized = dict(item)
+            normalized["module"] = str(module).strip()
+            selected.append(normalized)
 
     pinned, excluded = _lists_from_overrides(grounding)
     if not pinned and isinstance(grounding.get("pinned"), list):
@@ -129,14 +145,62 @@ def normalize_grounding(
     }
 
 
-def reviewed_from_decisions(decisions: Optional[Sequence[Any]]) -> bool:
-    """True when at least one --review-examples decision was recorded."""
+def _pre_generation_accepts(decisions: Optional[Sequence[Any]]) -> set[str]:
+    """Module slugs accepted during pre-generation --review-examples review."""
+    accepted: set[str] = set()
     if not decisions:
-        return False
+        return accepted
     for item in decisions:
-        if isinstance(item, Mapping) and item.get("decision") == "accept":
-            return True
-    return False
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("phase") != "pre" or item.get("decision") != "accept":
+            continue
+        module = item.get("module")
+        if module is not None and str(module).strip():
+            accepted.add(str(module).strip())
+    return accepted
+
+
+def reviewed_from_decisions(
+    decisions: Optional[Sequence[Any]],
+    *,
+    examples_used: Any = None,
+) -> bool:
+    """True when every cloud example was pre-approved before generation.
+
+    ``reviewed`` must not be set from post-generation interactive review. With
+    ``examples_used`` omitted, returns False (no implicit accept on empty runs).
+    """
+    pre_accepted = _pre_generation_accepts(decisions)
+    if not pre_accepted:
+        return False
+
+    if examples_used is None:
+        return False
+
+    if not isinstance(examples_used, list) or not examples_used:
+        return False
+
+    for raw in examples_used:
+        if not isinstance(raw, dict):
+            continue
+        slug = _example_module_slug(raw)
+        if not slug or slug not in pre_accepted:
+            return False
+    return True
+
+
+def grounding_reviewed_for_manifest(
+    cli_params: Mapping[str, Any],
+    examples_used: Any,
+) -> bool:
+    """Whether generation.grounding.reviewed should be true for this run."""
+    if not cli_params.get("review_examples"):
+        return False
+    return reviewed_from_decisions(
+        cli_params.get("grounding_review_decisions"),
+        examples_used=examples_used,
+    )
 
 
 def record_grounding_review_decision(
@@ -145,6 +209,7 @@ def record_grounding_review_decision(
     module: str,
     decision: str,
     reason: Optional[str] = None,
+    phase: str = "pre",
 ) -> None:
     """Append a review decision for evidence manifest provenance."""
     if ctx_obj is None:
@@ -155,10 +220,94 @@ def record_grounding_review_decision(
         ctx_obj["grounding_review_decisions"] = bucket
     if not isinstance(bucket, list):
         return
-    entry: Dict[str, Any] = {"module": module, "decision": decision}
+    entry: Dict[str, Any] = {
+        "module": module,
+        "decision": decision,
+        "phase": phase,
+    }
     if reason:
         entry["reason"] = reason
     bucket.append(entry)
+
+
+def review_pinned_examples_before_generation(
+    ctx_obj: Optional[MutableMapping[str, Any]],
+    prompt_text: str,
+    *,
+    force: bool = False,
+    quiet: bool = False,
+) -> None:
+    """Review <pin> tags before cloud/local generation (--review-examples)."""
+    if ctx_obj is None:
+        return
+
+    pinned, _ = _lists_from_overrides(extract_grounding_overrides(prompt_text))
+    if not pinned:
+        if not quiet:
+            click.echo(
+                "No <pin> tags to review before generation; "
+                "generation.grounding.reviewed stays false unless every "
+                "cloud-selected example was pre-approved via <pin>."
+            )
+        return
+
+    for slug in pinned:
+        if force:
+            record_grounding_review_decision(
+                ctx_obj,
+                module=slug,
+                decision="accept",
+                reason="force",
+                phase="pre",
+            )
+            continue
+
+        if not quiet:
+            click.echo(f"Pinned grounding example: {slug}")
+        if click.confirm(
+            "Approve this pinned example before generation?",
+            default=True,
+        ):
+            record_grounding_review_decision(
+                ctx_obj, module=slug, decision="accept", phase="pre"
+            )
+        else:
+            record_grounding_review_decision(
+                ctx_obj, module=slug, decision="reject", phase="pre"
+            )
+            raise click.UsageError(
+                f"Pinned grounding example {slug!r} was rejected under --review-examples."
+            )
+
+
+def warn_cloud_examples_not_preapproved(
+    examples_used: Any,
+    decisions: Optional[Sequence[Any]],
+    *,
+    quiet: bool = False,
+) -> None:
+    """Warn when cloud returned examples that were not pre-approved via <pin>."""
+    if quiet:
+        return
+    pre_accepted = _pre_generation_accepts(decisions)
+    if not isinstance(examples_used, list):
+        return
+    missing: List[str] = []
+    for raw in examples_used:
+        if not isinstance(raw, dict):
+            continue
+        slug = _example_module_slug(raw)
+        if slug and slug not in pre_accepted:
+            missing.append(slug)
+    if missing:
+        click.echo(
+            click.style(
+                "Cloud grounding examples were not pre-approved before generation "
+                f"({', '.join(missing)}); generation.grounding.reviewed=false. "
+                "Add <pin> tags and re-run with --review-examples to record reviewed=true.",
+                fg="yellow",
+            )
+        )
 
 
 def review_grounding_examples_interactive(
@@ -167,20 +316,18 @@ def review_grounding_examples_interactive(
     *,
     force: bool = False,
     quiet: bool = False,
+    phase: str = "pre",
 ) -> None:
-    """Interactively accept or reject cloud-selected grounding examples."""
+    """Interactively accept or reject grounding examples (pre-generation only)."""
     if ctx_obj is None:
         return
+
+    if phase != "pre":
+        raise ValueError("review_grounding_examples_interactive only supports phase='pre'")
 
     if not isinstance(examples_used, list) or not examples_used:
         if not quiet:
             click.echo("No grounding examples were selected for review.")
-        record_grounding_review_decision(
-            ctx_obj,
-            module="_run",
-            decision="accept",
-            reason="no_examples",
-        )
         return
 
     accepted = False
@@ -195,18 +342,26 @@ def review_grounding_examples_interactive(
 
         if force:
             record_grounding_review_decision(
-                ctx_obj, module=module, decision="accept", reason="force"
+                ctx_obj,
+                module=module,
+                decision="accept",
+                reason="force",
+                phase="pre",
             )
             accepted = True
             continue
 
         if not quiet:
             click.echo(f"Grounding example: {label}")
-        if click.confirm("Accept this example for generation?", default=True):
-            record_grounding_review_decision(ctx_obj, module=module, decision="accept")
+        if click.confirm("Approve this example before generation?", default=True):
+            record_grounding_review_decision(
+                ctx_obj, module=module, decision="accept", phase="pre"
+            )
             accepted = True
         else:
-            record_grounding_review_decision(ctx_obj, module=module, decision="reject")
+            record_grounding_review_decision(
+                ctx_obj, module=module, decision="reject", phase="pre"
+            )
 
     if not accepted:
         raise click.UsageError(
@@ -229,15 +384,20 @@ def grounding_overrides_from_click_ctx() -> Optional[Dict[str, List[str]]]:
     return None
 
 
-def reviewed_from_click_ctx() -> bool:
-    """Return whether review decisions on the Click context mark the run reviewed."""
+def reviewed_from_click_ctx(*, examples_used: Any = None) -> bool:
+    """Return whether pre-generation review covers the examples used on this run."""
     try:
         ctx = click.get_current_context(silent=True)
     except Exception:
         return False
     if not ctx or not isinstance(ctx.obj, dict):
         return False
-    return reviewed_from_decisions(ctx.obj.get("grounding_review_decisions"))
+    if not ctx.obj.get("review_examples"):
+        return False
+    return reviewed_from_decisions(
+        ctx.obj.get("grounding_review_decisions"),
+        examples_used=examples_used,
+    )
 
 
 def resolve_grounding_overrides_for_invoke(
