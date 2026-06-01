@@ -36,6 +36,12 @@ C1_CSI = "\x9b"
 C1_OSC = "\x9d"
 C1_ST = "\x9c"
 C1_CONTROL_STARTERS = "".join(chr(value) for value in range(0x80, 0xA0))
+C0_CONTROL_CHARS = "".join(
+    chr(value) for value in range(0x20)
+    if value not in {0x09, 0x0A, 0x0D, 0x1B}
+)
+CAN = "\x18"
+SUB = "\x1a"
 BEL = "\x07"
 ST = "\x1b\\"
 
@@ -105,7 +111,11 @@ def _prepare_ansi_text(
     has_ansi = False
     index = 0
     while index < len(text):
-        if text[index] != "\x1b" and text[index] not in C1_CONTROL_STARTERS:
+        if (
+            text[index] != "\x1b"
+            and text[index] not in C1_CONTROL_STARTERS
+            and text[index] not in C0_CONTROL_CHARS
+        ):
             position_map[index] = len(clean_chars)
             rich_parts.append(text[index])
             clean_chars.append(text[index])
@@ -138,6 +148,8 @@ def _scan_ansi_token(
     if start >= len(text):
         return None, start + 1, "", ""
 
+    if text[start] in C0_CONTROL_CHARS:
+        return start + 1, start + 1, "single", ""
     if text[start] in C1_STRING_CONTROL_MARKERS:
         return _scan_string_control_token(text, start + 1)
     if text[start] == C1_CSI:
@@ -184,6 +196,8 @@ def _scan_csi_token(text: str, start: int) -> tuple[Optional[int], int, str, str
         char = text[index]
         if char == "\x1b":
             return None, index, "", ""
+        if _is_csi_cancel_char(char):
+            return index + 1, index + 1, "csi_cancel", char
         index += 1
         if "@" <= char <= "~":
             return index, index, "csi", ""
@@ -214,6 +228,8 @@ def _scan_osc_end(text: str, start: int) -> tuple[Optional[int], str, int]:
     index = start
     while index < len(text):
         char = text[index]
+        if char in {CAN, SUB}:
+            return index + 1, char, index + 1
         if char == BEL:
             return index + 1, BEL, index + 1
         if char == C1_ST:
@@ -226,6 +242,11 @@ def _scan_osc_end(text: str, start: int) -> tuple[Optional[int], str, int]:
     return None, "", index
 
 
+def _is_csi_cancel_char(char: str) -> bool:
+    """Return True when a C0 character cancels a CSI sequence."""
+    return char in {"\n", "\r", CAN, SUB} or char in C0_CONTROL_CHARS
+
+
 def _scan_string_control_end(
     text: str,
     start: int,
@@ -234,6 +255,8 @@ def _scan_string_control_end(
     index = start
     while index < len(text):
         char = text[index]
+        if char in {CAN, SUB}:
+            return index + 1, char, index + 1
         if char == C1_ST:
             return index + 1, C1_ST, index + 1
         if char == "\x1b":
@@ -256,6 +279,8 @@ def _rich_ansi_token(
         if text[start] == C1_CSI:
             return "\x1b[" + text[start + 1:end]
         return text[start:end]
+    if token_kind == "csi_cancel":
+        return ""
     if token_kind == "osc":
         body_start = start + 2 if text[start] == "\x1b" else start + 1
         body_end = end - len(terminator)
@@ -467,13 +492,13 @@ def _is_sgr_reset(sequence: str) -> bool:
 
 
 def _is_full_reset_csi(body: str) -> bool:
-    """Return True when a CSI SGR body ends by fully resetting terminal style."""
+    """Return True when a CSI SGR body fully resets terminal style."""
     if not body.endswith("m"):
         return False
     params = body[:-1].replace(":", ";").split(";")
     if not params:
         return True
-    return params[-1] in {"", "0", "00"}
+    return any(param in {"", "0", "00"} for param in params)
 
 
 def _merge_reparsed_ansi_spans(
@@ -518,14 +543,14 @@ def _map_visible_span(
 
 def _split_complete_ansi_line(text: str) -> Optional[tuple[str, str]]:
     """Split at the first newline that is not inside a string control."""
-    newline_index = _find_visible_newline(text)
-    if newline_index is None:
+    split_index = _find_visible_line_split(text)
+    if split_index is None:
         return None
-    return text[:newline_index], text[newline_index + 1:]
+    return text[:split_index], text[split_index + 1:]
 
 
-def _find_visible_newline(text: str) -> Optional[int]:
-    """Return the first newline outside ANSI string-control payloads."""
+def _find_visible_line_split(text: str) -> Optional[int]:
+    """Return the first line split outside ANSI string-control payloads."""
     index = 0
     while index < len(text):
         char = text[index]
@@ -536,6 +561,11 @@ def _find_visible_newline(text: str) -> Optional[int]:
                 text,
                 index,
             )
+            if (
+                _token_kind == "csi_cancel"
+                and _terminator in {"\n", "\r", CAN, SUB}
+            ):
+                return token_end - 1
             if _is_string_control_start(text, index):
                 if token_end is not None:
                     index = token_end
@@ -550,9 +580,41 @@ def _find_visible_newline(text: str) -> Optional[int]:
     return None
 
 
+def _trim_to_after_last_visible_carriage_return(text: str) -> str:
+    """Apply carriage-return compaction outside ANSI string controls."""
+    carriage_return_index = _find_last_visible_carriage_return(text)
+    if carriage_return_index is None:
+        return text
+    return text[carriage_return_index + 1:]
+
+
+def _find_last_visible_carriage_return(text: str) -> Optional[int]:
+    """Return the last CR outside ANSI controls."""
+    last_carriage_return: Optional[int] = None
+    index = 0
+    while index < len(text):
+        if text[index] == "\r":
+            last_carriage_return = index
+            index += 1
+            continue
+        if _is_ansi_control_start(text, index):
+            token_end, next_index, _token_kind, _terminator = _scan_ansi_token(
+                text,
+                index,
+            )
+            index = token_end if token_end is not None else max(next_index, index + 1)
+            continue
+        index += 1
+    return last_carriage_return
+
+
 def _is_ansi_control_start(text: str, index: int) -> bool:
     """Return True when ``text[index]`` can begin an ANSI control sequence."""
-    return text[index] == "\x1b" or text[index] in C1_CONTROL_STARTERS
+    return (
+        text[index] == "\x1b"
+        or text[index] in C1_CONTROL_STARTERS
+        or text[index] in C0_CONTROL_CHARS
+    )
 
 
 def _is_string_control_start(text: str, index: int) -> bool:
@@ -953,8 +1015,11 @@ class ThreadSafeRedirector(io.TextIOBase):
         # Handle carriage return for in-place updates (progress bars)
         # When buffer has \r but no \n, it's an intermediate progress update
         # Keep only content after the last \r (ready for next update or final \n)
-        if '\r' in self.buffer and '\n' not in self.buffer:
-            self.buffer = self.buffer.rsplit('\r', 1)[-1]
+        if (
+            '\r' in self.buffer
+            and _split_complete_ansi_line(self.buffer) is None
+        ):
+            self.buffer = _trim_to_after_last_visible_carriage_return(self.buffer)
             return len(s)
 
         # Process complete lines. ANSI string-control payloads may contain
@@ -966,7 +1031,7 @@ class ThreadSafeRedirector(io.TextIOBase):
             line, self.buffer = split_line
             # Handle \r within line: keep only content after last \r
             if '\r' in line:
-                line = line.rsplit('\r', 1)[-1]
+                line = _trim_to_after_last_visible_carriage_return(line)
 
             # Convert ANSI codes to Rich Text
             text = _text_from_ansi_output(line)
