@@ -942,3 +942,249 @@ def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(tem
 
     assert run_report_path.exists()
     mock_save_fingerprint.assert_not_called()
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TESTS: Issue #1305 - @log_operation must write REAL (non-null)
+# fingerprint hashes for example/generate so CI auto-heal converges.
+#
+# Bug: log_operation() built `log_paths = {"prompt": <str>}` (a plain string,
+# single key) and fed it straight into save_fingerprint(). calculate_current_hashes()
+# only hashes values that are Path instances, so the string prompt value was
+# skipped and the absent code/example/test keys yielded all-null hashes. That
+# null fingerprint never matches the files on disk, so CI auto-heal re-runs
+# `pdd example`/`generate` on every pass (the PR #1243 loop), rewriting the
+# generated example and overwriting maintainer cleanup.
+#
+# Fix: the decorator resolves the authoritative, complete file-path set via
+# get_pdd_file_paths(basename, language) — Path objects keyed by
+# prompt/code/example/test — for the save_fingerprint call (falling back to a
+# Path-coerced {"prompt": Path(prompt_file)} hint on resolution failure).
+# --------------------------------------------------------------------------------
+
+
+def _setup_pdd_module_files(tmp_path, basename, language="python"):
+    """Create a real prompt/code/test/example file set under tmp_path and
+    return (meta_dir, paths_dict) where paths_dict maps PDD file roles to the
+    on-disk Path objects (the shape get_pdd_file_paths returns)."""
+    meta_dir = tmp_path / ".pdd" / "meta"
+    prompts_dir = tmp_path / "prompts"
+    src_dir = tmp_path / "src"
+    tests_dir = tmp_path / "tests"
+    examples_dir = tmp_path / "examples"
+    for d in (meta_dir, prompts_dir, src_dir, tests_dir, examples_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
+    code_file = src_dir / f"{basename}.py"
+    test_file = tests_dir / f"test_{basename}.py"
+    example_file = examples_dir / f"{basename}_example.py"
+
+    prompt_file.write_text("% Prompt for issue 1305 regression\nDo a thing.\n")
+    code_file.write_text("def thing():\n    return 42\n")
+    test_file.write_text("def test_thing():\n    assert True\n")
+    example_file.write_text(f"from src.{basename} import thing\nthing()\n")
+
+    paths = {
+        "prompt": prompt_file,
+        "code": code_file,
+        "test": test_file,
+        "example": example_file,
+    }
+    return meta_dir, paths
+
+
+def _is_hex_sha256(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def test_log_operation_example_writes_real_hashes_issue_1305(tmp_path):
+    """Issue #1305 (Test 1): a `pdd example` run through @log_operation must
+    write a fingerprint with REAL (non-null) prompt/code/example hashes.
+
+    On buggy code the decorator passes {"prompt": <str>} to save_fingerprint;
+    the string prompt is skipped and code/example keys are absent, so every
+    hash is null and these assertions fail.
+    """
+    basename, language = "examplemod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "example run must write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    assert fp_data["command"] == "example"
+    # The crux of the bug: these were all null before the fix.
+    assert fp_data["prompt_hash"] is not None, "prompt_hash must not be null after example"
+    assert fp_data["code_hash"] is not None, "code_hash must not be null after example"
+    assert fp_data["example_hash"] is not None, "example_hash must not be null after example"
+    for field in ("prompt_hash", "code_hash", "example_hash"):
+        assert _is_hex_sha256(fp_data[field]), (
+            f"{field} should be a 64-char hex SHA-256, got: {fp_data[field]!r}"
+        )
+
+
+def test_log_operation_generate_writes_real_hashes_issue_1305(tmp_path):
+    """Issue #1305 (Test 2 / Step 6 sibling): `pdd generate` shares the exact
+    same @log_operation(updates_fingerprint=True) line as `pdd example`, so it
+    is affected identically and must also write non-null hashes.
+
+    # Scope addition: covers expansion item "operation:generate — pdd generate
+    # also writes all-null fingerprints via the same operation_log.py:596 line"
+    # identified by Step 6 (this is a SIBLING_PATTERN expansion of the issue,
+    # which only named `pdd example`).
+    """
+    basename, language = "generatemod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def run_generate(prompt_file):
+        return {"status": "ok"}, 0.2, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_generate(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "generate run must write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    assert fp_data["command"] == "generate"
+    assert fp_data["prompt_hash"] is not None, "prompt_hash must not be null after generate"
+    assert fp_data["code_hash"] is not None, "code_hash must not be null after generate"
+    for field in ("prompt_hash", "code_hash"):
+        assert _is_hex_sha256(fp_data[field]), (
+            f"{field} should be a 64-char hex SHA-256, got: {fp_data[field]!r}"
+        )
+
+
+def test_log_operation_fingerprint_converges_no_drift_issue_1305(tmp_path):
+    """Issue #1305 (Test 3): the fingerprint written by an example run through
+    @log_operation must equal the hashes a fresh sync pass would compute from
+    the same on-disk files. If they match, a second auto-heal pass sees NO drift
+    and does not rewrite the example (breaking the PR #1243 loop).
+
+    On buggy code the saved hashes are null while the recomputed hashes are real,
+    so the equality assertions fail — exactly the non-converging state.
+    """
+    from pdd.sync_determine_operation import read_fingerprint, calculate_current_hashes
+
+    basename, language = "convergemod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+        # What a second sync/auto-heal pass would compute from the unchanged files.
+        expected = calculate_current_hashes(paths)
+        saved = read_fingerprint(basename, language)
+
+    assert saved is not None, "read_fingerprint must parse the saved fingerprint"
+    # Convergence: saved hashes equal freshly-recomputed hashes -> no drift.
+    assert saved.prompt_hash == expected.get("prompt_hash"), "prompt_hash diverges -> auto-heal loop"
+    assert saved.code_hash == expected.get("code_hash"), "code_hash diverges -> auto-heal loop"
+    assert saved.example_hash == expected.get("example_hash"), "example_hash diverges -> auto-heal loop"
+    # Guard against a vacuous match where both sides are null.
+    assert saved.example_hash is not None, "example_hash must be a real value, not null"
+
+
+def test_log_operation_passes_full_path_dict_to_save_fingerprint_issue_1305(tmp_path):
+    """Issue #1305 (Test 4): the caller side of the decorator -> save_fingerprint
+    boundary. The decorator must hand save_fingerprint a `paths` dict whose values
+    are Path objects (not str) and that includes the code/example/test keys, not
+    just a bare {"prompt": <str>}.
+
+    This is a behavioral interaction test on the ARGUMENT VALUES the caller passes,
+    not a signature/structure check. On buggy code save_fingerprint receives
+    {"prompt": <str>} (a single str value), so the assertions fail.
+    """
+    basename, language = "boundarymod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths), \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fingerprint:
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    mock_save_fingerprint.assert_called_once()
+    passed_paths = mock_save_fingerprint.call_args.kwargs.get("paths")
+    assert passed_paths is not None, "save_fingerprint must receive a paths argument"
+
+    # Must carry the full key set so code/example/test hashes can be computed.
+    for key in ("prompt", "code", "example", "test"):
+        assert key in passed_paths, (
+            f"save_fingerprint paths is missing '{key}' key (got keys: {list(passed_paths)})"
+        )
+    # Every value must be a Path (calculate_current_hashes only hashes Path values).
+    for key, value in passed_paths.items():
+        assert isinstance(value, Path), (
+            f"save_fingerprint paths['{key}'] must be a Path, got {type(value).__name__}: {value!r}"
+        )
+
+
+def test_log_operation_fallback_coerces_prompt_to_path_issue_1305(tmp_path):
+    """Issue #1305 (Test 5): when get_pdd_file_paths resolution fails, the
+    decorator must fall back to {"prompt": Path(prompt_file)} — a COERCED Path,
+    never a raw string — so prompt_hash is still real and the command does not
+    crash.
+
+    On buggy code (or a naive raw-string fallback) the prompt value stays a str,
+    calculate_current_hashes skips it, and prompt_hash is null -> assertion fails.
+    """
+    basename, language = "fallbackmod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+    real_prompt_path = paths["prompt"]  # absolute path to the real prompt file on disk
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch(
+             "pdd.sync_determine_operation.get_pdd_file_paths",
+             side_effect=OSError("prompts dir not found"),
+         ):
+        # Must not raise even though path resolution failed.
+        result = run_example(prompt_file=str(real_prompt_path))
+
+    assert result == ({"status": "ok"}, 0.1, "gpt-4"), "decorator must still return the result"
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "fallback path must still write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    # Fallback coerces the prompt string to a Path, so prompt_hash is real.
+    assert fp_data["prompt_hash"] is not None, (
+        "fallback must pass Path(prompt_file) (not a raw str) so prompt_hash is non-null"
+    )
+    assert _is_hex_sha256(fp_data["prompt_hash"]), (
+        f"prompt_hash should be a 64-char hex SHA-256, got: {fp_data['prompt_hash']!r}"
+    )
