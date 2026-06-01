@@ -115,6 +115,8 @@ def test_llm_invoke_local_returns_unavailable_grounding() -> None:
     with patch("pdd.llm_invoke._load_model_data", return_value=pd.DataFrame([mock_model])), patch(
         "pdd.llm_invoke._select_model_candidates", return_value=[mock_model]
     ), patch("pdd.llm_invoke._ensure_api_key", return_value=True), patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=False
+    ), patch(
         "pdd.llm_invoke.litellm"
     ) as mock_litellm:
         mock_litellm.completion = MagicMock(return_value=_make_completion_response())
