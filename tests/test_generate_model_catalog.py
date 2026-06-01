@@ -248,7 +248,11 @@ def test_normalize_model_name_handles_provider_noise():
     assert gmc._normalize_model_name("gemini-3-flash (thinking-minimal)") == "gemini-3-flash-thinking-minimal"
 
 
-def test_build_rows_skips_chatgpt_provider(monkeypatch):
+def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
+    """chatgpt/* must never be GENERATED from litellm.model_cost (chatgpt stays in
+    _SKIP_PROVIDER_ROOTS) — but the hand-managed subscription family IS preserved
+    via _merge_chatgpt_subscription_rows (issue #1269). So: no chatgpt row sourced
+    from model_cost, yet the 4 curated chatgpt/ rows are present."""
     fake_cost = {
         "chatgpt/gpt-5.2": {
             "mode": "responses",
@@ -275,7 +279,18 @@ def test_build_rows_skips_chatgpt_provider(monkeypatch):
     rows = gmc.build_rows()
 
     assert rows
-    assert all(not r["model"].startswith("chatgpt/") for r in rows)
+    # the model_cost chatgpt/gpt-5.2 (provider "chatgpt") must NOT be generated...
+    assert not any(r.get("provider") == "chatgpt" for r in rows)
+    # ...but the curated subscription family IS preserved (provider "OpenAI ChatGPT")
+    chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
+    assert chatgpt_rows == {
+        "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
+        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
+    }
+    assert all(
+        r["provider"] == "OpenAI ChatGPT"
+        for r in rows if r["model"].startswith("chatgpt/")
+    )
 
 
 def test_build_rows_accepts_custom_score_manifest(tmp_path, monkeypatch):
@@ -395,12 +410,25 @@ def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
     assert row["location"] == "global"
 
 
-def test_committed_csv_has_no_chatgpt_rows():
+def test_committed_csv_has_curated_chatgpt_subscription_rows():
+    """The committed CSV carries the hand-managed ChatGPT subscription family
+    (issue #1269): 4 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
+    (device-flow / codex login). They must NOT be the OPENAI_API_KEY-billed rows."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
-    assert "chatgpt/" not in text
-    assert "ChatGPT," not in text
+    for model in (
+        "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
+        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
+    ):
+        assert f"OpenAI ChatGPT,{model},0.0,0.0," in text, model
+    # subscription rows carry NO API key (device-flow / codex login). The cloud
+    # deploy guard only rejects literal OPENAI_API_KEY rows; these chatgpt/ rows
+    # are not those.
+    for line in text.splitlines():
+        if line.startswith("OpenAI ChatGPT,chatgpt/"):
+            fields = line.split(",")
+            assert fields[6] == "", f"chatgpt row must have empty api_key: {line!r}"
 
 
 def test_committed_csv_includes_vertex_gemini_flash_ci_default():

@@ -57,6 +57,7 @@ help:
 	@echo "  make upload-pypi             - Upload dist/*.whl to PyPI"
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
+	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
 	@echo "  make release                 - On main: tag HEAD with next vN.N.N and push (BUMP=patch|minor|major; default patch)"
 	@echo "                                  Actions publishes to PyPI via OIDC after gltanaka approval"
@@ -77,6 +78,19 @@ PUBLIC_COPY_CONTEXT ?= 1
 PUBLIC_CONTEXT_INCLUDE ?= context/**/*_example.py
 PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.csv
 PUBLIC_REGRESSION_SCRIPTS ?= $(wildcard tests/*regression*.sh)
+
+# Release video automation. Set RELEASE_VIDEO=0 for an emergency release that
+# must skip paid video generation/upload.
+RELEASE_VIDEO ?= 1
+RELEASE_VIDEO_OUTPUT_DIR ?= .pdd/release-videos
+RELEASE_VIDEO_PRESET ?= release-notes
+RELEASE_VIDEO_TARGET ?= publish
+RELEASE_VIDEO_PLATFORM ?= youtube
+RELEASE_VIDEO_PRIVACY ?= unlisted
+RELEASE_VIDEO_DRY_RUN ?= 0
+RELEASE_VIDEO_PROJECT_ID ?=
+CLAUDE_CLI ?= claude
+PDS_CLI ?= pds
 
 # Python files
 PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
@@ -108,7 +122,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release check-release-remote check-release-branch check-release-clean
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-video check-release-remote check-release-branch check-release-clean
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -721,6 +735,25 @@ check-release-clean:
 		exit 1; \
 	fi
 
+release-video:
+	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
+		echo "Skipping release video because RELEASE_VIDEO=0"; \
+		exit 0; \
+	fi; \
+	DRY_RUN_FLAG=""; \
+	if [ "$(RELEASE_VIDEO_DRY_RUN)" = "1" ]; then DRY_RUN_FLAG="--dry-run"; fi; \
+	RELEASE_TAG="$(RELEASE_TAG)" RELEASE_GIT_SHA="$(RELEASE_GIT_SHA)" \
+	python scripts/release_video.py \
+		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
+		--claude-cli "$(CLAUDE_CLI)" \
+		--pds-cli "$(PDS_CLI)" \
+		--project-id "$(RELEASE_VIDEO_PROJECT_ID)" \
+		--preset "$(RELEASE_VIDEO_PRESET)" \
+		--target "$(RELEASE_VIDEO_TARGET)" \
+		--platform "$(RELEASE_VIDEO_PLATFORM)" \
+		--privacy "$(RELEASE_VIDEO_PRIVACY)" \
+		$$DRY_RUN_FLAG
+
 release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
 	@echo "Preparing release"
 	@set -e; \
@@ -767,6 +800,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			exit 1; \
 		fi; \
+		make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
 		exit 0; \
 	fi; \
 	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
@@ -790,9 +824,10 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	fi; \
 	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
 	git push origin "$$NEW_TAG"; \
-	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."
+	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
+	make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"
 	@# Post-release cleanup check (Issue #186)
-	@$(MAKE) check-suspicious-files
+	@make check-suspicious-files
 
 analysis:
 	@echo "Running regression analysis"

@@ -34,7 +34,7 @@ match model identities at runtime.
    - `STATIC_ELO_FALLBACK` as an offline/local/niche fallback, not the primary score source.
    - `PRICE_OVERRIDES` for exact model-id pricing fixes in $/M tokens.
    - `PROVIDERS` for supported LiteLLM provider display names and API key env specs.
-   - Do not add ChatGPT subscription rows or ChatGPT auth behavior in this module; ChatGPT support is intentionally split out until the supported LiteLLM range can resolve `chatgpt/*` model IDs.
+   - Do not GENERATE ChatGPT subscription rows from `litellm.model_cost` (the `chatgpt/*` IDs are not curatable there, so `chatgpt` stays in `_SKIP_PROVIDER_ROOTS`), but DO PRESERVE the hand-managed ChatGPT subscription family so a catalog refresh never drops it (issue #1269): keep a `_CHATGPT_SUBSCRIPTION_ROWS` constant (provider `OpenAI ChatGPT`, empty `api_key` = device-flow/codex-login auth, flat 0.0 cost, ELOs mirroring each model's API twin) and a `_merge_chatgpt_subscription_rows(rows)` helper (model-keyed dedupe) that `build_rows` applies before returning — the same survival mechanism used for local-runner rows.
 3. Agentic score manifest:
    - The manifest schema is a JSON object with `schema_version`, `policy`, and `scores`.
    - Each score entry must include auditable provenance: `model: str`, `elo: int|float`, `source: str`, `source_url: str`, `raw_model_name: str`, `leaderboard: str`, `category: str`, `leaderboard_publish_date: str|null`, `retrieved_at: str`, `rank: int|null`, `rating: int|float`, `rating_lower: int|float|null`, `rating_upper: int|float|null`, `vote_count: int|float`, and `match_reason: str`; optional `aliases: list[str]` and `reviewed_by` may be present.

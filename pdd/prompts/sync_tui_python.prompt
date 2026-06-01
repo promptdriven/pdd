@@ -31,6 +31,26 @@ providing animated feedback, log output, and modal dialogs for user interaction.
    - Buffer writes, flush on newlines
    - Handle carriage returns for progress bar updates (keep content after last \r)
    - Convert ANSI codes to Rich Text via Text.from_ansi()
+   - Repair Rich-highlighted escape sequences before ANSI parsing so Rich
+     syntax highlighting does not surface fragments like `[90m`, `]0;title`,
+     or `39;49;00m` as visible sync output
+   - Preserve existing Rich Text spans around ANSI output when reparsing, so
+     outer styles such as bold/dim and OSC hyperlink styles survive nested
+     ANSI color resets
+   - Strip ECMA-48 control payloads that should not be visible in the log,
+     including CSI, OSC, DCS, SOS, PM, APC, C1 controls, standalone C0
+     controls, and DEL
+   - Treat CAN/SUB and interrupting ESC bytes as string-control cancellation
+     boundaries, hiding accumulated control payload while preserving following
+     visible text
+   - Split buffered output only on visible newlines outside ANSI string-control
+     payloads; newline and carriage-return bytes inside OSC/DCS/SOS/PM/APC
+     payloads must remain hidden and must not flush or compact visible log
+     lines
+   - Terminate malformed CSI parsing at C0/newline/carriage-return boundaries
+     so invalid escape fragments do not merge adjacent visible lines
+   - Keep ANSI restoration and fallback scanning linear in the input length to
+     avoid pathological rescans on malformed or unterminated escape fragments
    - Dim lines matching log timestamp pattern (YYYY-MM-DD HH:MM:SS)
    - Use app.call_from_thread() for thread-safe widget updates
 

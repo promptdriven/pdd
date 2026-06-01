@@ -85,7 +85,7 @@
     - CRITICAL: Dependency/include fixtures must include every node needed by the production mapping logic and must use the identifier type the code expects, such as prompt filenames versus normalized module names.
     - In forward-mismatch tests, keep the dependency target entry/file present when the scenario is about a missing include or metadata tag. Remove only the relationship being tested.
     - When production parsing normalizes fixture filenames to module names, assert the normalized user-facing value in warning text. For example, a Python prompt filename like `db_service_python.prompt` may normalize to module `db_service`.
-    - CRITICAL: In warning assertions containing phrases such as `declares dependency on module ...` or `<include>s module ...`, assert the normalized module name, not the raw language-suffixed filename stem. For example, assert `declares dependency on module 'log'`, not `declares dependency on module 'log_python'`; assert `<include>s module 'secret'`, not `<include>s module 'secret_python'`.
+    - CRITICAL: In warning assertions containing phrases such as `declares dependency on module ...` or warnings that an include references another module (for example, includes module 'secret'), assert the normalized module name, not the raw language-suffixed filename stem. For example, assert `declares dependency on module 'log'`, not `declares dependency on module 'log_python'`; assert the include reference names module 'secret', not 'secret_python'.
     - For include/dependency validators, add edge-case tests for ignored non-target includes, self-includes/self-dependencies when the code excludes self references, and already-rooted path prefixes such as `prompts/...` so path resolution is not double-prefixed.
     - If a test writes real metadata/include/dependency tags into a fixture file, do not also mock the parser for those tags.
 
@@ -122,6 +122,8 @@
         - Identify the EXACT return values and behavior
         - Identify any error conditions or edge cases
     2. SECOND: Analyze the prompt that generated the code to understand the intended functionality and edge cases.
+        - If prompt_that_generated_code contains a contract_rules section, apply the contract-rule test planning rules from context/test.prompt before selecting test cases.
+        - Make rule traceability visible in test names, parametrization IDs, comments, docstrings, TODOs, or skip reasons.
     3. THIRD: Classify each target behavior as either:
         - FORMAL_CANDIDATE: pure, deterministic, finite-state logic that can be encoded faithfully
         - RUNTIME_TEST_ONLY: filesystem behavior, imports, framework wiring, network, auth providers, time, randomness, or anything that depends on environment interaction

@@ -637,7 +637,7 @@ graph TB
 - **Entry points**: `pdd connect` (web UI), direct CLI, or the GitHub App
 - **Start**: `pdd generate <url>` scaffolds architecture, prompts, and `.pddrc` from a PRD GitHub issue
 - **Core loop**: `pdd sync` runs the full auto-deps → generate → example → crash → verify → test → fix → update cycle for each module
-- **Health check**: `pdd checkup <url>` identifies what needs attention next; `pdd checkup --pr ... --issue ...` verifies existing PRs
+- **Health check**: `pdd checkup <url>` identifies what needs attention next; `pdd checkup --pr ...` reviews an existing PR on its own merits (add `--issue ...` to also verify it resolves a specific issue)
 - **Defect path**: `test <url>` or `bug <url>` surfaces failing tests → `fix <url>` resolves them
 - **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules. Auth caveat: `sync <url>` still runs a LiteLLM-backed generate phase, so OAuth-only CLI setup is not enough; configure an API key first.
 
@@ -648,7 +648,7 @@ graph TB
 ### Agentic Commands (Issue-Driven)
 - **[`change`](#8-change)**: Implement feature requests from GitHub issues (13-step workflow)
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
-- **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or verify existing PRs against source issues
+- **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or review/verify existing PRs (optionally against a source issue)
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
 - **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename). This mode still requires API-key-backed LiteLLM for its generate phase; stored CLI OAuth alone is not sufficient.
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (18-step workflow in agentic mode)
@@ -702,6 +702,13 @@ Story prompt linkage:
 
 Template:
 - See `user_stories/story__template.md` for a starter format.
+
+Contract coverage:
+- User stories are **example-level coverage** for named contract rules in prompts.
+  Document rule IDs under each story's `## Covers` section (for example `R1` or
+  `prompts/module_python.prompt#R2`). See `docs/coverage_contracts.md` and
+  `docs/contract_check.md`.
+
 ## Global Options
 
 These options can be used with any command:
@@ -908,6 +915,7 @@ Arguments:
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
+- `--model NAME`: Override the base model for this sync run (sets PDD_MODEL_DEFAULT for the invocation, e.g. `chatgpt/gpt-5.3-codex`). Restored after the run. Affects the local llm_invoke route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
 - `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
@@ -963,7 +971,9 @@ If multiple development language prompt files exist for the same basename, sync 
 - **Configuration Hierarchy**: CLI options > .pddrc context > environment variables > defaults
 - **Multi-language Support**: Automatically processes all language variants of a basename
 - **Intelligent Path Resolution**: Uses sophisticated directory management for complex project structures
-- **Architecture-Aware Outputs**: When `architecture.json` provides an explicit `filepath` for a prompt entry, sync uses that code output path instead of flattening to `.pddrc` defaults
+- **Architecture-Aware Outputs**: When `architecture.json` provides an explicit `filepath` for a prompt entry, sync honors it according to whether that `filepath` includes a directory component:
+  - If `filepath` includes a directory (e.g. `backend/api/widget.py`), that explicit directory structure wins and is preserved as-is — `.pddrc` output paths are not applied to it.
+  - If `filepath` is a bare filename at the project root (e.g. `widget.py`), the filename is preserved but its parent directory is taken from `.pddrc` `generate_output_path`. This makes the code path resolve consistently with `example_output_path` and `test_output_path`, which are always sourced from `.pddrc` defaults (Issue #1201). When no `generate_output_path` is configured, the bare filename resolves at the project root as before.
 - Context-specific settings include output paths, default language, model parameters, coverage targets, and budgets
 
 **Workflow Logic**:
@@ -1001,6 +1011,8 @@ pdd sync --one-session factorial_calculator
 
 # Agentic sync (one-session is the default)
 pdd sync https://github.com/myorg/myrepo/issues/100
+pdd sync calculator --model chatgpt/gpt-5.3-codex  # force a model on the local route; for chatgpt/* on a cloud-enabled install add --local
+pdd sync calculator --local --model chatgpt/gpt-5.3-codex  # local route: required for a chatgpt/* subscription model when PDD Cloud is configured
 
 # Disable one-session for agentic sync
 pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
@@ -1885,6 +1897,8 @@ Options:
 - `--existing-tests PATH [PATH...]`: Path(s) to the existing unit test file(s). Required when using --coverage-report. Multiple paths can be provided.
 - `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
 - `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
+
+When the prompt contains a `contract_rules` section, unit test generation uses those rule IDs for planning: `MUST` rules should receive behavioral tests, `MUST NOT` rules should receive negative tests when fixtures allow, and generated test names or comments should reference the relevant rule ID where practical. If a rule cannot be exercised with the available fixtures, the generated test file should include a TODO or skipped-test reason instead of silently omitting the rule.
 
 #### Story Mode
 
@@ -2796,7 +2810,7 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 
 Run an automated health check on a project from a GitHub issue. The checkup workflow explores the project, identifies problems (missing deps, build errors, interface mismatches, failing tests, orphan pages, inconsistent API patterns), optionally fixes them, writes regression and e2e tests, and creates a PR.
 
-`checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
+`checkup` can also run against an existing pull request. With `--pr <PR_URL>` alone it reviews the PR diff on its own merits (correctness / quality), using full project context (architecture, `.pddrc`); the issue-alignment gate is skipped. Add `--issue <ISSUE_URL>` to also verify the PR resolves that issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop (which still requires `--issue`).
 
 `pdd checkup simplify` is a local subcommand for candidate cleanup rather than
 a PR review gate. By default it calls Claude Code's bundled `/simplify` skill; use
@@ -2811,15 +2825,15 @@ pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
 
 Arguments:
-- `GITHUB_ISSUE_URL`: GitHub issue URL describing what to check (e.g., "Check the entire CRM app"). Omit this argument in PR mode and pass `--pr` plus `--issue` instead.
+- `GITHUB_ISSUE_URL`: GitHub issue URL describing what to check (e.g., "Check the entire CRM app"). Omit this argument in PR mode and pass `--pr` (optionally with `--issue`) instead.
 
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--start-step STEP`: Recovery override for the legacy checkup flow; accepted values are `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, and `8`. Not compatible with `--review-loop`.
 - `--no-github-state`: Disable GitHub state persistence, use local-only
-- `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
-- `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
+- `--pr PR_URL`: Review an existing pull request instead of creating a new one. With no `--issue`, the PR is reviewed on its own merits. Cannot be combined with a positional issue URL.
+- `--issue ISSUE_URL`: Optional source GitHub issue for `--pr`; when provided, used as the expected behavior and acceptance criteria for PR verification (the alignment gate applies). Required with `--review-loop`; cannot be passed without `--pr`.
 - `--review-loop`: In PR mode, run the primary-reviewer/fixer loop. The primary reviewer reviews the PR, the fixer addresses actionable findings, fixes are committed and pushed to the PR branch, and the primary reviewer verifies until clean or a limit is reached.
 - `--review-only`: With `--review-loop`, run only the primary reviewer first pass. This never invokes the fixer, commits, or pushes.
 - `--reviewer ROLE`: Primary reviewer role for `--review-loop` (for example, `codex`).
@@ -2869,9 +2883,9 @@ These trade favourable-on-untrusted-PRs safety against gate coverage. To enforce
 
 **Report-Only Mode**: Use `--no-fix` to run steps 1-5 and 7 without applying fixes — useful for auditing a project's health without making changes.
 
-In **issue mode**, each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail. In **PR mode** (see below), step-level posting is suppressed — the orchestrator posts a single canonical final report on the PR thread and the issue thread once it knows the outcome (gate pass after push, gate fail, push failure, refusal, or `--no-fix` pass/fail). If GitHub commenting fails, the report body is also saved to `.pdd/checkup-pr-<n>/final-report.md` so it is never lost; the failure is surfaced via the run's returned message and persisted as `step_outputs["pr_post_status"]`, but it does not flip the gate outcome.
+In **issue mode**, each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail. In **PR mode** (see below), step-level posting is suppressed — the orchestrator posts a single canonical final report on the PR thread (and, when an `--issue` is provided, the issue thread) once it knows the outcome (gate pass after push, gate fail, push failure, refusal, or `--no-fix` pass/fail). With no `--issue`, progress comments are suppressed entirely and only the final report lands on the PR (the PR is the sole thread). If GitHub commenting fails, the report body is also saved to `.pdd/checkup-pr-<n>/final-report.md` so it is never lost; the failure is surfaced via the run's returned message and persisted as `step_outputs["pr_post_status"]`, but it does not flip the gate outcome.
 
-**PR Mode**: Use `--pr` and `--issue` to run checkup against an existing PR and the issue it is intended to resolve. By default this runs the full standard checkup flow on the PR worktree, commits eligible generated fixes, pushes them back to the same PR branch, and skips step 8 because the PR already exists. Add `--no-fix` when you want verification-only behavior. PR mode reloads `architecture.json` and `.pddrc` from the PR worktree before running, so audits see the PR's project state and not the parent checkout's.
+**PR Mode**: Use `--pr` to run checkup against an existing PR. With `--pr` alone the PR is reviewed on its own merits — correctness and quality of the diff — and the Step-7 `issue_aligned` requirement is dropped (verdict = code findings only: clean → ship, findings → fix). Add `--issue` to also verify the PR resolves that issue (the alignment gate then applies, unchanged from prior behavior). By default this runs the full standard checkup flow on the PR worktree, commits eligible generated fixes, pushes them back to the same PR branch, and skips step 8 because the PR already exists. Add `--no-fix` when you want verification-only behavior. PR mode reloads `architecture.json` and `.pddrc` from the PR worktree before running, so audits see the PR's project state and not the parent checkout's.
 
 **PR-Mode Push Refusals (issue #1212)**: Before pushing fixer changes back to the PR, `pdd checkup --pr` runs a stack of guards. Any one of them blocks the push, persists a refusal artifact under `.pdd/checkup-pr-<n>/`, and reports the verdict on the PR thread instead of publishing the diff:
 
@@ -2880,7 +2894,7 @@ In **issue mode**, each step posts its findings as a comment on the GitHub issue
 - **Causal-connection check** — when Step 5 reported a failure, the fixer's changed files must overlap the union of (PR changed files, file paths named in the Step 5 failure output, justified `EXPANSION_ITEMS` paths). A provider-success Step 5 whose embedded `failure_signal` block declares `status: fail` is treated as a logical failure (visible in the console as a `Step 5 failure detail:` block), so the causal check runs on those too. Artifact: `causal-connection-refusal.txt`.
 - **Diff-size sanity gate** — refuses pushes that add more than `DIFF_SIZE_ADDED_LOC_LIMIT` added lines (default 800) unless every **oversized** dirty path is covered by its own justified `EXPANSION_ITEMS` entry. A path is "oversized" when its individual added lines meet `OVERSIZED_PATH_ADDED_LOC_FLOOR` (default 50), so a small companion edit (e.g. a 5-line test update next to a 600-line refactor) is exempt from the per-path coverage requirement; the oversized refactor still has to be declared. A diffuse over-limit diff with no single oversized path falls back to the strict "every changed path covered" rule so death-by-a-thousand-cuts diffs are still blocked. Override the added-line limit for a single run with the `PDD_CHECKUP_DIFF_LOC_LIMIT` environment variable (parsed as an integer number of lines; an unparseable value falls back to the default, and `0` disables the gate entirely — use the escape hatch deliberately, since it removes the only safety net against runaway fixer diffs).
 - **Verification-skipped refusal** — when Step 5's `failure_signal` block reports `status: skipped` (or `skip`/`no_tests`/`n/a`/`n_a`), the test suite never executed against the PR head, so the orchestrator has no evidence that the PR is healthy. The gate refuses regardless of whether the worktree is dirty (no-push artifact + "tests didn't run" message) OR already clean (the run returns failure with a "worktree clean but checkup did NOT verify the PR's tests pass" message — without this, a clean worktree on a skipped-tests run would report success and mislead the user into thinking the PR was verified). The check is independent of `_run_single_step`'s provider success flag (an agent can emit a coherent `status: skipped` even when its provider call timed out) and is re-derived from the persisted `step_outputs["5"]` at gate time so a mid-loop interruption + resume can't slip past via a missing in-memory cache. Rerun `pdd checkup --pr` once the test environment is healthy. Artifact: `verification-skipped-refusal.txt`.
-- **`--no-fix --pr` early Step 5 refusal** — in `--no-fix --pr` mode (no fixer, no push), the same three-state Step 5 parse runs AFTER the Steps-3/4/5 linear loop and BEFORE Step 7. A `skipped` status (or `skip`/`no_tests`/`n/a`/`n_a`) returns failure immediately with "tests did not run" and writes `.pdd/checkup-pr-{N}/nofix-step5-skipped-refusal.txt`. A logical failure (`fail`/`error`/an empty Step 5 output/missing or malformed `failure_signal` block) returns failure with "test failure" and writes `.pdd/checkup-pr-{N}/nofix-step5-failure-refusal.txt`. Both paths post the refusal message as the canonical terminal report to the PR and issue threads before returning, so observers watching the GitHub thread get a durable status comment even without a Step 7 output. Both paths then **clear the saved workflow state** before returning — this is required, not cosmetic: `load_workflow_state` loads the GitHub state comment with priority over local state, so without a successful clear the next `pdd checkup --pr --no-fix` would replay the cached `step_outputs["5"]`, skip Step 5, and fire the identical refusal forever (plus post a duplicate report). When the GitHub state comment cannot be deleted (e.g. the token lacks delete scope), the clear falls back to neutralising the comment body so future loads no longer parse it as resumable state; if even that fails, the returned message carries a "could not confirm workflow-state cleanup" warning telling you to delete the `PDD_WORKFLOW_STATE` comment manually. The check reads from `step_outputs["5"]` (not only in-memory context) so a resumed run whose Step 5 was skipped by `start_step` still applies the contract. Non-PR no-fix runs (issue mode) are unaffected. Rerun `pdd checkup --pr --no-fix` once the test environment is healthy.
+- **`--no-fix --pr` early Step 5 refusal** — in `--no-fix --pr` mode (no fixer, no push), the same three-state Step 5 parse runs AFTER the Steps-3/4/5 linear loop and BEFORE Step 7. A `skipped` status (or `skip`/`no_tests`/`n/a`/`n_a`) returns failure immediately with "tests did not run" and writes `.pdd/checkup-pr-{N}/nofix-step5-skipped-refusal.txt`. A logical failure (`fail`/`error`/an empty Step 5 output/missing or malformed `failure_signal` block) returns failure with "test failure" and writes `.pdd/checkup-pr-{N}/nofix-step5-failure-refusal.txt`. Both paths post the refusal message as the canonical terminal report to the PR thread (and the issue thread when an `--issue` was provided) before returning, so observers watching the GitHub thread get a durable status comment even without a Step 7 output. Both paths then **clear the saved workflow state** before returning — this is required, not cosmetic: `load_workflow_state` loads the GitHub state comment with priority over local state, so without a successful clear the next `pdd checkup --pr --no-fix` would replay the cached `step_outputs["5"]`, skip Step 5, and fire the identical refusal forever (plus post a duplicate report). When the GitHub state comment cannot be deleted (e.g. the token lacks delete scope), the clear falls back to neutralising the comment body so future loads no longer parse it as resumable state; if even that fails, the returned message carries a "could not confirm workflow-state cleanup" warning telling you to delete the `PDD_WORKFLOW_STATE` comment manually. The check reads from `step_outputs["5"]` (not only in-memory context) so a resumed run whose Step 5 was skipped by `start_step` still applies the contract. Non-PR no-fix runs (issue mode) are unaffected. Rerun `pdd checkup --pr --no-fix` once the test environment is healthy.
 
 **PR-Head Freshness Lease (auto-rerun on advance)**: In PR fix mode, if the remote PR head advances mid-checkup (a teammate pushes while PDD is auditing), the orchestrator transparently restarts the workflow against the new head rather than publishing a stale verdict. Restarts are capped at `MAX_PR_HEAD_REFRESHES = 2`, so the worst case is three inner attempts before exhaustion. The current restart count persists at `.pdd/checkup-pr-{pr_number}/pr_head_refreshes` (a single-int sidecar outside the workflow-state dir, so Ctrl-C + manual resume cannot bypass the bound); it is cleared automatically on a clean terminal success. When budget is exhausted, the run returns a failure message that lists every observed `old_sha->new_sha` transition and cites `max_pr_head_refreshes=2`, e.g.: `PR head kept advancing during checkup (aaaaaaaa->bbbbbbbb, bbbbbbbb->cccccccc, cccccccc->dddddddd); exhausted max_pr_head_refreshes=2. Rerun pdd checkup once the PR branch stabilizes.` The lease triggers at four checkpoints inside the inner orchestrator (post-Step-7 gate, pre-guards, push failure, post-push), and never force-pushes. `--no-fix --pr` does NOT consume restart budget; instead it fails closed (`Verdict downgraded — unverified:` banner over the clean Step 7 body) when post-Step-7 freshness cannot be confirmed — head advance, post-run refetch failure, or pre-run refetch failure (transient `_fetch_pr_metadata` flake at entry). Fix mode similarly fails closed at entry when `_fetch_pr_metadata` returns an empty head SHA — a fix-mode push requires a known baseline to validate freshness.
 
@@ -2899,12 +2913,20 @@ pdd checkup --no-fix https://github.com/myorg/myrepo/issues/42
 # With extra timeout for large projects
 pdd checkup --timeout-adder 120 https://github.com/myorg/myrepo/issues/42
 
-# Run full checkup against an existing PR and push fixes to that PR
+# Review an existing PR on its own merits (no issue) and push fixes to that PR
+pdd checkup --pr https://github.com/myorg/myrepo/pull/123
+
+# Run full checkup against an existing PR and verify it resolves a specific issue
 pdd checkup \
   --pr https://github.com/myorg/myrepo/pull/123 \
   --issue https://github.com/myorg/myrepo/issues/42
 
-# Verify an existing PR without applying fixes
+# Verify an existing PR (on its own merits) without applying fixes
+pdd checkup \
+  --no-fix \
+  --pr https://github.com/myorg/myrepo/pull/123
+
+# Verify an existing PR against its source issue without applying fixes
 pdd checkup \
   --no-fix \
   --pr https://github.com/myorg/myrepo/pull/123 \
@@ -3776,3 +3798,17 @@ As you become more familiar with PDD, you can compose richer workflows by chaini
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
 Keep prompts as source; regenerate with PDD.
+
+### Using a ChatGPT/Codex subscription as a fallback
+
+If you have a ChatGPT subscription, PDD can use it for LLM calls when no API key is available (for example when `ANTHROPIC_API_KEY` is unset or rate-limited). Authenticate once with the Codex CLI:
+
+```bash
+codex login
+```
+
+PDD reads the resulting `~/.codex/auth.json` and routes fallback calls through the `chatgpt/*` model family on your subscription (flat-rate, no per-token API billing). This is for your own personal subscription only — do not share or pool a single subscription across users. **This is a LOCAL execution path.** The subscription token is a local file, so it is only used on the local llm_invoke route. If you have PDD Cloud configured (`PDD_JWT_TOKEN`, or `FIREBASE_API_KEY` + `GITHUB_CLIENT_ID`), cloud is the default route and does NOT carry the subscription — pass `--local` (or set `PDD_FORCE_LOCAL=1`) to force the local subscription path. Users without cloud credentials already run locally and need no flag.
+
+**Available subscription models** (selectable via `PDD_MODEL_DEFAULT` or `pdd setup`): `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`, `chatgpt/gpt-5.3-codex-spark`. `--strength` picks a higher- or lower-ranked model within the family, just like the Anthropic models. Codex is opt-in; the shipped default engine is unchanged. (Exact models depend on what your ChatGPT plan serves.)
+
+> **If `--model chatgpt/...` seems ignored after upgrading:** PDD prefers a user/project model catalog (`~/.pdd/llm_model.csv`, then `.pdd/llm_model.csv`) over the packaged one. An older such file won't contain the `OpenAI ChatGPT` rows, so the family is invisible and selection silently falls through to other models. PDD logs a clear error in this case. To recover, either add the `OpenAI ChatGPT,chatgpt/*` rows to your override CSV, or delete the override file to fall back to the packaged catalog.
