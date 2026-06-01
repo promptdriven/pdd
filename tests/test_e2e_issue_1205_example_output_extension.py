@@ -197,6 +197,60 @@ class TestIssue1205ExampleOutputExtensionE2E:
             "BUILTIN_EXT_MAP['yaml'] instead of the CSV-authoritative .yml."
         )
 
+    @pytest.mark.parametrize(
+        "prompt_suffix,expected_ext",
+        [
+            ("cpp", ".cpp"),
+            ("csharp", ".cs"),
+            ("yml", ".yml"),
+        ],
+    )
+    def test_cli_example_bare_name_prompt_alias_falls_back_to_builtin_extension(
+        self, tmp_path, monkeypatch, prompt_suffix, expected_ext
+    ):
+        """Bug #1315: prompt suffix aliases absent from the CSV must still use the
+        construct_paths-compatible built-in extension fallback.
+
+        The .h code file is deliberately unknown so the language comes from the
+        prompt suffix token, e.g. thing_cpp.prompt -> cpp.
+        """
+        monkeypatch.chdir(tmp_path)
+        prompt_file = tmp_path / f"thing_{prompt_suffix}.prompt"
+        code_file = tmp_path / "thing.h"
+        prompt_file.write_text("Generate a small example.\n")
+        code_file.write_text("// unknown extension fixture\n")
+        bare_output = tmp_path / "ex"
+
+        runner = CliRunner()
+        with patch(
+            "pdd.context_generator_main.context_generator",
+            side_effect=_stub_context_generator("// example\n"),
+        ):
+            result = runner.invoke(
+                cli,
+                [
+                    "--local", "--force", "--quiet",
+                    "example",
+                    str(prompt_file),
+                    str(code_file),
+                    "--output", str(bare_output),
+                ],
+            )
+
+        assert result.exit_code == 0, (
+            f"pdd example exited {result.exit_code}.\nOutput:\n{result.output}"
+        )
+        expected_output = tmp_path / f"ex{expected_ext}"
+        assert expected_output.exists(), (
+            f"Bug #1315: bare-name output for prompt suffix {prompt_suffix!r} "
+            f"must land at {expected_output.name}, but it was not written.\n"
+            f"CLI output:\n{result.output}"
+        )
+        assert not bare_output.exists(), (
+            "Bug #1315: empty get_extension() result was treated as final instead "
+            "of falling back to BUILTIN_EXT_MAP."
+        )
+
     def test_cli_example_yaml_output_alias_lands_at_yaml(self, tmp_path, monkeypatch):
         """The other YAML alias: --output foo.yaml + YAML prompt must also land at foo.yaml unchanged."""
         monkeypatch.chdir(tmp_path)

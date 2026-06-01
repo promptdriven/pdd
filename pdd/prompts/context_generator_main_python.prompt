@@ -89,9 +89,13 @@
               many languages — e.g. `.c++` instead of `.cpp`, `.matlab` instead of `.m`, `.c#`/`.f#` instead
               of `.cs`/`.fs`, `.haskell` instead of `.hs`, and `.yaml` instead of the CSV's `.yml`. Behavior:
               if `language` is truthy and `get_extension(language)` returns a non-empty extension, use that
-              extension (`output_path.with_suffix(ext)`); if `get_extension` returns an empty string (e.g.
-              Makefile), leave the bare name unchanged (do NOT append any suffix); if `language` is falsy,
-              fall back to `.py`.
+              extension (`output_path.with_suffix(ext)`). If `get_extension(language)` returns an empty
+              string, treat that as ambiguous because it can mean either a true no-extension language
+              (e.g. Makefile) OR an alias that is known to `construct_paths` but absent from the CSV
+              (e.g. `cpp`, `csharp`, `yml`); in that case fall back through `BUILTIN_EXT_MAP.get(lang_key,
+              f".{{lang_key}}")`, exactly mirroring `construct_paths`. Only leave the bare name unchanged
+              when the final fallback extension is also empty (e.g. `BUILTIN_EXT_MAP["makefile"] == ""`).
+              If `language` is falsy, fall back to `.py`.
             - Track whether the wrapper itself rewrote the path (set a local flag, e.g. `wrapper_rewrote_path`,
               True only in the `--format md` non-`.md` branch and the `--format code` bare-name branch).
               CRITICAL: in the bare-name branch, only set the flag when `resolved_output != output` — some

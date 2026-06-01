@@ -131,29 +131,26 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     if output_path.suffix:
                         resolved_output = output
                     else:
-                        # Issue #1315: synthesize the extension for a bare --output name from
-                        # the canonical CSV-backed get_extension — the same authoritative
-                        # language_format.csv table construct_paths itself uses — instead of a
-                        # wrapper-local partial map. The old duplicated BUILTIN_EXT_MAP lookup
-                        # plus an f".{lang_key}" fallback diverged from construct_paths and
-                        # synthesized wrong/invalid suffixes for dozens of languages
-                        # (.c++ vs .cpp, .matlab vs .m, .c#/.f# vs .cs/.fs, .yaml vs the CSV's
-                        # .yml). BUILTIN_EXT_MAP remains only as the offline fallback when
-                        # PDD_PATH/CSV is unavailable, mirroring construct_paths' own try/except.
-                        lang_ext = None
+                        # Issue #1315: synthesize the extension for a bare --output name using
+                        # the same CSV-first, BUILTIN_EXT_MAP-fallback pattern as construct_paths.
+                        # get_extension returns "" both for true no-extension languages
+                        # (Makefile) and for aliases absent from the CSV (cpp, csharp, yml), so
+                        # an empty CSV result must still fall through to the built-in map.
                         if language:
                             try:
                                 lang_ext = get_extension(language)
+                                if not lang_ext and (language or '').lower() != 'prompt':
+                                    raise ValueError('empty extension')
                             except Exception:
-                                lang_ext = None
-                        if lang_ext is None:
-                            lang_key = language.lower() if language else ''
-                            lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
-                        # An empty extension (e.g. Makefile) means "no suffix" — leave the bare
-                        # name unchanged rather than appending a guessed suffix. Only flag a
-                        # wrapper rewrite when the path actually changed, otherwise the
-                        # re-confirmation step below would prompt twice for the same target that
-                        # construct_paths already confirmed.
+                                lang_key = language.lower()
+                                lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}")
+                        else:
+                            lang_ext = '.py'
+                        # A final empty extension (e.g. Makefile from BUILTIN_EXT_MAP) means
+                        # "no suffix" — leave the bare name unchanged. Only flag a wrapper
+                        # rewrite when the path actually changed, otherwise the re-confirmation
+                        # step below would prompt twice for the same target that construct_paths
+                        # already confirmed.
                         resolved_output = str(output_path.with_suffix(lang_ext)) if lang_ext else output
                         if resolved_output != output:
                             wrapper_rewrote_path = True
