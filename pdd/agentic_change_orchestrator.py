@@ -2138,6 +2138,36 @@ def run_agentic_change_orchestrator(
     previous_fixes = state.get("previous_fixes", "")
     
     if last_completed_step < 13:
+        if worktree_path and worktree_path.exists():
+            boundary_changes = _detect_worktree_changes(
+                worktree_path,
+                context.get("direct_edit_candidates", []),
+            )
+            if boundary_changes:
+                changed_files = sorted(set([*changed_files, *boundary_changes]))
+                context["files_to_stage"] = ", ".join(changed_files)
+
+        from .pr_metadata_finalizer import (
+            finalize_pr_metadata,
+            stage_paths_scoped,
+        )
+
+        finalization = finalize_pr_metadata(
+            current_work_dir,
+            changed_paths=changed_files or None,
+            stage=True,
+        )
+        if not finalization.ok:
+            return False, finalization.message, total_cost, model_used, changed_files
+
+        if finalization.metadata_paths:
+            changed_files = sorted(set([*changed_files, *finalization.metadata_paths]))
+            context["files_to_stage"] = ", ".join(changed_files)
+
+        stage_ok, stage_message = stage_paths_scoped(current_work_dir, changed_files)
+        if not stage_ok:
+            return False, stage_message, total_cost, model_used, changed_files
+
         while review_iteration < MAX_REVIEW_ITERATIONS:
             review_iteration += 1
             state["review_iteration"] = review_iteration
