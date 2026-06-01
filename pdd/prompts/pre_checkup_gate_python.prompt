@@ -1,0 +1,63 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_pre_checkup_gate", "signature": "(worktree: Path, changed_files: Sequence[str], *, base_ref: Optional[str] = None, repo_owner: str = '', repo_name: str = '', issue_number: Optional[int] = None, strict: Optional[bool] = None, quiet: bool = False, timeout_per_check: float = 300.0) -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_gates_python.prompt</pdd-dependency>
+<pdd-dependency>ci_drift_heal_python.prompt</pdd-dependency>
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write the `pdd/pre_checkup_gate.py` module.
+
+% Role & Scope
+A single, blocking pre-checkup quality gate that runs immediately BEFORE `pdd checkup --pr` is invoked by either the `change`/feature orchestrator or the `fix`/bug e2e orchestrator. It exists to catch the *mechanical* PR criticals (won't-import, app won't start, router never mounted, lint/compile breakage) and *PDD drift* (stale `.pdd/meta` fingerprint, `architecture.json` out of sync) deterministically, so the cross-model `checkup --pr` review converges in one round instead of spending expensive review rounds doing what a CI script should do. It composes existing PDD primitives — it runs no new verification engine of its own.
+
+% Responsibility
+- Run two ordered phases against the PR worktree and return a single hard pass/fail the caller uses to block (or allow) the checkup handoff.
+- Phase 1 (drift-sync) brings code ↔ prompt ↔ `architecture.json` ↔ `.pdd/meta` into sync, then verifies the sync took (heal, then re-detect).
+- Phase 2 (build/smoke) runs deterministic per-file checks plus a small project-level smoke layer over the *touched* files and hard-blocks on any failure.
+
+% Non-responsibilities
+- Does NOT catch semantic / incomplete-coverage findings (shape mismatch, wrong page content, half-met contract). Those stay with the cross-model `checkup --pr` review loop; this gate MUST NOT attempt them or self-review.
+- Does NOT replace `checkup --pr`; it runs ahead of it.
+- Does NOT poll remote GitHub checks (that is `ci_validation`'s job); it runs its OWN local checks because the remote poll passes vacuously when no required checks exist.
+- Does NOT create or merge PRs, send notifications, or mutate any tree other than the PR worktree it is given.
+
+% Vocabulary
+- Touched files: the worktree-relative paths in `changed_files` (the PR's modified/added files), normalized platform-neutrally (`\\` → `/`).
+- Docs-only diff: a `changed_files` set whose entries are all documentation/non-code (`.md`, `.rst`, `.txt`) or otherwise carry no compilable/importable code.
+- Mechanical critical: a deterministically catchable breakage — import error, compile/syntax error, lint failure, unmounted route/router, or a targeted unit-test failure on a touched module.
+- Hard block: the gate returns `passed=False`, and the caller MUST NOT hand off to `checkup --pr`.
+
+% Requirements
+1. Function: `run_pre_checkup_gate(worktree, changed_files, *, base_ref=None, repo_owner='', repo_name='', issue_number=None, strict=None, quiet=False, timeout_per_check=300.0) -> (passed, message, cost)`. `passed` is the hard pass/fail; `message` is a structured, actionable summary the fixer can act on; `cost` is the cumulative LLM cost incurred (drift-sync may invoke `pdd update`/`example`; build/smoke is non-LLM and contributes 0.0).
+2. **R1 — Phase order (drift-sync THEN build/smoke).** Phase 1 (drift-sync) MUST run and complete before Phase 2 (build/smoke), so build/smoke validates the *synced* tree rather than a pre-sync one. This rule is violated if build/smoke checks run against the tree before drift-sync has finished.
+3. **R2 — Runs its own checks; hard-blocks (closes the vacuous-pass hole).** The gate MUST execute its own deterministic checks and MUST NOT return `passed=True` merely because no GitHub required checks exist or because a remote poll reported "no checks". This rule is violated if the gate returns `passed=True` without having run Phase 2's per-file checks over the touched code files (when any exist).
+4. **R3 — Build/smoke composition.** Phase 2 MUST, over the touched files: (a) reuse `checkup_gates.discover_gates(worktree, changed_files, base_ref=base_ref)` + `run_gates(...)` for per-file compile/lint/typecheck (`py-compile`, `ruff`, `tsc-noemit`, `git-diff-check`); (b) import each changed importable module and fail on ImportError/ModuleNotFoundError; (c) probe app-start / route-mount for changed router/app modules (confirm new routes/routers actually mount); (d) run a caller-compatibility sweep — grep the repository for callers of changed public symbols (functions, CLI flags, imports, module interfaces) and flag callers that pass invalid arguments or import symbols that no longer exist; (e) run targeted unit tests selected by git-diff over the touched modules. Any red result is a hard block.
+5. **R4 — Fork-PR-RCE security (reuse the existing allowlist; never `npm run`).** All Phase 2 command execution MUST go through trusted, allowlist-validated invocations — reuse `checkup_gates` discovery and its `_script_is_acceptable` policy, or invoke trusted tools directly / via `npx --no-install`. The gate MUST NOT dispatch `package.json` script bodies (`npm run <X>` / `yarn run <X>` / `pnpm run <X>` / `bun run <X>`) and MUST NOT run a `build:`/`build` script. This rule is violated if any gate command is a package-manager `run` dispatch or an un-allowlisted shell string.
+6. **R5 — Docs-only short-circuit.** When `changed_files` is empty or a docs-only diff, Phase 2's build/smoke layer MUST be skipped and the gate returns `passed=True` with a message noting the skip. (Phase 1 drift-sync still runs when applicable.) This avoids blocking trivial/docs-only PRs.
+7. **R6 — Drift-sync is verify-after-heal.** Phase 1 MUST orchestrate the existing primitives — `metadata_sync.run_metadata_sync(...)` for `.pdd/meta` fingerprint finalization, `architecture_sync.sync_all_prompts_to_architecture(...)` (scoped via `only_files` to the touched prompts) for `architecture.json`, and `ci_drift_heal.detect_drift(...)`/`heal_module(...)` for code↔prompt drift — then RE-RUN `detect_drift` to confirm no `update`-class drift remains. Unhealable drift that survives the heal pass is a hard block. A metadata-finalization failure (`run_metadata_sync` / `heal_module` reporting failure) MUST be a hard block, never silently passed — half-synced metadata must not reach checkup.
+8. **R7 — Strict-mode toggle reuses `PDD_STRICT_DOC_SYNC`.** When `strict` is `None`, resolve it from `os.environ.get("PDD_STRICT_DOC_SYNC", "")` treating `"1"`/`"true"`/`"yes"` (case-insensitive) as strict. Under strict mode any drift-sync violation hard-blocks; under non-strict (default) mode a residual *non-fatal* drift-sync discrepancy is reported in `message` for the review loop but does not by itself block, while build/smoke failures (R3) always hard-block regardless of strict mode.
+9. **R8 — Flaky-test quarantine.** Targeted-test selection MUST support a deterministic quarantine carve-out so a known-flaky test cannot turn the gate itself into a spurious blocker. Quarantined tests run in a non-gating manner (their result is reported but does not flip `passed`). Keep the gate fast (target ~5–10 min); prefer git-diff-targeted tests over the full suite.
+10. **R9 — Never raises; fail-closed on infrastructure errors.** The entrypoint MUST NOT propagate exceptions to the caller; wrap phases so an unexpected error returns `(False, "<scrubbed reason>", cost)` (fail closed — a gate that cannot run its checks must not green-light the handoff). Path matching for touched-file classification MUST be platform-neutral (normalize `\\` → `/`).
+11. The returned `message` MUST be structured enough that a fixer agent can act on it: name the failing phase, the failing check(s), and the touched file(s) involved.
+
+% Dependencies
+<pdd.checkup_gates><include mode="interface">pdd/checkup_gates.py</include></pdd.checkup_gates>
+<pdd.ci_drift_heal><include>context/ci_drift_heal_example.py</include></pdd.ci_drift_heal>
+<pdd.metadata_sync><include>context/metadata_sync_example.py</include></pdd.metadata_sync>
+<pdd.architecture_sync><include>context/architecture_sync_example.py</include></pdd.architecture_sync>
+
+% Deliverables
+- Code: `pdd/pre_checkup_gate.py`

@@ -14,6 +14,7 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>pre_checkup_gate_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
@@ -200,7 +201,7 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits, **associated_documents** (list of doc paths discovered from the include graph + architecture BFS — LLM must emit `ASSOCIATED_DOCS_{MODIFIED,CONFLICTS,UNCHANGED}` markers, one bucket per doc)
 - Step 11 receives: issue_content, step9_output, **step10_output** (so DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers emitted by Step 10.5 reach the review loop), worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
-- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests, **clean_restart** (`"true"` or `"false"`) — Step 13 uses this to decide whether to force-push (`--force-with-lease`) and whether to look for an existing open PR to update in place rather than creating a new one
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests, base_branch, **manual_review_lines** (aggregated `MANUAL_REVIEW:` lines from Step 9, the Step 12 review-loop iterations, the synthesized Step 10 conflict lines, and — when the Step 12.5 build/smoke gate fails in default mode — the gate's `gate_message`; rendered in the PR body's "Manual Review Required" section), **clean_restart** (`"true"` or `"false"`) — Step 13 uses this to decide whether to force-push (`--force-with-lease`) and whether to look for an existing open PR to update in place rather than creating a new one
 
 % Dependency Context (Before Step 6)
 Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
@@ -368,6 +369,21 @@ Step 10 now has two responsibilities: (a) update `architecture.json` metadata as
 
 5. Contract scope: the verifier only protects docs that `discover_associated_documents` actually found (i.e. declared via `<include>` or `<include-many>` in the modified prompts' graph or reachable through architecture BFS). Docs that *should* be referenced but aren't tagged are out of scope here — semantic auto-deps discovery is separate future work.
 
+6. Full metadata/fingerprint sync extension (Issue #1293): the `PDD_STRICT_DOC_SYNC` toggle now governs not only associated-document sync but full PDD drift-sync — code ↔ prompt ↔ `architecture.json` ↔ `.pdd/meta` fingerprint. This is the same drift-sync the fix path now runs via `pre_checkup_gate`; the change path already heals prompt drift at Step 8.5 and syncs architecture metadata at Step 10/10.5, so the extension is to ensure the strict toggle ALSO treats a residual `.pdd/meta` fingerprint or `architecture.json` discrepancy (not just a dropped associated doc) as a strict-mode abort. Under strict mode, after Step 10's architecture sanitization, a surviving `update`-class drift or unfinalized fingerprint is a violation aborting the workflow with `success=False`; under default mode it is appended to `step_output` as an `ORCHESTRATOR_POSTCHECK_WARNINGS` line for the Step 11/12 review loop. Reuse the existing `register_untracked_prompts` / `_merge_interface_signatures` / Step 8.5 heal primitives — do NOT introduce a parallel drift engine (coordinate with related issues #884 and #1317).
+
+% Step 12.5 — Pre-PR Build/Smoke Gate (Issue #1293)
+
+After the review loop (Steps 11-12) completes and BEFORE Step 13 creates the PR, run a blocking build/smoke pass over the changed files so the change/feature PR enters `checkup --pr` already building and wired. The worst observed breakage (app won't start, router never mounted, a page replaced with unrelated content) showed up on a feature PR, so this gate MUST run on change/feature flows too — not just the fix path.
+
+1. Import `run_pre_checkup_gate` from `pdd.pre_checkup_gate`.
+2. After the review loop and after `sync_order.sh` generation, call `run_pre_checkup_gate(worktree=worktree_path, changed_files=changed_files, base_ref=None, repo_owner=repo_owner, repo_name=repo_name, issue_number=issue_number)`. Pass `base_ref=None` (do NOT pass `base_branch`): `base_branch` is only resolved Before Step 13 — see the `_normalize_pr_base_branch` step in "Git Worktree Isolation" — so it is not yet defined at Step 12.5. `base_ref` is the gate's optional keyword arg (defaults to `None`); when omitted/`None` the gate derives the diff range itself. Add `gate_cost` to `total_cost`.
+3. The gate's Phase 2 (build/smoke) is what matters here — compile touched files, import changed modules, confirm new routes/routers mount, lint, caller-compatibility sweep, and targeted unit tests by git-diff; it hard-blocks on any red. Phase 1 drift-sync is largely a no-op on the change path because Step 8.5 already healed prompt drift and Step 10/10.5 synced architecture metadata, but running it is idempotent and confirms the tree is in sync.
+4. Block semantics:
+   - Under `PDD_STRICT_DOC_SYNC` strict mode, a failed gate aborts before Step 13: save state with `step_output` prefixed `FAILED:` and return `(False, f"Stopped at step 12.5: pre-PR build/smoke gate failed: {gate_message}", total_cost, model_used, changed_files)`.
+   - Under default (non-strict) mode, a failed gate does NOT abort PR creation but its structured `gate_message` MUST be surfaced in the Step 13 PR body via the existing `MANUAL_REVIEW:` convention (so the mechanical findings reach human/checkup review) and printed as a warning. Concretely: format the failure as one `MANUAL_REVIEW: pre_checkup_gate — {gate_message}` line and fold it into the same `manual_review_lines` aggregation Step 13 consumes — pass it as an extra source to `_collect_manual_review_lines(...)` alongside `step9_output`, `previous_fixes`, and the synthesized Step 10 conflict lines. Do NOT invent a new Step 13 context key; reuse `manual_review_lines` (already listed for Step 13 and rendered in the PR body's "Manual Review Required" section). This keeps the change path flag-and-continue while still making the breakage visible.
+5. Reuse the `checkup_gates` allowlist (`_script_is_acceptable`); never dispatch `npm run`/`build` scripts (fork-PR-RCE constraint). Docs-only diffs skip the build/smoke layer. Wrap the call so a gate exception is log-and-continue in default mode and fail-closed in strict mode; never raise into the orchestrator loop.
+6. Semantic / incomplete-coverage findings remain out of scope for the gate and stay with the cross-model `checkup --pr` review.
+
 % Git Worktree Isolation
 
 Before Step 9, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
@@ -475,6 +491,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`, `extract_step_report`, `post_step_comment_once`, `normalize_step_comments_state`
 Import from `pdd.preprocess`: `preprocess`
 Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
+Import from `pdd.pre_checkup_gate`: `run_pre_checkup_gate` (Step 12.5 build/smoke gate; see "Step 12.5 — Pre-PR Build/Smoke Gate")
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
@@ -483,6 +500,7 @@ Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Tim
 <pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
 <pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 <pdd.architecture_sync><include select="def:_merge_interface_signatures,def:register_untracked_prompts">pdd/architecture_sync.py</include></pdd.architecture_sync>
+<pdd.pre_checkup_gate><include mode="interface">pdd/pre_checkup_gate.py</include></pdd.pre_checkup_gate>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`
