@@ -86,7 +86,12 @@ Fixes #{issue_number}
 
 % Issue Comment Format
 
-Post a comment on the issue using:
+Source issue present: `{has_issue}`. When this value is `false` (PR-only
+review with no linked issue, #1292), do NOT post any GitHub comment in this
+step — the orchestrator owns the single PR report; skip the `gh issue comment`
+instruction below. (Step 8 is normally skipped entirely in PR mode; this guard
+is a safety net.) When it is `true` (or in issue mode), post a comment on the
+issue using:
 ```
 gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```

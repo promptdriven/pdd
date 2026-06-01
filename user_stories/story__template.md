@@ -1,19 +1,52 @@
-# User Story: <short title>
+<!-- pdd-story-prompts: prompts/<module>_<language>.prompt -->
 
-<!-- pdd-story-prompts: prompt_a_python.prompt, prompt_b_python.prompt -->
+# User Story: <name>
+
+## Covers
+
+- R1: <contract rule name>
+- R2: <contract rule name>
 
 ## Story
-As a <role>, I want <capability> so that <benefit>.
+
+As a <persona>,
+I want <behavior>,
+so that <value>.
 
 ## Context
-Describe any relevant context, constraints, or assumptions.
+
+Describe relevant state, assumptions, fixtures, users, records, external services, or dependencies.
 
 ## Acceptance Criteria
-1. Given <precondition>, when <action>, then <expected outcome>.
-2. Given <precondition>, when <action>, then <expected outcome>.
+
+1. Given ..., when ..., then ...
+2. Given ..., when ..., then ...
+
+## Oracle
+
+These details matter for pass/fail:
+- error type
+- state transition
+- absence/presence of external call
+- emitted event
+- returned value shape
+
+## Non-Oracle
+
+These details should not matter:
+- private helper names
+- internal class structure
+- exact wording of non-user-facing messages
+- deterministic but irrelevant ordering
+
+## Negative Cases
+
+List forbidden outcomes this story protects against.
 
 ## Non-Goals
-1. What this story explicitly does not cover.
+
+What this story explicitly does not cover.
 
 ## Notes
-- Links, edge cases, or implementation hints that help interpret intent.
+
+Links, edge cases, fixtures, rationale, or implementation hints.
