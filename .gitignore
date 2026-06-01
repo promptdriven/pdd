@@ -263,6 +263,7 @@ yarn.lock
 !.pdd/meta/preprocess_python.json
 !.pdd/meta/summarize_directory_python.json
 !.pdd/meta/sync_determine_operation_python.json
+!.pdd/meta/sync_tui_python.json
 .pdd/meta/*_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
 # `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal
@@ -280,6 +281,7 @@ demos/3blue1brown/models/
 
 # Generated video outputs
 demos/3blue1brown/outputs/
+.pdd/release-videos/
 *.mp4
 
 # Infisical config (contains workspace/environment references)
