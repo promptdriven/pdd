@@ -1509,10 +1509,10 @@ def test_exit_summary_quick_start_printed(tmp_path, monkeypatch):
 
 # Issue #813 P2 review: a fresh user with an OAuth-backed CLI but no API
 # key would get the standard "pdd generate success_python.prompt" quick-
-# start, which routes through litellm and fails because OAuth covers the
-# agentic CLI subprocess but not direct LLM calls. The exit summary now
-# tailors the quick-start to point those users at `pdd setup` (to add an
-# API key) or the agentic CLI directly, not at the doomed command.
+# start, which routes through llm_invoke and can fail when the only stored
+# credential is a non-Codex agentic CLI login. The exit summary now tailors
+# the quick-start to point those users at agentic commands plus either
+# `codex login` or an API key for direct/local llm_invoke commands.
 
 def test_exit_summary_oauth_only_omits_pdd_generate(tmp_path, monkeypatch):
     """OAuth-only setup must NOT advertise `pdd generate success_python.prompt`."""
@@ -1565,22 +1565,12 @@ def test_exit_summary_oauth_only_advertises_agentic_commands(tmp_path, monkeypat
     assert "pdd generate <prompt-file>" in output
     # The over-correction text MUST be gone.
     assert "invoke it standalone" not in output
-    # Direct prompt commands' API-key requirement must still be explained, so
-    # the user knows why they would re-run pdd setup to add an API key.
-    assert "litellm" in output or "API key" in output
-    # Issue #813 round-11 P2: `pdd sync <issue-url>` MUST NOT be advertised
-    # as an OAuth-friendly agentic command. maintenance.py:194 dispatches
-    # sync with `agentic=False` by default, and sync's generate step calls
-    # code_generator_main → llm_invoke (sync_orchestration.py:2202 →
-    # code_generator.py:93), so sync's path requires an API key even with
-    # an issue URL. Reviewer caught this in round 11 — the prior round-10
-    # quick-start steered OAuth-only users into a command that may fail
-    # for lack of API keys.
-    assert "pdd sync <issue-url>" not in output, (
-        "pdd sync <issue-url> still requires an API key for its generate "
-        "step (litellm path), so it must NOT appear in the OAuth-only "
-        "agentic-commands family.\nOutput:\n" + output
-    )
+    # Direct/local llm_invoke commands need a Codex subscription login or an
+    # API-key-backed model; pdd sync issue mode belongs to that family.
+    assert "API key" in output
+    assert "codex login" in output
+    assert "Direct/local llm_invoke commands" in output
+    assert "pdd sync     <issue-url>" in output
     # `pdd crash` MUST NOT be advertised as an issue-mode command — its
     # actual CLI signature requires PROMPT_FILE CODE_FILE PROGRAM_FILE
     # ERROR_FILE (not an issue URL), so a copy-paste of the quick-start
@@ -1606,11 +1596,12 @@ def test_exit_summary_oauth_only_summary_file_matches_terminal(tmp_path, monkeyp
     assert "pdd generate success_python.prompt" not in summary
     assert "pdd generate <issue-url>" in summary
     assert "pdd generate <prompt-file>" in summary
-    assert "pdd sync <issue-url>" not in summary
+    assert "pdd sync     <issue-url>" in summary
     cli_block = summary[summary.find("CLIs Configured:"):summary.find("API Keys Configured:")]
     assert "OAuth/subscription/config credential configured" in cli_block
     assert "no API key" not in cli_block
-    # The summary file mentions both fallback paths so the user has options.
+    # The summary file mentions both direct-route credential paths.
+    assert "codex login" in summary
     assert "pdd setup" in summary
     assert "claude" in summary or "codex" in summary or "gemini" in summary
 
