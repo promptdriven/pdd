@@ -240,6 +240,100 @@ def test_core_dump_auto_includes_operation_log_and_run_report(tmp_path, monkeypa
     assert sync_steps[0].get("source_log")
 
 
+def test_core_dump_auto_includes_user_llm_model_csv_with_precedence(tmp_path, monkeypatch):
+    """Core dump should include the active user llm_model.csv when it exists."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    fake_home = tmp_path / "home"
+    user_pdd_dir = fake_home / ".pdd"
+    user_pdd_dir.mkdir(parents=True)
+    user_csv = user_pdd_dir / "llm_model.csv"
+    user_csv.write_text(
+        "provider,model,input,output,coding_arena_elo,api_key\n"
+        "UserProvider,user-model,1,2,3,USER_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    env_project = tmp_path / "env_project"
+    env_project_pdd = env_project / ".pdd"
+    env_project_pdd.mkdir(parents=True)
+    (env_project_pdd / "llm_model.csv").write_text("env csv should not win", encoding="utf-8")
+
+    cwd_project = tmp_path / "cwd_project"
+    cwd_project_pdd = cwd_project / ".pdd"
+    cwd_project_pdd.mkdir(parents=True)
+    (cwd_project_pdd / "llm_model.csv").write_text("cwd csv should not win", encoding="utf-8")
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(cwd_project)
+    monkeypatch.setenv("PDD_PATH", str(env_project))
+    with patch("pdd.core.dump.Path.home", return_value=fake_home):
+        _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["generate"], 0.0)
+
+    core_dumps = list((cwd_project / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text(encoding="utf-8"))
+    file_contents = core_dump_data.get("file_contents", {})
+
+    assert str(user_csv) in file_contents
+    assert "UserProvider,user-model" in file_contents[str(user_csv)]
+    assert not any("env csv should not win" in content for content in file_contents.values())
+    assert not any("cwd csv should not win" in content for content in file_contents.values())
+
+
+def test_core_dump_auto_includes_packaged_llm_model_csv_fallback(tmp_path, monkeypatch):
+    """Core dump should include packaged llm_model.csv when no override exists."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_PATH", raising=False)
+    with patch("pdd.core.dump.Path.home", return_value=fake_home):
+        _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["generate"], 0.0)
+
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text(encoding="utf-8"))
+    file_contents = core_dump_data.get("file_contents", {})
+
+    csv_keys = [key for key in file_contents if key.endswith("pdd/data/llm_model.csv")]
+    assert csv_keys, f"Packaged llm_model.csv missing from file_contents: {list(file_contents.keys())}"
+    assert "provider,model,input,output" in file_contents[csv_keys[0]]
+
+
 def test_core_dump_steps_model_default_unknown(tmp_path, monkeypatch):
     """If results omit model or results are missing, core dump should store model='unknown'."""
     import json
