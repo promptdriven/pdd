@@ -3373,6 +3373,38 @@ def test_drain_issue_steers_env_idempotent(mock_cwd):
         os.environ.pop("PDD_STEER_JSON", None)
 
 
+def test_drain_step_steers_noop_without_issue(mock_cwd):
+    """Orchestrator helper is a no-op when issue_number is missing."""
+    from pdd.agentic_common import drain_step_steers
+
+    state: dict = {}
+    assert drain_step_steers("owner", "repo", 0, state, cwd=mock_cwd) == []
+    assert state == {}
+
+
+def test_drain_step_steers_noop_without_repo(mock_cwd):
+    from pdd.agentic_common import drain_step_steers
+
+    state: dict = {}
+    assert drain_step_steers("", "repo", 55, state, cwd=mock_cwd) == []
+    assert drain_step_steers("owner", "", 55, state, cwd=mock_cwd) == []
+
+
+def test_drain_step_steers_delegates_to_issue_drain(mock_cwd):
+    from pdd.agentic_common import drain_step_steers
+
+    steer_data = [{"comment_id": "201", "author": "dana", "body": "Ship it"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state: dict = {}
+        steers = drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert steers[0].author == "dana"
+        assert state["last_steered_comment_id"] == "201"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
 def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shutil_which):
     """Test fetching steers from GitHub comments."""
     from pdd.agentic_common import drain_issue_steers

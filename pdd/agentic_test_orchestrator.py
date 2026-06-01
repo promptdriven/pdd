@@ -27,6 +27,7 @@ from .agentic_common import (
     extract_step_report,
     normalize_step_comments_state,
     post_step_comment_once,
+    drain_step_steers,
 )
 from .pytest_output import _find_project_root
 from .load_prompt_template import load_prompt_template
@@ -506,6 +507,33 @@ def run_agentic_test_orchestrator(
 
     current_work_dir = cwd
 
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            save_result = save_workflow_state(
+                cwd,
+                issue_number,
+                "test",
+                state,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        return step_steers
+
     def run_step(
         step_num: Union[int, float],
         template_name: str,
@@ -547,6 +575,7 @@ def run_agentic_test_orchestrator(
             label=f"step{step_num}",
             max_retries=DEFAULT_MAX_RETRIES,
             use_playwright=use_playwright,
+            steers=_issue_step_steers() or None,
         )
         return step_success, step_output, step_cost, step_model
 

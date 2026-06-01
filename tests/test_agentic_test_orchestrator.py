@@ -81,6 +81,34 @@ def default_args(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Mid-run steering (54.2)
+# ---------------------------------------------------------------------------
+
+def test_mid_run_steers_passed_to_run_agentic_task(mock_deps, default_args):
+    """Drained steers are forwarded to run_agentic_task; empty drain passes None."""
+    from pdd.agentic_common import SteerEntry
+
+    steer = SteerEntry(comment_id="99", author="alice", body="Prefer pytest markers")
+    with patch("pdd.agentic_test_orchestrator.drain_step_steers") as mock_drain:
+        mock_drain.side_effect = [[steer], []]
+        mocks = mock_deps
+
+        mocks["run"].side_effect = [
+            (True, "duplicate of #42", 0.1, "anthropic"),
+        ]
+
+        success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is False
+        assert "duplicate" in msg.lower()
+        calls = mocks["run"].call_args_list
+        assert len(calls) == 1
+        assert calls[0].kwargs["steers"] == [steer]
+        assert mock_drain.call_count == 1
+        assert mocks["save"].call_count >= 1
+
+
+# ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
 

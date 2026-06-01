@@ -4556,6 +4556,31 @@ def drain_issue_steers(
     return []
 
 
+def drain_step_steers(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> List[SteerEntry]:
+    """Drain pending issue comments for the next orchestrator agentic step.
+
+    No-op when *issue_number* or repo coordinates are missing (e.g. split flows).
+    """
+    if not repo_owner or not repo_name or not issue_number:
+        return []
+    steers = drain_issue_steers(repo_owner, repo_name, issue_number, state, cwd=cwd)
+    if steers and not quiet:
+        preview = ", ".join(f"@{entry.author}" for entry in steers[:3])
+        suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+        console.print(
+            f"[cyan]Incorporating mid-run feedback from {preview}{suffix}[/cyan]"
+        )
+    return steers
+
+
 def load_workflow_state(
     cwd: Path,
     issue_number: int,

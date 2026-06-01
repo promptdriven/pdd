@@ -25,6 +25,7 @@ from .agentic_common import (
     _extract_step_report,
     _sanitize_comment_body,
     DEFAULT_MAX_RETRIES,
+    drain_step_steers,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -2101,6 +2102,33 @@ def run_agentic_bug_orchestrator(
     if isinstance(cached_step10, str) and _parse_e2e_needed_marker(cached_step10) == "no":
         skip_e2e = True
 
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            save_result = save_workflow_state(
+                cwd,
+                issue_number,
+                "bug",
+                state,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        return step_steers
+
     # Worktree restoration for resume
     if start_step >= 5 and start_step <= 12:
         if worktree_path and worktree_path.exists():
@@ -2325,6 +2353,7 @@ def run_agentic_bug_orchestrator(
             label=step_label,
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
 
         total_cost += step_cost
@@ -2558,6 +2587,7 @@ def run_agentic_bug_orchestrator(
                         label="step6",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     total_cost += retry_cost
                     model_used = retry_model
@@ -2878,6 +2908,7 @@ def run_agentic_bug_orchestrator(
                     label="step9",
                     max_retries=DEFAULT_MAX_RETRIES,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
                 total_cost += retry_cost
                 model_used = retry_model
@@ -2966,6 +2997,7 @@ def run_agentic_bug_orchestrator(
                         label="step9",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     total_cost += cv_cost
                     model_used = cv_model
@@ -3032,6 +3064,7 @@ def run_agentic_bug_orchestrator(
                         label="step9",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     total_cost += cov_cost
                     model_used = cov_model
