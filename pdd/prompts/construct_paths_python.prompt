@@ -39,7 +39,8 @@
    - Pass 'outputs' config through for template-based path generation.
    - `_resolve_config_hierarchy(cli_options, context_config, env_vars)` resolves keys:
      generate_output_path, test_output_path, example_output_path, prompts_dir,
-     default_language, target_coverage, strength, temperature, budget, max_attempts.
+     default_language, target_coverage, strength, temperature, budget, max_attempts,
+     auto_deps_csv_path.
      Also passes through 'outputs' dict from context_config if present.
    - Track matched context in resolved_config['_matched_context'] for debugging.
    - Validate `.pddrc` keys at load time (issue #1198): emit a UserWarning for any
@@ -49,7 +50,7 @@
      Known keys by level — Root: `version`, `contexts`. Context: `paths`, `defaults`.
      Defaults: `generate_output_path`, `test_output_path`, `example_output_path`, `prompts_dir`,
      `default_language`, `target_coverage`, `strength`, `temperature`, `budget`,
-     `max_attempts`, `outputs`.
+     `max_attempts`, `outputs`, `auto_deps_csv_path`.
 2. Context Detection and Pattern Matching:
    - `_match_path_to_contexts(path_str, contexts, use_specificity, is_absolute)`:
      Core matching logic. Skips 'default' context. For absolute paths uses "*/" prefix matching.

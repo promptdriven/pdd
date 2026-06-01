@@ -2551,7 +2551,7 @@ def sync_orchestration(
                                     ctx,
                                     prompt_file=str(pdd_files['prompt']),
                                     directory_path=examples_dir,
-                                    auto_deps_csv_path=(context_config or {}).get('auto_deps_csv_path') or "project_dependencies.csv",
+                                    auto_deps_csv_path=(context_config or {}).get('auto_deps_csv_path'),
                                     output=str(temp_output),
                                     force_scan=False,
                                     progress_callback=progress_callback_ref[0],

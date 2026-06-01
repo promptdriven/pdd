@@ -864,6 +864,62 @@ def test_load_pddrc_accepts_auto_deps_csv_path(tmp_path):
         _load_pddrc_config(pddrc)  # must not raise
 
 
+def test_construct_paths_auto_deps_resolves_explicit_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": "explicit.csv"},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "explicit.csv")
+
+
+def test_construct_paths_auto_deps_resolves_pddrc_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        '      auto_deps_csv_path: "configured/deps.csv"\n'
+    )
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": None},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "configured" / "deps.csv")
+
+
+def test_construct_paths_auto_deps_resolves_env_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_AUTO_DEPS_CSV_PATH", "env/deps.csv")
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": None},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "env" / "deps.csv")
+
+
 def test_load_pddrc_warns_on_prompt_path(tmp_path):
     """Issue #1198 + PR #1217 review feedback: prompt_path was documented in
     construct_paths_python.prompt as an alias for prompts_dir, but

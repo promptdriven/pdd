@@ -3723,6 +3723,45 @@ def test_auto_deps_passes_directory_not_glob_pattern(orchestration_fixture):
     )
 
 
+def test_auto_deps_forwards_configured_csv_path(orchestration_fixture):
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+    mock_auto_deps.return_value = ("resolved_content", 0.01, "mock-model")
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=1.0,
+        context_config={"auto_deps_csv_path": "configured/deps.csv"},
+    )
+
+    assert mock_auto_deps.call_args.kwargs["auto_deps_csv_path"] == "configured/deps.csv"
+
+
+def test_auto_deps_does_not_force_default_csv_path(orchestration_fixture):
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+    mock_auto_deps.return_value = ("resolved_content", 0.01, "mock-model")
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=1.0,
+    )
+
+    assert mock_auto_deps.call_args.kwargs["auto_deps_csv_path"] is None
+
+
 # =============================================================================
 # Test for merge behavior when test file exists
 # =============================================================================
