@@ -251,3 +251,54 @@ def test_rich_printed_ansi_preserves_existing_rich_styles(redirector, captured_t
         and getattr(span.style.color, "number", None) == 8
         for span in text.spans
     )
+
+
+def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
+    """OSC hyperlinks and CSI color should not leak or drop existing Rich styles."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+    osc_link = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"
+
+    console.print("[bold]prefix[/bold] " + osc_link + " \x1b[90mhello\x1b[0m")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix link hello"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+    assert any(
+        span.start <= len("prefix ") and span.end >= len("prefix link")
+        and span.style.link == "https://example.com"
+        for span in text.spans
+    )
+    assert any(
+        span.start <= len("prefix link ") and span.end >= len("prefix link hello")
+        and getattr(span.style.color, "number", None) == 8
+        for span in text.spans
+    )
+
+
+def test_rich_printed_non_csi_escape_preserves_styles(redirector, captured_texts):
+    """Non-CSI escape controls should be stripped without dropping Rich styles."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[bold]prefix[/bold] \x1b(Btail")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix tail"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
