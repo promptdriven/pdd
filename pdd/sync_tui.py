@@ -19,6 +19,7 @@ from rich.align import Align
 from rich.text import Text
 import time
 import re
+from rich.ansi import re_ansi as RICH_ANSI_RE
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
@@ -29,7 +30,6 @@ from rich.style import Style
 
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
-ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _debug_swallow(context: str, exc: Exception) -> None:
@@ -70,11 +70,122 @@ def _is_headless_environment() -> bool:
 
 def _text_from_ansi_output(text: str) -> Text:
     """Parse ANSI text, including ANSI that Rich highlighted before capture."""
+    text = _restore_rich_highlighted_ansi(text)
     rendered = Text.from_ansi(text)
-    if "\x1b[" in rendered.plain:
+    if RICH_ANSI_RE.search(rendered.plain):
         reparsed = Text.from_ansi(rendered.plain)
         return _merge_reparsed_ansi_spans(rendered, reparsed)
     return rendered
+
+
+def _restore_rich_highlighted_ansi(text: str) -> str:
+    """Repair ANSI escape sequences split by Rich's syntax highlighter."""
+    if "\x1b\x1b[" not in text:
+        return text
+
+    restored_parts: List[str] = []
+    index = 0
+    while index < len(text):
+        restored = _try_restore_highlighted_escape(text, index)
+        if restored is not None:
+            sequence, index = restored
+            restored_parts.append(sequence)
+            continue
+
+        restored_parts.append(text[index])
+        index += 1
+
+    return "".join(restored_parts)
+
+
+def _try_restore_highlighted_escape(
+    text: str, start: int
+) -> Optional[tuple[str, int]]:
+    """Restore one highlighted ANSI escape sequence starting at ``start``."""
+    if start >= len(text) or text[start] != "\x1b":
+        return None
+
+    index = _skip_sgr_sequences(text, start + 1)
+    if index == start + 1 or index >= len(text):
+        return None
+
+    marker = text[index]
+    if marker == "[":
+        return _restore_highlighted_csi(text, index + 1)
+    if marker == "]":
+        return _restore_highlighted_osc(text, index + 1)
+    if marker in "(@-Z\\-_":
+        return _restore_highlighted_single_escape(text, marker, index + 1)
+    return None
+
+
+def _restore_highlighted_csi(text: str, start: int) -> Optional[tuple[str, int]]:
+    """Restore a highlighted CSI sequence body."""
+    index = start
+    body: List[str] = []
+    while index < len(text):
+        skipped = _skip_sgr_sequences(text, index)
+        if skipped != index:
+            index = skipped
+            continue
+
+        char = text[index]
+        body.append(char)
+        index += 1
+        if "@" <= char <= "~":
+            return "\x1b[" + "".join(body), index
+    return None
+
+
+def _restore_highlighted_osc(text: str, start: int) -> Optional[tuple[str, int]]:
+    """Restore a highlighted OSC sequence body."""
+    index = start
+    body: List[str] = []
+    while index < len(text):
+        skipped = _skip_sgr_sequences(text, index)
+        if skipped != index:
+            index = skipped
+            continue
+        if text.startswith("\x1b\\", index):
+            return "\x1b]" + "".join(body) + "\x1b\\", index + 2
+
+        body.append(text[index])
+        index += 1
+    return None
+
+
+def _restore_highlighted_single_escape(
+    text: str, marker: str, start: int
+) -> tuple[str, int]:
+    """Restore a highlighted non-CSI/non-OSC escape sequence."""
+    index = _skip_sgr_sequences(text, start)
+    if marker == "(" and index < len(text):
+        return "\x1b" + marker + text[index], index + 1
+    return "\x1b" + marker, index
+
+
+def _skip_sgr_sequences(text: str, start: int) -> int:
+    """Skip Rich highlighter SGR sequences at ``start``."""
+    index = start
+    while True:
+        next_index = _consume_sgr_sequence(text, index)
+        if next_index is None:
+            return index
+        index = next_index
+
+
+def _consume_sgr_sequence(text: str, start: int) -> Optional[int]:
+    """Return the index after a CSI SGR sequence, if present."""
+    if not text.startswith("\x1b[", start):
+        return None
+
+    index = start + 2
+    while index < len(text):
+        char = text[index]
+        index += 1
+        if "@" <= char <= "~":
+            return index if char == "m" else None
+    return None
 
 
 def _merge_reparsed_ansi_spans(original: Text, reparsed: Text) -> Text:
@@ -83,12 +194,18 @@ def _merge_reparsed_ansi_spans(original: Text, reparsed: Text) -> Text:
     position_map: List[Optional[int]] = [None] * len(plain_text)
     clean_chars: List[str] = []
     index = 0
-    for match in ANSI_CSI_RE.finditer(plain_text):
+    for match in RICH_ANSI_RE.finditer(plain_text):
+        start, end = match.span()
+        if start < index:
+            continue
+        _osc, sgr = match.groups()
+        if sgr == "(" and end < len(plain_text):
+            end += 1
         while index < match.start():
             position_map[index] = len(clean_chars)
             clean_chars.append(plain_text[index])
             index += 1
-        index = match.end()
+        index = end
     while index < len(plain_text):
         position_map[index] = len(clean_chars)
         clean_chars.append(plain_text[index])
