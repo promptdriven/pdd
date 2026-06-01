@@ -1,0 +1,7 @@
+# Sample gate policy for waiver enforcement demos (issue #832).
+# Merge the `gate:` block into your project `.pddrc` or pass via --policy-file.
+gate:
+  allow_waivers: true
+  forbid_waivers: false
+  require_expiration: true
+  enforce_expiration: true
