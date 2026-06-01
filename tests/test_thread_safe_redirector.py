@@ -278,6 +278,56 @@ def test_rich_printed_ansi_reset_preserves_outer_suffix_style(
     )
 
 
+def test_rich_highlighter_style_not_replayed_for_256_color_csi(
+    redirector,
+    captured_texts,
+):
+    """Rich highlighter SGR should not become part of restored CSI style."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("\x1b[38;5;196mRED\x1b[0m after")
+
+    text = captured_texts[0]
+    assert text.plain == "RED after"
+    assert any(
+        span.start <= 0 and span.end >= len("RED")
+        and getattr(span.style.color, "number", None) == 196
+        for span in text.spans
+    )
+    assert not any(span.style.bold for span in text.spans)
+
+
+def test_rich_highlighter_style_not_replayed_after_osc_title(
+    redirector,
+    captured_texts,
+):
+    """Restoring highlighted OSC should not style following visible text."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;title\x1b\\post after")
+
+    text = captured_texts[0]
+    assert text.plain == "prepost after"
+    assert not any(
+        span.start < len("prepost after")
+        and span.end > len("pre")
+        and (span.style.bold or span.style.underline)
+        for span in text.spans
+    )
+
+
 def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
     """OSC hyperlinks and CSI color should not leak or drop existing Rich styles."""
     console = Console(
@@ -312,6 +362,30 @@ def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
 def test_direct_bel_terminated_osc_does_not_leak_payload(redirector, captured_lines):
     """BEL-terminated OSC sequences should be stripped from direct output."""
     redirector.write("pre\x1b]0;mytitle\x07post\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1bP1;payload\x1b\\post",
+        "pre\x1bXpayload\x1b\\post",
+        "pre\x1b^payload\x1b\\post",
+        "pre\x1b_payload\x1b\\post",
+        "pre\x90payload\x9cpost",
+    ],
+    ids=[
+        "esc-dcs",
+        "esc-sos",
+        "esc-pm",
+        "esc-apc",
+        "c1-dcs",
+    ],
+)
+def test_string_control_payloads_do_not_leak(sequence, redirector, captured_lines):
+    """DCS/SOS/PM/APC and C1 string-control payloads should be stripped."""
+    redirector.write(sequence + "\n")
 
     assert captured_lines == ["prepost"]
 
