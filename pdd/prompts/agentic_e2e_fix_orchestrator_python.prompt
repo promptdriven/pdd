@@ -19,6 +19,7 @@
 <pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
 <pdd-dependency>ci_validation_python.prompt</pdd-dependency>
+<pdd-dependency>pr_metadata_finalize_python.prompt</pdd-dependency>
 
 <pdd.agentic_e2e_fix_orchestrator>
 <include select="def:_check_e2e_environment,def:_verify_tests_independently,def:_extract_test_files,def:_get_modified_and_untracked,def:_detect_meaningful_changes,def:_is_noise_path,def:push_with_retry,def:_fetch_pr_head_sha,def:_read_checkup_worktree_head_sha,def:_run_final_checkup_on_pr,def:_run_step11_code_cleanup,def:_classify_verification_failure,def:_is_intermediate_file,def:_commit_and_push,def:_revert_out_of_scope_changes,def:_check_staleness,def:_reevaluate_step3_not_a_bug_on_resume,def:_resolve_cached_step9_output,def:_resolve_step9_loop_token,def:_apply_step9_resolved_token,pattern:/VERIFY_TIMEOUT_SECONDS/,pattern:/_fallback_scan_was_capped/,pattern:/MAX_FALLBACK_TEST_FILES/,pattern:/E2E_FIX_STEP_TIMEOUTS/,pattern:/NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME/,pattern:/NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE/">context/agentic_e2e_fix_orchestrator_example.py</include>
@@ -153,6 +154,30 @@ After a successful inner loop, `_commit_and_push` stages only files whose hashes
 `push_with_retry` MUST:
 - Accept `force_with_lease_on_non_fast_forward: bool = True`. When true, retry non-fast-forward rejections (markers `"non-fast-forward"`, `"tip of your current branch is behind"`) with `--force-with-lease`. When false, return the non-fast-forward error to the caller so shared-branch workflows can fetch/rebase/retry instead. Other `[rejected]` reasons (protected branches, hooks) MUST NOT force-push.
 - On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), first read a non-empty `PDD_GH_TOKEN_FILE`; if no token file token is available, fall back to `GH_TOKEN`, `GITHUB_TOKEN`, then `PDD_GITHUB_TOKEN`. Rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
+
+% PR-Boundary Metadata Finalization (Issue #1317)
+
+`_commit_and_push` is this workflow's PR boundary — it is where prompt/code changes from the fix become a pushed commit. Before it commits, it MUST deterministically finalize and scope-stage the `.pdd/meta/<module>_<lang>.json` fingerprints for every PDD-owned file the fix changed, so a pushed fix can never carry an updated prompt/code file without its matching fresh fingerprint. This replaces relying on the hash-diff staging to incidentally pick up fingerprints (which it cannot, because the `_is_intermediate_file` filter drops `.pdd/**`).
+
+1. **Import**: `from pdd.pr_metadata_finalize import finalize_pr_metadata, PrMetadataFinalizeResult`.
+
+2. **Call site (inside `_commit_and_push`)**: after the hash-diff changed-file set is computed (the files about to be committed) and BEFORE the `git commit`, call:
+   ```python
+   finalize_result = finalize_pr_metadata(
+       worktree=cwd,
+       changed_files=staged_changed_files,   # the hash-diff fix files about to be committed
+       quiet=quiet,
+   )
+   ```
+   `finalize_pr_metadata` filters to PDD-owned prompt/code/example/test files, resolves each to its owning module, finalizes metadata via the deterministic `run_metadata_sync` + `save_fingerprint` primitives, and scope-stages ONLY the exact expected fingerprint paths with `git add -f -- <exact-path>` (`cwd=cwd`). The `-f` is required because `.pdd/meta` is gitignored. It NEVER runs `git add -A`, never stages transient `.pdd` state, never pushes.
+
+3. **Fingerprints must survive the intermediate-file filter**: the expected fingerprint paths returned in `finalize_result.staged_paths` are an EXPLICIT allowlist that overrides the `_is_intermediate_file` `.pdd/**`-except-`e2e-fix-state/` exclusion. `_is_intermediate_file` MUST treat any path in `finalize_result.staged_paths` as NON-intermediate so the deterministic fingerprints land in the same fix commit as the prompt/code changes rather than being filtered back out. Do NOT widen the `.pdd/**` exclusion generally — only the exact finalizer-returned fingerprint paths are whitelisted; transient run-report / worktree-state `.pdd` paths stay filtered.
+
+4. **Fail loud on missing metadata**: when `finalize_result.ok is False` (`finalize_result.missing_modules` non-empty — a touched module whose fingerprint is missing-on-disk or missing-from-staged), `_commit_and_push` MUST fail the push/workflow rather than committing half-synced metadata. Surface `finalize_result.missing_modules` / `finalize_result.reason` in the failure message and return failure up to the orchestrator (which posts via `post_final_comment` and saves state). Re-raise only `KeyboardInterrupt` / `SystemExit`; any other unexpected finalizer exception is treated the same fail-loud way.
+
+5. **No detected modules is success**: a fix that changed no fingerprinted PDD module (e.g. a direct edit to a non-PDD-managed file) yields an empty `ok=True` result without invoking git — `_commit_and_push` proceeds with its normal hash-diff commit.
+
+6. **Idempotency**: the finalizer is content-hash idempotent and re-staging an already-staged path is a no-op, so a retried `_commit_and_push` (e.g. push retry) re-runs `finalize_pr_metadata` safely.
 
 % Step 11: Code Cleanup
 `_run_step11_code_cleanup` runs only if files changed, builds the cleanup prompt with `git diff <initial_sha>` plus current contents of changed files, runs the cleanup agent, then:

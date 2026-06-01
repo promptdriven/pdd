@@ -2,6 +2,7 @@
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_gates_python.prompt</pdd-dependency>
+<pdd-dependency>pr_metadata_finalize_python.prompt</pdd-dependency>
 
 1) This module acts as the multi-step agentic orchestrator for the `pdd checkup` command, responsible for managing an 8-step workflow that analyzes, fixes, and verifies software issues. It coordinates between LLM-based agents, local environment execution, and git state management, ensuring that changes are isolated in worktrees and that the workflow can be resumed gracefully after interruptions.
 
@@ -56,6 +57,12 @@
         - **Posting protocol** inside `_handle_step_result`: when `description` is provided AND the step succeeded, compute `report_body = extract_step_report(step_output)`; if `None`, use a short fallback body saying the step completed and raw output is retained in workflow state. Build `f"## Step {step_num}/8: {description}\n\n{report_body}"` and call `post_step_comment_once(...)` with the composite key. Any exception MUST be log-and-continue (never raise into the orchestrator loop).
         - **PR-mode**: in PR-verification mode the trusted helper still posts to the GitHub *issue* thread (`post_step_comment_once` calls `gh issue comment`). It does NOT replace the Step 7 PR-thread comment routing (`gh pr comment`).
         - **Relationship to legacy `post_step_comment`**: hard-stop / failure comments continue to flow through the legacy helper unchanged. `post_step_comment_once` is strictly additive — it covers the success-comment case that previously had no first-party posting path.
+    10. **PR-Boundary Metadata Finalization (Issue #1317)**: in PR fix mode (`no_fix=False`), `_commit_and_push_if_changed` is this workflow's PR boundary. Before it commits/pushes the fixer's generated changes back to the PR head branch, it MUST deterministically finalize and scope-stage the `.pdd/meta/<module>_<lang>.json` fingerprints for every PDD-owned file the fix changed, so a pushed checkup fix can never carry an updated prompt/code file without its matching fresh fingerprint.
+        - **Import**: `from pdd.pr_metadata_finalize import finalize_pr_metadata, PrMetadataFinalizeResult`.
+        - **Call site**: after all scope/causal/size/clean-run guards have PASSED and the eligible changed-file set is determined, but BEFORE the actual `git commit`/push, call `finalize_pr_metadata(worktree=worktree_path, changed_files=<eligible changed files>, quiet=quiet)`. It filters to PDD-owned prompt/code/example/test files, resolves each to its owning module, finalizes metadata via the deterministic `run_metadata_sync` + `save_fingerprint` primitives, and scope-stages ONLY the exact expected fingerprint paths with `git add -f -- <exact-path>` (`cwd=worktree`). The `-f` is required because `.pdd/meta` is gitignored. It NEVER runs `git add -A`, never stages transient `.pdd` state, never pushes.
+        - **Fingerprints are exempt from the scope/size guards**: the expected fingerprint paths returned in `finalize_result.staged_paths` are an EXPLICIT allowlist. The scope guard (Bug 2), clean-run side-effect refusal (Bug 5b/round-3), and pre-push diff-size sanity gate MUST treat any path in `finalize_result.staged_paths` as in-scope / exempt — they are deterministic, PDD-owned, and derived from the already-approved changed files, NOT unscoped fixer edits. Do NOT widen the guards generally; only the exact finalizer-returned fingerprint paths are exempted. Run the finalizer AFTER the guards so guard refusals (which abort before push) never produce orphaned fingerprints.
+        - **Fail loud on missing metadata**: when `finalize_result.ok is False` (`finalize_result.missing_modules` non-empty), `_commit_and_push_if_changed` MUST fail the push rather than committing half-synced metadata. Surface `finalize_result.missing_modules` / `finalize_result.reason`, write `.pdd/checkup-pr-{N}/metadata-finalize-refusal.txt`, post the canonical Step 7 report via `_post_pr_mode_final_report`, and return `(False, …)`. Re-raise only `KeyboardInterrupt` / `SystemExit`; any other unexpected finalizer exception is treated the same fail-loud way.
+        - **No detected modules is success**: a checkup fix that changed no fingerprinted PDD module yields an empty `ok=True` result without invoking git — proceed with the normal commit/push. The `--no-fix` mode never pushes, so the finalizer is not invoked there.
 
 3) Dependencies:
     <agentic_common>
@@ -76,6 +83,9 @@
     <utils.agentic_langtest>
         <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
     </utils.agentic_langtest>
+    <pdd.pr_metadata_finalize>
+        <include select="def:finalize_pr_metadata" mode="interface">pdd/pr_metadata_finalize.py</include>
+    </pdd.pr_metadata_finalize>
 
 4) Instructions:
     1. Use `subprocess` for all git operations (worktree creation, branch management, diffing, and applying changes).

@@ -20,6 +20,8 @@
 }
 </pdd-interface>
 
+<pdd-dependency>pr_metadata_finalize_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -164,6 +166,28 @@ The retry-path parsing contract:
    In all three, sibling evidence IS the classification signal; the original LLM marker is not load-bearing. `CROSS_CUTTING` is left alone (a strictly broader scope must not be narrowed by promotion). Step 8 otherwise receives the contradictory `LOCALIZED` + non-empty `step6_expansion_items` pair.
 6. **Resume safety.** After updating FIX_LOCATIONS and `step6_expansion_items`, append updated `FIX_LOCATIONS: <merged>`, `EXPANSION_ITEMS: <merged>`, one `NEEDS_FIX: <path> | <reason>` line per confirmed sibling, and (when scope was promoted) `SCOPE_CLASSIFICATION: <new>` to `context["step6_output"]`. The resume-side parsers MUST read the LAST `EXPANSION_ITEMS:` / `SCOPE_CLASSIFICATION:` marker so the post-retry values win, and `_apply_step6_scope_markers` must see the appended `NEEDS_FIX:` lines so it does not re-downgrade SIBLING_PATTERN back to LOCALIZED on resume.
 
+% PR-Boundary Metadata Finalization (Issue #1317)
+
+After Step 11 (E2E) completes and the final `changed_files` / `files_to_stage` set is known, but BEFORE Step 12 creates the draft PR, deterministically finalize and scope-stage PDD fingerprints for the changed files so the PR cannot ship a touched module (e.g. a Step 7 `PROMPT_FIXED` prompt) without its matching fresh `.pdd/meta/<module>_<lang>.json` fingerprint. This replaces reliance on Step 12 incidentally staging fingerprints.
+
+1. **Import**: `from pdd.pr_metadata_finalize import finalize_pr_metadata, PrMetadataFinalizeResult`.
+
+2. **Call site**: guarded by `if worktree_path and worktree_path.exists():`, after Step 11 and before Step 12's prompt is formatted/run. Pass the authoritative changed-file set:
+   ```python
+   finalize_result = finalize_pr_metadata(
+       worktree=worktree_path,
+       changed_files=changed_files,   # Step 7 PROMPT_FIXED + Step 9 FILES_* + Step 11 E2E_FILES_*
+       quiet=quiet,
+   )
+   ```
+   `finalize_pr_metadata` filters `changed_files` to PDD-owned prompt/code/example/test files, resolves each to its owning `(basename, language)` module, finalizes metadata via the deterministic `run_metadata_sync` + `save_fingerprint` primitives, and scope-stages ONLY the exact expected fingerprint paths with `git add -f -- <exact-path>` (`cwd=worktree`). It NEVER runs `git add -A`, never stages transient `.pdd` state, never commits or pushes.
+
+3. **Fold fingerprints into the staged set**: append `finalize_result.staged_paths` to `changed_files` and refresh `context["files_to_stage"] = ", ".join(changed_files)` (dedupe), so Step 12's per-file `git add -f -- <path>` staging carries the fingerprints. The `-f` is required because target repos commonly gitignore `.pdd/meta`.
+
+4. **Fail loud on missing metadata**: when `finalize_result.ok is False` (`finalize_result.missing_modules` non-empty), this is a hard PR-boundary failure. Post the failure via the orchestrator's normal failed-step path, save state, and return `(False, f"Investigation failed at PR boundary: metadata finalization incomplete for {finalize_result.missing_modules}", total_cost, model_used, changed_files)`. Do NOT proceed to Step 12 with half-synced metadata.
+
+5. **No detected modules is success**: a test-only PR that touches no fingerprinted PDD module yields an empty `ok=True` result without invoking git — proceed to Step 12 normally. (This is the common case for the bug workflow, which usually adds only failing tests.) Re-raise only `KeyboardInterrupt` / `SystemExit`; any other unexpected finalizer exception is treated as a hard PR-boundary failure under the same fail-loud discipline as step 4.
+
 % Early Exit Conditions (Hard Stops)
 
 The orchestrator must parse step output to detect stop conditions:
@@ -281,9 +305,11 @@ Use `quiet` flag to suppress all output except errors. Use `verbose` flag to sho
 Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`,
 `post_step_comment`, `save_workflow_state`, `load_workflow_state`,
 `clear_workflow_state`.
+Import from `pdd.pr_metadata_finalize`: `finalize_pr_metadata`, `PrMetadataFinalizeResult` (PR-boundary fingerprint finalization, see "PR-Boundary Metadata Finalization" section).
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
+<pdd.pr_metadata_finalize><include select="def:finalize_pr_metadata" mode="interface">pdd/pr_metadata_finalize.py</include></pdd.pr_metadata_finalize>
 
 % Deliverables
 - Code: `pdd/agentic_bug_orchestrator.py`
