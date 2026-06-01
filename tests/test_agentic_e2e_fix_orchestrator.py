@@ -10724,3 +10724,122 @@ class TestFinalCheckupHeadSafetyChecks:
         # Only the pre-checkup SHA is fetched; the post-checkup fetch must
         # not happen because the checkup failed before any push.
         assert sha_mock.call_count == 1
+
+
+
+# ============================================================================
+# Additional targeted tests for public helpers
+# ============================================================================
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+import subprocess
+from unittest.mock import patch
+
+
+class TestPushWithRetryNewSignature:
+    """Test the public push_with_retry function (keyword-only API)."""
+
+    def test_success_first_try(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            success, err = push_with_retry(
+                tmp_path, repo_owner="o", repo_name="r"
+            )
+        assert success is True
+        assert err == ""
+
+    def test_non_ff_disabled_returns_error(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("R", (), {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "! [rejected] HEAD -> main (non-fast-forward)",
+            })()
+            success, err = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                force_with_lease_on_non_fast_forward=False,
+            )
+        assert success is False
+        assert "non-fast-forward" in err
+
+    def test_custom_refspec_passed_through(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+            mock_run.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            success, _ = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                remote="upstream",
+                refspec="feature:refs/heads/feature",
+                set_upstream=False,
+            )
+        assert success is True
+        called_cmd = mock_run.call_args.args[0]
+        assert "upstream" in called_cmd
+        assert "feature:refs/heads/feature" in called_cmd
+        assert "-u" not in called_cmd
+
+
+class TestFetchPrHeadShaHelper:
+    """Test _fetch_pr_head_sha best-effort behavior."""
+
+    def test_returns_empty_on_exception(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            side_effect=RuntimeError("gh failed"),
+        ):
+            assert _fetch_pr_head_sha("o", "r", 1) == ""
+
+    def test_returns_sha_from_metadata(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            return_value={"head_sha": "abc1234"},
+        ):
+            assert _fetch_pr_head_sha("o", "r", 1) == "abc1234"
+
+    def test_returns_empty_when_missing_key(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            return_value={},
+        ):
+            assert _fetch_pr_head_sha("o", "r", 1) == ""
+
+
+class TestReadCheckupWorktreeHeadSha:
+    """Test _read_checkup_worktree_head_sha behavior."""
+
+    def test_returns_empty_when_worktree_missing(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        result = _read_checkup_worktree_head_sha(tmp_path, 99)
+        assert result == ""
+
+    def test_returns_empty_when_not_a_git_repo(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        # No git init — rev-parse --show-toplevel fails
+        result = _read_checkup_worktree_head_sha(tmp_path, 99)
+        assert result == ""
