@@ -37,7 +37,7 @@ def _load_model_data(*args, **kwargs):
     return _real_loader(*args, **kwargs)
 
 # Constants
-_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["openai", "google", "anthropic", "opencode"]
+_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
 
 # Default number of tail lines to scan for semantic regex patterns.
 # Semantic matching is restricted to the tail to prevent false positives
@@ -250,9 +250,9 @@ def get_agent_provider_preference() -> List[str]:
     """Return provider preference order, overridable via PDD_AGENTIC_PROVIDER env var.
 
     Examples:
-        PDD_AGENTIC_PROVIDER=google,openai,anthropic  ->  ["google", "openai", "anthropic"]
+        PDD_AGENTIC_PROVIDER=google,anthropic,openai  ->  ["google", "anthropic", "openai"]
         PDD_AGENTIC_PROVIDER=google                    ->  ["google"]
-        (unset)                                        ->  ["openai", "google", "anthropic"]
+        (unset)                                        ->  ["anthropic", "google", "openai"]
     """
     env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
     if env_val:
@@ -1130,11 +1130,12 @@ def get_available_agents() -> List[str]:
     2. Standard PATH (shutil.which)
     3. Common installation directories
     """
-    available = {}
+    available = []
 
     # 1. Anthropic (Claude)
     # Available if 'claude' CLI exists. API key not strictly required (subscription auth).
-    available["anthropic"] = bool(_find_cli_binary("claude"))
+    if _find_cli_binary("claude"):
+        available.append("anthropic")
 
     # 2. Google (Gemini / Antigravity)
     # Available if the resolved Google CLI binary exists AND a non-interactive
@@ -1159,9 +1160,8 @@ def get_available_agents() -> List[str]:
     elif google_cli_name == "gemini":
         has_matching_oauth = _has_legacy_gemini_oauth_credentials()
 
-    available["google"] = bool(
-        google_bin and (has_google_key or has_vertex_auth or has_matching_oauth)
-    )
+    if google_bin and (has_google_key or has_vertex_auth or has_matching_oauth):
+        available.append("google")
 
     # 3. OpenAI (Codex)
     # Available if 'codex' CLI exists AND any supported auth path is present:
@@ -1173,13 +1173,12 @@ def get_available_agents() -> List[str]:
     # with only the file-based login isn't told Codex is configured during
     # setup but then silently dropped from the runtime preference list.
     has_codex_oauth = _has_codex_auth_file()
-    available["openai"] = bool(
-        _find_cli_binary("codex") and (
-            os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
-            or has_codex_oauth
-        )
-    )
+    if _find_cli_binary("codex") and (
+        os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
+        or has_codex_oauth
+    ):
+        available.append("openai")
 
     # 4. OpenCode (multi-provider CLI)
     # Available if 'opencode' CLI exists AND at least one usable credential
@@ -1187,15 +1186,10 @@ def get_available_agents() -> List[str]:
     # OpenCode config source declaring a provider, or any provider credential
     # env var represented in pdd/data/llm_model.csv. OPENCODE_MODEL alone is
     # NOT a credential — it's a model knob.
-    available["opencode"] = bool(
-        _find_cli_binary("opencode") and _has_opencode_credentials()
-    )
+    if _find_cli_binary("opencode") and _has_opencode_credentials():
+        available.append("opencode")
 
-    return [
-        provider
-        for provider in get_agent_provider_preference()
-        if available.get(provider)
-    ]
+    return available
 
 
 def _has_gemini_oauth_credentials() -> bool:

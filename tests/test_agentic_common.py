@@ -1450,7 +1450,7 @@ def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock
     # OpenCode (Issue #798) joins as a fourth provider when its CLI is found
     # and any backing-provider credential signal (e.g., ANTHROPIC_API_KEY) is
     # present.
-    assert agents == ["openai", "google", "anthropic", "opencode"]
+    assert agents == ["anthropic", "google", "openai", "opencode"]
 
 # --- Tests for Cost Calculation ---
 
@@ -3773,7 +3773,7 @@ def test_get_agent_provider_preference_default(mock_env):
     """Default preference when PDD_AGENTIC_PROVIDER is not set."""
     mock_env.pop("PDD_AGENTIC_PROVIDER", None)
     # OpenCode (Issue #798) is the fourth default-preference provider.
-    assert get_agent_provider_preference() == ["openai", "google", "anthropic", "opencode"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 def test_get_agent_provider_preference_single(mock_env):
@@ -3797,7 +3797,7 @@ def test_get_agent_provider_preference_with_spaces(mock_env):
 def test_get_agent_provider_preference_empty_string(mock_env):
     """Empty string falls back to default."""
     mock_env["PDD_AGENTIC_PROVIDER"] = ""
-    assert get_agent_provider_preference() == ["openai", "google", "anthropic", "opencode"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 # ---------------------------------------------------------------------------
