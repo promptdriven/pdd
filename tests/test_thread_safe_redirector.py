@@ -285,6 +285,13 @@ def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
     )
 
 
+def test_direct_bel_terminated_osc_does_not_leak_payload(redirector, captured_lines):
+    """BEL-terminated OSC sequences should be stripped from direct output."""
+    redirector.write("pre\x1b]0;mytitle\x07post\n")
+
+    assert captured_lines == ["prepost"]
+
+
 def test_rich_printed_non_csi_escape_preserves_styles(redirector, captured_texts):
     """Non-CSI escape controls should be stripped without dropping Rich styles."""
     console = Console(
@@ -344,3 +351,23 @@ def test_malformed_highlighted_ansi_restore_advances_linearly(monkeypatch):
     sync_tui._restore_rich_highlighted_ansi(malformed)
 
     assert calls <= repeat_count * 20
+
+
+def test_malformed_osc_span_mapping_avoids_regex_rescan(monkeypatch):
+    """Fallback span mapping should not use suffix-scanning regex matching."""
+    malformed = "\x1b]8;;unterminated"
+    plain = "prefix " + malformed * 20 + " suffix"
+    original = sync_tui.Text(plain)
+    reparsed = sync_tui.Text(plain)
+
+    class SuffixScanningRegex:
+        """Detect accidental use of the regex fallback in span mapping."""
+
+        def finditer(self, text):
+            raise AssertionError(f"regex finditer called for {len(text)} chars")
+
+    monkeypatch.setattr(sync_tui, "ANSI_ESCAPE_RE", SuffixScanningRegex())
+
+    merged = sync_tui._merge_reparsed_ansi_spans(original, reparsed)
+
+    assert merged.plain == plain
