@@ -993,7 +993,7 @@ The sync command automatically detects what files exist and executes the appropr
 4. **crash**: Fix any runtime errors to make code executable
 5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
 6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests). Auth modules get auth-specific test patterns (mock OAuth servers, JWT fixtures, token lifecycle testing)
-7. **fix**: Resolve any bugs found by unit tests
+7. **fix**: Resolve any bugs found by unit tests (unless --skip-tests). Because `--skip-tests` skips both unit test generation (step 6) and fixing, the fix step is skipped along with the test step.
 8. **update**: Back-propagate any learnings to the prompt file
 
 **One-Session Mode** (`--one-session`):
@@ -3264,6 +3264,7 @@ PDD automatically detects the appropriate context based on:
 - `temperature`: Default AI model temperature
 - `budget`: Default budget for iterative commands
 - `max_attempts`: Default maximum attempts for fixing operations
+- `auto_deps_csv_path`: Path to the CSV file the auto-deps step uses to store and read dependency information. When unset, sync falls back to `project_dependencies.csv`. This is the `.pddrc` context-level equivalent of the `PDD_AUTO_DEPS_CSV_PATH` environment variable and the `auto-deps --csv` option (see the auto-deps command and Environment Variables sections); the same `project_dependencies.csv` default applies if none of these is set.
 
 **Path Behavior**:
 - Paths ending with `/` are treated as explicit directories and do **not** preserve subdirectory basenames (e.g., `commands/analysis` -> `pdd/analysis.py`).
