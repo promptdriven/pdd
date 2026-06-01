@@ -883,3 +883,268 @@ def test_code_format_no_suffix_uses_language_extension(mock_ctx, mock_construct_
     assert expected_output.exists(), (
         f"Expected language-derived path {expected_output} to exist when user supplied a bare output name."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1315 (SIBLING_PATTERN expansion of #1205): bare-name --output extension
+# synthesis must defer to the canonical CSV-backed get_extension/construct_paths
+# resolution, NOT the wrapper's duplicated partial BUILTIN_EXT_MAP + f".{lang_key}"
+# fallback, which produces wrong/invalid suffixes for 33 CSV languages. Plus the
+# suggested-fix-#2 path-rewrite WARNING for --format md without a collision.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pdd_path_env(monkeypatch):
+    """Make the real get_extension/language_format.csv reachable.
+
+    The fix may defer to either construct_paths' resolved output path OR
+    get_extension(language); both need PDD_PATH set so the CSV lookup works.
+    """
+    import pdd as _pdd
+    monkeypatch.setenv("PDD_PATH", str(Path(_pdd.__file__).parent))
+
+
+# (language as construct_paths lowercases the CSV *name*) -> CSV-authoritative extension.
+# Every entry is a SIBLING_PATTERN value-case from Step 6: under the buggy wrapper,
+# BUILTIN_EXT_MAP.get(name, f".{name}") synthesizes the wrong/invalid suffix shown after
+# each comment, while get_extension(name) returns the expected value asserted below.
+EXAMPLE_BARE_NAME_LANG_EXT_CASES = [
+    ("c++", ".cpp"),               # buggy: .c++ (invalid)
+    ("c#", ".cs"),                 # buggy: .c# (invalid)
+    ("f#", ".fs"),                 # buggy: .f# (invalid)
+    ("matlab", ".m"),              # buggy: .matlab
+    ("objective-c", ".m"),         # buggy: .objective-c
+    ("haskell", ".hs"),            # buggy: .haskell
+    ("julia", ".jl"),              # buggy: .julia
+    ("elixir", ".ex"),             # buggy: .elixir
+    ("scheme", ".scm"),            # buggy: .scheme
+    ("clojure", ".clj"),           # buggy: .clojure
+    ("erlang", ".erl"),            # buggy: .erlang
+    ("assembly", ".asm"),          # buggy: .assembly
+    ("fortran", ".f90"),           # buggy: .fortran
+    ("cobol", ".cob"),             # buggy: .cobol
+    ("coffeescript", ".coffee"),   # buggy: .coffeescript
+    ("vbscript", ".vbs"),          # buggy: .vbscript
+    ("ocaml", ".ml"),              # buggy: .ocaml
+    ("systemverilog", ".sv"),      # buggy: .systemverilog
+    ("verilog", ".v"),             # buggy: .verilog
+    ("pascal", ".pas"),            # buggy: .pascal
+    ("prolog", ".pl"),             # buggy: .prolog
+    ("starlark", ".bzl"),          # buggy: .starlark
+    ("handlebars", ".hbs"),        # buggy: .handlebars
+    ("jinja", ".jinja2"),          # buggy: .jinja
+    ("latex", ".tex"),             # buggy: .latex
+    ("restructuredtext", ".rst"),  # buggy: .restructuredtext
+    ("protobuf", ".proto"),        # buggy: .protobuf
+    ("solidity", ".sol"),          # buggy: .solidity
+    ("terraform", ".tf"),          # buggy: .terraform
+    ("text", ".txt"),              # buggy: .text
+    ("llm", ".prompt"),            # buggy: .llm
+    ("r", ".R"),                   # buggy: .r (case mismatch — distinct file on case-sensitive FS)
+    ("yaml", ".yml"),              # buggy: .yaml (map-divergence: wrapper map says .yaml, CSV says .yml)
+]
+
+
+@pytest.mark.parametrize(
+    "language,expected_ext",
+    EXAMPLE_BARE_NAME_LANG_EXT_CASES,
+    ids=[c[0] for c in EXAMPLE_BARE_NAME_LANG_EXT_CASES],
+)
+def test_bare_name_output_uses_csv_authoritative_extension(
+    language,
+    expected_ext,
+    mock_ctx,
+    mock_construct_paths,
+    mock_context_generator,
+    mock_get_jwt_token,
+    pdd_path_env,
+    tmp_path,
+):
+    """Bug #1315: bare --output (no suffix) under --format code must synthesize the
+    CSV-authoritative extension (the one get_extension/construct_paths resolve), not the
+    wrapper's own BUILTIN_EXT_MAP + f".{lang_key}" fallback.
+
+    SIBLING_PATTERN: one independent run through the bare-name code path per language
+    value. On buggy code the wrapper recomputes `BUILTIN_EXT_MAP.get(name, f".{name}")`
+    and writes e.g. ex.matlab / ex.c++ / ex.yaml / ex.r — diverging from the canonical
+    .m / .cpp / .yml / .R. Dual setup (construct_paths already returns the correct path
+    AND get_extension is reachable) makes the test pass whichever authoritative source the
+    fix defers to, and fail on the current code that ignores both.
+    """
+    mock_ctx.obj['local'] = True
+    import re
+    safe = re.sub(r'[^a-z0-9]', '_', language)
+    work = tmp_path / safe
+    work.mkdir()
+    prompt_file = work / "src.prompt"
+    code_file = work / "src.txt"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("source")
+    bare_output = work / "ex"  # no suffix -> wrapper synthesizes the extension
+    correct_output = work / f"ex{expected_ext}"
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "source"},
+        {"output": str(correct_output)},
+        language,
+    )
+    mock_context_generator.return_value = ("EXAMPLE BODY", 0.0, "local-model")
+
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(bare_output), format="code")
+
+    created = [p for p in work.iterdir() if p.is_file() and p.stem == "ex"]
+    assert len(created) == 1, (
+        f"Expected exactly one synthesized example file for language={language!r}, "
+        f"found {[p.name for p in created]}."
+    )
+    # Case-sensitive exact-name compare (matters for r: .R vs .r on case-preserving FS).
+    assert created[0].name == f"ex{expected_ext}", (
+        f"Bug #1315: bare-name --output under --format code for language={language!r} must land "
+        f"at the CSV-authoritative 'ex{expected_ext}' (the extension get_extension/construct_paths "
+        f"resolve), but landed at {created[0].name!r}. The wrapper's duplicated partial "
+        f"BUILTIN_EXT_MAP + f'.{{lang_key}}' fallback synthesized a wrong/invalid suffix."
+    )
+
+
+def test_format_md_warns_on_silent_rewrite_without_collision(
+    mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path
+):
+    """Bug #1315 (suggested fix #2): --format md with a non-.md --output must emit a
+    path-rewrite WARNING even when the resolved .md target does NOT already exist.
+
+    Today the only rewrite notice is gated on `Path(resolved_output).exists()`, so a
+    no-collision rewrite (foo.yml -> foo.md) is completely silent. A caller stamping the
+    requested --output as metadata is then handed a different artifact path with no warning.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    mock_ctx.obj['quiet'] = False
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def f(): pass")
+    requested = tmp_path / "foo.yml"  # non-.md; target foo.md does NOT exist
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def f(): pass"},
+        {"output": str(requested)},
+        "python",
+    )
+    mock_context_generator.return_value = ("# Markdown Example", 0.0, "local-model")
+
+    with patch("pdd.context_generator_main.console") as mock_console:
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(requested), format="md")
+
+    printed = " || ".join(str(c) for c in mock_console.print.call_args_list)
+    assert "foo.yml" in printed and "foo.md" in printed, (
+        "Issue #1315 (suggested fix #2): --format md rewrote --output 'foo.yml' to 'foo.md' but "
+        "emitted NO warning naming both paths. A path-rewrite WARNING must fire even when the "
+        "resolved target does not already exist, so callers are never silently handed a different "
+        f"artifact path. console.print calls were: {printed!r}"
+    )
+    # The rewrite itself must still have happened.
+    assert (tmp_path / "foo.md").exists()
+
+
+def test_format_md_rewrite_preserved_and_quiet_suppresses_warning(
+    mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path
+):
+    """Guard for Bug #1315 fix #2: the new path-rewrite warning must not break the .md
+    rewrite itself, and must be suppressed under --quiet."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def f(): pass")
+
+    # Run A: quiet=False -> the .md rewrite must still occur.
+    a = tmp_path / "a"
+    a.mkdir()
+    out_a = a / "foo.yml"
+    mock_ctx.obj['quiet'] = False
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def f(): pass"},
+        {"output": str(out_a)},
+        "python",
+    )
+    mock_context_generator.return_value = ("# Markdown Example", 0.0, "local-model")
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(out_a), format="md")
+    assert (a / "foo.md").exists(), "--format md must still rewrite the artifact to .md"
+    assert not out_a.exists(), "--format md must not leave the original .yml artifact"
+
+    # Run B: quiet=True -> the rewrite warning must be suppressed.
+    b = tmp_path / "b"
+    b.mkdir()
+    out_b = b / "bar.yml"
+    mock_ctx.obj['quiet'] = True
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def f(): pass"},
+        {"output": str(out_b)},
+        "python",
+    )
+    with patch("pdd.context_generator_main.console") as mock_console:
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(out_b), format="md")
+    assert (b / "bar.md").exists()
+    printed = " || ".join(str(c) for c in mock_console.print.call_args_list)
+    assert not ("bar.yml" in printed and "bar.md" in printed), (
+        "Under --quiet, the --format md path-rewrite warning must be suppressed, but a "
+        f"console.print mentioned both paths: {printed!r}"
+    )
+
+
+def test_format_code_regression_paths_preserved(
+    mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, pdd_path_env, tmp_path
+):
+    """Regression guard (Bug #1315): the fix must not regress the already-correct cases —
+    bare-name Python -> .py, and explicit non-default suffixes honored verbatim."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def f(): pass")
+    mock_context_generator.return_value = ("BODY", 0.0, "local-model")
+
+    # (a) bare-name Python -> .py (the unchanged-correct case must keep working)
+    a = tmp_path / "a"
+    a.mkdir()
+    mock_construct_paths.return_value = (
+        {}, {"prompt_file": "P", "code_file": "C"}, {"output": str(a / "ex.py")}, "python",
+    )
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(a / "ex"), format="code")
+    assert (a / "ex.py").exists() and not (a / "ex").exists()
+
+    # (b) explicit .yml suffix honored verbatim (no .yaml rewrite)
+    bdir = tmp_path / "b"
+    bdir.mkdir()
+    mock_construct_paths.return_value = (
+        {}, {"prompt_file": "P", "code_file": "C"}, {"output": str(bdir / "ex.yml")}, "yaml",
+    )
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(bdir / "ex.yml"), format="code")
+    assert (bdir / "ex.yml").exists() and not (bdir / "ex.yaml").exists()
+
+    # (c) explicit .markdown alias honored verbatim (not normalized to .md)
+    c = tmp_path / "c"
+    c.mkdir()
+    mock_construct_paths.return_value = (
+        {}, {"prompt_file": "P", "code_file": "C"}, {"output": str(c / "ex.markdown")}, "markdown",
+    )
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(c / "ex.markdown"), format="code")
+    assert (c / "ex.markdown").exists() and not (c / "ex.md").exists()
+
+
+def test_get_extension_returns_csv_authoritative_values(pdd_path_env):
+    """Callee-side contract (Bug #1315): get_extension is the authoritative source the
+    wrapper must defer to. Locks the CSV-correct values the caller-side test asserts on."""
+    from pdd.get_extension import get_extension
+
+    assert get_extension("YAML") == ".yml"
+    assert get_extension("R") == ".R"
+    assert get_extension("C++") == ".cpp"
+    assert get_extension("MATLAB") == ".m"
+    assert get_extension("Objective-C") == ".m"
+    assert get_extension("Markdown") == ".md"
+    assert get_extension("Starlark") == ".bzl"
