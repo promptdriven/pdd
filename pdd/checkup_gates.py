@@ -2040,6 +2040,28 @@ def _is_git_worktree(worktree: Path, *, git_cmd: Optional[str] = None) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
+# Trusted runner for the doc-contract gate. Executed as ``python -I -B -c
+# <this>`` with argv = [worktree, base_ref]. The leading ``sys.path`` scrub is
+# defense-in-depth on top of ``-I``: it removes any empty entry, the process
+# CWD, and any path resolving inside the reviewed worktree BEFORE importing
+# ``pdd``, so the gate is always run by the installed/base checker and never by
+# a PR-controlled copy living in the worktree (issue #1303 review).
+_DOC_CONTRACT_RUNNER = (
+    "import sys, os\n"
+    "_wt = os.path.realpath(sys.argv[1])\n"
+    "_cwd = os.path.realpath(os.getcwd())\n"
+    "sys.path[:] = [\n"
+    "    _p for _p in sys.path\n"
+    "    if _p\n"
+    "    and os.path.realpath(_p) != _wt\n"
+    "    and not os.path.realpath(_p).startswith(_wt + os.sep)\n"
+    "    and os.path.realpath(_p) != _cwd\n"
+    "]\n"
+    "from pdd.checkup_gates import run_doc_contract_check\n"
+    "sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))"
+)
+
+
 def discover_gates(
     worktree: Path,
     changed_files: Sequence[str],
@@ -2078,9 +2100,20 @@ def discover_gates(
                 name="doc-contract",
                 cmd=[
                     sys.executable,
+                    # ``-I`` (isolated) ignores PYTHON* env vars, the user
+                    # site, and — critically — does NOT prepend the CWD/script
+                    # dir to ``sys.path``. ``run_gates`` runs every gate with
+                    # ``cwd=worktree``; without isolation a ``-c`` snippet's
+                    # ``import pdd`` would resolve to the PR-controlled
+                    # ``pdd/checkup_gates.py`` inside the reviewed worktree,
+                    # letting the reviewed code bypass the gate or execute
+                    # arbitrary code (issue #1303 review). The snippet below
+                    # also defensively scrubs any worktree-resolving entry from
+                    # ``sys.path`` so the TRUSTED installed checker always runs.
+                    "-I",
                     "-B",
                     "-c",
-                    "from pdd.checkup_gates import run_doc_contract_check; import sys; sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))",
+                    _DOC_CONTRACT_RUNNER,
                     str(worktree.absolute()),
                     base_ref or "",
                 ],
@@ -3275,6 +3308,21 @@ def _doc_contract_should_scan_added_file(file_path: str) -> bool:
     return True
 
 
+def _condition_doc_tokens(cond: str) -> List[str]:
+    """Return the documentation spellings that satisfy a skip condition.
+
+    A code identifier like ``skip_tests`` may be documented as ``skip_tests``,
+    ``skip-tests``, or the CLI flag ``--skip-tests``; any one is accepted.
+    """
+    dashed = cond.replace("_", "-")
+    return [cond, dashed, f"--{dashed}"]
+
+
+def _doc_mentions_condition(text: str, cond: str) -> bool:
+    """True when ``text`` documents skip condition ``cond`` in any spelling."""
+    return any(token in text for token in _condition_doc_tokens(cond))
+
+
 def run_doc_contract_check(
     worktree_path: Path | str, base_ref: Optional[str] = None
 ) -> int:
@@ -3356,6 +3404,13 @@ def run_doc_contract_check(
     added_pddrc_keys = set()
     added_click_options = set()
     added_skip_behaviors = set()
+    # (operation, condition) pairs where a NEW skip condition gates an existing
+    # operation, e.g. `operation == 'fix' and skip_tests`. This is the
+    # #1303/#1238 drift class: recording only the operation name is not enough
+    # because docs that merely mention the operation (e.g. "fix: Resolve test
+    # failures") would still pass while the new skip condition stays
+    # undocumented. The condition is normalized to its snake_case identifier.
+    added_skip_contracts: set = set()
     added_env_vars = set()
 
     # .pddrc keys
@@ -3421,7 +3476,20 @@ def run_doc_contract_check(
                 # 2. Skip behaviors / operation names
                 match = re.search(r"operation\s*==\s*['\"]([a-zA-Z0-9_-]+)['\"]", line)
                 if match:
-                    added_skip_behaviors.add(match.group(1))
+                    op_name = match.group(1)
+                    added_skip_behaviors.add(op_name)
+                    # Capture any skip CONDITION gating this operation on the
+                    # same line (e.g. `operation == 'fix' and skip_tests` or
+                    # `... and not skip_verify`). Both the snake_case
+                    # identifier (`skip_tests`) and the CLI flag spelling
+                    # (`--skip-tests`) are normalized to the identifier so the
+                    # downstream doc check accepts either spelling.
+                    for cond in re.findall(r"\bskip_[a-z][a-z0-9_]*\b", line):
+                        added_skip_contracts.add((op_name, cond))
+                    for flag in re.findall(r"--skip-[a-z][a-z0-9-]*\b", line):
+                        added_skip_contracts.add(
+                            (op_name, flag.lstrip("-").replace("-", "_"))
+                        )
                 match_skip = re.search(r"['\"]skip:([a-zA-Z0-9_-]+)['\"]", line)
                 if match_skip:
                     added_skip_behaviors.add(match_skip.group(1))
@@ -3483,6 +3551,24 @@ def run_doc_contract_check(
         if op not in prompt_ops_section:
             errors.append(
                 f"Sync step '{op}' is not documented in pdd/prompts/sync_orchestration_python.prompt under 'Workflow Operations' section."
+            )
+
+    # A new skip CONDITION on an existing operation must be documented as a
+    # condition (not just the operation name) in BOTH README and the sync
+    # orchestration prompt. This is the #1303/#1238 regression: adding
+    # `operation == 'fix' and skip_tests` while the docs still only say
+    # "fix: Resolve test failures" must fail the gate.
+    for op, cond in added_skip_contracts:
+        if not _doc_mentions_condition(readme_content, cond):
+            errors.append(
+                f"Skip condition '{cond}' gating operation '{op}' is not documented in README.md "
+                f"(mention one of: {', '.join(_condition_doc_tokens(cond))})."
+            )
+        if not _doc_mentions_condition(prompt_content, cond):
+            errors.append(
+                f"Skip condition '{cond}' gating operation '{op}' is not documented in "
+                f"pdd/prompts/sync_orchestration_python.prompt "
+                f"(mention one of: {', '.join(_condition_doc_tokens(cond))})."
             )
 
     for env in added_env_vars:

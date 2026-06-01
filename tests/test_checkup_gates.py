@@ -4595,12 +4595,12 @@ class TestDocContractCheck:
         from pdd.checkup_gates import run_doc_contract_check
 
         _git_init(tmp_path)
-        
+
         # Initial commit with files
         (tmp_path / "README.md").write_text("**Available Context Settings**:\n- `existing_key`\n", encoding="utf-8")
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "construct_paths.py").write_text('_PDDRC_DEFAULTS_KEYS = {"existing_key"}\n', encoding="utf-8")
-        
+
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init docs", "-q"], cwd=tmp_path, check=True)
 
@@ -4613,7 +4613,7 @@ class TestDocContractCheck:
 
         # Document it in README
         (tmp_path / "README.md").write_text("**Available Context Settings**:\n- `existing_key`\n- `undocumented_key`\n", encoding="utf-8")
-        
+
         # Should now pass
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
@@ -4622,10 +4622,10 @@ class TestDocContractCheck:
         from pdd.checkup_gates import run_doc_contract_check
 
         _git_init(tmp_path)
-        
+
         (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
         (tmp_path / "cli.py").write_text("import click\n@click.command()\n", encoding="utf-8")
-        
+
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init cli", "-q"], cwd=tmp_path, check=True)
 
@@ -4637,7 +4637,7 @@ class TestDocContractCheck:
 
         # Document it in README
         (tmp_path / "README.md").write_text("# README\n--new-opt is here\n", encoding="utf-8")
-        
+
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
 
@@ -4645,13 +4645,13 @@ class TestDocContractCheck:
         from pdd.checkup_gates import run_doc_contract_check
 
         _git_init(tmp_path)
-        
+
         (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text("## Workflow Operations\n", encoding="utf-8")
         (tmp_path / "sync.py").write_text("def run():\n    pass\n", encoding="utf-8")
-        
+
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init sync", "-q"], cwd=tmp_path, check=True)
 
@@ -4683,10 +4683,10 @@ class TestDocContractCheck:
         from pdd.checkup_gates import run_doc_contract_check
 
         _git_init(tmp_path)
-        
+
         (tmp_path / "README.md").write_text("### Environment Variables\n", encoding="utf-8")
         (tmp_path / "helper.py").write_text("def run():\n    pass\n", encoding="utf-8")
-        
+
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init helper", "-q"], cwd=tmp_path, check=True)
 
@@ -4698,7 +4698,7 @@ class TestDocContractCheck:
 
         # Document it in README
         (tmp_path / "README.md").write_text("### Environment Variables\n- `PDD_MY_NEW_VAR` is here\n", encoding="utf-8")
-        
+
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
 
@@ -4743,3 +4743,111 @@ class TestDocContractCheck:
 
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
+
+    def test_doc_contract_cmd_runs_isolated(self, tmp_path: Path) -> None:
+        """Security (issue #1303 review): the gate must invoke trusted code,
+        so its command runs the interpreter in isolated mode (``-I``) and the
+        snippet scrubs the worktree from ``sys.path``."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        gate = next(
+            g
+            for g in discover_gates(tmp_path, changed_files=())
+            if g.name == "doc-contract"
+        )
+        assert "-I" in gate.cmd, "doc-contract must run python in isolated mode"
+        snippet = next(part for part in gate.cmd if "run_doc_contract_check" in part)
+        # The snippet removes worktree-resolving entries from sys.path before importing pdd.
+        assert "sys.path" in snippet
+        assert "realpath" in snippet
+
+    def test_doc_contract_does_not_execute_worktree_pdd(self, tmp_path: Path) -> None:
+        """Security (issue #1303 review): a PR-controlled ``pdd/checkup_gates.py``
+        inside the reviewed worktree must NOT be imported/executed when the
+        gate runs with ``cwd=worktree``. Reproduces the reported exploit: a
+        malicious copy that writes a marker and returns 0. With isolation +
+        the sys.path scrub the marker is never written."""
+        from pdd.checkup_gates import _DOC_CONTRACT_RUNNER
+
+        marker = tmp_path / "PWNED"
+        pkg = tmp_path / "pdd"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "checkup_gates.py").write_text(
+            "from pathlib import Path\n"
+            "def run_doc_contract_check(*a, **k):\n"
+            f"    Path(r'{marker}').write_text('pwned')\n"
+            "    return 0\n",
+            encoding="utf-8",
+        )
+
+        # Run the exact command discover_gates builds, with cwd=worktree (the
+        # condition under which run_gates executes every gate).
+        proc = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", _DOC_CONTRACT_RUNNER, str(tmp_path), ""],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+        )
+        # The PR-controlled module must never have run, regardless of whether
+        # the trusted import resolved (installed pdd) or failed (no install).
+        assert not marker.exists(), (
+            f"PR-controlled pdd/checkup_gates.py was executed! "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+
+    def test_detects_new_skip_condition_on_existing_operation(self, tmp_path: Path) -> None:
+        """Issue #1303/#1238 regression: adding a NEW skip condition to an
+        EXISTING operation (e.g. `operation == 'fix' and skip_tests`) must be
+        caught. Documenting only the operation name is not sufficient — the
+        skip CONDITION must be documented in BOTH README and the sync
+        orchestration prompt."""
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
+        # The operation 'fix' is already fully documented; only the new skip
+        # condition is missing — exactly the drift the old name-only check missed.
+        (tmp_path / "README.md").write_text(
+            "# README\n## Workflow\n- fix: Resolve test failures\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text(
+            "## Workflow Operations\n- fix: resolve failing tests\n", encoding="utf-8"
+        )
+        (tmp_path / "sync.py").write_text(
+            "def run(operation):\n    return operation == 'fix'\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        # Add a skip condition gating the existing 'fix' operation.
+        (tmp_path / "sync.py").write_text(
+            "def run(operation, skip_tests):\n"
+            "    if operation == 'fix' and skip_tests:\n"
+            "        return 'skip'\n"
+            "    return operation == 'fix'\n",
+            encoding="utf-8",
+        )
+        # Operation 'fix' is documented, but the skip_tests condition is not →
+        # must fail (the old name-only check would have passed here).
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        # Document the condition in README only → still fails (prompt missing).
+        (tmp_path / "README.md").write_text(
+            "# README\n## Workflow\n- fix: Resolve test failures; skipped with --skip-tests\n",
+            encoding="utf-8",
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        # Document the condition in BOTH README and the prompt → passes.
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text(
+            "## Workflow Operations\n- fix: resolve failing tests; skipped under --skip-tests\n",
+            encoding="utf-8",
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0

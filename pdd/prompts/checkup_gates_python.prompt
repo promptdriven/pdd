@@ -130,18 +130,19 @@ loop refuses to ship and the fixer addresses the failure.
 
 35. **`doc-contract` gate (Issue #1303).** The doc-contract gate enforces documentation consistency on newly added user-facing surfaces.
     - **Discovery conditions**: Always emitted when a trusted `git` binary can be resolved and `_is_git_worktree` is True.
-    - **Command argv**: `[sys.executable, "-B", "-c", "from pdd.checkup_gates import run_doc_contract_check; import sys; sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))", <worktree_abs>, <base_ref_or_empty>]`.
+    - **Command argv (trusted execution)**: `[sys.executable, "-I", "-B", "-c", <RUNNER>, <worktree_abs>, <base_ref_or_empty>]`. The gate MUST run the TRUSTED installed checker, never a PR-controlled copy. Because `run_gates` executes every gate with `cwd=<worktree>`, a plain `-c "from pdd.checkup_gates import ..."` snippet would `import pdd` from the reviewed worktree (the PR's own `pdd/checkup_gates.py`), letting the reviewed code bypass the gate or run arbitrary code. Defend in two layers: (a) launch the interpreter in isolated mode (`-I`) so the CWD/script dir is NOT prepended to `sys.path` and `PYTHON*` env vars / user-site are ignored; AND (b) the `<RUNNER>` snippet, BEFORE importing `pdd`, scrubs `sys.path` of every empty entry, the process CWD, and any path resolving inside the worktree (compare via `os.path.realpath`). Only after the scrub does it `from pdd.checkup_gates import run_doc_contract_check` and `sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))`.
     - **Check execution (`run_doc_contract_check(worktree_path, base_ref=None) -> int`)**:
       - It parses the git diff of the worktree against `base_ref` (or HEAD/parent if `base_ref` is unresolvable) to find newly added user-facing surfaces:
         1. **.pddrc keys**: Any added string literal within `_PDDRC_DEFAULTS_KEYS` in `pdd/construct_paths.py` (e.g., `+    "my_new_key",`).
         2. **CLI click options**: Any added click options starting with `--` (e.g., `+    @click.option("--my-option")`).
-        3. **Skip behaviors**: Any added skip behavior/operation names (e.g., `+    if operation == 'my_op' and skip_tests:`).
+        3. **Skip behaviors AND skip contracts**: Any added operation name (`+    if operation == 'my_op':`). ADDITIONALLY, when the SAME added line gates an operation on a skip CONDITION (e.g. `+    if operation == 'fix' and skip_tests:`, or a `--skip-tests` flag), record the `(operation, condition)` contract. Recording only the operation name is insufficient — that is the #1303/#1238 drift, where a new skip condition is added to an existing, already-documented operation. Normalize the condition to its snake_case identifier (`--skip-tests` → `skip_tests`).
         4. **Environment variables**: Any added environment variable starting with `PDD_*` (e.g., `+    os.environ.get("PDD_MY_VAR")`).
       - It MUST ignore test, fixture, snapshot, documentation, context, and example files when scanning added runtime surfaces so regression-test literals such as `--new-opt`, `new_op`, or `PDD_MY_NEW_VAR` do not make the gate fail its own PR. Environment-variable scanning is limited to runtime `.py` and `.sh` files, not prompt text.
       - It checks if each added surface is documented:
         - Added `.pddrc` keys MUST be documented in `README.md` under the "Available Context Settings" section.
         - Added Click options MUST be documented in `README.md` (e.g., option lists).
         - Added skip behaviors / sync steps MUST be documented in `README.md` (e.g., "Options" or workflow-steps lists) AND in `pdd/prompts/sync_orchestration_python.prompt` (Workflow Operations).
+        - Added skip CONTRACTS (`operation` + `condition`) MUST document the CONDITION — accepting any spelling (`skip_tests`, `skip-tests`, or `--skip-tests`) — in BOTH `README.md` AND `pdd/prompts/sync_orchestration_python.prompt`. A doc that mentions only the operation (e.g. "fix: Resolve test failures") without the gating condition fails the gate.
         - Added `PDD_*` env vars MUST be documented in `README.md` under the "Environment Variables" section.
       - If any added item is not documented in the expected file/section, print detailed error messages to stdout/stderr and exit with code 1; otherwise exit with code 0.
 
