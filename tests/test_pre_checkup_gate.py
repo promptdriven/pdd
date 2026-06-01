@@ -172,10 +172,119 @@ def test_caller_compatibility_flags_invalid_keyword(tmp_path):
         encoding="utf-8",
     )
 
-    failures = pre_checkup_gate._check_caller_compatibility(
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
         tmp_path,
         ["pkg/api.py"],
     )
 
     assert failures
     assert "invalid keyword" in failures[0]
+
+
+def _write_pkg_module(tmp_path: Path, name: str, body: str) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir(exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / f"{name}.py").write_text(body, encoding="utf-8")
+
+
+def test_caller_compat_allows_existing_nonfunction_imports(tmp_path):
+    """Regression for #1293 FM3: importing existing private helpers, classes,
+    and constants from a changed module must NOT be reported as missing.
+
+    Before the fix, existence was checked against a public-functions-only list,
+    so any caller importing a private helper/class/constant was falsely flagged
+    (202 false positives on the PR's own orchestrators)."""
+    _write_pkg_module(
+        tmp_path,
+        "api",
+        "PUBLIC_CONST = 1\n"
+        "def build(name):\n    return name\n"
+        "def _private_helper():\n    return 2\n"
+        "class Widget:\n    pass\n",
+    )
+    (tmp_path / "consumer.py").write_text(
+        "from pkg.api import build, _private_helper, Widget, PUBLIC_CONST\n",
+        encoding="utf-8",
+    )
+
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path,
+        ["pkg/api.py"],
+        timeout=30.0,
+    )
+
+    assert failures == [], failures
+
+
+def test_caller_compat_flags_removed_symbol(tmp_path):
+    """A caller importing a symbol the module does NOT export is still flagged
+    (true positive — the half the check is meant to catch)."""
+    _write_pkg_module(
+        tmp_path,
+        "api",
+        "def build(name):\n    return name\n",
+    )
+    (tmp_path / "consumer.py").write_text(
+        "from pkg.api import build, gone_symbol\n",
+        encoding="utf-8",
+    )
+
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path,
+        ["pkg/api.py"],
+        timeout=30.0,
+    )
+
+    assert any("missing symbol gone_symbol" in f for f in failures), failures
+    assert not any("missing symbol build" in f for f in failures), failures
+
+
+def test_caller_compat_honors_dynamic_exports(tmp_path):
+    """Existence uses the interpreter's real export set, so a name provided via
+    module-level ``__getattr__`` (PEP 562) is NOT falsely reported missing —
+    an AST-only reconstruction of top-level defs would miss it."""
+    _write_pkg_module(
+        tmp_path,
+        "dyn",
+        "def __getattr__(name):\n"
+        "    if name == 'DYNAMIC':\n"
+        "        return 42\n"
+        "    raise AttributeError(name)\n",
+    )
+    (tmp_path / "consumer.py").write_text(
+        "from pkg.dyn import DYNAMIC\n",
+        encoding="utf-8",
+    )
+
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path,
+        ["pkg/dyn.py"],
+        timeout=30.0,
+    )
+
+    assert failures == [], failures
+
+
+def test_caller_compat_skips_existence_when_module_unimportable(tmp_path):
+    """If the changed module cannot be imported (already hard-blocked by the
+    import check), the existence sweep must NOT treat every imported symbol as
+    missing — it returns None and is skipped."""
+    _write_pkg_module(
+        tmp_path,
+        "broken",
+        "import this_module_does_not_exist_anywhere\n"
+        "def build(name):\n    return name\n",
+    )
+    (tmp_path / "consumer.py").write_text(
+        "from pkg.broken import build\n",
+        encoding="utf-8",
+    )
+
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path,
+        ["pkg/broken.py"],
+        timeout=30.0,
+    )
+
+    assert not any("missing symbol" in f for f in failures), failures

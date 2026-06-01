@@ -54,6 +54,11 @@ _SECRET_RE = re.compile(
     re.IGNORECASE,
 )
 _QUARANTINE_ENV = "PDD_PRE_CHECKUP_QUARANTINE"
+# Upper bound on the caller-compatibility repo walk so the sweep stays
+# predictable on very large trees. The cheap substring pre-filter keeps the
+# expensive AST parse off all but a handful of files; this caps the walk
+# itself. Truncation is surfaced as a note (never silently dropped).
+_MAX_CALLER_SCAN_FILES = 20000
 
 
 @dataclass
@@ -453,7 +458,11 @@ def _check_route_probe(
             env=env,
         )
         if not ok:
-            failures.append(f"route-probe failed for {rel}: no mounted route/router object found; {output}")
+            failures.append(
+                f"route-probe failed for {rel}: module imported but defines no "
+                f"route/router objects (best-effort app-wiring smoke check; "
+                f"full mount verification stays with checkup); {output}"
+            )
     return failures
 
 
@@ -500,42 +509,132 @@ def _iter_python_files(worktree: Path) -> Iterable[Path]:
         yield path
 
 
-def _check_caller_compatibility(worktree: Path, code_files: Sequence[str]) -> List[str]:
+def _runtime_missing_symbols(
+    worktree: Path,
+    module: str,
+    names: Sequence[str],
+    *,
+    timeout: float,
+) -> Optional[Set[str]]:
+    """Return the subset of ``names`` not importable from ``module``.
+
+    Existence is decided by the interpreter's *actual* export set — import the
+    module in a subprocess and test attribute presence (``hasattr``) — rather
+    than reconstructing exports from the AST. That makes the check honor
+    star-imports, conditional/``try``-guarded definitions, module-level
+    ``__getattr__`` (PEP 562), ``__all__`` re-exports, and imported-then-
+    re-exported names, none of which an AST scan of top-level ``def``\\ s would
+    see. Because this check hard-blocks the PR, that precision matters.
+
+    Returns ``None`` when the module cannot be imported: that breakage is
+    already reported by the import check, and a failed import must not be
+    mistaken for "every symbol is missing".
+    """
+    wanted = sorted({n for n in names if n and n != "*"})
+    if not wanted:
+        return set()
+    # Redirect import-time stdout/stderr into a discarded buffer so a chatty
+    # module (banners, warnings) can't push the JSON result past
+    # ``_run_command``'s output truncation. An import error still propagates
+    # after the buffer is restored, so the subprocess exits non-zero -> None.
+    probe = (
+        "import importlib, sys, json, io, contextlib\n"
+        "buf = io.StringIO()\n"
+        "with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):\n"
+        "    m = importlib.import_module(sys.argv[1])\n"
+        "wanted = json.loads(sys.argv[2])\n"
+        "missing = [n for n in wanted if not hasattr(m, n)]\n"
+        "sys.stdout.write(json.dumps(missing))\n"
+    )
+    ok, output = _run_command(
+        [sys.executable, "-c", probe, module, json.dumps(wanted)],
+        worktree=worktree,
+        timeout=timeout,
+        env=_python_import_env(worktree),
+    )
+    if not ok:
+        return None
+    for line in reversed(output.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            return set(json.loads(stripped))
+        except ValueError:
+            return None
+    return set()
+
+
+def _check_caller_compatibility(
+    worktree: Path,
+    code_files: Sequence[str],
+    *,
+    timeout: float = 60.0,
+) -> Tuple[List[str], List[str]]:
+    """Flag repo callers that import a symbol the changed module no longer
+    exports, or call a changed public function with incompatible arguments.
+
+    Symbol *existence* is checked against the interpreter's real export set
+    (see ``_runtime_missing_symbols``), so existing imports of private helpers,
+    classes, constants, and re-exports are never falsely reported as missing.
+    *Arity/keyword* checks use the AST signatures of the changed module's
+    public functions. Returns ``(failures, notes)``.
+    """
     failures: List[str] = []
+    notes: List[str] = []
     module_to_sigs: Dict[str, Dict[str, _FunctionSig]] = {}
     for rel in code_files:
         path = worktree / rel
         module = _module_name_for_python_path(path, worktree)
         if not module:
             continue
-        sigs = _public_function_sigs(path)
-        if sigs:
-            module_to_sigs[module] = sigs
+        module_to_sigs[module] = _public_function_sigs(path)
     if not module_to_sigs:
-        return failures
+        return failures, notes
+
+    # Cheap substring pre-filter: a caller can only import one of these modules
+    # if its source spells out the module's final path component, so files that
+    # cannot match are skipped before the expensive AST parse. The walk itself
+    # is bounded by _MAX_CALLER_SCAN_FILES.
+    tails = {module.rsplit(".", 1)[-1] for module in module_to_sigs}
+    # wanted[module] accumulates every symbol imported from that module across
+    # the repo so the runtime existence probe runs once per changed module, not
+    # once per caller. import_sites keeps (caller, module, name) for attribution.
+    wanted: Dict[str, Set[str]] = {module: set() for module in module_to_sigs}
+    import_sites: List[Tuple[str, str, str]] = []
+    scanned = 0
+    truncated = False
 
     for py_file in _iter_python_files(worktree):
+        if scanned >= _MAX_CALLER_SCAN_FILES:
+            truncated = True
+            break
+        scanned += 1
         try:
-            tree = ast.parse(py_file.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError):
+            text = py_file.read_text(encoding="utf-8")
+        except OSError:
             continue
+        if not any(tail in text for tail in tails):
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        rel_caller = py_file.relative_to(worktree).as_posix()
         imported: Dict[str, Tuple[str, str]] = {}
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
             if node.module not in module_to_sigs:
                 continue
-            exports = module_to_sigs[node.module]
+            sigs = module_to_sigs[node.module]
             for alias in node.names:
                 if alias.name == "*":
                     continue
-                if alias.name not in exports:
-                    failures.append(
-                        f"caller-compat failed: {py_file.relative_to(worktree)} "
-                        f"imports missing symbol {alias.name} from {node.module}"
-                    )
-                    continue
-                imported[alias.asname or alias.name] = (node.module, alias.name)
+                wanted[node.module].add(alias.name)
+                import_sites.append((rel_caller, node.module, alias.name))
+                if alias.name in sigs:
+                    imported[alias.asname or alias.name] = (node.module, alias.name)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
                 continue
@@ -548,24 +647,48 @@ def _check_caller_compatibility(worktree: Path, code_files: Sequence[str]) -> Li
             kw_names = {kw.arg for kw in node.keywords if kw.arg is not None}
             if sig.max_positional is not None and pos_count > sig.max_positional:
                 failures.append(
-                    f"caller-compat failed: {py_file.relative_to(worktree)} calls "
+                    f"caller-compat failed: {rel_caller} calls "
                     f"{name} with {pos_count} positional args, max {sig.max_positional}"
                 )
             if pos_count < sig.min_positional and not any(kw.arg is None for kw in node.keywords):
                 supplied = pos_count + len(kw_names)
                 if supplied < sig.min_positional:
                     failures.append(
-                        f"caller-compat failed: {py_file.relative_to(worktree)} calls "
+                        f"caller-compat failed: {rel_caller} calls "
                         f"{name} with too few required args"
                     )
             if not sig.accepts_kwargs:
                 bad = sorted(kw_names - sig.keywords)
                 if bad:
                     failures.append(
-                        f"caller-compat failed: {py_file.relative_to(worktree)} calls "
+                        f"caller-compat failed: {rel_caller} calls "
                         f"{name} with invalid keyword(s): {', '.join(bad)}"
                     )
-    return failures
+
+    # Existence: ask the interpreter which of the symbols callers actually
+    # import are absent from each changed module.
+    for module, names in wanted.items():
+        if not names:
+            continue
+        missing = _runtime_missing_symbols(worktree, module, sorted(names), timeout=timeout)
+        if not missing:
+            # Either nothing missing, or the module failed to import (None) —
+            # the latter is already hard-blocked by the import check, so don't
+            # treat its symbols as missing here.
+            continue
+        for caller_rel, site_module, name in import_sites:
+            if site_module == module and name in missing:
+                failures.append(
+                    f"caller-compat failed: {caller_rel} "
+                    f"imports missing symbol {name} from {module}"
+                )
+
+    if truncated:
+        notes.append(
+            f"caller-compat scan capped at {_MAX_CALLER_SCAN_FILES} files; "
+            f"some callers were not checked"
+        )
+    return failures, notes
 
 
 def _targeted_test_candidates(worktree: Path, code_files: Sequence[str]) -> List[str]:
@@ -679,7 +802,11 @@ def _run_build_smoke(
 
     failures.extend(_check_python_imports(worktree, code_files, timeout=timeout_per_check))
     failures.extend(_check_route_probe(worktree, code_files, timeout=timeout_per_check))
-    failures.extend(_check_caller_compatibility(worktree, code_files))
+    caller_failures, caller_notes = _check_caller_compatibility(
+        worktree, code_files, timeout=timeout_per_check
+    )
+    failures.extend(caller_failures)
+    notes.extend(caller_notes)
     test_failures, test_notes = _run_targeted_tests(
         worktree,
         code_files,
