@@ -18,10 +18,14 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
+<<<<<<< HEAD
 from .contract_ir import parse_prompt_contracts
+=======
+from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
+>>>>>>> origin/main
 from .sync_order import extract_includes_from_file
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
@@ -391,6 +395,19 @@ def validation_from_sync(
     return validation
 
 
+def grounding_kwargs_from_ctx(
+    ctx_obj: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build write_evidence_manifest grounding kwargs from a Click ctx.obj mapping."""
+    obj = dict(ctx_obj or {})
+    grounding = obj.get("last_grounding")
+    examples_used = None
+    if isinstance(grounding, Mapping):
+        examples_used = grounding.get("selected_examples")
+    reviewed = grounding_reviewed_for_manifest(obj, examples_used)
+    return {"grounding": grounding, "reviewed": reviewed}
+
+
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     command: str,
@@ -403,6 +420,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     logs: Optional[Mapping[str, Optional[str]]] = None,
     basename: Optional[str] = None,
     project_root: Optional[str | Path] = None,
+    grounding: Optional[Mapping[str, Any]] = None,
+    reviewed: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
@@ -436,6 +455,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     if logs:
         log_values.update(logs)
 
+    grounding_block = normalize_grounding(grounding, reviewed=reviewed)
+
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -454,7 +475,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
             "model": model or None,
             "temperature": temperature,
             "cost_usd": float(cost_usd),
-            "grounding_examples": [],
+            "grounding": grounding_block,
+            "grounding_examples": list(grounding_block.get("selected_examples") or []),
         },
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),
