@@ -206,7 +206,7 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
 7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
-8. **fix**: Resolve test failures
+8. **fix**: Resolve test failures (unless `--skip-tests`)
 9. **update**: Back-propagate learnings to prompt
 
 Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`
@@ -258,7 +258,7 @@ Use `AtomicStateUpdate` context manager for consistent state writes:
 When `skip_verify` or `skip_tests` is set:
 - Log that the operation was skipped
 - Save fingerprint with 'skip:' prefix (e.g., 'skip:verify') to distinguish from actual execution
-- Cascading: `skip_tests` also skips `verify` and `crash`
+- Cascading: `skip_tests` also skips `verify`, `crash`, and `fix` operations
 - For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
 
 ### Operation Dispatch
@@ -368,6 +368,7 @@ Detect and break infinite loops with these limits:
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
 - Consecutive fix operations: Break after 5
+- Consecutive no-op fix operations: Track consecutive fix operations where no LLM is invoked (cost is 0.0 and model name is empty/none/unknown), and fail fast with LogicalFailure if it reaches 2
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
 - Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
 - Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)
@@ -397,7 +398,7 @@ Handle command results in multiple formats:
 - For test operation failure: if `result[4]` (error_message) is non-empty, append it to the errors list so it reaches the sync log
 - For crash/fix operations returning tuples: extract error message from `result[1]` on failure and append to errors list
 - For `ArchitectureConformanceError` exception paths, extract `total_cost` and `model_name` from the exception into a result-shaped dict before logging so failed conformance attempts do not report `$0.00`.
-- Save fingerprint after successful operations regardless of format
+- Save fingerprint after successful operations regardless of format, **except** for no-op fix operations. A no-op fix is detected when `operation == 'fix'` and `actual_cost == 0.0` and `model_name` is empty/`'none'`/`'unknown'`/`'n/a'`. This check **must run before** `_save_fingerprint_atomic` so that a logical failure (consecutive no-op breaker) does not persist stale "fix completed" state. Do not call `_save_fingerprint_atomic` for no-op fixes.
 
 ### Non-Python Language Handling and Agentic Mode
 

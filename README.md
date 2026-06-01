@@ -993,7 +993,7 @@ The sync command automatically detects what files exist and executes the appropr
 4. **crash**: Fix any runtime errors to make code executable
 5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
 6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests). Auth modules get auth-specific test patterns (mock OAuth servers, JWT fixtures, token lifecycle testing)
-7. **fix**: Resolve any bugs found by unit tests
+7. **fix**: Resolve any bugs found by unit tests (unless --skip-tests). Because `--skip-tests` skips both unit test generation (step 6) and fixing, the fix step is skipped along with the test step.
 8. **update**: Back-propagate any learnings to the prompt file
 
 **One-Session Mode** (`--one-session`):
@@ -2126,6 +2126,19 @@ pdd [GLOBAL OPTIONS] fix --output-code src/factorial_calculator_fixed.py --outpu
 ```
 In this example, `pdd fix` will be run for each test file, and the fixed test files will be saved as `tests/test_factorial_calculator_fixed.py` and `tests/test_factorial_calculator_edge_cases_fixed.py`.
 
+
+#### Focused Repair for Large Dev Units
+
+For dev units where the code file exceeds 500 lines or the test file exceeds 1000 lines, `pdd fix` automatically switches to a two-phase focused-repair strategy instead of sending the entire file to the LLM in one shot.
+
+**How it Works:**
+
+1. **Fast-path:** If the pytest traceback directly names 1–3 functions, those function slices plus their failing tests are sent to the LLM immediately — no diagnosis step needed.
+2. **Phase 1 — Diagnose:** For all other large dev units, a code skeleton (function signatures only, no bodies) is sent along with the error log so the LLM can identify which functions are likely broken.
+3. **Phase 2 — Fix:** Only the identified function slices plus their failing tests are sent for the actual fix. The repaired bodies are spliced back into the original file at their original line offsets.
+4. **Automatic fallback:** If the focused-repair path encounters a parse error or returns an empty result, `pdd fix` silently falls back to the standard full-file behavior.
+
+This strategy is fully automatic and requires no flags. The threshold check and focused-repair path are internal to `pdd fix`; its public interface and all existing flags remain unchanged.
 
 #### Agentic Fallback Mode
 
@@ -3295,6 +3308,7 @@ PDD automatically detects the appropriate context based on:
 - `temperature`: Default AI model temperature
 - `budget`: Default budget for iterative commands
 - `max_attempts`: Default maximum attempts for fixing operations
+- `auto_deps_csv_path`: Path to the CSV file the auto-deps step uses to store and read dependency information. When unset, sync falls back to `project_dependencies.csv`. This is the `.pddrc` context-level equivalent of the `PDD_AUTO_DEPS_CSV_PATH` environment variable and the `auto-deps --csv` option (see the auto-deps command and Environment Variables sections); the same `project_dependencies.csv` default applies if none of these is set.
 
 **Path Behavior**:
 - Paths ending with `/` are treated as explicit directories and do **not** preserve subdirectory basenames (e.g., `commands/analysis` -> `pdd/analysis.py`).
