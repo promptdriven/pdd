@@ -142,6 +142,7 @@ _PDDRC_DEFAULTS_KEYS = {
     "budget",
     "max_attempts",
     "outputs",
+    "auto_deps_csv_path",
 }
 
 
@@ -194,10 +195,10 @@ def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     try:
         with open(pddrc_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        
+
         if not isinstance(config, dict):
             raise ValueError(f"Invalid .pddrc format: expected dictionary at root level")
-        
+
         # Validate basic structure
         if 'contexts' not in config:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
@@ -538,6 +539,7 @@ def _resolve_config_hierarchy(
         'temperature': None,
         'budget': None,
         'max_attempts': None,
+        'auto_deps_csv_path': 'PDD_AUTO_DEPS_CSV_PATH',
     }
 
     for config_key, env_var in config_keys.items():
@@ -1210,7 +1212,7 @@ def construct_paths(
         # Also update context_config with resolved environment variables for generate_output_paths
         # This ensures environment variables are available when context config doesn't override them
         for key, value in resolved_config.items():
-            if key.endswith('_output_path') and key not in context_config:
+            if (key.endswith('_output_path') or key == 'auto_deps_csv_path') and key not in context_config:
                 context_config[key] = value
                 
     except Exception as e:
@@ -1480,7 +1482,10 @@ def construct_paths(
     # Filter user‑provided output_* locations from CLI options
     output_location_opts = {
         k: v for k, v in command_options.items()
-        if k.startswith("output") and v is not None # Ensure value is not None
+        if (
+            k.startswith("output")
+            or (command == "auto-deps" and k == "csv")
+        ) and v is not None # Ensure value is not None
     }
 
     # Determine input file directory for default output path generation

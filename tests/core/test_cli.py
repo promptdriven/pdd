@@ -231,6 +231,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['output_cost'] is None
     assert ctx.obj['local'] is False
     assert ctx.obj['review_examples'] is False
+    assert 'grounding_review_decisions' not in ctx.obj
     assert ctx.obj['time'] == DEFAULT_TIME
     mock_auto_update.assert_called_once_with()
 
@@ -270,6 +271,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['output_cost'] == "./output/costs.csv"
     assert ctx.obj['local'] is True
     assert ctx.obj['review_examples'] is True
+    assert ctx.obj['grounding_review_decisions'] == []
     assert ctx.obj['time'] == 0.7
     mock_auto_update.assert_called_once_with()
 

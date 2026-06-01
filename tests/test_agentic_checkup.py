@@ -452,6 +452,64 @@ class TestRunAgenticCheckup:
         call_kwargs = mock_orchestrator.call_args[1]
         assert call_kwargs["no_fix"] is True
 
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
+    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_pr_mode_without_issue_skips_issue_fetch(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+    ):
+        """#1292: ``--pr`` with no issue must not fetch an issue, and the PR
+        becomes the comment/state thread while the issue context is empty
+        (so the step prompts review the PR on its own merits)."""
+        mock_orchestrator.return_value = (True, "Checkup complete", 0.40, "anthropic")
+
+        success, msg, cost, model = run_agentic_checkup(
+            None,  # no --issue
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/42",
+            use_github_state=False,
+        )
+
+        assert success
+        assert msg == "Checkup complete"
+        # The issue body/comments fetch must be skipped entirely — there is
+        # no issue to read. (PR context is fetched inside the orchestrator,
+        # which is mocked here.)
+        mock_gh_cmd.assert_not_called()
+        mock_orchestrator.assert_called_once()
+        kwargs = mock_orchestrator.call_args.kwargs
+        # Empty issue context — never the literal "None" — drives merit review.
+        assert kwargs["issue_url"] == ""
+        assert kwargs["issue_content"] == ""
+        assert kwargs["issue_title"] == ""
+        # Thread/state target aliases to the PR (GitHub treats PRs as issues).
+        assert kwargs["issue_number"] == 42
+        assert kwargs["repo_owner"] == "owner"
+        assert kwargs["repo_name"] == "repo"
+        assert kwargs["pr_url"] == "https://github.com/owner/repo/pull/42"
+        assert kwargs["pr_number"] == 42
+
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_pr_mode_without_issue_rejects_invalid_pr_url(self, mock_gh_cli):
+        """#1292: even with no issue, an unparseable --pr URL fails fast."""
+        success, msg, cost, model = run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="not-a-pr",
+            use_github_state=False,
+        )
+        assert not success
+        assert "Invalid GitHub PR URL" in msg
+
     @patch("pdd.agentic_checkup.run_checkup_review_loop")
     @patch("pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}')
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")

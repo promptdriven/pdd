@@ -5,6 +5,7 @@ import click
 from pathlib import Path
 from unittest.mock import patch, ANY
 import os
+import warnings
 
 # Mock generate_output_paths before importing construct_paths if it's needed globally
 # Or mock within each test as currently done.
@@ -731,14 +732,131 @@ def test_load_pddrc_warning_message_format(tmp_path):
     assert "ignored" in msg.lower()
     assert "pdd setup" in msg.lower()
 
-def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
-    """Issue #1198 + PR #1217 review feedback: auto_deps_csv_path is prescribed
-    by pdd/templates/generic/generate_pddrc_YAML.prompt but never consumed by
-    _resolve_config_hierarchy. Validator should surface it as unknown until the
-    wiring is added (separate issue). If this test starts failing, either the
-    wiring landed and the key should move into _PDDRC_DEFAULTS_KEYS with
-    regression coverage proving .pddrc affects the auto-deps CSV path, or the
-    template re-introduced the prescription and needs to be cleaned up."""
+
+def test_load_pddrc_warns_on_prompt_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: prompt_path was documented in
+    construct_paths_python.prompt as an alias for prompts_dir, but
+    _resolve_config_hierarchy never implemented the resolution chain. Per Greg's
+    second review, removed from the schema and from the prompt's spec. Validator
+    should surface it as unknown until aliasing is actually wired through. If
+    this test starts failing, either the wiring landed (CLI prompt_path, .pddrc
+    prompt_path, PDD_PROMPT_PATH env var, all resolving to prompts_dir with the
+    documented precedence) and the key should move into _PDDRC_DEFAULTS_KEYS
+    with regression coverage proving .pddrc affects prompts_dir resolution, or
+    the prompt re-introduced the alias documentation and needs cleanup."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      prompt_path: "configured_prompts"\n'
+    )
+    with pytest.warns(UserWarning, match="prompt_path"):
+        _load_pddrc_config(pddrc)
+
+
+# ---- Issue #1198: .pddrc unknown-key validation ----
+
+from pdd.construct_paths import _load_pddrc_config
+
+
+def test_load_pddrc_warns_on_unknown_root_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears at the root level."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="fake_unknown_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_context_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in a context block."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    typo_context_key: oops\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="typo_context_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_defaults_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in defaults."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      typo_defaults_key: oops\n'
+    )
+    with pytest.warns(UserWarning, match="typo_defaults_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_clean_config_no_warnings(tmp_path, recwarn):
+    """Issue #1198: a config with only known keys should not emit unknown-key warnings."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      generate_output_path: "src/"\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '      default_language: python\n'
+        '      strength: 0.5\n'
+        '      temperature: 0.0\n'
+        '      target_coverage: 80.0\n'
+        '      budget: 10.0\n'
+        '      max_attempts: 3\n'
+    )
+    _load_pddrc_config(pddrc)
+    unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
+    assert unknown_warnings == []
+
+
+def test_load_pddrc_warning_message_format(tmp_path):
+    """Issue #1198: warning should follow the format: contains unknown key 'X' at path 'Y', ignored."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning) as caught:
+        _load_pddrc_config(pddrc)
+    msg = str(caught[0].message)
+    assert "fake_unknown_key" in msg
+    assert "ignored" in msg.lower()
+    assert "pdd setup" in msg.lower()
+
+
+def test_load_pddrc_accepts_auto_deps_csv_path(tmp_path):
+    """Issue #1198 + PR #1238 fix: auto_deps_csv_path is prescribed by
+    pdd/templates/generic/generate_pddrc_YAML.prompt and is now wired into
+    _resolve_config_hierarchy and _PDDRC_DEFAULTS_KEYS. The validator must
+    accept it without warning so that PDD-generated configs don't immediately
+    tell users to regenerate their config."""
     pddrc = tmp_path / ".pddrc"
     pddrc.write_text(
         'version: "1.0"\n'
@@ -748,8 +866,65 @@ def test_load_pddrc_warns_on_auto_deps_csv_path(tmp_path):
         '      default_language: python\n'
         '      auto_deps_csv_path: "project_dependencies.csv"\n'
     )
-    with pytest.warns(UserWarning, match="auto_deps_csv_path"):
-        _load_pddrc_config(pddrc)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _load_pddrc_config(pddrc)  # must not raise
+
+
+def test_construct_paths_auto_deps_resolves_explicit_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": "explicit.csv"},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "explicit.csv")
+
+
+def test_construct_paths_auto_deps_resolves_pddrc_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        '      auto_deps_csv_path: "configured/deps.csv"\n'
+    )
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": None},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "configured" / "deps.csv")
+
+
+def test_construct_paths_auto_deps_resolves_env_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_AUTO_DEPS_CSV_PATH", "env/deps.csv")
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": None},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "env" / "deps.csv")
 
 
 def test_load_pddrc_warns_on_prompt_path(tmp_path):

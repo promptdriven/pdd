@@ -19,26 +19,37 @@ from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 class TestIssue902(unittest.TestCase):
     
     # --- agentic_common Jitter Test ---
-    @patch("pdd.agentic_common.get_available_agents", return_value=["anthropic"])
-    @patch("pdd.agentic_common._run_with_provider")
-    @patch("pdd.agentic_common.time.sleep")
-    @patch("pdd.agentic_common.random.uniform")
-    def test_jitter_is_additive(self, mock_uniform, mock_sleep, mock_run_with_provider, _mock_agents):
+    def test_jitter_is_additive(self):
         """Requirement: Backoff jitter should be additive to the exponential base."""
-        mock_run_with_provider.return_value = (False, "Error: transient", 0.0, None)
-        mock_uniform.return_value = 2.5
+        retry_delay = 10.0
+        jitter = 2.5
+        with (
+            patch(
+                "pdd.agentic_common.get_available_agents",
+                return_value=["anthropic"],
+            ),
+            patch("pdd.agentic_common._run_with_provider") as mock_run_with_provider,
+            patch("pdd.agentic_common.time.sleep") as mock_sleep,
+            patch(
+                "pdd.agentic_common.random.uniform",
+                return_value=jitter,
+            ) as mock_uniform,
+        ):
+            mock_run_with_provider.return_value = (False, "Error: transient", 0.0, None)
 
-        run_agentic_task(
-            instruction="test",
-            cwd=Path("."),
-            max_retries=2,
-            retry_delay=10.0,
-            quiet=True
-        )
+            run_agentic_task(
+                instruction="test",
+                cwd=Path("."),
+                max_retries=2,
+                retry_delay=retry_delay,
+                quiet=True,
+            )
 
-        self.assertTrue(mock_sleep.called)
-        first_sleep = mock_sleep.call_args_list[0][0][0]
-        self.assertAlmostEqual(first_sleep, 12.5)
+            self.assertTrue(mock_sleep.called)
+            mock_uniform.assert_called_with(0, retry_delay)
+            first_sleep = mock_sleep.call_args_list[0][0][0]
+            expected = retry_delay * (2 ** 0) + jitter
+            self.assertAlmostEqual(first_sleep, expected)
 
     # --- agentic_common False Positive Test ---
     @patch("pdd.agentic_common.get_available_agents", return_value=["anthropic"])
