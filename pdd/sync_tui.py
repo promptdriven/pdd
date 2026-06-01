@@ -254,18 +254,28 @@ def _restore_highlighted_csi(text: str, start: int) -> tuple[Optional[str], int]
     """Restore a highlighted CSI sequence body."""
     index = start
     body: List[str] = []
+    preserved_sgr: List[str] = []
     while index < len(text):
         char = text[index]
         if char == "\x1b":
-            skipped = _skip_sgr_sequences(text, index)
+            skipped, sequences = _consume_sgr_sequences(text, index)
             if skipped != index:
+                preserved_sgr.extend(
+                    sequence
+                    for sequence in sequences
+                    if not _is_sgr_reset(sequence)
+                )
                 index = skipped
                 continue
             return None, index
         body.append(char)
         index += 1
         if "@" <= char <= "~":
-            return "\x1b[" + "".join(body), index
+            csi_sequence = "\x1b[" + "".join(body)
+            outer_style = "".join(preserved_sgr)
+            if _is_full_reset_csi("".join(body)):
+                return csi_sequence + outer_style, index
+            return outer_style + csi_sequence, index
     return None, index
 
 
@@ -273,14 +283,23 @@ def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]
     """Restore a highlighted OSC sequence body."""
     index = start
     body: List[str] = []
+    preserved_sgr: List[str] = []
     while index < len(text):
         if text[index] == BEL:
-            return "\x1b]" + "".join(body) + BEL, index + 1
+            return "\x1b]" + "".join(body) + BEL + "".join(preserved_sgr), index + 1
         if text.startswith("\x1b\\", index):
-            return "\x1b]" + "".join(body) + "\x1b\\", index + 2
+            return (
+                "\x1b]" + "".join(body) + "\x1b\\" + "".join(preserved_sgr),
+                index + 2,
+            )
         if text[index] == "\x1b":
-            skipped = _skip_sgr_sequences(text, index)
+            skipped, sequences = _consume_sgr_sequences(text, index)
             if skipped != index:
+                preserved_sgr.extend(
+                    sequence
+                    for sequence in sequences
+                    if not _is_sgr_reset(sequence)
+                )
                 index = skipped
                 continue
             return None, index
@@ -294,10 +313,13 @@ def _restore_highlighted_single_escape(
     text: str, marker: str, start: int
 ) -> tuple[str, int]:
     """Restore a highlighted non-CSI/non-OSC escape sequence."""
-    index = _skip_sgr_sequences(text, start)
+    index, sequences = _consume_sgr_sequences(text, start)
+    preserved_sgr = "".join(
+        sequence for sequence in sequences if not _is_sgr_reset(sequence)
+    )
     if marker in CHARSET_SELECTOR_MARKERS and index < len(text):
-        return "\x1b" + marker + text[index], index + 1
-    return "\x1b" + marker, index
+        return "\x1b" + marker + text[index] + preserved_sgr, index + 1
+    return "\x1b" + marker + preserved_sgr, index
 
 
 def _is_single_escape_marker(marker: str) -> bool:
@@ -311,11 +333,19 @@ def _is_single_escape_marker(marker: str) -> bool:
 
 def _skip_sgr_sequences(text: str, start: int) -> int:
     """Skip Rich highlighter SGR sequences at ``start``."""
+    index, _sequences = _consume_sgr_sequences(text, start)
+    return index
+
+
+def _consume_sgr_sequences(text: str, start: int) -> tuple[int, List[str]]:
+    """Return the index after a run of SGR sequences and the consumed strings."""
     index = start
+    sequences: List[str] = []
     while True:
         next_index = _consume_sgr_sequence(text, index)
         if next_index is None:
-            return index
+            return index, sequences
+        sequences.append(text[index:next_index])
         index = next_index
 
 
@@ -331,6 +361,23 @@ def _consume_sgr_sequence(text: str, start: int) -> Optional[int]:
         if "@" <= char <= "~":
             return index if char == "m" else None
     return None
+
+
+def _is_sgr_reset(sequence: str) -> bool:
+    """Return True when an SGR sequence resets the active terminal style."""
+    if not sequence.startswith("\x1b[") or not sequence.endswith("m"):
+        return False
+    return _is_full_reset_csi(sequence[2:])
+
+
+def _is_full_reset_csi(body: str) -> bool:
+    """Return True when a CSI SGR body ends by fully resetting terminal style."""
+    if not body.endswith("m"):
+        return False
+    params = body[:-1].replace(":", ";").split(";")
+    if not params:
+        return True
+    return params[-1] in {"", "0", "00"}
 
 
 def _merge_reparsed_ansi_spans(
