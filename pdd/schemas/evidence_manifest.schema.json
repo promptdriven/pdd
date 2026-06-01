@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema_version", "run", "prompt", "context", "generation", "outputs", "contracts", "validation", "logs"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"type": "integer", "enum": [1, 2]},
     "run": {
       "type": "object",
       "required": ["id", "command", "pdd_version", "timestamp"],
@@ -42,7 +42,8 @@
         "model": {"type": ["string", "null"]},
         "temperature": {"type": ["number", "null"]},
         "cost_usd": {"type": "number"},
-        "grounding_examples": {"type": "array"}
+        "grounding_examples": {"type": "array"},
+        "grounding": {"$ref": "#/$defs/grounding"}
       }
     },
     "outputs": {"type": "array", "items": {"$ref": "#/$defs/fileHash"}},
@@ -65,6 +66,18 @@
       "additionalProperties": {"type": ["string", "null"]}
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 2}}, "required": ["schema_version"]},
+      "then": {
+        "properties": {
+          "generation": {
+            "required": ["model", "temperature", "cost_usd", "grounding_examples", "grounding"]
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "fileHash": {
       "type": "object",
@@ -73,6 +86,34 @@
         "path": {"type": "string"},
         "sha256": {"type": "string"}
       }
+    },
+    "grounding": {
+      "type": "object",
+      "required": ["mode", "selected_examples", "pinned", "excluded", "reviewed"],
+      "properties": {
+        "mode": {"enum": ["cloud", "local", "unavailable"]},
+        "selected_examples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["module"],
+            "properties": {
+              "module": {"type": "string"},
+              "id": {"type": "string"},
+              "title": {"type": "string"},
+              "prompt_sha256": {"type": "string"},
+              "code_sha256": {"type": "string"},
+              "similarity": {"type": "number"},
+              "source": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "pinned": {"type": "array", "items": {"type": "string"}},
+        "excluded": {"type": "array", "items": {"type": "string"}},
+        "reviewed": {"type": "boolean"}
+      },
+      "additionalProperties": false
     }
   }
 }

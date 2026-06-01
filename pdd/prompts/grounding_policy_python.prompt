@@ -1,0 +1,46 @@
+<pdd-reason>Loads optional .pdd/grounding_policy.yaml and checks per-run grounding evidence against required-review and required-pin rules for critical modules.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "load_policy", "signature": "(path: Optional[str] = None) -> GroundingPolicy", "returns": "GroundingPolicy"},
+      {"name": "check", "signature": "(policy: GroundingPolicy, module: str, grounding: Dict[str, Any]) -> List[PolicyViolation]", "returns": "List[PolicyViolation]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/grounding_policy.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+A small policy library that loads an optional `.pdd/grounding_policy.yaml` file and evaluates a single run's grounding evidence (mode, selected_examples, pinned, excluded, reviewed) against critical-module rules. This module is library-only; CI integration (e.g. `pdd gate`) will be wired separately.
+
+% Policy File Schema (`.pdd/grounding_policy.yaml`)
+```yaml
+grounding:
+  require_review_for_critical_modules: true
+  require_pinned_examples_for:
+    - auth
+    - payments
+    - compliance
+```
+
+% Requirements
+1. `load_policy(path=None) -> GroundingPolicy`: read YAML from the given path (default `.pdd/grounding_policy.yaml` resolved against CWD or `PDD_PATH`). When the file is missing OR the `grounding` key is absent, return a permissive default policy (`require_review_for_critical_modules=False`, empty `require_pinned_examples_for`) — never raise.
+2. Parse `require_pinned_examples_for` as a list of module slug strings used for exact-match comparison against the `module` argument to `check()`. Trim whitespace; ignore non-string entries.
+3. `check(policy, module, grounding)` returns a list of `PolicyViolation` records. Empty list means "policy satisfied" (or "policy not applicable" — they're indistinguishable to callers by design).
+4. Violation rules (each must produce a stable `code` so future `pdd gate` can render them deterministically):
+   - **R1 — `grounding.review_required`**: when `policy.require_review_for_critical_modules` is True AND `module` matches an entry in `require_pinned_examples_for` AND `grounding.get("reviewed") is not True`.
+   - **R2 — `grounding.pin_required`**: when `module` matches an entry in `require_pinned_examples_for` AND none of those slugs appear in `grounding.get("pinned", [])`.
+   - **R3 — `grounding.unavailable_for_critical_module`**: when `module` matches an entry in `require_pinned_examples_for` AND `grounding.get("mode") == "unavailable"`. This is a warning-level violation (callers may downgrade), but it MUST still be emitted so reviewers see the gap.
+5. `PolicyViolation` is a Pydantic v2 model with fields `code: str`, `module: str`, `message: str`, `severity: Literal["error", "warning"]`. R1/R2 are `error`; R3 is `warning`. (Match `GroundingPolicy`'s Pydantic v2 convention — do not use a dataclass.)
+6. `GroundingPolicy` is a Pydantic v2 model with fields `require_review_for_critical_modules: bool = False` and `require_pinned_examples_for: List[str] = []`.
+7. Module slug match is exact, case-sensitive — do not perform substring or fuzzy matching (the issue explicitly calls out the slugs `auth`, `payments`, `compliance`).
+8. `check()` MUST NOT mutate its `grounding` argument and MUST tolerate missing/None fields without raising (a malformed grounding dict yields the same violations as `mode: "unavailable"`).
+
+% Deliverables
+- Code: `pdd/grounding_policy.py`

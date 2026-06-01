@@ -403,6 +403,8 @@ def cli(
         os.environ.pop("PDD_QUIET", None)
     ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
+    if review_examples:
+        ctx.obj["grounding_review_decisions"] = []
     ctx.obj["local"] = local
     # Propagate --local flag to environment for llm_invoke cloud detection
     if local:

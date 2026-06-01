@@ -46,6 +46,38 @@ def test_generate_evidence_records_completed_output(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert record.call_args.kwargs["prompt_file"] == str(prompt)
     assert record.call_args.kwargs["output_files"] == [str(output)]
+    assert record.call_args.kwargs["reviewed"] is False
+
+
+def test_generate_evidence_forwards_cloud_grounding_from_ctx(tmp_path) -> None:
+    prompt = tmp_path / "item_python.prompt"
+    output = tmp_path / "item.py"
+    prompt.write_text("prompt", encoding="utf-8")
+    cloud_grounding = {
+        "mode": "cloud",
+        "selected_examples": [{"module": "item"}],
+        "pinned": ["item"],
+        "excluded": [],
+        "reviewed": True,
+    }
+    with patch("pdd.commands.generate.code_generator_main", return_value=("code", False, 0.1, "model")), \
+         patch("pdd.commands.generate.write_evidence_manifest") as record:
+        result = CliRunner().invoke(
+            generate,
+            [str(prompt), "--output", str(output), "--evidence"],
+            obj={
+                "temperature": 0.0,
+                "quiet": True,
+                "review_examples": True,
+                "last_grounding": cloud_grounding,
+                "grounding_review_decisions": [
+                    {"module": "item", "decision": "accept", "phase": "pre"}
+                ],
+            },
+        )
+    assert result.exit_code == 0, result.output
+    assert record.call_args.kwargs["grounding"] == cloud_grounding
+    assert record.call_args.kwargs["reviewed"] is True
 
 
 def test_test_evidence_records_manual_generation(tmp_path) -> None:

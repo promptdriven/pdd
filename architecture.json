@@ -9724,10 +9724,45 @@
     }
   },
   {
-    "reason": "Optional per-run JSON evidence manifests for supported commands.",
-    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
+    "reason": "Loads optional .pdd/grounding_policy.yaml and checks per-run grounding evidence against required-review and required-pin rules for critical modules.",
+    "description": "Policy library for the grounding evidence recorded by pdd generate. Library-only; CI integration (pdd gate) will be wired separately.",
     "dependencies": [],
-    "priority": 242,
+    "priority": 243,
+    "filename": "grounding_policy_python.prompt",
+    "filepath": "pdd/grounding_policy.py",
+    "tags": [
+      "module",
+      "python",
+      "grounding",
+      "policy"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[str] = None) -> GroundingPolicy",
+            "returns": "GroundingPolicy"
+          },
+          {
+            "name": "check",
+            "signature": "(policy: GroundingPolicy, module: str, grounding: Dict[str, Any]) -> List[PolicyViolation]",
+            "returns": "List[PolicyViolation]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
+    "dependencies": [],
+    "priority": 244,
     "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [
@@ -9741,7 +9776,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(**, command: str, ...) -> Path",
+            "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path",
             "returns": "Path"
           },
           {
