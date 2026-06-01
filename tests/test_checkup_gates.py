@@ -4881,3 +4881,71 @@ class TestDocContractCheck:
             encoding="utf-8",
         )
         assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0
+
+    def test_skip_condition_must_be_tied_to_the_operation_not_just_present(self, tmp_path: Path) -> None:
+        """Issue #1303/#1238 review round 2: the skip condition must be documented
+        in the CONTRACT FOR THE SPECIFIC OPERATION, not merely anywhere in the
+        file. The original drift was docs that already mention `--skip-tests`
+        (for the `test` step) while the `fix` step contract stayed unconditional.
+        That must still fail; only tying `--skip-tests`/`skip_tests` to `fix`'s own
+        entry passes."""
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
+
+        # --skip-tests is documented globally + for the TEST step, but `fix` is
+        # documented as an unconditional "Resolve test failures" (the drift).
+        (tmp_path / "README.md").write_text(
+            "# README\n## Options\n- `--skip-tests`: skip the test step\n"
+            "## Workflow\n"
+            "- test: run tests (skipped with --skip-tests)\n"
+            "- fix: Resolve test failures\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text(
+            "## Workflow Operations\n"
+            "- test: run tests; skipped when skip_tests is set\n"
+            "- fix: resolve failing tests\n"
+            "### Signature\nskip_tests: bool = False\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "sync.py").write_text(
+            "def run(operation):\n    return operation == 'fix'\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "init", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        # New skip condition added to the EXISTING `fix` operation.
+        (tmp_path / "sync.py").write_text(
+            "def run(operation, skip_tests):\n"
+            "    if operation == 'fix' and skip_tests:\n"
+            "        return 'skip'\n"
+            "    return operation == 'fix'\n",
+            encoding="utf-8",
+        )
+        # --skip-tests is present in both files, but only for `test` — `fix`'s own
+        # contract is silent. Must fail (the file-wide check wrongly passed here).
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        # Tie the condition to `fix`'s OWN entry in both docs → passes.
+        (tmp_path / "README.md").write_text(
+            "# README\n## Options\n- `--skip-tests`: skip the test step\n"
+            "## Workflow\n"
+            "- test: run tests (skipped with --skip-tests)\n"
+            "- fix: Resolve test failures; skipped when --skip-tests is set\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text(
+            "## Workflow Operations\n"
+            "- test: run tests; skipped when skip_tests is set\n"
+            "- fix: resolve failing tests; skipped when skip_tests is set\n"
+            "### Signature\nskip_tests: bool = False\n",
+            encoding="utf-8",
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0

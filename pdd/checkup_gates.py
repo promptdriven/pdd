@@ -3339,6 +3339,55 @@ def _doc_mentions_condition(text: str, cond: str) -> bool:
     return any(token in text for token in _condition_doc_tokens(cond))
 
 
+def _operation_doc_block(text: str, op: str) -> str:
+    """Return the documentation block that introduces workflow operation ``op``
+    as its own labeled entry, including wrapped/continuation lines.
+
+    Recognizes the common ``label: description`` shapes — ``- fix: ...``,
+    ``fix:``, ``**fix**:``, ``` `fix` — ... ``` — optionally prefixed by a list
+    marker, and gathers following lines until a blank line, a heading, or the
+    next same-or-lower-indent list entry. Returns ``""`` when ``op`` is not
+    documented as its own entry.
+
+    This is what lets the gate check a skip condition against the operation's
+    OWN contract instead of anywhere in the file: docs that mention
+    ``--skip-tests`` only for the ``test`` step must NOT satisfy a new
+    ``fix``+``skip_tests`` contract (#1303/#1238 review round 2).
+    """
+    # The operation token, optionally wrapped in emphasis/backticks and a list
+    # marker, immediately followed by a ':' or dash separator.
+    intro = re.compile(
+        r"^\s*(?:[-*+]\s+|\d+\.\s+)?[`*_]*"
+        + re.escape(op)
+        + r"[`*_]*\s*[:\-–—]"
+    )
+    any_bullet = re.compile(r"^\s*(?:[-*+]\s+|\d+\.\s+)")
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if intro.search(ln)), None)
+    if start is None:
+        return ""
+    block = [lines[start]]
+    base_indent = len(lines[start]) - len(lines[start].lstrip())
+    for ln in lines[start + 1:]:
+        if not ln.strip():
+            break
+        if ln.lstrip().startswith("#"):
+            break
+        indent = len(ln) - len(ln.lstrip())
+        # A new list entry at the same or shallower indent is a different op.
+        if any_bullet.match(ln) and indent <= base_indent:
+            break
+        block.append(ln)
+    return "\n".join(block)
+
+
+def _operation_documents_condition(text: str, op: str, cond: str) -> bool:
+    """True when ``op``'s OWN documented contract block in ``text`` mentions the
+    skip condition ``cond`` (any spelling). File-wide mentions do not count."""
+    block = _operation_doc_block(text, op)
+    return bool(block) and _doc_mentions_condition(block, cond)
+
+
 def run_doc_contract_check(
     worktree_path: Path | str, base_ref: Optional[str] = None
 ) -> int:
@@ -3569,22 +3618,25 @@ def run_doc_contract_check(
                 f"Sync step '{op}' is not documented in pdd/prompts/sync_orchestration_python.prompt under 'Workflow Operations' section."
             )
 
-    # A new skip CONDITION on an existing operation must be documented as a
-    # condition (not just the operation name) in BOTH README and the sync
-    # orchestration prompt. This is the #1303/#1238 regression: adding
-    # `operation == 'fix' and skip_tests` while the docs still only say
-    # "fix: Resolve test failures" must fail the gate.
+    # A new skip CONDITION on an existing operation must be documented as part
+    # of THAT operation's own contract (not merely anywhere in the file) in BOTH
+    # README and the sync orchestration prompt. This is the #1303/#1238 drift
+    # (review round 2): adding `operation == 'fix' and skip_tests` while the docs
+    # only tie `--skip-tests` to the `test` step — leaving `fix` documented as an
+    # unconditional "Resolve test failures" — must fail the gate.
     for op, cond in added_skip_contracts:
-        if not _doc_mentions_condition(readme_content, cond):
-            errors.append(
-                f"Skip condition '{cond}' gating operation '{op}' is not documented in README.md "
-                f"(mention one of: {', '.join(_condition_doc_tokens(cond))})."
-            )
-        if not _doc_mentions_condition(prompt_content, cond):
+        tokens = ", ".join(_condition_doc_tokens(cond))
+        if not _operation_documents_condition(readme_content, op, cond):
             errors.append(
                 f"Skip condition '{cond}' gating operation '{op}' is not documented in "
-                f"pdd/prompts/sync_orchestration_python.prompt "
-                f"(mention one of: {', '.join(_condition_doc_tokens(cond))})."
+                f"README.md within the '{op}' operation's own entry "
+                f"(tie '{op}' to one of: {tokens})."
+            )
+        if not _operation_documents_condition(prompt_content, op, cond):
+            errors.append(
+                f"Skip condition '{cond}' gating operation '{op}' is not documented in "
+                f"pdd/prompts/sync_orchestration_python.prompt within the '{op}' "
+                f"operation's own entry (tie '{op}' to one of: {tokens})."
             )
 
     for env in added_env_vars:
