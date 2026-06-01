@@ -35,6 +35,7 @@ from pdd.agentic_test_orchestrator import (
 def mock_deps():
     """Patch all external dependencies of the orchestrator."""
     with patch("pdd.agentic_test_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_test_orchestrator.drain_step_steers", return_value=[]), \
          patch("pdd.agentic_test_orchestrator.load_workflow_state") as mock_load, \
          patch("pdd.agentic_test_orchestrator.save_workflow_state") as mock_save, \
          patch("pdd.agentic_test_orchestrator.clear_workflow_state") as mock_clear, \
@@ -118,7 +119,7 @@ def test_happy_path_non_web(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step4":
             return (True, "TEST_TYPE: api\nTEST_FRAMEWORK: pytest", 0.1, "anthropic")
         if label == "step12":
@@ -154,7 +155,7 @@ def test_cost_accumulation(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         nonlocal call_count
         call_count += 1
         if label == "step12":
@@ -193,7 +194,7 @@ def test_hard_stop_needs_info(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step3":
             return (True, "STOP_CONDITION: Needs More Info from author", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -221,7 +222,7 @@ def test_hard_stop_plan_blocked(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step5":
             return (True, "PLAN_BLOCKED: Cannot test without environment", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -242,7 +243,7 @@ def test_hard_stop_no_files_step12(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "Generated tests but forgot to list files.", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -276,7 +277,7 @@ def test_resume_from_cached_state(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -314,7 +315,7 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -373,7 +374,7 @@ def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -412,7 +413,7 @@ def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         executed_labels.append(label)
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
@@ -446,7 +447,7 @@ def test_resume_partial_failure_reruns_from_failed_step(mock_deps, default_args)
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         executed_labels.append(label)
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
@@ -539,7 +540,7 @@ def test_file_parsing_deduplication(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: a.py, b.py", 0.1, "anthropic")
         if label == "step14":
@@ -584,7 +585,7 @@ def test_step16_skipped_when_step15_has_no_new_files(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
         if label == "step15":
@@ -609,7 +610,7 @@ def test_step16_runs_when_step15_creates_files(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
         if label == "step15":
@@ -664,7 +665,7 @@ def test_resume_populates_likely_ci_cwd_from_cached_step12(mock_deps, default_ar
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         rendered[label] = instruction
         return (True, "ok", 0.1, "anthropic")
 
@@ -702,7 +703,7 @@ def test_step16_uses_step15_subproject_not_step12(mock_deps, default_args, tmp_p
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         rendered[label] = instruction
         if label == "step12":
             return (True, "FILES_CREATED: extensions/a/tests/test_x.py", 0.1, "anthropic")
@@ -736,7 +737,7 @@ def test_context_passes_step_outputs(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step1":
             return (True, "No duplicates found.", 0.1, "anthropic")
         if label == "step12":
@@ -761,7 +762,7 @@ def test_step5b_output_alias_in_context(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step5.5":
             return (True, "Enhanced plan with contracts.", 0.1, "anthropic")
         if label == "step12":
@@ -819,7 +820,7 @@ def test_soft_failure_continues(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step2":
             return (False, "Partial failure, no hard stop", 0.1, "anthropic")
         if label == "step12":
@@ -846,7 +847,7 @@ def test_return_tuple_structure(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step12":
             return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -876,7 +877,7 @@ def test_step4_extracts_test_type_and_target_url(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step4":
             return (True, "TEST_TYPE: web\nTARGET_URL: http://localhost:3000", 0.1, "anthropic")
         if label == "step12":
@@ -1000,7 +1001,7 @@ def test_clarification_step3_saves_previous_step(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step3":
             return (True, "STOP_CONDITION: Needs More Info", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
@@ -1057,7 +1058,7 @@ def test_no_false_positive_casual_needs_more_info(mock_deps, default_args):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, steers=None, **kwargs):
         if label == "step3":
             # Casual mention without STOP_CONDITION tag
             return (True, "The issue already has enough info. Needs More Info is not required.", 0.1, "anthropic")
@@ -1159,7 +1160,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False):
+                        use_playwright=False, steers=None, **kwargs):
             if label == "step4":
                 return (
                     True,
@@ -1203,7 +1204,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False):
+                        use_playwright=False, steers=None, **kwargs):
             if label == "step4":
                 return (True, "TEST_TYPE: api", 0.1, "anthropic")
             if label == "step12":
@@ -1234,7 +1235,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False):
+                        use_playwright=False, steers=None, **kwargs):
             if label == "step4":
                 return (
                     True,
