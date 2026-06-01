@@ -338,6 +338,7 @@ def test_csv_fieldnames_include_interactive_only():
     "model_id,expected",
     [
         ("github_copilot/gpt-5", True),
+        ("chatgpt/gpt-5.4", True),  # subscription / codex-login device-flow auth
         ("lm_studio/qwen3-coder-next", True),
         ("ollama/llama3", True),
         ("ollama_chat/llama3", True),  # litellm chat-format variant of ollama

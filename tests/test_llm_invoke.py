@@ -4984,15 +4984,17 @@ class TestSelectModelCandidates:
 
 class TestInteractiveOnlyFilter:
     """The interactive_only column lets server/CI/library contexts skip
-    device-flow / local-server providers (github_copilot, lm_studio, ollama)
-    that would otherwise hang. Default: skip. PDD_ALLOW_INTERACTIVE=1: include.
-    An explicitly configured base model is always honored.
+    device-flow / subscription / local-server providers (github_copilot,
+    chatgpt, lm_studio, ollama) that would otherwise hang. Default: skip.
+    PDD_ALLOW_INTERACTIVE=1: include. An explicitly configured base model is
+    always honored.
     """
 
     def _make_df(self, llm_mod, tmp_path, with_column=True):
         col = ",interactive_only" if with_column else ""
         keyed = ",False" if with_column else ""
         copilot = ",True" if with_column else ""
+        chatgpt = ",True" if with_column else ""
         local = ",True" if with_column else ""
         content = (
             "provider,model,input,output,coding_arena_elo,api_key,"
@@ -5001,6 +5003,8 @@ class TestInteractiveOnlyFilter:
             "openai,gpt-4,30,60,1300,OPENAI_API_KEY,True,effort,128000,4096,0" + keyed + "\n"
             "anthropic,claude-3,15,75,1280,ANTHROPIC_API_KEY,True,budget,200000,8192,16000" + keyed + "\n"
             "Github Copilot,github_copilot/gpt-5,0,0,1393,,True,none,128000,4096,0" + copilot + "\n"
+            # chatgpt/* subscription rows use codex-login device-flow auth, empty api_key.
+            "OpenAI ChatGPT,chatgpt/gpt-5.4,0,0,1437,,True,none,128000,4096,0" + chatgpt + "\n"
             "lm_studio,lm_studio/qwen3-coder-next,0,0,1310,,True,none,128000,4096,0" + local + "\n"
         )
         csv_path = tmp_path / "models_interactive.csv"
@@ -5010,7 +5014,8 @@ class TestInteractiveOnlyFilter:
     def test_interactive_rows_parsed_as_bool(self, llm_mod, tmp_path):
         df = self._make_df(llm_mod, tmp_path)
         # String-aware parse: "False" must NOT become truthy (bool("False") is True).
-        assert int(df["interactive_only"].sum()) == 2
+        # Three interactive rows: github_copilot, chatgpt, lm_studio.
+        assert int(df["interactive_only"].sum()) == 3
         keyed = df[df["model"] == "gpt-4"].iloc[0]["interactive_only"]
         assert bool(keyed) is False
 
@@ -5020,6 +5025,7 @@ class TestInteractiveOnlyFilter:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         names = [c["model"] for c in candidates]
         assert "github_copilot/gpt-5" not in names
+        assert "chatgpt/gpt-5.4" not in names
         assert "lm_studio/qwen3-coder-next" not in names
         assert "gpt-4" in names and "claude-3" in names
 
@@ -5029,6 +5035,7 @@ class TestInteractiveOnlyFilter:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         names = [c["model"] for c in candidates]
         assert "github_copilot/gpt-5" in names
+        assert "chatgpt/gpt-5.4" in names
         assert "lm_studio/qwen3-coder-next" in names
 
     def test_explicit_interactive_base_is_honored(self, llm_mod, tmp_path, monkeypatch):
@@ -5040,6 +5047,33 @@ class TestInteractiveOnlyFilter:
         candidates = llm_mod._select_model_candidates(0.5, "github_copilot/gpt-5", df)
         names = [c["model"] for c in candidates]
         assert "github_copilot/gpt-5" in names
+        assert "chatgpt/gpt-5.4" not in names
+        assert "lm_studio/qwen3-coder-next" not in names
+
+    def test_chatgpt_excluded_by_default(self, llm_mod, tmp_path, monkeypatch):
+        # Regression for the #1164 review: chatgpt/* subscription rows use the
+        # same device-flow (codex login) auth class and must be skipped in the
+        # automatic cascade by default.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        names = [c["model"] for c in llm_mod._select_model_candidates(0.5, "gpt-4", df)]
+        assert "chatgpt/gpt-5.4" not in names
+
+    def test_chatgpt_included_with_opt_in(self, llm_mod, tmp_path, monkeypatch):
+        monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+        df = self._make_df(llm_mod, tmp_path)
+        names = [c["model"] for c in llm_mod._select_model_candidates(0.5, "gpt-4", df)]
+        assert "chatgpt/gpt-5.4" in names
+
+    def test_explicit_chatgpt_base_is_honored(self, llm_mod, tmp_path, monkeypatch):
+        # An explicitly configured chatgpt/* base is honored even without opt-in.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(0.5, "chatgpt/gpt-5.4", df)
+        names = [c["model"] for c in candidates]
+        assert "chatgpt/gpt-5.4" in names
+        # ...while the OTHER interactive rows stay excluded.
+        assert "github_copilot/gpt-5" not in names
         assert "lm_studio/qwen3-coder-next" not in names
 
     def test_missing_column_defaults_to_non_interactive(self, llm_mod, tmp_path, monkeypatch):
@@ -5051,6 +5085,7 @@ class TestInteractiveOnlyFilter:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         names = [c["model"] for c in candidates]
         assert "github_copilot/gpt-5" in names
+        assert "chatgpt/gpt-5.4" in names
         assert "lm_studio/qwen3-coder-next" in names
 
 

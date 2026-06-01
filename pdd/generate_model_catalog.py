@@ -362,7 +362,13 @@ CSV_FIELDNAMES = [
 # fast-failing. Rows for these providers are emitted with interactive_only=True
 # so automatic model selection can skip them by default. See
 # llm_invoke._select_model_candidates and the PDD_ALLOW_INTERACTIVE opt-in.
-_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama"}
+#   - github_copilot: device-flow OAuth (github.com/login/device)
+#   - lm_studio / ollama: local server on localhost
+#   - chatgpt: ChatGPT subscription via the codex login token (`codex login`);
+#     the hand-managed chatgpt/* rows carry an empty api_key and litellm may
+#     prompt for device-flow auth when no token exists, so they belong in the
+#     same default-deny class (issue #1164 review).
+_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama", "chatgpt"}
 
 # ---------------------------------------------------------------------------
 # Regex patterns for _extract_base_model() — stripping provider/region/version
