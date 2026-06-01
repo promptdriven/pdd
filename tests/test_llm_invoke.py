@@ -4941,12 +4941,18 @@ class TestSelectModelCandidates:
             0.5, "vertex_ai/claude-opus-4-6", df
         )
         # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
-        # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to surrogate-base = first row (AWS Bedrock).
+        # constrained to provider="Google Vertex AI" finds nothing. Issue #1330:
+        # the surrogate base now stays within the configured provider, so it
+        # resolves to the Google Vertex AI family (gemini-3.1-pro-preview) —
+        # NOT the direct Anthropic row, and NOT the Anthropic-keyed first CSV
+        # row (AWS Bedrock).
         assert candidates[0]["model"] != "claude-opus-4-6", (
             "vertex_ai/ prefix must not silently match direct Anthropic row"
         )
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+        assert candidates[0]["provider"] == "Google Vertex AI", (
+            f"surrogate base should stay within Vertex, got {candidates[0]['provider']}"
+        )
+        assert candidates[0]["model"] == "gemini-3.1-pro-preview"
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
@@ -4976,6 +4982,80 @@ class TestSelectModelCandidates:
         # Should resolve to the Google Vertex AI row, not anything else.
         assert candidates[0]["model"] == "gemini-3.1-pro-preview"
         assert candidates[0]["provider"] == "Google Vertex AI"
+
+
+# ============================================================================
+# TESTS: provider-aware surrogate base (issue #1330)
+# ============================================================================
+
+class TestProviderAwareSurrogateBase:
+    """Issue #1330: when a configured PDD_MODEL_DEFAULT carries a provider
+    prefix (e.g. vertex_ai/...) but the exact model is absent from the CSV,
+    the surrogate base must stay within that provider instead of defaulting
+    to the provider-sorted first row (an Anthropic-keyed model). A
+    Google/Vertex Cloud Run job with no ANTHROPIC_API_KEY must not be routed
+    to Anthropic by CSV-ranking accident.
+    """
+
+    def _make_df(self, llm_mod, tmp_path):
+        # First rows are Anthropic-keyed (mirrors the bundled CSV's provider
+        # sort, where AWS Bedrock / direct Anthropic rows sort first). A
+        # Google Vertex AI family is present but none matches the configured
+        # `vertex_ai/gemini-3.5-flash` exactly.
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "AWS Bedrock,anthropic.claude-opus-4-8,5.0,25.0,1575,"
+            "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,"
+            "True,effort,0,0,0\n"
+            "Anthropic,claude-opus-4-8,5.0,25.0,1575,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Anthropic,claude-sonnet-4-6,3.0,15.0,1525,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Google Vertex AI,vertex_ai/claude-opus-4-8,5.0,25.0,1570,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,0,0,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3-flash-preview,0.5,3.0,1437,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,0,0,0\n"
+        )
+        csv_path = tmp_path / "vertex_routing_models.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_missing_vertex_base_surrogates_within_vertex_not_anthropic(self, llm_mod, tmp_path):
+        df = self._make_df(llm_mod, tmp_path)
+        # Configured base is absent from the CSV (only gemini-3-flash-preview
+        # exists, not gemini-3.5-flash). At strength 0.5 the surrogate base is
+        # candidates[0].
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3.5-flash", df
+        )
+        base = candidates[0]
+        assert base["provider"] == "Google Vertex AI", (
+            f"surrogate base routed outside Vertex: {base['provider']} / {base['model']}"
+        )
+        assert "ANTHROPIC_API_KEY" not in str(base["api_key"]), (
+            f"surrogate base requires an Anthropic API key: {base['model']}"
+        )
+
+    def test_no_same_provider_row_falls_back_to_first_row(self, llm_mod, tmp_path):
+        # Backward-compat (issue #296): a prefix with no matching provider rows
+        # still falls back to the first available CSV row.
+        df = self._make_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "azure_ai/some-missing-model", df
+        )
+        # No "Azure AI" rows in the fixture → first available row is the base.
+        assert candidates[0]["model"] == df.iloc[0]["model"]
+
+    def test_provider_for_base_model_name(self, llm_mod):
+        assert llm_mod._provider_for_base_model_name("vertex_ai/gemini-3.5-flash") == "Google Vertex AI"
+        assert llm_mod._provider_for_base_model_name("gemini/gemini-3-flash-preview") == "Google Gemini"
+        assert llm_mod._provider_for_base_model_name("anthropic/claude-opus-4-8") == "Anthropic"
+        assert llm_mod._provider_for_base_model_name("claude-opus-4-8") is None
+        assert llm_mod._provider_for_base_model_name("") is None
 
 
 class TestAlternativeBaseLookups:

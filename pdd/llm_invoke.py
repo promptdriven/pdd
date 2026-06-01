@@ -2428,6 +2428,24 @@ def _is_permanent_invalid_request_error(exc: Exception) -> bool:
     return any(marker in msg for marker in permanent_markers)
 
 
+def _provider_for_base_model_name(base_model_name: str) -> Optional[str]:
+    """Return the CSV ``provider`` display name implied by a configured base
+    model name's prefix (e.g. ``vertex_ai/...`` → ``Google Vertex AI``), or
+    ``None`` when the name carries no known provider prefix.
+
+    Used to keep the surrogate-base fallback inside the provider the
+    deployment configured (issue #1330): a Google/Vertex-configured Cloud
+    Run job with ``PDD_MODEL_DEFAULT=vertex_ai/...`` must not be routed to
+    Anthropic-keyed rows just because they sort first in the CSV.
+    """
+    if not base_model_name:
+        return None
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        if base_model_name.startswith(prefix):
+            return provider
+    return None
+
+
 def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     """Return ``(alt_name, required_provider)`` pairs to try when the literal
     form of ``base_model_name`` is not in the CSV.
@@ -2537,20 +2555,47 @@ def _select_model_candidates(
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
-            # Option A': Soft fallback – choose a reasonable surrogate base and continue
-            # Strategy (simplified and deterministic): pick the first available model
-            # from the CSV as the surrogate base. This mirrors typical CSV ordering
-            # expectations and keeps behavior predictable across environments.
-            # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
-            try:
-                base_model = available_df.iloc[0]
-                # Silently use the first available model from user's CSV without warning
-                # Users who intentionally customize their CSV shouldn't see warnings about removed models
-            except Exception:
-                # If any unexpected error occurs during fallback, raise a clear error
-                raise ValueError(
-                    f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
-                )
+            # Option A': Soft fallback – choose a reasonable surrogate base and continue.
+            # Issue #1330: before defaulting to the global first row, honor the
+            # provider implied by the configured base model name's prefix. The
+            # CSV is provider-sorted, so its first row is an Anthropic-keyed
+            # model; picking it for a Google/Vertex-configured job
+            # (PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash) silently routes
+            # generation to ANTHROPIC_API_KEY models and fails in --force mode
+            # when that key is intentionally absent in Cloud Run. Prefer the
+            # highest-ELO available row from the same provider so routing stays
+            # within the configured provider family; only fall back to the
+            # global first row when no same-provider row exists.
+            base_model = None
+            preferred_provider = _provider_for_base_model_name(base_model_name)
+            if preferred_provider is not None:
+                same_provider = available_df[available_df['provider'] == preferred_provider]
+                if not same_provider.empty:
+                    base_model = same_provider.sort_values(
+                        by='coding_arena_elo', ascending=False
+                    ).iloc[0]
+                    logger.info(
+                        "Base model '%s' not in CSV; using same-provider surrogate "
+                        "'%s' (provider='%s') so routing stays within the configured "
+                        "provider instead of the Anthropic-keyed first CSV row (issue #1330).",
+                        base_model_name, base_model['model'], preferred_provider,
+                    )
+            if base_model is None:
+                # Fix for issue #296: Don't warn when any base model (from env var
+                # or default) is not found in CSV. Pick the first available model
+                # as a deterministic, predictable surrogate.
+                try:
+                    base_model = available_df.iloc[0]
+                    logger.info(
+                        "Base model '%s' not in CSV and no same-provider surrogate "
+                        "available; falling back to first CSV row '%s' (provider='%s').",
+                        base_model_name, base_model['model'], base_model['provider'],
+                    )
+                except Exception:
+                    # If any unexpected error occurs during fallback, raise a clear error
+                    raise ValueError(
+                        f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
+                    )
     else:
         base_model = base_model_row.iloc[0]
 
