@@ -3259,6 +3259,22 @@ def get_markdown_section(text: str, start_marker: str, end_markers: List[str]) -
     return text[start_idx:end_idx]
 
 
+def _doc_contract_should_scan_added_file(file_path: str) -> bool:
+    """Return True when ``file_path`` can define user-facing runtime surfaces."""
+    path = file_path.replace("\\", "/")
+    parts = path.split("/")
+    name = parts[-1] if parts else path
+    if "tests" in parts or "__tests__" in parts:
+        return False
+    if "fixtures" in parts or "testdata" in parts or "snapshots" in parts:
+        return False
+    if path.startswith(("context/", "examples/", "docs/")):
+        return False
+    if name.startswith("test_") or name.endswith("_test.py"):
+        return False
+    return True
+
+
 def run_doc_contract_check(
     worktree_path: Path | str, base_ref: Optional[str] = None
 ) -> int:
@@ -3378,6 +3394,8 @@ def run_doc_contract_check(
 
     # Click options, Skip behaviors, and Env vars
     for file_path, lines in added_lines_by_file.items():
+        if not _doc_contract_should_scan_added_file(file_path):
+            continue
         if file_path.endswith(".py"):
             has_click = False
             full_path = worktree / file_path
@@ -3412,7 +3430,6 @@ def run_doc_contract_check(
         if (
             file_path.endswith(".py")
             or file_path.endswith(".sh")
-            or file_path.endswith(".prompt")
         ):
             for line in lines:
                 env_matches = re.findall(r"\b(PDD_[A-Z0-9_]+)\b", line)

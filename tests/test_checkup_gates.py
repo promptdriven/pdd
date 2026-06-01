@@ -4702,3 +4702,44 @@ class TestDocContractCheck:
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
 
+    def test_run_doc_contract_check_ignores_test_fixture_literals(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+
+        (tmp_path / "README.md").write_text("# README\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "tests" / "test_doc_contract.py").write_text(
+            "def test_existing():\n    assert True\n",
+            encoding="utf-8",
+        )
+
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "init tests",
+                "-q",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        (tmp_path / "tests" / "test_doc_contract.py").write_text(
+            "import click\n"
+            "def test_fixture_literals():\n"
+            "    click.option('--new-opt')\n"
+            "    operation = 'skip:new_op'\n"
+            "    env = 'PDD_MY_NEW_VAR'\n"
+            "    assert operation and env\n",
+            encoding="utf-8",
+        )
+
+        res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
+        assert res == 0
