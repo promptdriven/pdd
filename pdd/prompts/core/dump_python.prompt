@@ -20,7 +20,7 @@
      - Signature: `_write_core_dump(ctx: click.Context, normalized_results: List[Any], invoked_subcommands: List[str], total_cost: float, terminal_output: Optional[str] = None) -> None`
      - Payload structure: `schema_version` (integer, currently 1), `pdd_version`, `timestamp_utc`, `argv` (without binary name), `cwd`, `platform` dict, `global_options` dict, `invoked_subcommands`, `total_cost`, `steps` list, `errors`, `environment`, `file_contents`, `terminal_output`.
      - File collection: reads from `ctx.obj["core_dump_files"]` set; 50KB size limit per file; marks binary as `<binary>`, oversized as `<too large>`, errors as `<error reading file: ...>`.
-     - Auto-includes: meta files from `.pdd/meta/` matching invoked commands; config files (`.pdd/config.json`, `.pddconfig`, `pdd.json`).
+     - Auto-includes: meta files from `.pdd/meta/` matching invoked commands; config files (`.pdd/config.json`, `.pddconfig`, `pdd.json`); the active LLM model CSV (`~/.pdd/llm_model.csv`, explicit real `$PDD_PATH/.pdd/llm_model.csv`, CWD project `.pdd/llm_model.csv`, or packaged `pdd/data/llm_model.csv`, in that order).
      - Environment filtering: only `PDD_*` vars and `VIRTUAL_ENV`, `PYTHONPATH`, `PATH`; redacts vars containing KEY, TOKEN, SECRET, PASSWORD.
 
   2. **`_get_github_token` function**:
