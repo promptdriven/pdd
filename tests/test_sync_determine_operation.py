@@ -1099,8 +1099,8 @@ def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
     assert isinstance(decision, SyncDecision)
 
 @patch('sync_determine_operation.construct_paths')
-def test_skip_flags_dont_interfere_with_crash_fix(mock_construct, pdd_test_environment):
-    """Test that skip flags don't interfere with crash/fix operations."""
+def test_sync_determine_operation_respects_skip_flags_before_run_report(mock_construct, pdd_test_environment):
+    """Test that skip flags prevent crash/fix recommendations based on cached failing run reports."""
     # Create prompt file so get_pdd_file_paths can work properly
     prompts_dir = pdd_test_environment / "prompts"
     prompts_dir.mkdir(exist_ok=True)
@@ -1124,7 +1124,7 @@ def test_skip_flags_dont_interfere_with_crash_fix(mock_construct, pdd_test_envir
         "prompt_hash": prompt_hash, "code_hash": "c", "example_hash": "e", "test_hash": test_hash
     })
 
-    # Create run report with test failures (fix should still trigger)
+    # Create run report with test failures
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 2, "coverage": 80.0,
@@ -1132,8 +1132,8 @@ def test_skip_flags_dont_interfere_with_crash_fix(mock_construct, pdd_test_envir
     })
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir), skip_tests=True, skip_verify=True)
-    assert decision.operation == 'fix'  # Should still trigger fix despite skip flags
-    assert "Test failures detected" in decision.reason
+    assert decision.operation == 'all_synced'  # Should NOT trigger fix because skip flags are active
+    assert "tests skipped" in decision.reason.lower()
 
 # --- Part 5: Integration Tests - Example Scenarios ---
 
