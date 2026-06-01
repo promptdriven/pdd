@@ -20,10 +20,12 @@ class MockRichLog:
 
     def __init__(self):
         self.written_lines: List[str] = []
+        self.written_texts: List[object] = []
 
     def write(self, text):
         """Capture the plain text content."""
         if hasattr(text, 'plain'):
+            self.written_texts.append(text)
             self.written_lines.append(text.plain)
         else:
             self.written_lines.append(str(text))
@@ -59,6 +61,12 @@ def redirector(mock_app, mock_log):
 def captured_lines(mock_log):
     """Return the captured lines from the mock log."""
     return mock_log.written_lines
+
+
+@pytest.fixture
+def captured_texts(mock_log):
+    """Return the captured Rich Text objects from the mock log."""
+    return mock_log.written_texts
 
 
 # =============================================================================
@@ -218,3 +226,28 @@ def test_rich_printed_ansi_output_does_not_show_escape_fragments(redirector, cap
     console.print("\x1b[36m\x1b[1mcyan-bold\x1b[39;49;00m")
 
     assert captured_lines == ["hello", "cyan-bold"]
+
+
+def test_rich_printed_ansi_preserves_existing_rich_styles(redirector, captured_texts):
+    """Reparsing highlighted ANSI should keep non-ANSI Rich styles on the line."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[bold]prefix[/bold] \x1b[90mhello\x1b[0m")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix hello"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+    assert any(
+        span.start <= len("prefix ") and span.end >= len("prefix hello")
+        and getattr(span.style.color, "number", None) == 8
+        for span in text.spans
+    )
