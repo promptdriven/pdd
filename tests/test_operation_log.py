@@ -1269,3 +1269,161 @@ def test_log_operation_second_pass_is_idempotent_issue_1305(tmp_path):
             f"{field} changed between passes ({first[field]} -> {second[field]}); "
             "a second auto-heal pass would rewrite the example (PR #1243 loop)"
         )
+
+
+def test_log_operation_nested_subproject_from_parent_cwd_issue_1305_1211(
+    tmp_path, monkeypatch
+):
+    """Issue #1305 + #1211 regression: a decorated command run from a PARENT CWD
+    for a nested subproject must write a REAL, converged fingerprint to the
+    SUBPROJECT's .pdd/meta — not an all-null one to the parent.
+
+    This closes the gap the other issue_1305 tests leave open: every one of them
+    `patch(...get_pdd_file_paths, return_value=<already-correct dict>)`, which
+    bypasses the exact CWD-relative resolution that breaks here. This test uses
+    the REAL get_pdd_file_paths (NO mock) against a context-configured subproject
+    whose .pddrc lives BELOW the run CWD.
+
+    Before the fix, get_pdd_file_paths(basename, language) re-resolved the prompts
+    root from the parent CWD: the prompt was not found, code/example/test paths
+    pointed at non-existent parent files (so every hash was null), and the
+    fingerprint landed in the PARENT .pdd/meta — split from the sync log/run
+    report that log_paths still anchored at the subproject. The fix anchors
+    resolution at the prompt file's subproject (absolute prompts_dir).
+    """
+    from pdd.sync_determine_operation import calculate_current_hashes
+
+    parent = tmp_path / "monorepo"
+    sub = parent / "service"
+    for d in ("prompts/api", "api/src", "api/examples", "api/tests"):
+        (sub / d).mkdir(parents=True)
+    # Subproject .pddrc with a custom context: non-default output dirs + paths
+    # patterns, so real context/template resolution is exercised (not just the
+    # default layout, which would mask residual CWD-anchored resolution).
+    (sub / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  backendctx:\n"
+        '    paths: ["api/**", "prompts/api/**"]\n'
+        "    defaults:\n"
+        '      generate_output_path: "api/src/"\n'
+        '      example_output_path: "api/examples/"\n'
+        '      test_output_path: "api/tests/"\n'
+        '      prompts_dir: "prompts/api"\n'
+        '      default_language: "python"\n'
+    )
+    prompt_file = sub / "prompts" / "api" / "widget_python.prompt"
+    code_file = sub / "api" / "src" / "widget.py"
+    example_file = sub / "api" / "examples" / "widget_example.py"
+    test_file = sub / "api" / "tests" / "test_widget.py"
+    prompt_file.write_text("% prompt\nMake a widget.\n")
+    code_file.write_text("def widget():\n    return 7\n")
+    example_file.write_text("from api.src.widget import widget\nwidget()\n")
+    test_file.write_text("def test_widget():\n    assert True\n")
+
+    # Run from the PARENT, above the subproject's .pddrc (the #1211 scenario).
+    monkeypatch.chdir(parent)
+    prompt_rel = os.path.join("service", "prompts", "api", "widget_python.prompt")
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    # Deliberately NO patch of get_pdd_file_paths / get_meta_dir / META_DIR:
+    # real resolution must decide where the fingerprint lands and what it hashes.
+    run_example(prompt_file=prompt_rel)
+
+    basename, language = operation_log.infer_module_identity(prompt_rel)
+    assert basename and language
+
+    # 1. The fingerprint must NOT leak to the parent root.
+    parent_fp = operation_log.get_fingerprint_path(
+        basename, language, project_root=parent
+    )
+    assert not parent_fp.exists(), (
+        f"fingerprint leaked to the PARENT root {parent_fp} (issue #1211 regression)"
+    )
+
+    # 2. It must be anchored at the subproject root, with real (non-null) hashes.
+    sub_fp = operation_log.get_fingerprint_path(
+        basename, language, project_root=sub
+    )
+    assert sub_fp.exists(), f"fingerprint not anchored at subproject: {sub_fp}"
+    fp_data = json.loads(sub_fp.read_text())
+
+    # 2b. Finding 2 (no metadata split): the sync log the decorator writes via the
+    #     prompt-path hint must land in the SAME subproject meta dir as the
+    #     fingerprint — before the fix the fingerprint diverged to the parent.
+    assert operation_log.get_log_path(
+        basename, language, project_root=sub
+    ).exists(), "sync log not anchored at subproject"
+    assert not operation_log.get_log_path(
+        basename, language, project_root=parent
+    ).exists(), "sync log leaked to the parent root (metadata split)"
+
+    # 3. Convergence: the saved hashes equal what a fresh sync pass computes from
+    #    the real subproject files, so a second auto-heal pass sees no drift.
+    expected = calculate_current_hashes(
+        {
+            "prompt": prompt_file,
+            "code": code_file,
+            "example": example_file,
+            "test": test_file,
+        }
+    )
+    for field in ("prompt_hash", "code_hash", "example_hash", "test_hash"):
+        assert _is_hex_sha256(fp_data[field]), (
+            f"{field} must be a real SHA-256, got {fp_data[field]!r} "
+            "(null + parent-anchored before the fix)"
+        )
+        assert fp_data[field] == expected.get(field), (
+            f"{field} diverges from the on-disk subproject files -> auto-heal loop"
+        )
+
+
+def test_prompts_root_for_fingerprint_uses_base_prompts_dir_issue_1305(tmp_path):
+    """`_prompts_root_for_fingerprint` must return the BASE prompts dir (the
+    outermost 'prompts' component), NOT a configured-deeper dir like
+    `prompts/commands`.
+
+    get_pdd_file_paths keys architecture.json lookups *relative to* this root, so
+    a deeper root changes the key (`checkup_python.prompt` instead of
+    `commands/checkup_python.prompt`) and silently breaks filepath resolution for
+    subdir-context modules — e.g. `pdd/commands/checkup.py` mis-resolves to
+    `pdd/checkup.py`, yielding null code/example/test hashes. This locks the
+    base-not-deep contract that distinction relies on.
+    """
+    # Subdir-context prompt: base root is '.../prompts', not '.../prompts/commands'.
+    base = operation_log._prompts_root_for_fingerprint(
+        "prompts/commands/checkup_python.prompt"
+    )
+    assert base.name == "prompts", f"expected base 'prompts' root, got {base}"
+    assert base.parts[-2:] != ("prompts", "commands"), (
+        f"must not return the configured-deep prompts_dir: {base}"
+    )
+    assert base.is_absolute()
+
+    # Nested subproject below CWD: base root is the subproject's own prompts dir.
+    nested = operation_log._prompts_root_for_fingerprint(
+        os.path.join("service", "prompts", "api", "widget_python.prompt")
+    )
+    assert nested.parts[-2:] == ("service", "prompts"), (
+        f"expected the subproject's base prompts root, got {nested}"
+    )
+    assert nested.is_absolute()
+
+    # No 'prompts' component anywhere: fall back to the prompt file's directory.
+    bare = operation_log._prompts_root_for_fingerprint(
+        str(tmp_path / "weird" / "foo_python.prompt")
+    )
+    assert bare == (tmp_path / "weird").resolve()
+
+    # An ancestor directory literally named 'prompts' (e.g. the repo checked out
+    # under ~/prompts/myrepo) must not mis-anchor: use the 'prompts' NEAREST the
+    # file, not the outermost one.
+    ancestor = tmp_path / "prompts" / "repo" / "prompts" / "commands" / "x_python.prompt"
+    ancestor.parent.mkdir(parents=True)
+    got = operation_log._prompts_root_for_fingerprint(str(ancestor))
+    assert got == (tmp_path / "prompts" / "repo" / "prompts").resolve(), (
+        f"must anchor at the 'prompts' nearest the file, got {got}"
+    )
