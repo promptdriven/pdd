@@ -1,4 +1,6 @@
-% You are an expert Python engineer. Your goal is to implement `pdd/user_story_tests.py`, which provides user story validation and user story-driven prompt fixing for PDD.
+% You are an expert Python engineer. Your goal is to implement and maintain
+% `pdd/user_story_tests.py`, which provides user story validation, story generation,
+% and user story-driven prompt fixing for PDD.
 
 <include>context/python_preamble.prompt</include>
 
@@ -6,13 +8,45 @@
 Implement user story utilities that:
 - discover story files (`story__*.md`) and prompt files (`*.prompt`)
 - validate stories against prompts via `detect_change`
+- generate contract-aware `story__*.md` files from prompt inputs (`pdd test <*.prompt>`)
 - apply prompt fixes for a single story by orchestrating `change_main`
+
+% Issue #820 — contract-aware story template (epic #833)
+User stories are **example-level coverage** for named contract rules. Keep the
+canonical on-disk template at `user_stories/story__template.md` aligned with the
+generator and with `docs/prompting_guide.md` (template uses `## Negative Cases`;
+the guide may say `## Forbidden Outcomes` — same intent).
+
+**Template sections (in order):** `## Covers`, `## Story`, `## Context`,
+`## Acceptance Criteria`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`,
+`## Non-Goals`, `## Notes`. Do not emit `## Prompt Scope`; list scoped prompts in
+`## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
+
+**`generate_user_story()` / `_render_story_markdown_from_prompts()`**
+- Invoked from `pdd/commands/generate.py` when `pdd test` receives `.prompt` files.
+- Seed `## Covers` from `<contract_rules>` via `parse_prompt_contracts()` in
+  `pdd/contract_ir.py` (Path-based API; do not duplicate parsing).
+- Single-prompt: `- R{n}: <summary>`. Multi-prompt: `prompts/<file>.prompt#R{n}: <summary>`.
+- When no contract rules exist, emit one placeholder Covers bullet for authors.
+- Seed `## Negative Cases` bullets from MUST/SHALL/MAY NOT rule text when present.
+- Emit starter Oracle and Non-Oracle bullets (issue #820 examples). Remain deterministic
+  (no LLM for story generation).
+
+**Backward compatibility**
+- `run_user_story_tests`, `cache_story_prompt_links`, and `run_user_story_fix` must not
+  require the new sections. Legacy minimal stories must still pass when `detect_change`
+  returns no changes.
+- Keep the public keyword `cache_story_prompt_links` on `run_user_story_tests`.
+  `link_story_prompt_metadata` may exist only as a deprecated alias (warn + map).
 
 % Inputs and Outputs
 - `run_user_story_tests(...) -> Tuple[bool, List[Dict[str, object]], float, str]`
   - returns: `all_passed`, per-story results list, total cost, model name
 - `run_user_story_fix(...) -> Tuple[bool, str, float, str, List[str]]`
   - returns: success flag, status message, total cost, model name, changed prompt paths
+- `generate_user_story(...) -> Tuple[bool, str, float, str, str, List[str]]`
+  - returns: success, message, cost, model, generated story path, linked prompt refs
+- `cache_story_prompt_links(...) -> Tuple[bool, str, float, str, List[str]]`
 
 % Requirements
 1. **Story and prompt discovery**
@@ -30,7 +64,13 @@ Implement user story utilities that:
    - If no stories are found, return success with zero cost.
    - If no prompt files are found, return failure with a clear message and zero cost.
 
-3. **Story fix flow**
+3. **Story generation (#820)**
+   - `_seed_covers_from_prompts`, `_rule_covers_summary`, `_cross_module_covers_ref`,
+     `_seed_negative_cases_from_rules`, and `_render_story_markdown_from_prompts` implement
+     the contract-aware template. Use `Rule` and `parse_prompt_contracts` from `contract_ir`.
+   - After writing the story file, run `cache_story_prompt_links` / `detect_change` as today.
+
+4. **Story fix flow**
    - `run_user_story_fix` must:
      - load the target story file and run `detect_change` over prompt files
      - for each reported prompt, resolve prompt path robustly (case-insensitive + basename fallback)
@@ -42,17 +82,34 @@ Implement user story utilities that:
    - Append to changed files only on successful `change_main` calls.
    - Re-run `run_user_story_tests` on just the target story after applying changes; fail if still not passing.
 
-4. **Recursion prevention and context hygiene**
+5. **Recursion prevention and context hygiene**
    - While calling `change_main` from story fix flow, set `ctx.obj["skip_user_stories"] = True` and restore original value afterward.
    - Ensure restoration runs via `finally` block even on errors.
 
-5. **Error handling and diagnostics**
+6. **Error handling and diagnostics**
    - Return actionable messages for missing story file, missing prompts, unresolved prompt path, missing mapped code file, and failed post-fix validation.
    - Keep a module logger (`logging.getLogger(__name__)`) for debug traces.
    - Use type annotations and concise docstrings.
+   - When editing, preserve existing comments and docstrings outside changed regions (issue #926).
 
 % Dependencies
+- `.contract_ir.parse_prompt_contracts`, `.contract_ir.Rule`
 - `.detect_change.detect_change`
 - `.change_main.change_main` (import lazily inside fix function to avoid cycles)
 - `.get_extension.get_extension`
 - `rich.print` for PASS/FAIL output when not quiet
+
+% Deliverables (issue #820)
+- `user_stories/story__template.md`
+- `pdd/user_story_tests.py`
+- `tests/test_user_story_tests.py` and `tests/fixtures/contract_rules_python.prompt`
+- `README.md` and `docs/prompting_guide.md` (targeted edits)
+
+% Verification
+```bash
+pytest -q tests/test_user_story_tests.py tests/test_contract_check.py tests/test_coverage_contracts.py tests/commands/test_analysis.py
+pytest -q tests/test_contract_check.py::TestRealPromptLegacySafety::test_bundled_prompts_no_errors
+pylint pdd/user_story_tests.py
+```
+Public helpers use module-level `# pylint: disable=too-many-arguments` (and related)
+on their definitions; the pylint command above should exit 0.

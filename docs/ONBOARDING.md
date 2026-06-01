@@ -99,7 +99,7 @@ pdd setup
 
 The wizard will:
 - **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription/config credentials
-- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands still need API keys.
+- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands need one of an API key, a Codex (ChatGPT) subscription login (the `chatgpt/` model family — no API key; `codex login` then `PDD_MODEL_DEFAULT=chatgpt/gpt-5.3-codex`; this is a LOCAL-route path, so on a cloud-enabled install also pass `--local`), or a configured PDD Cloud login.
 - **Validate API keys** with real test requests to ensure they work
 - **Show cost transparency** for different model tiers
 - **Create .pddrc** configuration for your project
