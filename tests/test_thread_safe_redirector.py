@@ -390,6 +390,75 @@ def test_string_control_payloads_do_not_leak(sequence, redirector, captured_line
     assert captured_lines == ["prepost"]
 
 
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1bcpost",
+        "pre\x1b#8post",
+        "pre\x1b%Gpost",
+        "pre\x1b Fpost",
+        "pre\x1b Gpost",
+        "pre\x9b?25lpost",
+    ],
+    ids=[
+        "esc-ris",
+        "esc-screen-alignment",
+        "esc-utf8-designate",
+        "esc-sp-f",
+        "esc-sp-g",
+        "c1-csi",
+    ],
+)
+def test_ecma48_controls_do_not_leak(sequence, redirector, captured_lines):
+    """Valid ESC/C1 controls should not reach the log as raw text."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b]0;payload\x1b[31mRED\x1b[0mpost",
+        "pre\x1bPpayload\x1b[31mRED\x1b[0mpost",
+    ],
+    ids=["osc-interrupted-by-csi", "dcs-interrupted-by-csi"],
+)
+def test_interrupted_string_control_payloads_do_not_leak(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """String-control payload before an interrupting ESC should be stripped."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["preREDpost"]
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("\x1b]0;title", "\x1b\\"),
+        ("\x1bPpayload", "\x1b\\"),
+        ("\x90payload", "\x9c"),
+    ],
+    ids=["osc-st", "dcs-st", "c1-dcs-st"],
+)
+def test_string_control_payloads_can_span_newlines(
+    start,
+    end,
+    redirector,
+    captured_lines,
+):
+    """Newlines inside string controls should not flush hidden payload."""
+    redirector.write("pre" + start + "\n")
+    assert captured_lines == []
+
+    redirector.write("more" + end + "post\n")
+
+    assert captured_lines == ["prepost"]
+
+
 def test_rich_printed_non_csi_escape_preserves_styles(redirector, captured_texts):
     """Non-CSI escape controls should be stripped without dropping Rich styles."""
     console = Console(
