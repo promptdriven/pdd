@@ -47,6 +47,7 @@ from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
+from pdd.pre_checkup_gate import run_pre_checkup_gate
 
 # Initialize console for rich output
 console = Console()
@@ -1304,8 +1305,13 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language
-        ext = get_extension(language) if language else defaults["ext"]
+        # Derive ext from language. If local data resolution is unavailable
+        # (for example PDD_PATH is unset in unit tests), keep the loaded
+        # .pddrc paths and fall back only for the extension.
+        try:
+            ext = get_extension(language) if language else defaults["ext"]
+        except Exception:
+            ext = "py" if language == "python" else defaults["ext"]
         if ext.startswith("."):
             ext = ext[1:]  # Remove leading dot if present
 
@@ -2263,6 +2269,48 @@ def run_agentic_change_orchestrator(
 
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
 
+    pre_checkup_manual_review = ""
+    if worktree_path:
+        gate_worktree = worktree_path
+    else:
+        gate_worktree = Path(current_work_dir)
+    if changed_files:
+        try:
+            gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                worktree=gate_worktree,
+                changed_files=changed_files,
+                base_ref=None,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                quiet=quiet,
+                timeout_per_check=CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder,
+            )
+        except Exception as _exc:  # pylint: disable=broad-except
+            gate_success = False
+            gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+            gate_cost = 0.0
+        total_cost += gate_cost
+        state["total_cost"] = total_cost
+        if not gate_success:
+            strict_gate = os.environ.get("PDD_STRICT_DOC_SYNC", "").lower() in ("1", "true", "yes")
+            if strict_gate:
+                state["step_outputs"]["12.5"] = f"FAILED: {gate_message}"
+                save_workflow_state(
+                    cwd, issue_number, "change", state, state_dir,
+                    repo_owner, repo_name, use_github_state, github_comment_id,
+                    dedupe=effective_clean_restart,
+                )
+                return (
+                    False,
+                    f"Stopped at step 12.5: {gate_message}",
+                    total_cost, model_used, changed_files,
+                )
+            pre_checkup_manual_review = f"MANUAL_REVIEW: pre_checkup_gate — {gate_message}"
+            if not quiet:
+                console.print(f"[yellow]{pre_checkup_manual_review}[/yellow]")
+    context["pre_checkup_gate_manual_review"] = pre_checkup_manual_review
+
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []
     test_dir_name = pddrc_context.get("test_dir", "tests/").rstrip("/")
@@ -2309,6 +2357,7 @@ def run_agentic_change_orchestrator(
             context.get("step9_output", "") or "",
             previous_fixes,
             synthesized_conflict_lines,
+            context.get("pre_checkup_gate_manual_review", "") or "",
         )
         context["clean_restart"] = "true" if effective_clean_restart else "false"
         git_root_for_pr_base = _get_git_root(current_work_dir) or current_work_dir

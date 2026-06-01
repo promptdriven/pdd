@@ -39,6 +39,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
 from .ci_validation import _find_open_pr_number, run_ci_validation_loop
+from .pre_checkup_gate import run_pre_checkup_gate
 
 # Constants
 STEP_NAMES = {
@@ -69,7 +70,7 @@ STEP_DESCRIPTIONS = {
     11: "Code cleanup",
 }
 
-# Per-step timeouts for the 11-step agentic e2e fix workflow
+# Per-step timeouts for the 12-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -2056,7 +2057,7 @@ def run_agentic_e2e_fix_orchestrator(
     clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 11-step agentic e2e fix workflow.
+    Orchestrator for the 12-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -3401,6 +3402,24 @@ def run_agentic_e2e_fix_orchestrator(
                     "No CI checks detected",
                 }:
                     final_message = ci_message
+
+                try:
+                    gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                        worktree=cwd,
+                        changed_files=changed_files,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        quiet=quiet,
+                        timeout_per_check=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    gate_success = False
+                    gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+                    gate_cost = 0.0
+                total_cost += gate_cost
+                if not gate_success:
+                    return False, gate_message, total_cost, model_used, changed_files
 
                 checkup_success, checkup_message, checkup_cost, checkup_model = (
                     _run_final_checkup_on_pr(

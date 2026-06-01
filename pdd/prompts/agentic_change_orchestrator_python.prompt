@@ -173,10 +173,10 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
      - `source_dir` from `generate_output_path`
      - `test_dir` from `test_output_path`
      - `example_dir` from `example_output_path`
-   - Derive `ext` using `get_extension(language)` (strip leading dot if present)
+   - Derive `ext` using `get_extension(language)` (strip leading dot if present); if extension lookup raises because local data resolution is unavailable (for example `PDD_PATH` is unset), keep the loaded `.pddrc` paths and fall back only to `"py"` for Python / the default extension otherwise
    - Derive `lang` as `f"_{language}"`
    - Return dict with all 6 keys
-   - On any exception, return defaults
+   - On any exception outside extension lookup, return defaults
 
 3. **Add to context dict** before step loop:
    ```python

@@ -40,6 +40,16 @@ from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _pa
 # Fixtures
 # -----------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def mock_pre_checkup_gate_default():
+    """Keep existing change-orchestrator tests focused unless they override the gate."""
+    with patch(
+        "pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+        return_value=(True, "pre_checkup_gate passed", 0.0),
+    ):
+        yield
+
+
 @pytest.fixture
 def temp_cwd(tmp_path):
     """Returns a temporary directory path to use as cwd."""
@@ -206,6 +216,52 @@ def test_step13_prompt_includes_manual_review_lines(mock_dependencies, temp_cwd)
     s13_prompt = step13_calls[0].kwargs["instruction"]
     assert "MANUAL_REVIEW: docs/api.md" in s13_prompt
     assert "schema diverged" in s13_prompt
+
+
+def test_step13_prompt_includes_pre_checkup_gate_manual_review(mock_dependencies, temp_cwd):
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "PR template manual review: {manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mock_template_loader.side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: pdd/foo.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/9", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+        return_value=(False, "phase=build-smoke failures: py-compile failed", 0.0),
+    ):
+        success, _, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+            repo_name="repo", issue_number=4242, issue_author="me",
+            issue_title="Gate surfacing", cwd=temp_cwd, verbose=False,
+        )
+
+    assert success is True
+    step13_calls = [
+        c for c in mock_run.call_args_list
+        if c.kwargs.get("label") == "step13"
+    ]
+    s13_prompt = step13_calls[0].kwargs["instruction"]
+    assert "MANUAL_REVIEW: pre_checkup_gate" in s13_prompt
+    assert "py-compile failed" in s13_prompt
 
 
 def test_step13_surfaces_step10_associated_docs_conflicts(mock_dependencies, temp_cwd):

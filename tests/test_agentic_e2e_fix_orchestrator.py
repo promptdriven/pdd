@@ -455,6 +455,16 @@ def test_add():
 from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
 
+@pytest.fixture(autouse=True)
+def mock_pre_checkup_gate_default():
+    """Keep legacy e2e-fix tests focused unless they override the new gate."""
+    with patch(
+        "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+        return_value=(True, "pre_checkup_gate passed", 0.0),
+    ):
+        yield
+
+
 @pytest.fixture
 def e2e_fix_mock_dependencies(tmp_path):
     """Mocks external dependencies for the e2e fix orchestrator.
@@ -5488,6 +5498,9 @@ class TestStep11CodeCleanup:
             "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
             return_value="aaaaaaaa",
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ) as gate_mock, patch(
             "pdd.agentic_checkup.run_agentic_checkup",
             return_value=(True, "Checkup complete", 0.0, "model"),
         ) as checkup_mock:
@@ -5496,11 +5509,51 @@ class TestStep11CodeCleanup:
             )
 
         assert success is True, msg
+        gate_mock.assert_called_once()
         checkup_mock.assert_called_once()
         assert checkup_mock.call_args.kwargs["pr_url"] == (
             "https://github.com/owner/repo/pull/77"
         )
         assert checkup_mock.call_args.kwargs["no_fix"] is False
+
+    def test_pre_checkup_gate_blocks_final_checkup(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Mechanical pre-checkup failures must stop before expensive PR checkup."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(False, "pre_checkup_gate blocked: py_compile failed", 0.0),
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Checkup complete", 0.0, "model"),
+        ) as checkup_mock:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "pre_checkup_gate blocked" in msg
+        checkup_mock.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
