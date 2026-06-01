@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from .construct_paths import construct_paths, BUILTIN_EXT_MAP
+from .get_extension import get_extension
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
 # get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
@@ -130,14 +131,30 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     if output_path.suffix:
                         resolved_output = output
                     else:
-                        lang_key = language.lower() if language else ''
-                        lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
-                        resolved_output = str(output_path.with_suffix(lang_ext))
-                        # Some languages map to an empty extension (e.g. Makefile → ""), in
-                        # which case with_suffix is a no-op and the path is unchanged. Only
-                        # flag as a wrapper rewrite when the resulting path actually differs
-                        # — otherwise the re-confirmation step below would prompt twice for
-                        # the same target that construct_paths already confirmed.
+                        # Issue #1315: synthesize the extension for a bare --output name from
+                        # the canonical CSV-backed get_extension — the same authoritative
+                        # language_format.csv table construct_paths itself uses — instead of a
+                        # wrapper-local partial map. The old duplicated BUILTIN_EXT_MAP lookup
+                        # plus an f".{lang_key}" fallback diverged from construct_paths and
+                        # synthesized wrong/invalid suffixes for dozens of languages
+                        # (.c++ vs .cpp, .matlab vs .m, .c#/.f# vs .cs/.fs, .yaml vs the CSV's
+                        # .yml). BUILTIN_EXT_MAP remains only as the offline fallback when
+                        # PDD_PATH/CSV is unavailable, mirroring construct_paths' own try/except.
+                        lang_ext = None
+                        if language:
+                            try:
+                                lang_ext = get_extension(language)
+                            except Exception:
+                                lang_ext = None
+                        if lang_ext is None:
+                            lang_key = language.lower() if language else ''
+                            lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
+                        # An empty extension (e.g. Makefile) means "no suffix" — leave the bare
+                        # name unchanged rather than appending a guessed suffix. Only flag a
+                        # wrapper rewrite when the path actually changed, otherwise the
+                        # re-confirmation step below would prompt twice for the same target that
+                        # construct_paths already confirmed.
+                        resolved_output = str(output_path.with_suffix(lang_ext)) if lang_ext else output
                         if resolved_output != output:
                             wrapper_rewrote_path = True
                 else:
@@ -155,6 +172,18 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         # Directory outputs and no-output cases are already covered by construct_paths.
         force = ctx.obj.get('force', False)
         quiet_flag = ctx.obj.get('quiet', False)
+        # Issue #1315 (suggested fix #2): whenever the wrapper rewrites the path so the
+        # artifact lands somewhere other than the requested --output (e.g. --format md
+        # turning foo.yml into foo.md), surface the change — naming BOTH the requested and
+        # the resolved path — EVEN WHEN there is no overwrite collision. Callers that
+        # recorded the requested --output as metadata are otherwise silently handed a
+        # different artifact path. Respect --quiet; the no-rewrite and directory/omitted
+        # --output cases (already resolved by construct_paths) never reach here.
+        if wrapper_rewrote_path and resolved_output and not quiet_flag:
+            console.print(
+                f"[yellow]Warning: output path rewritten from '{output}' to "
+                f"'{resolved_output}'.[/yellow]"
+            )
         if (
             wrapper_rewrote_path
             and resolved_output
