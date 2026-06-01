@@ -1148,3 +1148,41 @@ def test_get_extension_returns_csv_authoritative_values(pdd_path_env):
     assert get_extension("Objective-C") == ".m"
     assert get_extension("Markdown") == ".md"
     assert get_extension("Starlark") == ".bzl"
+
+
+def test_bare_name_append_does_not_warn(
+    mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, pdd_path_env, tmp_path
+):
+    """Bug #1315 (fix #2 scoping): completing a bare --output name with the language
+    extension (myexample -> myexample.py) is the documented default, not a surprising
+    rewrite — it must NOT emit a path-rewrite warning. Only an override of an extension the
+    user EXPLICITLY supplied (e.g. --format md turning foo.yml into foo.md) warrants it;
+    warning on the ordinary bare-name append (silent before this fix) would be pure noise.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['force'] = False
+    mock_ctx.obj['quiet'] = False
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def f(): pass")
+    bare_output = tmp_path / "myexample"  # no suffix -> wrapper appends the language ext
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt content", "code_file": "def f(): pass"},
+        {"output": str(tmp_path / "myexample.py")},
+        "python",
+    )
+    mock_context_generator.return_value = ("BODY", 0.0, "local-model")
+
+    with patch("pdd.context_generator_main.console") as mock_console:
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(bare_output), format="code")
+
+    # The synthesized .py file must still be written...
+    assert (tmp_path / "myexample.py").exists()
+    # ...but NO "rewritten from ... to ..." warning may be printed for a bare-name append.
+    printed = " || ".join(str(c) for c in mock_console.print.call_args_list)
+    assert "rewritten from" not in printed, (
+        "Bug #1315 (fix #2 scoping): a bare-name --output append (myexample -> myexample.py) is the "
+        f"documented default and must NOT emit a path-rewrite warning. console.print calls: {printed!r}"
+    )

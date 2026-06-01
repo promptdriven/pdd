@@ -110,15 +110,18 @@
           `EOFError`) raise `click.Abort`. `--force` skips the prompt entirely. CRITICAL: do NOT re-prompt
           when `output` is a directory or is omitted — in those cases `construct_paths` already resolved the
           final path and ran its own overwrite confirmation, so a second prompt would be a regression.
-        * Path-rewrite WARNING (issue #1315, suggested fix #2): whenever the wrapper rewrites the path
-          (`wrapper_rewrote_path` is True) so the artifact lands at a path different from the requested
-          `--output` (e.g. `--format md --output foo.yml` → `foo.md`), emit a WARNING (respecting `quiet`)
-          that names BOTH the requested `output` and the resolved `resolved_output`, EVEN WHEN no overwrite
-          collision exists (`Path(resolved_output).exists()` is False). This warning MUST fire independently
-          of the overwrite re-confirmation above, so callers are never silently handed an artifact path that
-          differs from what they asked for. Do NOT warn when the path was not rewritten
-          (`wrapper_rewrote_path` is False), nor for directory/omitted `--output` (already resolved and
-          surfaced by `construct_paths`).
+        * Path-rewrite WARNING (issue #1315, suggested fix #2): warn ONLY when the wrapper overrode an
+          extension the user EXPLICITLY supplied — i.e. `wrapper_rewrote_path` is True AND the original
+          `--output` had a non-empty suffix (`Path(output).suffix`), as in `--format md --output foo.yml`
+          → `foo.md`. That is the only case where the artifact lands at a path the caller did not ask for.
+          Emit a WARNING (respecting `quiet`) that names BOTH the requested `output` and the resolved
+          `resolved_output`, EVEN WHEN no overwrite collision exists (`Path(resolved_output).exists()` is
+          False), and independently of the overwrite re-confirmation above, so callers are never silently
+          handed an artifact path that differs from what they asked for. Do NOT warn when completing a bare
+          `--output` name with the language extension (e.g. `myexample` → `myexample.py`): that is the
+          documented default, not a surprising rewrite, and must stay silent. Do NOT warn when the path was
+          not rewritten (`wrapper_rewrote_path` is False), nor for directory/omitted `--output` (already
+          resolved and surfaced by `construct_paths`).
         * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
     - Python syntax validation (for Python language only):
         * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.

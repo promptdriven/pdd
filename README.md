@@ -1763,7 +1763,7 @@ Options:
 - `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
   - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript) when no suffix is supplied on `--output`. If `--output` includes a suffix (`.yml`, `.m`, `.txt`, …), that suffix is honored verbatim — pass `--format md` to force a `.md` extension.
   - `md`: Generates markdown content; the resolved output path will always end in lowercase `.md`, replacing any other suffix (including upper-case variants like `.MD`) on `--output`.
-  When the wrapper rewrites an explicit `--output` path (`--format md` with a non-`.md` suffix, or a bare name under `--format code`), it prints a warning naming both the requested and resolved paths unless `--quiet` is set. If the rewritten file already exists, you will also be prompted to confirm the overwrite unless `--force` is set.
+  When `--format md` overrides an explicit non-`.md` output suffix, the wrapper prints a warning naming both the requested and resolved paths unless `--quiet` is set. If any wrapper-rewritten output path already exists (`--format md` suffix override, or a bare name under `--format code`), you will also be prompted to confirm the overwrite unless `--force` is set.
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.

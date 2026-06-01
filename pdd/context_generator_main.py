@@ -169,14 +169,18 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         # Directory outputs and no-output cases are already covered by construct_paths.
         force = ctx.obj.get('force', False)
         quiet_flag = ctx.obj.get('quiet', False)
-        # Issue #1315 (suggested fix #2): whenever the wrapper rewrites the path so the
-        # artifact lands somewhere other than the requested --output (e.g. --format md
-        # turning foo.yml into foo.md), surface the change — naming BOTH the requested and
-        # the resolved path — EVEN WHEN there is no overwrite collision. Callers that
-        # recorded the requested --output as metadata are otherwise silently handed a
-        # different artifact path. Respect --quiet; the no-rewrite and directory/omitted
-        # --output cases (already resolved by construct_paths) never reach here.
-        if wrapper_rewrote_path and resolved_output and not quiet_flag:
+        # Issue #1315 (suggested fix #2): warn ONLY when the wrapper overrode an extension
+        # the user EXPLICITLY supplied (e.g. --format md turning the requested foo.yml into
+        # foo.md) — that is the only case where the artifact lands at a path the caller did
+        # not ask for, and the only one suggested fix #2 is about. Completing a bare --output
+        # name with the language extension (myexample → myexample.py) is the documented
+        # default, not a surprising rewrite, and was silent before this change; warning on it
+        # would be noise on the most ordinary invocation. Names BOTH paths and fires EVEN
+        # WHEN there is no overwrite collision, independently of the re-confirmation below.
+        # Respect --quiet; the no-rewrite and directory/omitted --output cases (already
+        # resolved by construct_paths) never reach here.
+        user_suffix_overridden = wrapper_rewrote_path and bool(Path(output).suffix)
+        if user_suffix_overridden and resolved_output and not quiet_flag:
             console.print(
                 f"[yellow]Warning: output path rewritten from '{output}' to "
                 f"'{resolved_output}'.[/yellow]"
