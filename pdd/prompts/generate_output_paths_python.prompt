@@ -47,7 +47,8 @@
       "cwd": resolve relative to current working directory (used by sync command)
 
 % Output Keys per Command
-  - generate, example, test, preprocess, change, update, detect, conflicts, trace, bug, auto-deps: ['output']
+  - generate, example, test, preprocess, change, update, detect, conflicts, trace, bug: ['output']
+  - auto-deps: ['output', 'csv']
   - fix: ['output_test', 'output_code', 'output_results']
   - split: ['output_sub', 'output_modified']
   - crash: ['output', 'output_program']
@@ -57,6 +58,8 @@
 % Context Config Key Mapping (implementation detail)
   Maps command/output_key to context_config lookup key:
   - generate/output, fix/output_code, most others -> 'generate_output_path'
+  - auto-deps/output -> 'generate_output_path'
+  - auto-deps/csv -> 'auto_deps_csv_path'
   - example/output -> 'example_output_path'
   - test/output, bug/output, fix/output_test -> 'test_output_path'
   - crash/* -> None (always use CWD-based defaults, not context paths)
