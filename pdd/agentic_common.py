@@ -12,7 +12,7 @@ import time
 import uuid
 import re
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
@@ -106,6 +106,127 @@ class SteerEntry:
     comment_id: str
     author: str
     body: str
+
+
+STEER_STATE_KEYS = ("last_steered_comment_id", "last_steer_at", "steer_generation")
+
+
+def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) -> None:
+    """Copy steer cursor fields from *from_state* into *into_state*."""
+    for key in STEER_STATE_KEYS:
+        if key in from_state:
+            into_state[key] = from_state[key]
+
+
+def workflow_awaiting_clarification(
+    state: Dict[str, Any],
+    clarification_step_numbers: Set[int],
+) -> bool:
+    """True when cached outputs show the workflow paused for user clarification."""
+    outputs = state.get("step_outputs") or {}
+    for step in clarification_step_numbers:
+        out = outputs.get(str(step), "")
+        if isinstance(out, str) and re.search(
+            r"STOP_CONDITION:\s*.+", out, re.IGNORECASE
+        ):
+            return True
+    return False
+
+
+def merge_steers_into_issue_content(
+    issue_content: str,
+    steers: List[SteerEntry],
+) -> str:
+    """Append drained mid-run steers so clarification steps see new user input."""
+    if not steers:
+        return issue_content
+    block_lines = [
+        "",
+        "## Mid-run user comments (since workflow pause)",
+        "The following issue comments arrived while the workflow was paused. "
+        "Address them in this step:",
+    ]
+    for steer in steers:
+        block_lines.append(f"- @{steer.author} ({steer.comment_id}): {steer.body}")
+    return issue_content.rstrip() + "\n" + "\n".join(block_lines) + "\n"
+
+
+def issue_update_should_clear_workflow_state(
+    state: Dict[str, Any],
+    stored_updated_at: str,
+    current_updated_at: str,
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+    clarification_step_numbers: Optional[Set[int]] = None,
+) -> bool:
+    """Return True when ``issue_updated_at`` drift should wipe cached workflow state.
+
+    Preserves state when pending human steers exist (comment-only activity) or when
+    the workflow is paused awaiting clarification responses.
+    """
+    if not stored_updated_at or not current_updated_at:
+        return False
+    if stored_updated_at == current_updated_at:
+        return False
+
+    scratch = _steer_state_slice(state)
+    pending = drain_issue_steers(
+        repo_owner, repo_name, issue_number, scratch, cwd=cwd
+    )
+    if pending:
+        merge_steer_state(scratch, state)
+        return False
+
+    if clarification_step_numbers and workflow_awaiting_clarification(
+        state, clarification_step_numbers
+    ):
+        return False
+
+    return True
+
+
+def apply_clarification_steers_on_resume(
+    issue_content: str,
+    state: Dict[str, Any],
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    clarification_step_numbers: Set[int],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> str:
+    """Merge newly drained steers into *issue_content* when resuming clarification."""
+    if not workflow_awaiting_clarification(state, clarification_step_numbers):
+        return issue_content
+    steers = drain_issue_steers(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    )
+    if not steers:
+        return issue_content
+    if not quiet:
+        preview = ", ".join(f"@{s.author}" for s in steers[:3])
+        suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+        console.print(
+            f"[cyan]Resuming clarification with new feedback from {preview}{suffix}[/cyan]"
+        )
+    return merge_steers_into_issue_content(issue_content, steers)
+
+
+def _steer_state_slice(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: state[key] for key in STEER_STATE_KEYS if key in state}
+
+
+def append_agentic_progress_steer_note(count: int, preview: str) -> None:
+    """Attach pending-steer metadata to the current interrupt/progress context."""
+    global _agentic_interrupt_context
+    if _agentic_interrupt_context is None:
+        return
+    _agentic_interrupt_context["pending_steers"] = count
+    _agentic_interrupt_context["steer_preview"] = preview
 
 
 def detect_control_token(
@@ -4459,6 +4580,10 @@ def drain_issue_steers(
                     max_id_val = cid_val
             if steers:
                 state["last_steered_comment_id"] = str(max_id_val)
+                state["last_steer_at"] = (
+                    state.get("last_steer_at")
+                    or datetime.now(timezone.utc).isoformat()
+                )
                 state["steer_generation"] = state.get("steer_generation", 0) + 1
                 return steers
 
@@ -4578,6 +4703,7 @@ def drain_step_steers(
         console.print(
             f"[cyan]Incorporating mid-run feedback from {preview}{suffix}[/cyan]"
         )
+        append_agentic_progress_steer_note(len(steers), preview + suffix)
     return steers
 
 

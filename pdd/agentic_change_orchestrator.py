@@ -33,6 +33,8 @@ from pdd.agentic_common import (
     post_step_comment_once,
     normalize_step_comments_state,
     drain_step_steers,
+    issue_update_should_clear_workflow_state,
+    apply_clarification_steers_on_resume,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -1497,12 +1499,31 @@ def run_agentic_change_orchestrator(
     if not clean_restart and state is not None and issue_updated_at:
         stored_updated_at = state.get("issue_updated_at")
         if stored_updated_at and stored_updated_at != issue_updated_at:
-            # Issue was modified - state is stale
-            if not quiet:
-                console.print("[yellow]Issue was updated since last run - starting fresh[/yellow]")
-            clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
-            state = None
-            loaded_gh_id = None
+            if issue_update_should_clear_workflow_state(
+                state,
+                stored_updated_at,
+                issue_updated_at,
+                repo_owner,
+                repo_name,
+                issue_number,
+                cwd=cwd,
+                clarification_step_numbers=_CLARIFICATION_STEPS,
+            ):
+                if not quiet:
+                    console.print(
+                        "[yellow]Issue was updated since last run - starting fresh[/yellow]"
+                    )
+                clear_workflow_state(
+                    cwd, issue_number, "change", state_dir,
+                    repo_owner, repo_name, use_github_state,
+                )
+                state = None
+                loaded_gh_id = None
+            elif not quiet:
+                console.print(
+                    "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
+                )
+                state["issue_updated_at"] = issue_updated_at
 
     # Initialize variables from state or defaults.
     # Under clean_restart, defensively ignore any state that survived the
@@ -1542,6 +1563,34 @@ def run_agentic_change_orchestrator(
     state["step_comments"] = sorted(step_comments_set)
 
     pddrc_context = _load_pddrc_context(cwd)
+
+    steer_generation_before = state.get("steer_generation", 0)
+    issue_content = apply_clarification_steers_on_resume(
+        issue_content,
+        state,
+        repo_owner,
+        repo_name,
+        issue_number,
+        _CLARIFICATION_STEPS,
+        cwd=cwd,
+        quiet=quiet,
+    )
+    if state.get("steer_generation", 0) != steer_generation_before:
+        save_result = save_workflow_state(
+            cwd,
+            issue_number,
+            "change",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+            dedupe=effective_clean_restart,
+        )
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
 
     context = {
         "issue_url": issue_url,
@@ -1676,6 +1725,13 @@ def run_agentic_change_orchestrator(
             quiet=quiet,
         )
         if step_steers:
+            refreshed_at = _fetch_issue_updated_at(
+                repo_owner, repo_name, issue_number
+            )
+            if refreshed_at:
+                state["issue_updated_at"] = refreshed_at
+            elif issue_updated_at:
+                state["issue_updated_at"] = issue_updated_at
             save_result = save_workflow_state(
                 cwd,
                 issue_number,

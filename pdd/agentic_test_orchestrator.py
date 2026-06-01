@@ -28,6 +28,7 @@ from .agentic_common import (
     normalize_step_comments_state,
     post_step_comment_once,
     drain_step_steers,
+    apply_clarification_steers_on_resume,
 )
 from .pytest_output import _find_project_root
 from .load_prompt_template import load_prompt_template
@@ -408,6 +409,33 @@ def run_agentic_test_orchestrator(
 
     step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
+
+    steer_generation_before = state.get("steer_generation", 0)
+    issue_content = apply_clarification_steers_on_resume(
+        issue_content,
+        state,
+        repo_owner,
+        repo_name,
+        issue_number,
+        _CLARIFICATION_STEPS,
+        cwd=cwd,
+        quiet=quiet,
+    )
+    if state.get("steer_generation", 0) != steer_generation_before:
+        save_result = save_workflow_state(
+            cwd,
+            issue_number,
+            "test",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
 
     context: Dict[str, Any] = {
         "issue_url": issue_url,

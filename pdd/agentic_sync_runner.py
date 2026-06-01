@@ -1494,9 +1494,21 @@ class AsyncSyncRunner:
             "## PDD Agentic Sync Progress",
             f"Issue: #{issue_number}",
             "",
+        ]
+        pending_steers = (
+            self.github_info.get("pending_steers") if self.github_info else None
+        )
+        steer_preview = (
+            self.github_info.get("steer_preview") if self.github_info else None
+        )
+        if pending_steers:
+            detail = steer_preview or f"{pending_steers} comment(s)"
+            lines.append(f"**Mid-run feedback:** {detail} pending at next step boundary.")
+            lines.append("")
+        lines.extend([
             "| Module | Status | Phase | Duration | Cost |",
             "|--------|--------|-------|----------|------|",
-        ]
+        ])
 
         total_cost = self.initial_cost
 

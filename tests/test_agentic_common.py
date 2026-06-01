@@ -3405,6 +3405,109 @@ def test_drain_step_steers_delegates_to_issue_drain(mock_cwd):
         os.environ.pop("PDD_STEER_JSON", None)
 
 
+def test_drain_issue_steers_env_sets_last_steer_at(mock_cwd):
+    from pdd.agentic_common import drain_issue_steers
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "42", "author": "user", "body": "note"}]
+    )
+    try:
+        state: dict = {}
+        steers = drain_issue_steers("owner", "repo", 1, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert state.get("last_steer_at")
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_issue_update_should_not_clear_when_pending_steers(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "99", "author": "alice", "body": "please adjust"}]
+    )
+    try:
+        state = {
+            "step_outputs": {},
+            "last_steered_comment_id": "1",
+            "issue_updated_at": "2026-01-01T00:00:00Z",
+        }
+        assert issue_update_should_clear_workflow_state(
+            state,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "owner",
+            "repo",
+            55,
+            cwd=mock_cwd,
+        ) is False
+        assert state["last_steered_comment_id"] == "99"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_issue_update_should_clear_when_no_pending_steers(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    state = {"step_outputs": {}, "issue_updated_at": "2026-01-01T00:00:00Z"}
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is True
+
+
+def test_issue_update_should_not_clear_during_clarification_pause(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    state = {
+        "step_outputs": {
+            "4": "STOP_CONDITION: needs clarification from author\n",
+        },
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+        clarification_step_numbers={4, 7},
+    ) is False
+
+
+def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
+    from pdd.agentic_common import apply_clarification_steers_on_resume
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "7", "author": "bob", "body": "Use pytest markers"}]
+    )
+    try:
+        state = {
+            "step_outputs": {"3": "STOP_CONDITION: needs more info from author\n"},
+        }
+        merged = apply_clarification_steers_on_resume(
+            "Original issue body",
+            state,
+            "owner",
+            "repo",
+            1,
+            {3},
+            cwd=mock_cwd,
+            quiet=True,
+        )
+        assert "Use pytest markers" in merged
+        assert "Original issue body" in merged
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
 def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shutil_which):
     """Test fetching steers from GitHub comments."""
     from pdd.agentic_common import drain_issue_steers
