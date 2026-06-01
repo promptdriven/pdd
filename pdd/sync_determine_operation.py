@@ -2150,6 +2150,24 @@ def _perform_sync_analysis(
         )
 
     run_report = read_run_report(basename, language, paths=_initial_paths)
+    if run_report and skip_tests:
+        # Ignore stale or failing cached test-results from run_report when skip_tests is active.
+        # Also zero exit_code when it is paired with test failures: a non-zero exit_code whose
+        # sibling tests_failed > 0 is from the test runner (e.g. pytest returning 1/2 on
+        # failures), not a real runtime crash, so it must not drive fix/crash decisions when the
+        # caller has explicitly requested that tests be skipped.  When tests_failed == 0 the
+        # exit_code reflects a genuine runtime error (e.g. a crash fix that still fails) and
+        # must be preserved so the crash-retry path at the fingerprint check can act on it.
+        exit_code_from_tests = run_report.tests_failed > 0
+        run_report = RunReport(
+            timestamp=run_report.timestamp,
+            exit_code=0 if exit_code_from_tests else run_report.exit_code,
+            tests_passed=run_report.tests_passed,
+            tests_failed=0,
+            coverage=run_report.coverage,
+            test_hash=run_report.test_hash,
+            test_files=run_report.test_files
+        )
     # Only process runtime signals (crash/fix/test) if we have a fingerprint
     # Without a fingerprint, run_report is stale/orphaned and should be ignored
     if run_report and fingerprint:
