@@ -18,11 +18,8 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
-<<<<<<< HEAD
 from .contract_ir import parse_prompt_contracts
-=======
 from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
->>>>>>> origin/main
 from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 2
