@@ -30,6 +30,11 @@ from rich.style import Style
 # Default steering timeout (seconds).
 DEFAULT_STEER_TIMEOUT_S = 8.0
 CHARSET_SELECTOR_MARKERS = "()*+-./"
+STRING_CONTROL_MARKERS = "PX^_"
+C1_STRING_CONTROL_MARKERS = "\x90\x98\x9e\x9f"
+C1_OSC = "\x9d"
+C1_CONTROL_STARTERS = C1_STRING_CONTROL_MARKERS + C1_OSC
+C1_ST = "\x9c"
 BEL = "\x07"
 ST = "\x1b\\"
 
@@ -99,7 +104,7 @@ def _prepare_ansi_text(
     has_ansi = False
     index = 0
     while index < len(text):
-        if text[index] != "\x1b":
+        if text[index] != "\x1b" and text[index] not in C1_CONTROL_STARTERS:
             position_map[index] = len(clean_chars)
             rich_parts.append(text[index])
             clean_chars.append(text[index])
@@ -132,9 +137,15 @@ def _scan_ansi_token(
     start: int,
 ) -> tuple[Optional[int], int, str, str]:
     """Scan one ANSI escape token without rescanning malformed suffixes."""
-    if start >= len(text) or text[start] != "\x1b":
+    if start >= len(text):
         return None, start + 1, "", ""
-    if start + 1 >= len(text):
+
+    if text[start] in C1_STRING_CONTROL_MARKERS:
+        return _scan_string_control_token(text, start + 1)
+    if text[start] == C1_OSC:
+        return _scan_osc_token(text, start + 1)
+
+    if text[start] != "\x1b" or start + 1 >= len(text):
         return None, start + 1, "", ""
 
     marker = text[start + 1]
@@ -142,6 +153,8 @@ def _scan_ansi_token(
         return _scan_csi_token(text, start + 2)
     if marker == "]":
         return _scan_osc_token(text, start + 2)
+    if marker in STRING_CONTROL_MARKERS:
+        return _scan_string_control_token(text, start + 2)
     if marker in CHARSET_SELECTOR_MARKERS:
         if start + 2 < len(text):
             return start + 3, start + 3, "single", ""
@@ -172,6 +185,17 @@ def _scan_osc_token(text: str, start: int) -> tuple[Optional[int], int, str, str
     return token_end, token_end, "osc", terminator
 
 
+def _scan_string_control_token(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], int, str, str]:
+    """Scan a string-control token body terminated by ST."""
+    token_end, terminator, next_index = _scan_string_control_end(text, start)
+    if token_end is None:
+        return None, next_index, "", ""
+    return token_end, token_end, "string", terminator
+
+
 def _scan_osc_end(text: str, start: int) -> tuple[Optional[int], str, int]:
     """Return an OSC token end, terminator, and next index."""
     index = start
@@ -179,6 +203,26 @@ def _scan_osc_end(text: str, start: int) -> tuple[Optional[int], str, int]:
         char = text[index]
         if char == BEL:
             return index + 1, BEL, index + 1
+        if char == C1_ST:
+            return index + 1, C1_ST, index + 1
+        if char == "\x1b":
+            if text.startswith(ST, index):
+                return index + len(ST), ST, index + len(ST)
+            return None, "", index
+        index += 1
+    return None, "", index
+
+
+def _scan_string_control_end(
+    text: str,
+    start: int,
+) -> tuple[Optional[int], str, int]:
+    """Return a string-control token end, terminator, and next index."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == C1_ST:
+            return index + 1, C1_ST, index + 1
         if char == "\x1b":
             if text.startswith(ST, index):
                 return index + len(ST), ST, index + len(ST)
@@ -198,9 +242,9 @@ def _rich_ansi_token(
     if token_kind == "csi":
         return text[start:end]
     if token_kind == "osc":
-        if terminator == BEL:
-            return text[start:end - 1] + ST
-        return text[start:end]
+        body_start = start + 2 if text[start] == "\x1b" else start + 1
+        body_end = end - len(terminator)
+        return "\x1b]" + text[body_start:body_end] + ST
     return ""
 
 
@@ -211,16 +255,29 @@ def _restore_rich_highlighted_ansi(text: str) -> str:
 
     restored_parts: List[str] = []
     index = 0
+    active_sgr = ""
     while index < len(text):
         if text[index] != "\x1b":
             restored_parts.append(text[index])
             index += 1
             continue
 
-        sequence, next_index = _try_restore_highlighted_escape(text, index)
+        sequence, next_index = _try_restore_highlighted_escape(
+            text,
+            index,
+            active_sgr,
+        )
         if sequence is not None:
             index = next_index
             restored_parts.append(sequence)
+            continue
+
+        sgr_end = _consume_sgr_sequence(text, index)
+        if sgr_end is not None:
+            sequence = text[index:sgr_end]
+            active_sgr = _update_active_sgr(active_sgr, sequence)
+            restored_parts.append(sequence)
+            index = sgr_end
             continue
 
         restored_parts.append(text[index:next_index])
@@ -230,7 +287,7 @@ def _restore_rich_highlighted_ansi(text: str) -> str:
 
 
 def _try_restore_highlighted_escape(
-    text: str, start: int
+    text: str, start: int, active_sgr: str
 ) -> tuple[Optional[str], int]:
     """Restore one highlighted ANSI escape sequence starting at ``start``."""
     if start >= len(text) or text[start] != "\x1b":
@@ -242,29 +299,29 @@ def _try_restore_highlighted_escape(
 
     marker = text[index]
     if marker == "[":
-        return _restore_highlighted_csi(text, index + 1)
+        return _restore_highlighted_csi(text, index + 1, active_sgr)
     if marker == "]":
         return _restore_highlighted_osc(text, index + 1)
+    if marker in STRING_CONTROL_MARKERS:
+        return _restore_highlighted_string_control(text, marker, index + 1)
     if _is_single_escape_marker(marker):
         return _restore_highlighted_single_escape(text, marker, index + 1)
     return None, start + 1
 
 
-def _restore_highlighted_csi(text: str, start: int) -> tuple[Optional[str], int]:
+def _restore_highlighted_csi(
+    text: str,
+    start: int,
+    active_sgr: str,
+) -> tuple[Optional[str], int]:
     """Restore a highlighted CSI sequence body."""
     index = start
     body: List[str] = []
-    preserved_sgr: List[str] = []
     while index < len(text):
         char = text[index]
         if char == "\x1b":
-            skipped, sequences = _consume_sgr_sequences(text, index)
+            skipped = _skip_sgr_sequences(text, index)
             if skipped != index:
-                preserved_sgr.extend(
-                    sequence
-                    for sequence in sequences
-                    if not _is_sgr_reset(sequence)
-                )
                 index = skipped
                 continue
             return None, index
@@ -272,10 +329,9 @@ def _restore_highlighted_csi(text: str, start: int) -> tuple[Optional[str], int]
         index += 1
         if "@" <= char <= "~":
             csi_sequence = "\x1b[" + "".join(body)
-            outer_style = "".join(preserved_sgr)
             if _is_full_reset_csi("".join(body)):
-                return csi_sequence + outer_style, index
-            return outer_style + csi_sequence, index
+                return csi_sequence + active_sgr, index
+            return csi_sequence, index
     return None, index
 
 
@@ -283,23 +339,41 @@ def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]
     """Restore a highlighted OSC sequence body."""
     index = start
     body: List[str] = []
-    preserved_sgr: List[str] = []
     while index < len(text):
         if text[index] == BEL:
-            return "\x1b]" + "".join(body) + BEL + "".join(preserved_sgr), index + 1
+            return "\x1b]" + "".join(body) + BEL, index + 1
+        if text[index] == C1_ST:
+            return "\x1b]" + "".join(body) + C1_ST, index + 1
         if text.startswith("\x1b\\", index):
-            return (
-                "\x1b]" + "".join(body) + "\x1b\\" + "".join(preserved_sgr),
-                index + 2,
-            )
+            return "\x1b]" + "".join(body) + "\x1b\\", index + 2
         if text[index] == "\x1b":
-            skipped, sequences = _consume_sgr_sequences(text, index)
+            skipped = _skip_sgr_sequences(text, index)
             if skipped != index:
-                preserved_sgr.extend(
-                    sequence
-                    for sequence in sequences
-                    if not _is_sgr_reset(sequence)
-                )
+                index = skipped
+                continue
+            return None, index
+
+        body.append(text[index])
+        index += 1
+    return None, index
+
+
+def _restore_highlighted_string_control(
+    text: str,
+    marker: str,
+    start: int,
+) -> tuple[Optional[str], int]:
+    """Restore a highlighted DCS/SOS/PM/APC string-control sequence."""
+    index = start
+    body: List[str] = []
+    while index < len(text):
+        if text[index] == C1_ST:
+            return "\x1b" + marker + "".join(body) + C1_ST, index + 1
+        if text.startswith(ST, index):
+            return "\x1b" + marker + "".join(body) + ST, index + len(ST)
+        if text[index] == "\x1b":
+            skipped = _skip_sgr_sequences(text, index)
+            if skipped != index:
                 index = skipped
                 continue
             return None, index
@@ -313,13 +387,10 @@ def _restore_highlighted_single_escape(
     text: str, marker: str, start: int
 ) -> tuple[str, int]:
     """Restore a highlighted non-CSI/non-OSC escape sequence."""
-    index, sequences = _consume_sgr_sequences(text, start)
-    preserved_sgr = "".join(
-        sequence for sequence in sequences if not _is_sgr_reset(sequence)
-    )
+    index = _skip_sgr_sequences(text, start)
     if marker in CHARSET_SELECTOR_MARKERS and index < len(text):
-        return "\x1b" + marker + text[index] + preserved_sgr, index + 1
-    return "\x1b" + marker + preserved_sgr, index
+        return "\x1b" + marker + text[index], index + 1
+    return "\x1b" + marker, index
 
 
 def _is_single_escape_marker(marker: str) -> bool:
@@ -361,6 +432,13 @@ def _consume_sgr_sequence(text: str, start: int) -> Optional[int]:
         if "@" <= char <= "~":
             return index if char == "m" else None
     return None
+
+
+def _update_active_sgr(active_sgr: str, sequence: str) -> str:
+    """Update active Rich outer-style SGR state with one direct SGR sequence."""
+    if _is_sgr_reset(sequence):
+        return ""
+    return active_sgr + sequence
 
 
 def _is_sgr_reset(sequence: str) -> bool:
