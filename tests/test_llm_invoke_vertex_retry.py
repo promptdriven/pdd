@@ -79,7 +79,8 @@ def mock_set_llm_cache():
     """Mock the LiteLLM cache to avoid cache-related side effects."""
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
         # Force local execution to prevent cloud routing when shell secrets are present.
-        with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
+        with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}), \
+                patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=False):
             yield mock_cache_class
 
 

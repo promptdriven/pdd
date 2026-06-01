@@ -70,7 +70,8 @@ def reset_callback_data():
     _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = 0
     _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = 0
     _llm_mod._LAST_CALLBACK_DATA["finish_reason"] = None
-    yield
+    with patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=False):
+        yield
 
 
 class TestRetryCostAccumulation:
