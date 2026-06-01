@@ -353,8 +353,16 @@ _DATED_PREVIEW = re.compile(
 CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
     "base_url", "api_key", "max_reasoning_tokens", "structured_output",
-    "reasoning_type", "location",
+    "reasoning_type", "location", "interactive_only",
 ]
+
+# Provider roots that require interactive human auth (device-flow OAuth) or a
+# running local server (localhost connect), and therefore hang in
+# non-interactive contexts (Cloud Run, CI, library import) rather than
+# fast-failing. Rows for these providers are emitted with interactive_only=True
+# so automatic model selection can skip them by default. See
+# llm_invoke._select_model_candidates and the PDD_ALLOW_INTERACTIVE opt-in.
+_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama"}
 
 # ---------------------------------------------------------------------------
 # Regex patterns for _extract_base_model() — stripping provider/region/version
@@ -561,6 +569,21 @@ def _extract_base_model(model_id: str) -> Optional[str]:
 def _get_provider_root(litellm_provider: str) -> str:
     """Return the root provider for compound provider strings like vertex_ai-anthropic_models."""
     return litellm_provider.split("-")[0].split("_models")[0]
+
+
+def _is_interactive_only(model_id: str) -> bool:
+    """Return True for rows that require interactive human auth or a running
+    local server (and therefore hang in non-interactive contexts).
+
+    Classification is by the model's provider-prefix root so it applies
+    uniformly to litellm-derived rows, seeded local-runner rows, and
+    user-preserved rows. ``ollama_chat`` is litellm's chat-format variant of
+    the ``ollama`` local runner and is treated the same.
+    """
+    prefix = model_id.split("/", 1)[0] if "/" in model_id else model_id
+    if prefix == "ollama_chat":
+        prefix = "ollama"
+    return prefix in _INTERACTIVE_ONLY_PROVIDERS
 
 
 # Regex matching region-specific Bedrock model IDs, e.g.:
@@ -1584,6 +1607,11 @@ def build_rows(
         print(f"  ELO sources: {breakdown}")
 
     print(f"  Post-processing: {initial_count} -> {len(rows)} rows.")
+
+    # Classify every emitted row (litellm-derived, seeded local-runner,
+    # mandatory, and user-preserved alike) for the interactive_only column.
+    for row in rows:
+        row["interactive_only"] = _is_interactive_only(row["model"])
 
     # Sort: provider ascending, then ELO descending within each provider
     rows.sort(key=lambda r: (r["provider"], -r["coding_arena_elo"], r["model"]))

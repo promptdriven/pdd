@@ -313,6 +313,64 @@ def test_local_runner_default_survives_when_score_known(monkeypatch):
     assert any(r["model"] == "lm_studio/qwen3-coder-next" for r in rows)
 
 
+def test_csv_fieldnames_include_interactive_only():
+    # The column must be present (and last) so DictWriter emits it for every row.
+    assert "interactive_only" in gmc.CSV_FIELDNAMES
+    assert gmc.CSV_FIELDNAMES[-1] == "interactive_only"
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [
+        ("github_copilot/gpt-5", True),
+        ("lm_studio/qwen3-coder-next", True),
+        ("ollama/llama3", True),
+        ("ollama_chat/llama3", True),  # litellm chat-format variant of ollama
+        ("anthropic.claude-opus-4-8", False),
+        ("vertex_ai/claude-opus-4-8", False),
+        ("gpt-5", False),
+    ],
+)
+def test_is_interactive_only_classifies_by_provider_root(model_id, expected):
+    assert gmc._is_interactive_only(model_id) is expected
+
+
+def test_build_rows_emits_interactive_only_for_right_providers(monkeypatch):
+    fake_cost = {
+        "github_copilot/gpt-5": {
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "github_copilot",
+            "supports_function_calling": True,
+        },
+        "gpt-5": {
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "litellm_provider": "openai",
+            "supports_function_calling": True,
+        },
+    }
+    fake_litellm = type("L", (), {"model_cost": fake_cost})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {
+        "gpt-5": {"elo": 1393.0, "votes": 0, "raw_name": "gpt-5"},
+        "github_copilot/gpt-5": {"elo": 1393.0, "votes": 0, "raw_name": "github_copilot/gpt-5"},
+    })
+
+    rows = gmc.build_rows()
+
+    by_model = {r["model"]: r for r in rows}
+    # Every row carries the column...
+    assert all("interactive_only" in r for r in rows)
+    # ...True for the interactive provider, False for a keyed one.
+    assert by_model["github_copilot/gpt-5"]["interactive_only"] is True
+    assert by_model["gpt-5"]["interactive_only"] is False
+    # The seeded local-runner row is classified interactive too.
+    assert by_model["lm_studio/qwen3-coder-next"]["interactive_only"] is True
+
+
 def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
     fake_litellm = type("L", (), {"model_cost": {
         "vertex_ai/zai-org/glm-4.7-maas": {
