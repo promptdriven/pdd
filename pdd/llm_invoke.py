@@ -27,6 +27,12 @@ try:
 except Exception:  # pragma: no cover
     _record_llm_pair = None  # type: ignore
 
+from .grounding_provenance import (
+    build_grounding_metadata,
+    resolve_grounding_overrides_for_invoke,
+    reviewed_from_click_ctx,
+)
+
 # Environment variable to control log level
 PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
 PRODUCTION_MODE = os.getenv("PDD_ENVIRONMENT") == "production"
@@ -851,6 +857,8 @@ def _llm_invoke_cloud(
     use_batch_mode: bool,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]],
     language: Optional[str],
+    grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute llm_invoke via cloud endpoint.
 
@@ -955,12 +963,41 @@ def _llm_invoke_cloud(
                     # Return raw result if validation fails
                     pass
 
-            return {
+            examples_used = data.get("examplesUsed")
+            resolved_overrides = resolve_grounding_overrides_for_invoke(
+                grounding_overrides, source_prompt
+            )
+            try:
+                grounding = build_grounding_metadata(
+                    mode="cloud",
+                    examples_used=examples_used,
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("Grounding metadata extraction failed: %s", exc)
+                grounding = build_grounding_metadata(
+                    mode="unavailable",
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
+                )
+
+            if verbose and grounding.get("selected_examples"):
+                logger.info(
+                    "Grounding examples selected: %s",
+                    [ex.get("module") for ex in grounding["selected_examples"]],
+                )
+
+            cloud_payload: Dict[str, Any] = {
                 "result": result,
                 "cost": data.get("totalCost", 0.0),
                 "model_name": data.get("modelName", "cloud_model"),
                 "thinking_output": data.get("thinkingOutput"),
+                "grounding": grounding,
             }
+            if examples_used is not None:
+                cloud_payload["examplesUsed"] = examples_used
+            return cloud_payload
 
         elif response.status_code == 402:
             error_msg = response.json().get("error", "Insufficient credits")
@@ -3388,6 +3425,8 @@ def llm_invoke(
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
     language: Optional[str] = None,
     use_cloud: Optional[bool] = None,
+    grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -3455,6 +3494,19 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
+        grounding_overrides, source_prompt
+    )
+
+    def _with_local_grounding(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if "grounding" not in payload:
+            payload["grounding"] = build_grounding_metadata(
+                mode="unavailable",
+                grounding_overrides=resolved_grounding_overrides,
+                reviewed=reviewed_from_click_ctx(),
+            )
+        return payload
 
     # --- 1. Cloud Execution Path ---
     # Determine cloud usage: explicit param > environment > default (local)
@@ -3581,6 +3633,8 @@ def llm_invoke(
                 use_batch_mode=use_batch_mode,
                 messages=messages,
                 language=language,
+                grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
             )
             # On success, replace the placeholder with the cloud-returned
             # modelName so the history reflects the actual model used.
@@ -4349,14 +4403,14 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
-                        return {
+                        return _with_local_grounding({
                             'result': final_result,
                             'cost': total_cost,
                             'model_name': model_name_litellm,
                             'thinking_output': None,
                             'finish_reason': finish_reason,
                             'attempted_models': list(attempted_models),
-                        }
+                        })
                     except Exception as e:
                         last_exception = e
                         _emit_llm_attribution(
@@ -5015,14 +5069,14 @@ def llm_invoke(
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
                 )
-                return {
+                return _with_local_grounding({
                     'result': final_result,
                     'cost': total_cost,
                     'model_name': model_name_litellm, # Actual model used
                     'thinking_output': final_thinking if final_thinking else None,
                     'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
                     'attempted_models': list(attempted_models),
-                }
+                })
 
             # --- 6b. Handle Invocation Errors ---
             except openai.AuthenticationError as e:
