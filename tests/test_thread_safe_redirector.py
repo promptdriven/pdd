@@ -254,6 +254,30 @@ def test_rich_printed_ansi_preserves_existing_rich_styles(redirector, captured_t
     )
 
 
+def test_rich_printed_ansi_reset_preserves_outer_suffix_style(
+    redirector,
+    captured_texts,
+):
+    """Nested ANSI reset should not truncate an outer Rich style span."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[dim]\x1b[31mFAIL\x1b[0m after[/dim]")
+
+    text = captured_texts[0]
+    assert text.plain == "FAIL after"
+    assert any(
+        span.start <= len("FAIL ") and span.end >= len("FAIL after")
+        and span.style.dim
+        for span in text.spans
+    )
+
+
 def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
     """OSC hyperlinks and CSI color should not leak or drop existing Rich styles."""
     console = Console(
