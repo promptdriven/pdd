@@ -42,6 +42,8 @@ C0_CONTROL_CHARS = "".join(
 )
 CAN = "\x18"
 SUB = "\x1a"
+DEL = "\x7f"
+CONTROL_CHARS = C0_CONTROL_CHARS + DEL
 BEL = "\x07"
 ST = "\x1b\\"
 
@@ -114,7 +116,7 @@ def _prepare_ansi_text(
         if (
             text[index] != "\x1b"
             and text[index] not in C1_CONTROL_STARTERS
-            and text[index] not in C0_CONTROL_CHARS
+            and text[index] not in CONTROL_CHARS
         ):
             position_map[index] = len(clean_chars)
             rich_parts.append(text[index])
@@ -148,7 +150,7 @@ def _scan_ansi_token(
     if start >= len(text):
         return None, start + 1, "", ""
 
-    if text[start] in C0_CONTROL_CHARS:
+    if text[start] in CONTROL_CHARS:
         return start + 1, start + 1, "single", ""
     if text[start] in C1_STRING_CONTROL_MARKERS:
         return _scan_string_control_token(text, start + 1)
@@ -383,6 +385,8 @@ def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]
     index = start
     body: List[str] = []
     while index < len(text):
+        if text[index] in {CAN, SUB}:
+            return "\x1b]" + "".join(body) + text[index], index + 1
         if text[index] == BEL:
             return "\x1b]" + "".join(body) + BEL, index + 1
         if text[index] == C1_ST:
@@ -394,7 +398,7 @@ def _restore_highlighted_osc(text: str, start: int) -> tuple[Optional[str], int]
             if skipped != index:
                 index = skipped
                 continue
-            return None, index
+            return "\x1b]" + "".join(body) + CAN, index
 
         body.append(text[index])
         index += 1
@@ -410,6 +414,8 @@ def _restore_highlighted_string_control(
     index = start
     body: List[str] = []
     while index < len(text):
+        if text[index] in {CAN, SUB}:
+            return "\x1b" + marker + "".join(body) + text[index], index + 1
         if text[index] == C1_ST:
             return "\x1b" + marker + "".join(body) + C1_ST, index + 1
         if text.startswith(ST, index):
@@ -419,7 +425,7 @@ def _restore_highlighted_string_control(
             if skipped != index:
                 index = skipped
                 continue
-            return None, index
+            return "\x1b" + marker + "".join(body) + CAN, index
 
         body.append(text[index])
         index += 1
@@ -556,6 +562,10 @@ def _find_visible_line_split(text: str) -> Optional[int]:
         char = text[index]
         if char == "\n":
             return index
+        highlighted_end = _highlighted_string_control_end(text, index)
+        if highlighted_end is not None:
+            index = highlighted_end
+            continue
         if _is_ansi_control_start(text, index):
             token_end, next_index, _token_kind, _terminator = _scan_ansi_token(
                 text,
@@ -597,6 +607,10 @@ def _find_last_visible_carriage_return(text: str) -> Optional[int]:
             last_carriage_return = index
             index += 1
             continue
+        highlighted_end = _highlighted_string_control_end(text, index)
+        if highlighted_end is not None:
+            index = highlighted_end
+            continue
         if _is_ansi_control_start(text, index):
             token_end, next_index, _token_kind, _terminator = _scan_ansi_token(
                 text,
@@ -613,7 +627,30 @@ def _is_ansi_control_start(text: str, index: int) -> bool:
     return (
         text[index] == "\x1b"
         or text[index] in C1_CONTROL_STARTERS
-        or text[index] in C0_CONTROL_CHARS
+        or text[index] in CONTROL_CHARS
+    )
+
+
+def _highlighted_string_control_end(text: str, index: int) -> Optional[int]:
+    """Return end index for a Rich-highlighted string control, if present."""
+    if index >= len(text) or text[index] != "\x1b":
+        return None
+    sequence, next_index = _try_restore_highlighted_escape(text, index, "")
+    if sequence is None or not _restored_sequence_is_string_control(sequence):
+        return None
+    return next_index
+
+
+def _restored_sequence_is_string_control(sequence: str) -> bool:
+    """Return True when a restored sequence is OSC/DCS/SOS/PM/APC."""
+    if not sequence:
+        return False
+    if sequence[0] in C1_STRING_CONTROL_MARKERS + C1_OSC:
+        return True
+    return (
+        sequence[0] == "\x1b"
+        and len(sequence) > 1
+        and sequence[1] in STRING_CONTROL_MARKERS + "]"
     )
 
 
