@@ -568,6 +568,7 @@ class TestClassifyRule:
             rule_id,
             coverage_entries or {},
             waiver_map or {},
+            {},
             story_evidence or {},
             test_evidence or {},
             validation_failures or {},

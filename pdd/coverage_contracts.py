@@ -26,12 +26,14 @@ from .contract_ir import (
     CROSS_MODULE_REF_RE,
     _WAIVER_REF_RE,
     _extract_markdown_sections,
+    extract_waivers as _extract_waivers,
     extract_sections as _extract_sections,
     parse_coverage_block as _parse_coverage_block,
     parse_rule_ids as _parse_rule_ids,
     parse_waiver_rule_map as _parse_waiver_rule_map,
     rule_ids_from_covers as _rule_ids_from_covers,
 )
+from .waiver_policy import classify_waiver_status
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,8 @@ class RuleCoverage:
     stories: list[str] = field(default_factory=list)   # story filenames
     tests: list[str] = field(default_factory=list)     # test function names
     waiver: Optional[str] = None                       # waiver ID, e.g. "W1"
+    waiver_status: Optional[str] = None                # active|expired|unknown-rule|malformed|untracked
+    waiver_expires: Optional[str] = None               # ISO date
     failures: list[str] = field(default_factory=list)  # validation failures
 
     def as_dict(self) -> dict:
@@ -93,6 +97,8 @@ class RuleCoverage:
             "stories": self.stories,
             "tests": self.tests,
             "waiver": self.waiver,
+            "waiver_status": self.waiver_status,
+            "waiver_expires": self.waiver_expires,
             "failures": self.failures,
         }
 
@@ -468,6 +474,7 @@ def _classify_rule(  # pylint: disable=too-many-arguments
     rule_id: str,
     coverage_entries: dict[str, str],
     waiver_map: dict[str, str],
+    waiver_details: dict[str, tuple[str, str, Optional[str]]],
     story_evidence: dict[str, list[str]],
     test_evidence: dict[str, list[str]],
     validation_failures: Optional[dict[str, list[str]]] = None,
@@ -489,10 +496,18 @@ def _classify_rule(  # pylint: disable=too-many-arguments
     # Check for explicit waiver
     waiver_id: Optional[str] = None
     waiver_ref = _WAIVER_REF_RE.search(coverage_text)
+    waiver_status: Optional[str] = None
+    waiver_expires: Optional[str] = None
     if waiver_ref:
         waiver_id = waiver_ref.group(1).upper()
+        if rid in waiver_details:
+            _, waiver_status, waiver_expires = waiver_details[rid]
+        else:
+            waiver_status = "untracked"
     elif rid in waiver_map:
         waiver_id = waiver_map[rid]
+        if rid in waiver_details:
+            _, waiver_status, waiver_expires = waiver_details[rid]
 
     if waiver_id:
         # Still collect any story evidence for display
@@ -503,6 +518,8 @@ def _classify_rule(  # pylint: disable=too-many-arguments
             stories=stories,
             tests=[],
             waiver=waiver_id,
+            waiver_status=waiver_status,
+            waiver_expires=waiver_expires,
         )
 
     failures = list((validation_failures or {}).get(rid, []))
@@ -513,6 +530,8 @@ def _classify_rule(  # pylint: disable=too-many-arguments
             stories=list(story_evidence.get(rid, [])),
             tests=list(test_evidence.get(rid, [])),
             waiver=None,
+            waiver_status=None,
+            waiver_expires=None,
             failures=failures,
         )
 
@@ -550,6 +569,8 @@ def _classify_rule(  # pylint: disable=too-many-arguments
         stories=stories,
         tests=tests,
         waiver=None,
+        waiver_status=None,
+        waiver_expires=None,
     )
 
 # ---------------------------------------------------------------------------
@@ -617,6 +638,17 @@ def build_coverage(
 
     waivers_text = sections.get("waivers", "")
     waiver_map = _parse_waiver_rule_map(waivers_text) if waivers_text else {}
+    waiver_details: dict[str, tuple[str, str, Optional[str]]] = {}
+    if waivers_text:
+        for waiver in _extract_waivers(waivers_text):
+            if not waiver.rule_id:
+                continue
+            status = classify_waiver_status(waiver, set(rule_ids))
+            waiver_details[waiver.rule_id.upper()] = (
+                waiver.raw_id,
+                status,
+                waiver.expires.isoformat() if waiver.expires else None,
+            )
 
     read_errors: list[str] = []
     story_evidence = scan_story_evidence(stories_dir, path, read_errors=read_errors)
@@ -640,6 +672,7 @@ def build_coverage(
             rid,
             coverage_entries,
             waiver_map,
+            waiver_details,
             story_evidence,
             test_evidence,
             validation_failures,

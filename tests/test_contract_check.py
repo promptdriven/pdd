@@ -511,7 +511,7 @@ class TestCheckWaivers:
             "  Expires: 2020-01-01\n"
             "  Follow-up: Add test.\n"
         )
-        issues = _check_waivers(text)
+        issues = _check_waivers(_extract_waivers(text), {"R2"})
         expired = [i for i in issues if i.code == "EXPIRED_WAIVER"]
         assert len(expired) == 1
         assert expired[0].rule_id == "W1"
@@ -527,7 +527,7 @@ class TestCheckWaivers:
             "  Expires: 2099-01-01\n"
             "  Follow-up: Add test.\n"
         )
-        issues = _check_waivers(text)
+        issues = _check_waivers(_extract_waivers(text), {"R2"})
         expired = [i for i in issues if i.code == "EXPIRED_WAIVER"]
         assert expired == []
 
@@ -538,7 +538,7 @@ class TestCheckWaivers:
             "  Status: temporary\n"
             "  Reason: Test fixture not available.\n"
         )
-        issues = _check_waivers(text)
+        issues = _check_waivers(_extract_waivers(text), {"R2"})
         missing = [i for i in issues if i.code == "MISSING_WAIVER_FIELDS"]
         assert len(missing) >= 1
         assert "approved by" in missing[0].message.lower() or "expires" in missing[0].message.lower()
@@ -557,6 +557,19 @@ class TestCheckWaivers:
         result = check_prompt(FIXTURES / "waiver_valid_python.prompt")
         assert result.warn_count == 0
         assert result.error_count == 0
+
+    def test_unknown_rule_in_waiver_is_error(self):
+        text = (
+            "W1:\n"
+            "  Rule: R999\n"
+            "  Status: temporary\n"
+            "  Reason: Test fixture not available.\n"
+            "  Approved by: security-review\n"
+            "  Expires: 2099-01-01\n"
+        )
+        issues = _check_waivers(_extract_waivers(text), {"R1", "R2"})
+        unknown = [i for i in issues if i.code == "WAIVER_UNKNOWN_RULE"]
+        assert len(unknown) == 1
 
 
 # ---------------------------------------------------------------------------

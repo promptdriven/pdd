@@ -19,7 +19,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +34,7 @@ from .contract_ir import (
     iter_covers_refs,
     parse_prompt_contracts,
 )
+from .waiver_policy import classify_waiver_status
 
 __all__ = [
     "ContractIssue",
@@ -47,6 +47,7 @@ __all__ = [
     "check_prompt",
     "check_stories",
     "run_llm_ambiguity_pass",
+    "classify_waiver_status",
 ]
 
 logger = logging.getLogger(__name__)
@@ -437,26 +438,16 @@ def _check_must_not_coverage(
     return issues
 
 
-def _check_waivers(waivers_text: str) -> list[ContractIssue]:
+def _check_waivers(waivers: list[Waiver], known_ids: set[str]) -> list[ContractIssue]:
     """
     Validate <waivers> blocks:
       - MISSING_WAIVER_FIELDS warn: missing Rule, Reason, Approved by, or Expires
       - EXPIRED_WAIVER warn: Expires date is in the past
     """
     issues: list[ContractIssue] = []
-    required_fields = ("rule", "reason", "approved by", "expires")
-
-    for waiver in _extract_waivers(waivers_text):
-        # Check required fields
-        fields_present = {
-            "rule": bool(waiver.rule_id),
-            "reason": bool(waiver.reason),
-            "approved by": bool(waiver.approved_by),
-            "expires": bool(waiver.expires is not None or
-                            re.search(r"expires\s*:", waiver.raw_block, re.IGNORECASE)),
-        }
-        missing = [f for f in required_fields if not fields_present.get(f, False)]
-        if missing:
+    for waiver in waivers:
+        waiver_status = classify_waiver_status(waiver, known_ids)
+        if waiver_status == "malformed":
             issues.append(ContractIssue(
                 level="warn",
                 code="MISSING_WAIVER_FIELDS",
@@ -464,16 +455,28 @@ def _check_waivers(waivers_text: str) -> list[ContractIssue]:
                 section="waivers",
                 line=f"{waiver.raw_id}:",
                 message=(
-                    f'Waiver [{waiver.raw_id}] is missing required fields: '
-                    f'{", ".join(missing)}.'
+                    f"Waiver [{waiver.raw_id}] is missing required fields: "
+                    "Rule, Reason, Approved by, or Expires."
                 ),
                 suggestion=(
                     "Add all required fields: Rule, Reason, Approved by, Expires."
                 ),
             ))
-
-        # Check expiry
-        if waiver.expires is not None and waiver.expires < date.today():
+        elif waiver_status == "unknown-rule":
+            issues.append(ContractIssue(
+                level="error",
+                code="WAIVER_UNKNOWN_RULE",
+                rule_id=waiver.raw_id,
+                section="waivers",
+                line=f"Rule: {waiver.rule_id}",
+                message=(
+                    f'Waiver [{waiver.raw_id}] references unknown rule "{waiver.rule_id}".'
+                ),
+                suggestion=(
+                    "Point the waiver to an existing <contract_rules> ID or remove it."
+                ),
+            ))
+        elif waiver_status == "expired" and waiver.expires is not None:
             issues.append(ContractIssue(
                 level="warn",
                 code="EXPIRED_WAIVER",
@@ -735,7 +738,7 @@ def check_prompt_from_ir(  # pylint: disable=too-many-locals,invalid-name
         )
 
     if waivers_text:
-        result.issues.extend(_check_waivers(waivers_text))
+        result.issues.extend(_check_waivers(ir.waivers, known_ids))
 
     if capabilities_text:
         result.issues.extend(_check_capabilities_modals(capabilities_text))
