@@ -952,7 +952,9 @@ def _aggregate_coverage_status(coverage_summary: Dict[str, int], *, has_rules: b
     story_only = coverage_summary.get("story_only", 0)
     test_only = coverage_summary.get("test_only", 0)
 
-    if unchecked == 0 and failed == 0:
+    if failed > 0:
+        return "partial"
+    if unchecked == 0:
         if checked == total:
             return "full"
         if checked + waived == total:
@@ -1133,6 +1135,19 @@ def _extract_contract_summary(
         summary["evidence_status"] = "error"
         summary["error"] = str(exc)
         return summary, [f"contract_summary: {exc}"]
+
+
+def validate_contract_summary(summary: Dict[str, Any]) -> List[str]:
+    """Validate a contract_summary dict against the published JSON Schema.
+
+    Returns a list of human-readable validation errors (empty when valid).
+    """
+    import jsonschema
+
+    schema_path = Path(__file__).resolve().parent / "schemas" / "architecture_contract_summary.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(schema)
+    return sorted({f"{err.json_path}: {err.message}" for err in validator.iter_errors(summary)})
 
 
 def _contract_summary_is_empty(summary: Dict[str, Any]) -> bool:
