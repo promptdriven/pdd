@@ -917,7 +917,7 @@ Arguments:
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
-- `--model NAME`: Override the base model for this sync run (sets PDD_MODEL_DEFAULT for the invocation, e.g. `chatgpt/gpt-5.3-codex`). Restored after the run. Affects the local llm_invoke route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
+- `--model NAME`: Override the base model for this sync run (sets `PDD_MODEL_DEFAULT` and pins it first for the invocation, e.g. `chatgpt/gpt-5.5`). Restored after the run. Affects the local llm_invoke route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
 - `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
@@ -1013,8 +1013,8 @@ pdd sync --one-session factorial_calculator
 
 # Agentic sync (one-session is the default)
 pdd sync https://github.com/myorg/myrepo/issues/100
-pdd sync calculator --model chatgpt/gpt-5.3-codex  # force a model on the local route; for chatgpt/* on a cloud-enabled install add --local
-pdd sync calculator --local --model chatgpt/gpt-5.3-codex  # local route: required for a chatgpt/* subscription model when PDD Cloud is configured
+pdd sync calculator --model chatgpt/gpt-5.5  # force a model on the local route; for chatgpt/* on a cloud-enabled install add --local
+pdd sync calculator --local --model chatgpt/gpt-5.5  # local route: required for a chatgpt/* subscription model when PDD Cloud is configured
 
 # Disable one-session for agentic sync
 pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
@@ -3320,7 +3320,7 @@ PDD uses several environment variables to customize its behavior:
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
-- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `openai`, `google`, `anthropic`, `opencode`, and `antigravity` (default order: `openai,google,anthropic,opencode`; for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
 - **`PDD_CLAUDE_CODE_MODE`**: Set to `interactive` to make the Anthropic agentic provider use interactive Claude Code through a temporary MCP reply tool instead of `claude -p`. This is an opt-in workaround for environments where `claude -p` uses a separate Agent SDK credit pool; when unset, PDD keeps the existing `claude -p - --output-format json` behavior.
 - **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
@@ -3823,7 +3823,7 @@ npm install -g @openai/codex   # if not already installed
 codex login
 ```
 
-PDD reads the resulting Codex `auth.json` and, when `PDD_MODEL_DEFAULT` is unset, routes the **default** LLM calls through the `chatgpt/*` model family on your subscription (flat-rate, no per-token API billing) instead of automatically using `ANTHROPIC_API_KEY`. PDD honors `CODEX_HOME` (default `~/.codex`) when locating `auth.json`, and also accepts a `CODEX_API_KEY` environment variable for headless/CI environments that inject the token directly. This is for your own personal subscription only — do not share or pool a single subscription across users. **This is a LOCAL execution path.** The subscription token is a local file, so it is only used on the local llm_invoke route. If you have PDD Cloud configured (`PDD_JWT_TOKEN`, or `FIREBASE_API_KEY` + `GITHUB_CLIENT_ID`), cloud is the default route and does NOT carry the subscription — pass `--local` (or set `PDD_FORCE_LOCAL=1`) to force the local subscription path. Users without cloud credentials already run locally and need no flag.
+PDD reads the resulting Codex `auth.json` and, when `PDD_MODEL_DEFAULT` is unset or points at an OpenAI/Codex default such as `gpt-5.5`, routes the **default** LLM calls through the `chatgpt/*` model family on your subscription (flat-rate, no per-token API billing) instead of automatically using `ANTHROPIC_API_KEY`. PDD honors `CODEX_HOME` (default `~/.codex`) when locating `auth.json`, and also accepts a `CODEX_API_KEY` environment variable for headless/CI environments that inject the token directly. This is for your own personal subscription only — do not share or pool a single subscription across users. **This is a LOCAL execution path.** The subscription token is a local file, so it is only used on the local llm_invoke route. If you have PDD Cloud configured (`PDD_JWT_TOKEN`, or `FIREBASE_API_KEY` + `GITHUB_CLIENT_ID`), cloud is the default route and does NOT carry the subscription — pass `--local` (or set `PDD_FORCE_LOCAL=1`) to force the local subscription path. Users without cloud credentials already run locally and need no flag.
 
 **Available subscription models** (selectable via `PDD_MODEL_DEFAULT` or `pdd setup`): `chatgpt/gpt-5.5` (the preferred default), `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`, `chatgpt/gpt-5.3-codex-spark`. `--strength` picks a higher- or lower-ranked model within the family, just like the Anthropic models. (Exact models depend on what your ChatGPT plan serves.)
 

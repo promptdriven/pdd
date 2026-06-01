@@ -2504,6 +2504,110 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _truthy_env(name: str) -> bool:
+    """Return True for common truthy env-var spellings."""
+    return str(os.environ.get(name, "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _is_openai_codex_default(model_name: Any) -> bool:
+    """Return True for OpenAI/Codex model ids that can use ChatGPT subscription auth."""
+    value = str(model_name or "").strip().lower()
+    if not value:
+        return False
+    if value.startswith("chatgpt/"):
+        return True
+    if value.startswith("openai/"):
+        value = value.split("/", 1)[1]
+    return value.startswith("gpt-5") or "codex" in value
+
+
+def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
+    """Rows backed by the ChatGPT/Codex subscription provider."""
+    return model_df[
+        model_df["model"].astype(str).str.lower().str.startswith("chatgpt/")
+    ].copy()
+
+
+def _chatgpt_default_for_request(family_df: pd.DataFrame, requested_model: Any) -> str:
+    """Resolve the ChatGPT-family default model for the current request."""
+    requested = str(requested_model or "").strip()
+    if requested:
+        chatgpt_name = (
+            requested
+            if requested.lower().startswith("chatgpt/")
+            else f"chatgpt/{requested.split('/', 1)[-1]}"
+        )
+        exact = family_df[
+            family_df["model"].astype(str).str.lower() == chatgpt_name.lower()
+        ]
+        if not exact.empty:
+            return str(exact.iloc[0]["model"])
+
+    preferred = family_df[
+        family_df["model"].astype(str).str.lower() == "chatgpt/gpt-5.5"
+    ]
+    if not preferred.empty:
+        return "chatgpt/gpt-5.5"
+    return str(family_df.loc[family_df["coding_arena_elo"].idxmax()]["model"])
+
+
+def _apply_codex_subscription_default(
+    model_df: pd.DataFrame,
+    effective_default_model: Any,
+) -> Tuple[pd.DataFrame, Any, bool]:
+    """Prefer the Codex subscription family for default OpenAI/Codex routes.
+
+    This is the bill-control guard for issue #1318. If a usable ``codex login``
+    token is present and the caller did not explicitly choose a non-OpenAI
+    model, constrain automatic selection to ``chatgpt/*`` so ELO interpolation
+    cannot pick an Anthropic row first.
+    """
+    requested = str(effective_default_model or "").strip()
+    if requested and not _is_openai_codex_default(requested):
+        return model_df, effective_default_model, False
+
+    try:
+        from pdd.codex_subscription import has_codex_subscription_auth
+        has_codex_auth = has_codex_subscription_auth()
+    except Exception:
+        has_codex_auth = False
+    if not has_codex_auth:
+        return model_df, effective_default_model, False
+
+    family = _chatgpt_family(model_df)
+    if family.empty:
+        raise ValueError(
+            "Codex subscription auth is available, but the active model catalog "
+            "has no chatgpt/* rows. Remove or update ~/.pdd/llm_model.csv so PDD "
+            "can use the packaged OpenAI ChatGPT subscription models."
+        )
+
+    resolved_default = _chatgpt_default_for_request(family, requested)
+    logger.info(
+        "Using Codex subscription default for llm_invoke: provider=OpenAI ChatGPT model=%s",
+        resolved_default,
+    )
+    return family, resolved_default, True
+
+
+def _pin_default_model_first(
+    candidate_models: List[Dict[str, Any]],
+    effective_default_model: Any,
+) -> List[Dict[str, Any]]:
+    """Keep an explicitly pinned default ahead of strength/ELO interpolation."""
+    if not _truthy_env("PDD_MODEL_DEFAULT_FIRST") or not effective_default_model:
+        return candidate_models
+    default_name = str(effective_default_model)
+    candidate_models.sort(
+        key=lambda candidate: 0
+        if str(candidate.get("model")) == default_name
+        else 1
+    )
+    return candidate_models
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -3670,6 +3774,9 @@ def llm_invoke(
         # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
         # `pdd sync --model` takes effect this run (issue #1269).
         _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
+        model_df, _effective_default_model, _ = (
+            _apply_codex_subscription_default(model_df, _effective_default_model)
+        )
         # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
         # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
         # catalog, so an existing install with an older user/project CSV will not
@@ -3691,6 +3798,10 @@ def llm_invoke(
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
         candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
+        candidate_models = _pin_default_model_first(
+            candidate_models,
+            _effective_default_model,
+        )
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
