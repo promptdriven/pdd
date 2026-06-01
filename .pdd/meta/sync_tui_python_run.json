@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-06-01T18:19:03.938322+00:00",
+  "exit_code": 0,
+  "tests_passed": 25,
+  "tests_failed": 0,
+  "coverage": 100.0,
+  "test_hash": "3d787dd8211c3ed4361df33c382b5ae2ef366aa9b0757d53a1fc103142b160fe",
+  "test_files": {
+    "test_sync_tui.py": "3d787dd8211c3ed4361df33c382b5ae2ef366aa9b0757d53a1fc103142b160fe"
+  }
+}
