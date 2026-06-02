@@ -61,6 +61,36 @@ def test_verify_contract_missing_symbol():
         ApiContractSlicer.verify_contract("def foo(): pass\n", ["missing_fn"])
 
 
+def test_slice_preserves_required_imports():
+    """Import drift: kept helpers must retain imports their bodies reference."""
+    source = """
+import os
+
+def _helper(path: str) -> str:
+    return os.path.join(path, "x")
+
+def public_api() -> str:
+    return _helper("a")
+"""
+    slicer = ApiContractSlicer(source, file_path="api.py")
+    output, manifest = slicer.slice(["public_api"])
+    assert "import os" in output
+    assert manifest.included_imports == ["import os"]
+    ApiContractSlicer.verify_contract(output, manifest.included_symbols)
+
+
+def test_slice_raises_when_seed_missing():
+    with pytest.raises(ContractSlicerError, match="Seed symbol 'missing' not found"):
+        ApiContractSlicer("def foo(): pass\n", file_path="mod.py").slice(["missing"])
+
+
+def test_seeds_from_test_then_slice():
+    seeds = ApiContractSlicer.seeds_from_test(TEST_SOURCE, "myapp.worker")
+    output, manifest = ApiContractSlicer(MODULE_SOURCE, file_path="worker.py").slice(seeds)
+    assert "_get_job_secrets" in manifest.included_symbols
+    assert "def _get_job_secrets" in output
+
+
 def test_content_selector_contract_kind():
     out = ContentSelector.select(MODULE_SOURCE, "contract:run_worker", file_path="worker.py")
     assert "def run_worker" in out

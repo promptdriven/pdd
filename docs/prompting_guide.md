@@ -1110,10 +1110,13 @@ Use `select=` to include only specific parts of a file instead of the whole thin
 | `pattern:/regex/` | Any | `pattern:/^import/` |
 | `path:key.nested` | JSON/YAML | `path:config.database.host` |
 | `pytest:test_name` | Python (pytest) (Python only) | `pytest:test_auth,test_login` |
+| `contract:symbol` | Python only | `contract:run_worker,_get_job_secrets` |
 
 Selectors are composable: `select="lines:1-5,def:main,def:helper"`. If a selector fails to match, PDD falls back to the full file with a warning.
 
 **`pytest:` selector** (Python only): Specifically designed for testing context. It uses AST slicing to extract only the requested tests and their transitive closure of dependencies (fixtures, helper functions, decorators, and imports). It automatically resolves fixtures from the same file or `conftest.py` files.
+
+**`contract:` selector** (Python only): Preserves a seed symbol and its transitive local dependencies (helpers, constants, classes, required imports) for compressed generation. Use when generated code must keep patch targets and private helpers referenced from tests. Seeds can be listed explicitly (`contract:run_worker`) or derived in code via `ApiContractSlicer.seeds_from_test(test_source, module_qualname)` before slicing. Output is verified so missing symbols fail fast instead of silently drifting.
 
 **Interface mode** (`mode="interface"`, Python only) extracts signatures, docstrings, and type hints with bodies replaced by `...`. Useful when you only need the contract, not the implementation:
 
