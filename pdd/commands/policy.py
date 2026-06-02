@@ -143,7 +143,7 @@ def check(
     if evidence:
         policy_status = "passed" if not any_violations else "failed"
         write_evidence_manifest(
-            command="pdd policy check",
+            command="pdd checkup policy check",
             prompt_file=prompt_path,
             output_files=[r.target_path for r in results],
             validation={"policy": policy_status},

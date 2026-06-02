@@ -161,8 +161,11 @@ class TestDiscoverGates:
         gates = discover_gates(tmp_path, changed_files=("svc.py",))
         policy_gates = [g for g in gates if g.name.startswith("policy:")]
         assert len(policy_gates) == 1
-        assert "policy" in policy_gates[0].cmd
-        assert "check" in policy_gates[0].cmd
+        assert policy_gates[0].cmd[policy_gates[0].cmd.index("checkup") : policy_gates[0].cmd.index("check") + 1] == [
+            "checkup",
+            "policy",
+            "check",
+        ]
         assert "--prompt" in policy_gates[0].cmd
 
     def test_py_compile_required_fix_hint_does_not_recommend_bare_py_compile(

@@ -3,8 +3,9 @@
 `.pdd/grounding_policy.yaml` is an optional, opt-in file that lets a project
 require human review and/or pinned examples for critical modules whose
 generation depends on PDD Cloud grounding. The policy is consumed by
-`pdd/grounding_policy.py` today and is the schema that a future `pdd gate`
-check will enforce.
+`pdd/grounding_policy.py` today and is the schema that a future grounding gate
+(under `pdd checkup gate` / `gate_main`, issue #825) will enforce separately
+from the waiver policy gate shipped for contract waivers (issue #832).
 
 ## Schema
 
@@ -53,11 +54,19 @@ emits `grounding.unavailable_for_critical_module` (warning) for critical
 modules in that state, so CI can surface the gap without blocking purely
 offline workflows.
 
-## Relationship to `pdd gate`
+## Relationship to `pdd checkup gate`
 
-`pdd gate` is not yet wired to this policy. The library returns structured
-`PolicyViolation` records so the eventual gate integration only has to map
-codes → exit policy. Until then, projects can call
+Two gate surfaces share the `pdd checkup gate` command namespace:
+
+| Gate | Status | Scope |
+|------|--------|-------|
+| **Waiver policy** (#832) | Shipped | `<waivers>` blocks in prompt contracts |
+| **Grounding policy** (#825) | Planned | `.pdd/grounding_policy.yaml` / evidence manifests |
+
+This document covers grounding policy only. Waiver gate usage lives in
+`docs/contract_check.md`. The grounding library returns structured
+`PolicyViolation` records so the eventual grounding integration only has to map
+codes → exit policy. Until #825 lands, projects can call
 `pdd.grounding_policy.check` directly from their own CI scripts.
 
 ## Related documents

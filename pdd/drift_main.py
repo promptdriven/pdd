@@ -21,17 +21,30 @@ except ImportError:  # pragma: no cover
     resolve_test_output_paths = None  # type: ignore[assignment,misc]
 
 try:
-    from .policy_check import run_policy_check as _run_policy_check_impl
+    from .policy_check import run_policy_check as _run_capability_policy_check_impl
 
     _POLICY_CHECK_AVAILABLE = True
-except ImportError:  # pragma: no cover
+except ImportError:  # pragma: no cover - capability policy optional
     _POLICY_CHECK_AVAILABLE = False
 
-    def _run_policy_check_impl(*_args, **_kwargs):
-        class _Result:
+    def _run_capability_policy_check_impl(_code_path: Path, _prompt_path: Path) -> Any:
+        class _CapabilityResult:
             passed = False
 
-        return _Result()
+        return _CapabilityResult()
+
+try:
+    from .gate_main import run_gate_policy as _run_gate_policy_impl
+
+    _GATE_POLICY_AVAILABLE = True
+except (ModuleNotFoundError, ImportError):  # pragma: no cover - gate optional
+    _GATE_POLICY_AVAILABLE = False
+
+    def _run_gate_policy_impl(*_args: Any, **_kwargs: Any) -> Any:
+        class _GateResult:
+            passed = False
+
+        return _GateResult()
 
 DEFAULT_MAX_COST_USD = 20.0
 _COST_RE = re.compile(r"(?:Total\s+)?Cost:\s*\$([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
@@ -477,16 +490,33 @@ def _verify_configured(manifest: Optional[ManifestView]) -> bool:
     return _validation_key_configured(manifest, ("verify",))
 
 
+def _evidence_gate_policy_configured(
+    project_root: Path,
+    manifest: Optional[ManifestView],
+) -> bool:
+    """Return True when ``pdd checkup gate`` evidence policy should run for this dev unit."""
+    policy_paths = (
+        project_root / ".pdd" / "policy.yml",
+        project_root / ".pdd" / "policy.yaml",
+        project_root / "policy.yml",
+        project_root / "policy.yaml",
+    )
+    if any(path.is_file() for path in policy_paths):
+        return True
+    return _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS)
+
+
 def _capability_policy_configured(
     project_root: Path,
     manifest: Optional[ManifestView],
     prompt_path: Optional[Path] = None,
 ) -> bool:
-    """Return True when capability policy checks should run for this dev unit.
+    """Return True when ``pdd checkup policy check`` should run for this dev unit.
 
-    Distinct from ``pdd checkup gate`` evidence YAML (``.pdd/policy.yml``): drift
-    only keys off manifest validation fields and ``<capabilities>`` in the prompt.
+    Distinct from evidence YAML under ``.pdd/policy.yml`` (see
+    ``_evidence_gate_policy_configured``).
     """
+    del project_root  # capability policy keys off prompt/manifest only
     if _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS):
         return True
 
@@ -521,13 +551,24 @@ def _run_policy_check(
     code_path: Path,
 ) -> tuple[bool, bool, bool]:
     """Return ``(passed, skipped, unavailable)`` for policy evaluation."""
-    if not _capability_policy_configured(project_root, manifest, prompt_path):
+    capability_configured = _capability_policy_configured(
+        project_root, manifest, prompt_path
+    )
+    gate_configured = _evidence_gate_policy_configured(project_root, manifest)
+    if not capability_configured and not gate_configured:
         return True, True, False
-    if not _POLICY_CHECK_AVAILABLE:
+
+    if capability_configured and not _POLICY_CHECK_AVAILABLE:
+        return False, False, True
+    if gate_configured and not _GATE_POLICY_AVAILABLE:
         return False, False, True
 
-    # Policy check requires the source path and optionally the prompt path
-    return _run_policy_check_impl(code_path, prompt_path).passed, False, False
+    passed = True
+    if capability_configured:
+        passed = _run_capability_policy_check_impl(code_path, prompt_path).passed
+    if gate_configured:
+        passed = passed and _run_gate_policy_impl(project_root, target=devunit).passed
+    return passed, False, False
 
 
 def _run_verify_check(
@@ -683,12 +724,14 @@ def run_drift(
     candidate_apis: list[str] = []
     total_cost = 0.0
     cost_budget_exceeded = False
-    policy_check_skipped = not _capability_policy_configured(
+    capability_configured = _capability_policy_configured(
         project_root, manifest, prompt_path
     )
+    gate_configured = _evidence_gate_policy_configured(project_root, manifest)
+    policy_check_skipped = not capability_configured and not gate_configured
     policy_check_unavailable = (
-        _capability_policy_configured(project_root, manifest, prompt_path)
-        and not _POLICY_CHECK_AVAILABLE
+        (capability_configured and not _POLICY_CHECK_AVAILABLE)
+        or (gate_configured and not _GATE_POLICY_AVAILABLE)
     )
 
     with tempfile.TemporaryDirectory(prefix="pdd-drift-") as temp_name:

@@ -1537,7 +1537,7 @@ def _discover_policy_gates(
     worktree: Path,
     changed_files: Sequence[str],
 ) -> List[Gate]:
-    """Emit ``pdd policy check`` gates for changed Python files with capability contracts."""
+    """Emit ``pdd checkup policy check`` gates for changed Python files with capability contracts."""
     from .policy_check import (  # pylint: disable=import-outside-toplevel
         prompt_has_capabilities,
         resolve_policy_prompt_for_code,
@@ -1563,6 +1563,7 @@ def _discover_policy_gates(
                 name=f"policy:{rel}",
                 cmd=[
                     *cli,
+                    "checkup",
                     "policy",
                     "check",
                     str(code_path.resolve()),
@@ -1571,7 +1572,7 @@ def _discover_policy_gates(
                 ],
                 source=f"{prompt_label}:<capabilities>",
                 required_fix_hint=(
-                    f"Run `pdd policy check {rel} --prompt {prompt_label}` locally and "
+                    f"Run `pdd checkup policy check {rel} --prompt {prompt_label}` locally and "
                     "fix capability violations, or add a justified "
                     "`# pdd-policy-ignore` on the flagged line."
                 ),

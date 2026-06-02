@@ -431,7 +431,8 @@ def test_drift_applies_default_max_cost_for_non_dry_run(tmp_path: Path) -> None:
     assert report.max_cost_usd == DEFAULT_MAX_COST_USD
 
 
-def test_drift_policy_fails_closed_when_gate_unavailable(tmp_path: Path) -> None:
+def test_drift_policy_fails_closed_when_capability_check_unavailable(tmp_path: Path) -> None:
+    """Capabilities in the prompt require policy_check; missing module fails closed."""
     _prompt, code = _write_fixture(tmp_path)
     _prompt.write_text(
         _prompt.read_text(encoding="utf-8")
@@ -446,6 +447,29 @@ def test_drift_policy_fails_closed_when_gate_unavailable(tmp_path: Path) -> None
         return 0.0
 
     with patch("pdd.drift_main._POLICY_CHECK_AVAILABLE", False):
+        with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
+            report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
+
+    assert report.policy_check_unavailable
+    assert not report.policy_check_skipped
+    assert report.status == "unstable"
+    assert not report.behavior_unchanged
+    assert report.snapshots[0].policy_passed is False
+
+
+def test_drift_evidence_gate_fails_closed_when_gate_unavailable(tmp_path: Path) -> None:
+    """``.pdd/policy.yml`` requires checkup gate; missing gate module fails closed."""
+    _prompt, code = _write_fixture(tmp_path)
+    stable_source = code.read_text(encoding="utf-8")
+    (tmp_path / ".pdd").mkdir(parents=True)
+    (tmp_path / ".pdd" / "policy.yml").write_text("rules: []\n", encoding="utf-8")
+
+    def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(stable_source, encoding="utf-8")
+        return 0.0
+
+    with patch("pdd.drift_main._GATE_POLICY_AVAILABLE", False):
         with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
             report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
 

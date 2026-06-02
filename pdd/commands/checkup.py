@@ -16,6 +16,7 @@ from ..core.utils import echo_model_line
 from .checkup_simplify import checkup_simplify
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
+from .gate import gate_cmd
 from .drift import drift_cmd
 from .gate import gate_cmd
 from .policy import policy_group
@@ -368,8 +369,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
-    Evidence gate:
-      pdd checkup gate [TARGET] [OPTIONS]  →  enforce evidence policy checks.
+    Evidence and waiver gate:
+      pdd checkup gate [TARGET] [OPTIONS]  →  evidence manifests and waiver policy.
+    Capability side-effect policy:
+      pdd checkup policy check TARGET [OPTIONS]  →  AST checks vs <capabilities>.
     Regeneration drift:
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
@@ -382,6 +385,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "coverage",
         "drift",
         "gate",
+        "policy",
         "simplify",
     }:
         click.echo(ctx.command.get_help(ctx))
@@ -522,6 +526,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if target == "policy":
         policy_args = list(ctx.args)
+        if strict:
+            if policy_args and policy_args[0] == "check":
+                policy_args.insert(1, "--strict")
+            else:
+                policy_args.insert(0, "--strict")
+        if show_help and not policy_args:
+            click.echo(
+                policy_group.get_help(
+                    click.Context(policy_group, info_name="pdd checkup policy")
+                )
+            )
+            return None
         if show_help:
             policy_args.append("--help")
         exit_code = policy_group.main(

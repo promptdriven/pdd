@@ -1,6 +1,6 @@
 # Policy Check
 
-`pdd policy check` is a deterministic safety layer that validates generated code against natural-language capability contracts. It uses AST-based static analysis to ensure that modules stay within their allowed side-effect boundaries.
+`pdd checkup policy check` is a deterministic safety layer that validates generated code against natural-language capability contracts. It uses AST-based static analysis to ensure that modules stay within their allowed side-effect boundaries.
 
 This is **not** the same as `pdd checkup gate`, which evaluates evidence-manifest YAML rules under `.pdd/`. Capability policy checks are driven by `<capabilities>` in module prompts.
 
@@ -57,19 +57,19 @@ The initial version focuses on high-risk side effects in Python:
 
 ```bash
 # Check a specific file (prompt auto-discovered when possible)
-pdd policy check src/refund_payment.py
+pdd checkup policy check src/refund_payment.py
 
 # Explicit prompt
-pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt
+pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt
 
 # JSON for CI (capabilities + issues)
-pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --json
+pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --json
 
 # Strict: flag side effects even when <capabilities> is missing
-pdd policy check src/refund_payment.py --strict
+pdd checkup policy check src/refund_payment.py --strict
 
 # Evidence manifest with validation.policy
-pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --evidence
+pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --evidence
 ```
 
 Directory targets skip common vendor folders (`.git`, `venv`, `node_modules`, `__pycache__`, `.pdd`, etc.).
@@ -98,6 +98,6 @@ config_path = os.getenv("APP_CONFIG_PATH")
 
 ## Integration
 
-- **`pdd checkup --pr --review-loop`:** When a changed `.py` file has a prompt with `<capabilities>`, a `policy:<path>` gate runs `pdd policy check`.
+- **`pdd checkup --pr --review-loop`:** When a changed `.py` file has a prompt with `<capabilities>`, a `policy:<path>` gate runs `pdd checkup policy check`.
 - **`pdd checkup drift`:** Runs policy check when the prompt defines `<capabilities>` (not when only evidence gate YAML exists).
 - **Evidence:** `--evidence` sets `validation.policy` to `passed` or `failed`. Sync may populate the same field via `validation_from_sync`.

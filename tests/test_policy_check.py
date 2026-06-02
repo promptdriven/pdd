@@ -1,4 +1,4 @@
-"""Tests for capability contracts and ``pdd policy check``."""
+"""Tests for capability contracts and ``pdd checkup policy check``."""
 from __future__ import annotations
 
 import json
@@ -158,7 +158,7 @@ def test_policy_check_cli_json_output() -> None:
     prompt = FIXTURE_DIR / "forbidden_network_python.prompt"
     result = CliRunner().invoke(
         cli.cli,
-        ["policy", "check", str(target), "--prompt", str(prompt), "--json"],
+        ["checkup", "policy", "check", str(target), "--prompt", str(prompt), "--json"],
         env=_CLI_ENV,
     )
     assert result.exit_code != 0, result.output

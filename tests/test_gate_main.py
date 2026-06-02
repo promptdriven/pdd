@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,11 @@ def test_gate_fails_when_prompt_changed_after_manifest(tmp_path: Path) -> None:
     )
     # Ensure prompt is newer than manifest to trigger stale story validation.
     prompt.write_text("v2\n", encoding="utf-8")
+    # Force a clearly-later mtime so the freshness check is deterministic on
+    # fast filesystems where the manifest write and the prompt rewrite can land
+    # in the same mtime tick (the check compares prompt mtime > manifest mtime).
+    manifest_mtime = manifest_path.stat().st_mtime
+    os.utime(prompt, (manifest_mtime + 10, manifest_mtime + 10))
     result = run_gate_policy(project, target="refund")
     assert not result.passed
     assert any(f.code == "stories_stale_after_prompt_change" for f in result.failures)
