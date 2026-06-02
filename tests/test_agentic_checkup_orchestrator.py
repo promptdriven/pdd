@@ -6493,3 +6493,134 @@ class TestNoIssuePrModePosting:
         # ...and the final report posts to BOTH the PR and the issue thread.
         assert ppc.call_count == 1
         assert final_issue, "with a source issue, the issue-thread final report must still post"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1338: stale checkup issue worktree branches
+# ---------------------------------------------------------------------------
+
+def _git_issue1338(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run git in an isolated test repo without inheriting outer git env."""
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        env.pop(key, None)
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=check,
+        env=env,
+    )
+
+
+def _init_issue1338_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    _git_issue1338(repo, "init", "-q")
+    _git_issue1338(repo, "config", "user.email", "test@example.com")
+    _git_issue1338(repo, "config", "user.name", "Test User")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    _git_issue1338(repo, "add", ".")
+    _git_issue1338(repo, "commit", "-q", "-m", "init")
+
+
+def _current_branch_issue1338(repo: Path) -> str:
+    return _git_issue1338(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+
+def test_checkup_issue_stale_registered_branch_is_pruned_and_recreated(tmp_path: Path) -> None:
+    """A removed worktree registered to checkup/issue-N should not block setup."""
+    import shutil
+
+    from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+    repo = tmp_path / "repo"
+    _init_issue1338_repo(repo)
+    stale = repo / "old-wt"
+    _git_issue1338(repo, "worktree", "add", "-q", "-b", "checkup/issue-7", str(stale), "HEAD")
+    shutil.rmtree(stale)
+
+    wt_path, err = _setup_worktree(repo, issue_number=7, quiet=True, resume_existing=False)
+
+    assert err is None
+    assert wt_path == repo / ".pdd" / "worktrees" / "checkup-issue-7"
+    assert wt_path is not None and wt_path.exists()
+    assert _current_branch_issue1338(wt_path) == "checkup/issue-7"
+    assert (wt_path / "f.txt").read_text(encoding="utf-8") == "x\n"
+
+
+def test_checkup_issue_plain_leftover_branch_still_resets_cleanly(tmp_path: Path) -> None:
+    """A non-checked-out leftover checkup branch should still be replaced."""
+    from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+    repo = tmp_path / "repo"
+    _init_issue1338_repo(repo)
+    _git_issue1338(repo, "branch", "checkup/issue-7")
+
+    wt_path, err = _setup_worktree(repo, issue_number=7, quiet=True, resume_existing=False)
+
+    assert err is None
+    assert wt_path == repo / ".pdd" / "worktrees" / "checkup-issue-7"
+    assert wt_path is not None and wt_path.exists()
+    assert _current_branch_issue1338(wt_path) == "checkup/issue-7"
+
+
+def test_checkup_issue_live_registered_branch_returns_actionable_error(tmp_path: Path) -> None:
+    """A branch checked out in a live worktree should fail before generic add -b."""
+    from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+    repo = tmp_path / "repo"
+    _init_issue1338_repo(repo)
+    live = repo / "live-wt"
+    _git_issue1338(repo, "worktree", "add", "-q", "-b", "checkup/issue-7", str(live), "HEAD")
+
+    wt_path, err = _setup_worktree(repo, issue_number=7, quiet=False, resume_existing=False)
+
+    assert wt_path is None
+    assert err is not None
+    assert "checkup/issue-7" in err
+    assert str(live) in err
+    assert "worktree" in err.lower()
+    assert "remove" in err.lower() or "prune" in err.lower()
+    assert not err.startswith("Failed to create worktree")
+    assert "a branch named 'checkup/issue-7' already exists" not in err
+
+
+def test_checkup_issue_resume_uses_existing_branch_without_resetting(tmp_path: Path) -> None:
+    """resume_existing should add a worktree on the existing branch."""
+    from pdd.agentic_checkup_orchestrator import _setup_worktree
+
+    repo = tmp_path / "repo"
+    _init_issue1338_repo(repo)
+    _git_issue1338(repo, "branch", "checkup/issue-7")
+
+    wt_path, err = _setup_worktree(repo, issue_number=7, quiet=True, resume_existing=True)
+
+    assert err is None
+    assert wt_path == repo / ".pdd" / "worktrees" / "checkup-issue-7"
+    assert wt_path is not None and wt_path.exists()
+    assert _current_branch_issue1338(wt_path) == "checkup/issue-7"
+
+
+def test_checkup_orchestrator_surfaces_actionable_setup_error(
+    mock_dependencies,
+    default_args,
+    tmp_path: Path,
+) -> None:
+    """Caller should preserve the direct branch/worktree cleanup error."""
+    _mock_run, _mock_load, _mock_console, mock_worktree = mock_dependencies
+    live = tmp_path / "live-wt"
+    setup_error = (
+        f"Cannot reset branch checkup/issue-7 because it is checked out at {live}. "
+        "Remove that worktree and retry."
+    )
+    mock_worktree.return_value = (None, setup_error)
+    default_args["issue_number"] = 7
+
+    success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+    mock_worktree.assert_called()
+    assert success is False
+    assert "checkup/issue-7" in msg
+    assert str(live) in msg
+    assert setup_error in msg

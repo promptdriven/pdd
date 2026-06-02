@@ -325,6 +325,132 @@ class TestSetupPrWorktree:
         assert err is not None
         assert "not a git repository" in err
 
+    def test_stale_scoped_branch_is_pruned_before_fetch_and_worktree(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A removed worktree registered to the scoped PR branch should not block setup."""
+        import os
+        import shutil
+
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+            env = os.environ.copy()
+            for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+                env.pop(key, None)
+            return subprocess.run(
+                ["git", *args],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+
+        repo = tmp_path / "repo"
+        remote = tmp_path / "remote"
+        for path in (repo, remote):
+            path.mkdir()
+            git(path, "init", "-q")
+            git(path, "config", "user.email", "test@example.com")
+            git(path, "config", "user.name", "Test User")
+            (path / "f.txt").write_text(f"{path.name}\n", encoding="utf-8")
+            git(path, "add", ".")
+            git(path, "commit", "-q", "-m", "init")
+        git(remote, "update-ref", "refs/pull/77/head", "HEAD")
+
+        branch_name = _pr_worktree_branch_name(repo, 77)
+        stale = repo / "old-pr-wt"
+        git(repo, "worktree", "add", "-q", "-b", branch_name, str(stale), "HEAD")
+        shutil.rmtree(stale)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=str(remote),
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=repo,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+                resume_existing=False,
+            )
+
+        assert err is None
+        assert wt_path == repo / ".pdd" / "worktrees" / "checkup-pr-77"
+        assert wt_path is not None and wt_path.exists()
+        current = git(wt_path, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        assert current == branch_name
+        assert (wt_path / "f.txt").read_text(encoding="utf-8") == "remote\n"
+
+    def test_live_scoped_branch_returns_direct_actionable_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A live scoped PR branch conflict should not be reported as fetch/add noise."""
+        import os
+
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+            env = os.environ.copy()
+            for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+                env.pop(key, None)
+            return subprocess.run(
+                ["git", *args],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+
+        repo = tmp_path / "repo"
+        remote = tmp_path / "remote"
+        for path in (repo, remote):
+            path.mkdir()
+            git(path, "init", "-q")
+            git(path, "config", "user.email", "test@example.com")
+            git(path, "config", "user.name", "Test User")
+            (path / "f.txt").write_text(f"{path.name}\n", encoding="utf-8")
+            git(path, "add", ".")
+            git(path, "commit", "-q", "-m", "init")
+        git(remote, "update-ref", "refs/pull/77/head", "HEAD")
+
+        branch_name = _pr_worktree_branch_name(repo, 77)
+        live = repo / "live-pr-wt"
+        git(repo, "worktree", "add", "-q", "-b", branch_name, str(live), "HEAD")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=str(remote),
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=repo,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+                resume_existing=False,
+            )
+
+        assert wt_path is None
+        assert err is not None
+        assert branch_name in err
+        assert str(live) in err
+        assert "worktree" in err.lower()
+        assert "remove" in err.lower() or "prune" in err.lower()
+        assert not err.startswith("Failed to fetch PR")
+        assert not err.startswith("Failed to create PR worktree")
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator PR-mode wiring
