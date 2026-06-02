@@ -14,6 +14,7 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from .checkup_simplify import checkup_simplify
+from .checkup_snapshot import checkup_snapshot
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .prompt import prompt_lint
@@ -362,10 +363,19 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
+    Snapshot policy (nondeterministic prompt context):
+      pdd checkup snapshot PROMPT_FILE [OPTIONS]
     """
     ctx.ensure_object(dict)
 
-    if show_help and target not in {"lint", "contract", "contracts", "coverage", "simplify"}:
+    if show_help and target not in {
+        "lint",
+        "contract",
+        "contracts",
+        "coverage",
+        "simplify",
+        "snapshot",
+    }:
         click.echo(ctx.command.get_help(ctx))
         return None
 
@@ -429,6 +439,25 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         )
         if show_help:
             ctx.exit()
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "snapshot":
+        snapshot_args = list(ctx.args)
+        if not snapshot_args or show_help:
+            click.echo(
+                checkup_snapshot.get_help(
+                    click.Context(checkup_snapshot, info_name="pdd checkup snapshot")
+                )
+            )
+            return None
+        exit_code = checkup_snapshot.main(
+            args=snapshot_args,
+            prog_name="pdd checkup snapshot",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
         if exit_code:
             raise click.exceptions.Exit(exit_code)
         return None

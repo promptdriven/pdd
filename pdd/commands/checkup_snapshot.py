@@ -1,22 +1,16 @@
-"""Policy commands for snapshot and reproducibility enforcement."""
+"""``pdd checkup snapshot`` — reproducibility policy for nondeterministic prompts."""
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
 from ..context_snapshot_policy import check_snapshot_policy
 
 
-@click.group(name="policy")
-def policy_group() -> None:
-    """Policy checks for reproducibility and side effects."""
-
-
-@policy_group.command(name="snapshot")
+@click.command("snapshot")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
     "--project-root",
@@ -26,8 +20,8 @@ def policy_group() -> None:
     help="Project root containing .pdd/evidence.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable results.")
-def snapshot(prompt_file: Path, project_root: Path, as_json: bool) -> None:
-    """Reject prompts with nondeterministic tags that lack a replayable snapshot."""
+def checkup_snapshot(prompt_file: Path, project_root: Path, as_json: bool) -> None:
+    """Fail when a prompt uses nondeterministic tags without a replayable snapshot."""
 
     passed, message = check_snapshot_policy(prompt_file, project_root)
     payload = {

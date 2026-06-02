@@ -5,7 +5,8 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from pdd.commands.policy import snapshot as policy_snapshot
+from pdd.commands.checkup import checkup
+from pdd.commands.checkup_snapshot import checkup_snapshot
 from pdd.context_snapshot import start_snapshot_run
 from pdd.context_snapshot_policy import check_snapshot_policy, declared_nondeterministic_tags
 from pdd.preprocess import preprocess
@@ -49,7 +50,7 @@ def test_policy_cli_exit_code(tmp_path: Path, monkeypatch) -> None:
     prompt.write_text("<web>https://example.test</web>\n", encoding="utf-8")
 
     fail = CliRunner().invoke(
-        policy_snapshot,
+        checkup_snapshot,
         [str(prompt), "--project-root", str(tmp_path)],
     )
     assert fail.exit_code == 1
@@ -75,7 +76,20 @@ def test_policy_cli_exit_code(tmp_path: Path, monkeypatch) -> None:
     recorder.finalize(expanded_prompt=expanded, prompt_text=prompt.read_text(encoding="utf-8"))
 
     ok = CliRunner().invoke(
-        policy_snapshot,
+        checkup_snapshot,
         [str(prompt), "--project-root", str(tmp_path)],
     )
     assert ok.exit_code == 0, ok.output
+
+
+def test_checkup_snapshot_dispatched_via_checkup_group(tmp_path: Path) -> None:
+    """``pdd checkup snapshot`` routes through the checkup command group."""
+    prompt = tmp_path / "static.prompt"
+    prompt.write_text("Deterministic prompt body.\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        checkup,
+        ["snapshot", str(prompt), "--project-root", str(tmp_path)],
+        obj={"quiet": True},
+    )
+    assert result.exit_code == 0, result.output

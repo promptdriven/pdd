@@ -15,7 +15,7 @@ Longer suites remain separate:
 Projects with critical modules may add a policy check that rejects unsnapshotted nondeterministic prompt context. The check should fail when a protected prompt uses `<shell>`, `<web>`, or `<include ... query="...">` without a corresponding snapshot-context run artifact. Keep this check separate from public fork-safe regression jobs if it requires private snapshot artifacts or secret-gated web access.
 
 ```bash
-pdd policy snapshot prompts/critical_python.prompt
+pdd checkup snapshot prompts/critical_python.prompt
 ```
 
 The command exits non-zero when active nondeterministic tags are declared but `.pdd/evidence/` contains no replayable snapshot manifest for that prompt.
