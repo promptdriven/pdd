@@ -126,6 +126,16 @@ _PATCH_STRING_PATTERNS = [
     # (best-effort; Go rarely uses string-based patching)
 ]
 
+# patch.object("module.path", "attr") and patch.object(module_ref, "attr")
+_PATCH_OBJECT_PATTERNS = [
+    re.compile(
+        r'''(?:patch|mocker\.patch)\.object\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']'''
+    ),
+    re.compile(
+        r'''(?:patch|mocker\.patch)\.object\s*\(\s*([\w.]+)\s*,\s*["']([^"']+)["']'''
+    ),
+]
+
 
 def _collect_patch_paths(test_file_content: str) -> list[str]:
     """Extract every module-path-looking string passed to a patch() call.
@@ -143,7 +153,6 @@ def _collect_patch_paths(test_file_content: str) -> list[str]:
     return sorted(paths)
 
 
-
 def symbols_from_patch_path(patch_path: str, module_stem: str) -> set[str]:
     """Map a dotted patch path to symbol names defined in *module_stem*."""
     symbols: set[str] = set()
@@ -154,6 +163,29 @@ def symbols_from_patch_path(patch_path: str, module_stem: str) -> set[str]:
     for index, part in enumerate(parts):
         if part == module_stem and index < len(parts) - 1:
             symbols.add(".".join(parts[index + 1 :]))
+    return symbols
+
+
+def symbols_from_patch_object_target(
+    module_ref: str,
+    attr: str,
+    module_stem: str,
+) -> set[str]:
+    """Map ``patch.object(<module_ref>, \"attr\")`` to symbols in *module_stem*."""
+    ref = module_ref.strip()
+    if "." in ref:
+        dotted = ref if ref.endswith(f".{attr}") else f"{ref}.{attr}"
+        return symbols_from_patch_path(dotted, module_stem)
+    if ref == module_stem or ref.split(".")[-1] == module_stem:
+        return {attr}
+    return set()
+
+
+def _collect_patch_object_symbols(test_file_content: str, module_stem: str) -> set[str]:
+    symbols: set[str] = set()
+    for pattern in _PATCH_OBJECT_PATTERNS:
+        for module_ref, attr in pattern.findall(test_file_content):
+            symbols.update(symbols_from_patch_object_target(module_ref, attr, module_stem))
     return symbols
 
 
@@ -195,6 +227,7 @@ def collect_patch_symbols_for_module(file_path: Path | str | None) -> set[str]:
             continue
         for patch_path in _collect_patch_paths(test_content):
             symbols.update(symbols_from_patch_path(patch_path, module_stem))
+        symbols.update(_collect_patch_object_symbols(test_content, module_stem))
     return symbols
 
 

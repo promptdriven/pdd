@@ -34,6 +34,13 @@ from .architecture_sync import (
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
+from .grounding_provenance import (
+    build_grounding_metadata,
+    grounding_reviewed_for_manifest,
+    review_pinned_examples_before_generation,
+    stash_grounding_overrides_on_ctx,
+    warn_cloud_examples_not_preapproved,
+)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -1543,7 +1550,52 @@ def _synthesize_dataclass_init_signature(
     return f"({', '.join(parts)})"
 
 
-def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
+def _patch_target_signature_entry(
+    tree: ast.Module,
+    symbol: str,
+    class_defs: Dict[str, ast.ClassDef],
+) -> Optional[str]:
+    """Return a snapshot signature string for a patched callable *symbol*."""
+    if "." not in symbol:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == symbol:
+                kind = "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function"
+                return f"[{kind}] {_format_python_signature(node)}"
+        return None
+
+    parts = symbol.split(".")
+    cls_name = parts[0]
+    cls_node = class_defs.get(cls_name)
+    if cls_node is None:
+        return None
+
+    if len(parts) == 2:
+        method_name = parts[1]
+        for child in cls_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method_name:
+                binding_kind = _python_method_binding_kind(child)
+                skip_first = binding_kind != "staticmethod"
+                return f"[{binding_kind}] {_format_python_signature(child, skip_first=skip_first)}"
+        return None
+
+    inner_cls, method_name = parts[1], parts[2]
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            for method in child.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name == method_name:
+                    binding_kind = _python_method_binding_kind(method)
+                    skip_first = binding_kind != "staticmethod"
+                    return (
+                        f"[{binding_kind}] {_format_python_signature(method, skip_first=skip_first)}"
+                    )
+    return None
+
+
+def _snapshot_public_signatures(
+    code_text: str,
+    language: str,
+    patch_targets: Optional[Set[str]] = None,
+) -> Dict[str, str]:
     """Collect signatures for public top-level functions, classes, and class methods.
 
     Recurses into public nested classes so a method like ``Outer.Inner.method``
@@ -1890,6 +1942,13 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                     # sufficient to distinguish it from a same-named
                     # ``def Path()`` later in the file.
                     signatures[exposed] = f"[import:from {module}]"
+    if patch_targets:
+        for symbol in sorted(patch_targets):
+            if symbol in signatures:
+                continue
+            entry = _patch_target_signature_entry(tree, symbol, class_defs)
+            if entry is not None:
+                signatures[symbol] = entry
     return signatures
 
 
@@ -1956,8 +2015,16 @@ def _verify_public_surface_regression(
         for symbol in _diff_public_surface(before, after)
         if symbol not in expanded_allowed
     ]
-    before_signatures = _snapshot_public_signatures(existing_code, language or "python")
-    after_signatures = _snapshot_public_signatures(generated_code, language or "python")
+    before_signatures = _snapshot_public_signatures(
+        existing_code,
+        language or "python",
+        patch_targets=patch_targets,
+    )
+    after_signatures = _snapshot_public_signatures(
+        generated_code,
+        language or "python",
+        patch_targets=after_patch_targets,
+    )
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set = {
         symbol
@@ -3179,7 +3246,10 @@ def code_generator_main(
             prompt_content = body
         else:
             prompt_content = raw_prompt_content
-        
+
+        if isinstance(ctx.obj, dict):
+            stash_grounding_overrides_on_ctx(ctx.obj, prompt_content)
+
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
         env_llm_raw = None
@@ -3766,10 +3836,29 @@ def code_generator_main(
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
-                    payload = {"promptContent": processed_prompt_for_cloud, "searchInput": prompt_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
+                    payload = {
+                        "promptContent": processed_prompt_for_cloud,
+                        "searchInput": prompt_content,
+                        "language": language,
+                        "strength": strength,
+                        "temperature": temperature,
+                        "verbose": verbose,
+                    }
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
+                        ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else None
+                        if ctx_obj is None:
+                            ctx.obj = {}
+                            ctx_obj = ctx.obj
+                        overrides = stash_grounding_overrides_on_ctx(ctx_obj, prompt_content)
+                        if cli_params.get("review_examples"):
+                            review_pinned_examples_before_generation(
+                                ctx_obj,
+                                prompt_content,
+                                force=force_overwrite,
+                                quiet=quiet,
+                            )
                         response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_request_timeout())
                         response.raise_for_status()
                         
@@ -3780,6 +3869,26 @@ def code_generator_main(
 
                         # Extract example information from examplesUsed array (cloud returns this)
                         examples_used = response_data.get("examplesUsed", [])
+                        if cli_params.get("review_examples"):
+                            warn_cloud_examples_not_preapproved(
+                                examples_used,
+                                cli_params.get("grounding_review_decisions"),
+                                quiet=quiet,
+                            )
+                        grounding_meta = build_grounding_metadata(
+                            mode="cloud",
+                            examples_used=examples_used,
+                            grounding_overrides=overrides,
+                            reviewed=grounding_reviewed_for_manifest(
+                                cli_params,
+                                examples_used,
+                            ),
+                        )
+                        if ctx.obj is None:
+                            ctx.obj = {}
+                        if isinstance(ctx.obj, dict):
+                            ctx.obj["last_grounding"] = grounding_meta
+
                         if examples_used:
                             selected_example_id = examples_used[0].get("id")
                             selected_example_title = examples_used[0].get("title")
@@ -3812,6 +3921,10 @@ def code_generator_main(
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
                              else:
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             if grounding_meta.get("selected_examples"):
+                                 console.print("[cyan]Grounding examples selected:[/cyan]")
+                                 for example in grounding_meta["selected_examples"]:
+                                     console.print(f"  - {example.get('module', 'unknown')}")
                     except requests.exceptions.Timeout:
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
@@ -4315,5 +4428,15 @@ def code_generator_main(
             console.print(traceback.format_exc())
 
         raise click.UsageError(f"An unexpected error occurred: {e}")
-        
+
+    if isinstance(ctx.obj, dict) and "last_grounding" not in ctx.obj:
+        overrides = ctx.obj.get("grounding_overrides") or stash_grounding_overrides_on_ctx(
+            ctx.obj, prompt_content
+        )
+        ctx.obj["last_grounding"] = build_grounding_metadata(
+            mode="unavailable",
+            grounding_overrides=overrides,
+            reviewed=grounding_reviewed_for_manifest(cli_params, []),
+        )
+
     return generated_code_content or "", was_incremental_operation, total_cost, model_name
