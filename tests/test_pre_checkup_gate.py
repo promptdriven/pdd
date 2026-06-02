@@ -523,6 +523,48 @@ def test_route_probe_is_nonblocking_note(tmp_path):
     assert any("route-probe note" in m for m in outcome.messages), outcome.messages
 
 
+def test_touched_invalid_architecture_json_blocks(tmp_path):
+    """Regression: _load_architecture swallows a parse error (returns []), so a PR
+    that breaks architecture.json would silently no-op drift-sync and pass. When
+    the PR itself touches architecture.json and it no longer parses, the gate MUST
+    hard-block — but only then (absent / pre-existingly broken must not block)."""
+    (tmp_path / "architecture.json").write_text("{ not: valid json ]", encoding="utf-8")
+    passed, message, _cost = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["architecture.json"], quiet=True, timeout_per_check=30.0
+    )
+    assert passed is False, message
+    assert "architecture.json" in message and "not valid JSON" in message, message
+
+    # Valid architecture.json touched -> this check does not block.
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+    assert pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["architecture.json"]
+    ) is None
+    # Not touched by the PR -> never blocks, even if broken.
+    (tmp_path / "architecture.json").write_text("{ broken ]", encoding="utf-8")
+    assert pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["pdd/foo.py"]
+    ) is None
+
+
+def test_caller_compat_resolves_from_dot_import_submodule(tmp_path):
+    """Regression: `from . import api; api.build(...)` (and `from . import api as a`)
+    binds the SUBMODULE, so the call is a module.attr call. The sweep must resolve
+    it like `import pkg.api as api`, not miss it. (Last static caller-compat form
+    resolved; dynamic/getattr/star re-exports stay with checkup.)"""
+    _write_pkg_module(tmp_path, "api", "def build(name):\n    return name\n")
+    (tmp_path / "pkg" / "consumer.py").write_text(
+        "from . import api\napi.build(1, 2, 3)\n"
+        "from . import api as a2\na2.build(title='bad')\n",
+        encoding="utf-8",
+    )
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path, ["pkg/api.py"], timeout=30.0
+    )
+    assert any("positional" in f for f in failures), failures
+    assert any("invalid keyword" in f for f in failures), failures
+
+
 def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path):
     """Issue #1293 (security): the gate executes worktree code, so its subprocess
     env must drop secret-bearing vars (LLM/cloud/VCS keys + tokens) while keeping

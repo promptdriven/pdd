@@ -158,6 +158,36 @@ def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
+def _touched_architecture_json_error(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Hard-block reason if the PR itself touched ``architecture.json`` and it no
+    longer parses, else ``None``.
+
+    ``_load_architecture`` deliberately swallows a parse error (returns ``[]``)
+    so the gate never crashes on a repo with a malformed arch file — but that
+    means a PR that *breaks* ``architecture.json`` would silently no-op the
+    drift phase and pass the gate, handing checkup a broken central config the
+    gate depends on. So validate it HERE, but only when the PR touched it and it
+    exists: a pre-existing/absent breakage is not this PR's doing (blocking on
+    that would be the false-block-on-infra pattern we avoid). Scope matches
+    ``_load_architecture`` — repo-root ``architecture.json`` only.
+    """
+    if not any(_norm(f) == "architecture.json" for f in changed_files):
+        return None
+    path = worktree / "architecture.json"
+    if not path.exists():
+        return None
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return (
+            "architecture.json (changed by this PR) is not valid JSON: "
+            f"{_scrub(exc)}"
+        )
+    return None
+
+
 def _prompt_path_for_filename(worktree: Path, filename: str) -> Optional[Path]:
     for base in (worktree / "pdd" / "prompts", worktree / "prompts"):
         candidate = base / filename
@@ -837,16 +867,31 @@ def _check_caller_compatibility(
                 resolved_mod = _resolve_from_import_module(
                     rel_caller, node.module, node.level
                 )
-                if resolved_mod not in module_to_sigs:
-                    continue
-                sigs = module_to_sigs[resolved_mod]
-                for alias in node.names:
-                    if alias.name == "*":
-                        continue
-                    wanted[resolved_mod].add(alias.name)
-                    import_sites.append((rel_caller, resolved_mod, alias.name))
-                    if alias.name in sigs:
-                        imported[alias.asname or alias.name] = (resolved_mod, alias.name)
+                if resolved_mod in module_to_sigs:
+                    sigs = module_to_sigs[resolved_mod]
+                    for alias in node.names:
+                        if alias.name == "*":
+                            continue
+                        wanted[resolved_mod].add(alias.name)
+                        import_sites.append((rel_caller, resolved_mod, alias.name))
+                        if alias.name in sigs:
+                            imported[alias.asname or alias.name] = (resolved_mod, alias.name)
+                else:
+                    # Submodule-import form: `from . import api` / `from pkg import
+                    # api` binds the SUBMODULE `api` (resolved_mod + ".api"), so a
+                    # later `api.build(...)` is a module.attr call — register it as a
+                    # module alias, same as `import pkg.api as api`. This is the last
+                    # static caller-compat form resolved; dynamic imports,
+                    # getattr-based calls, and star re-exports are statically
+                    # undecidable and intentionally left to the cross-model checkup.
+                    for alias in node.names:
+                        if alias.name == "*":
+                            continue
+                        submodule = (
+                            f"{resolved_mod}.{alias.name}" if resolved_mod else alias.name
+                        )
+                        if submodule in module_to_sigs:
+                            module_aliases[alias.asname or alias.name] = submodule
             elif isinstance(node, ast.Import):
                 # `import pkg.api as api` / `import pkg.api` -> map the local
                 # access prefix to the module so `api.build(...)` /
@@ -1030,9 +1075,28 @@ def _run_targeted_tests(
             f"(pytest only; JS test execution is out of scope for the RCE "
             f"constraint): {', '.join(js_ts_tests)}"
         )
+    # Changed JS/TS *modules* (not tests) likewise get no test execution from the
+    # gate — the targeted phase is pytest-only and a JS/TS runner against
+    # PR-controlled config is out of scope (fork-PR RCE). Say so honestly rather
+    # than letting the generic "no matching test files found" imply none exist;
+    # the tsc gate still catches their compile/type errors and checkup covers
+    # behavior. (We do not try to locate their colocated/frontend tests — that
+    # discovery is checkup's job, not a deterministic gate's.)
+    js_ts_modules = [
+        r
+        for r in code_files
+        if Path(r).suffix.lower() in _JS_TS_TEST_EXTS
+        and not (_JS_TS_TEST_NAME_RE.search(Path(r).name) or "__tests__" in Path(r).parts)
+    ]
+    if js_ts_modules:
+        notes.append(
+            "targeted-tests note: changed JS/TS module(s) have no gate-executed "
+            "tests (pytest only; JS/TS test execution is out of scope for the "
+            f"fork-PR-RCE constraint): {', '.join(js_ts_modules)}"
+        )
     candidates = _targeted_test_candidates(worktree, code_files)
     if not candidates:
-        notes.append("targeted-tests skipped: no matching test files found")
+        notes.append("targeted-tests skipped: no matching Python test files found")
         return failures, notes
     quarantine = _quarantined_tests()
     gating = [test for test in candidates if test not in quarantine]
@@ -1085,6 +1149,10 @@ def _run_build_smoke(
     code_files = _changed_code_files(changed_files)
     failures: List[str] = []
     notes: List[str] = []
+
+    arch_error = _touched_architecture_json_error(worktree, changed_files)
+    if arch_error:
+        failures.append(arch_error)
 
     artifacts_dir = (
         worktree
