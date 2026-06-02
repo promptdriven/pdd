@@ -4345,6 +4345,38 @@ def test_extract_contract_summary_finds_evidence_from_write_evidence_manifest(tm
     assert summary["evidence_status"] == "fresh"
 
 
+def test_extract_contract_summary_nested_prompt_evidence_slug(tmp_path):
+    """Nested prompt identities use _safe_slug basenames (frontend-page.latest.json)."""
+    from pdd.evidence_manifest import write_evidence_manifest
+
+    project_root = tmp_path
+    (project_root / ".pdd").mkdir()
+    prompt_path = project_root / "prompts" / "frontend" / "page_python.prompt"
+    prompt_path.parent.mkdir(parents=True)
+    (project_root / "tests").mkdir()
+    (project_root / "user_stories").mkdir()
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - Page\nThe system MUST render page.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+
+    write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt_path,
+        project_root=project_root,
+    )
+
+    wrong_path = (
+        project_root / ".pdd" / "evidence" / "devunits" / "frontend" / "page.latest.json"
+    )
+    assert not wrong_path.is_file()
+    latest = project_root / ".pdd" / "evidence" / "devunits" / "frontend-page.latest.json"
+    assert latest.is_file()
+
+    summary, _ = _extract_contract_summary(prompt_path, project_root)
+    assert summary["evidence_status"] == "fresh"
+
+
 def test_prompt_content_override_preserves_story_metadata_scope(tmp_path):
     """Override content must not change prompt filename used for story scoping."""
     project_root, prompts_dir, arch_path = _contract_summary_fixture(tmp_path)

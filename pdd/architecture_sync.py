@@ -987,22 +987,15 @@ def _story_paths_from_coverage(
     return sorted(linked)
 
 
-def _devunit_basename_for_prompt(prompt_path: Path) -> Optional[str]:
-    """Return the devunit evidence basename for a prompt (matches write_evidence_manifest)."""
-    from .operation_log import infer_module_identity
-
-    basename, _language = infer_module_identity(prompt_path)
-    return basename
-
-
 def _latest_evidence_manifest_path(project_root: Path, prompt_path: Path) -> Optional[Path]:
-    """Resolve ``.pdd/evidence/devunits/<basename>.latest.json`` for a prompt module."""
+    """Resolve ``.pdd/evidence/devunits/<slug>.latest.json`` for a prompt module."""
+    from .evidence_manifest import devunit_slug_for_prompt
     from .evidence_store import devunits_dir
 
-    basename = _devunit_basename_for_prompt(prompt_path)
-    if not basename:
+    slug = devunit_slug_for_prompt(prompt_path)
+    if not slug:
         return None
-    latest = devunits_dir(project_root) / f"{basename}.latest.json"
+    latest = devunits_dir(project_root) / f"{slug}.latest.json"
     return latest if latest.is_file() else None
 
 

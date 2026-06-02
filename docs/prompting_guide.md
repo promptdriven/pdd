@@ -1061,7 +1061,8 @@ Validation is **lenient**:
 When you run `pdd sync-architecture`, each module entry may include a generated
 `contract_summary` object (see `pdd/schemas/architecture_contract_summary.schema.json`).
 It is derived from `<contract_rules>`, linked user stories, test coverage, and the
-latest `.pdd/evidence/devunits/<prompt_stem>.latest.json` manifest. Fields include
+latest `.pdd/evidence/devunits/<module-slug>.latest.json` manifest (slug from
+`infer_module_identity`, with path segments normalized like `frontend-page`). Fields include
 `rules`, `critical`, `stories`, `capabilities`, `coverage_status`, `evidence_status`,
 `waived`, `unchecked`, and optional `rules_detail`. Legacy prompts without contract
 sections are left unchanged.

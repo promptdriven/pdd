@@ -329,6 +329,24 @@ def _safe_slug(value: str) -> str:
     return slug or "run"
 
 
+def devunit_slug_for_prompt(prompt_path: str | Path) -> Optional[str]:
+    """Return the devunit evidence filename slug for a prompt (matches latest manifests).
+
+    Uses :func:`infer_module_identity` for path-qualified basenames (e.g.
+    ``frontend/page`` for ``prompts/frontend/page_python.prompt``), then applies
+    the same :func:`_safe_slug` normalization as :func:`write_evidence_manifest`.
+    """
+    path = Path(prompt_path)
+    from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
+
+    basename, _language = infer_module_identity(path)
+    if not basename:
+        basename = path.stem or None
+    if not basename:
+        return None
+    return _safe_slug(basename)
+
+
 def validation_from_sync(
     sync_result: Mapping[str, Any],
     *,
@@ -422,10 +440,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         if not prompt_path.is_absolute():
             prompt_path = root / prompt_path
     if basename is None and prompt_path:
-        from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
-
-        basename, _ = infer_module_identity(prompt_path)
-        basename = basename or prompt_path.stem
+        basename = devunit_slug_for_prompt(prompt_path)
     basename = _safe_slug(basename or command.replace("pdd ", "", 1))
 
     timestamp = datetime.now(timezone.utc)
