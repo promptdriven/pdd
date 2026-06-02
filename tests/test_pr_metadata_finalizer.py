@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -142,6 +143,56 @@ def test_finalize_pr_metadata_ignores_fixture_prompts_outside_prompt_root(
     assert result.metadata_paths == ()
 
 
+def test_finalize_pr_metadata_anchors_subproject_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pdd.pr_metadata_finalizer as mod
+
+    repo = _make_repo(tmp_path)
+    sub = repo / "pkg"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths:\n"
+        "      - \"**\"\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts\n"
+        "      generate_output_path: \"\"\n"
+        "      test_output_path: tests/\n"
+        "      example_output_path: examples/\n"
+        "      default_language: python\n",
+        encoding="utf-8",
+    )
+    (sub / "prompts" / "bar_python.prompt").write_text(
+        "<pdd-reason>Bar module.</pdd-reason>\n"
+        "<pdd-interface>{\"type\":\"module\",\"module\":{\"functions\":[]}}</pdd-interface>\n"
+        "\n"
+        "% Generate bar.\n",
+        encoding="utf-8",
+    )
+    (sub / "bar.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repo, "add", "pkg/.pddrc", "pkg/prompts/bar_python.prompt", "pkg/bar.py")
+    _git(repo, "commit", "-m", "add subproject")
+
+    (sub / "bar.py").write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.setattr(
+        mod,
+        "run_metadata_sync",
+        lambda *args, **kwargs: SimpleNamespace(ok=True),
+    )
+
+    result = mod.finalize_pr_metadata(repo, changed_paths=["pkg/bar.py"])
+
+    assert result.ok, result.message
+    assert result.metadata_paths == ("pkg/.pdd/meta/bar_python.json",)
+    assert (sub / ".pdd" / "meta" / "bar_python.json").is_file()
+    assert _git(repo, "diff", "--cached", "--name-only").splitlines() == [
+        "pkg/.pdd/meta/bar_python.json"
+    ]
+
+
 def test_checkup_commit_scopes_pdd_meta_staging(tmp_path: Path, monkeypatch) -> None:
     import pdd.checkup_review_loop as mod
 
@@ -182,11 +233,18 @@ def test_cli_pr_flows_are_wired_to_metadata_finalizer() -> None:
     change_pr_prompt = (
         root / "pdd" / "prompts" / "agentic_change_step13_create_pr_LLM.prompt"
     ).read_text(encoding="utf-8")
+    checkup_pr_prompt = (
+        root / "pdd" / "prompts" / "agentic_checkup_step8_create_pr_LLM.prompt"
+    ).read_text(encoding="utf-8")
 
-    assert "finalize_pr_metadata(\n                current_work_dir" in bug
-    assert "finalize_pr_metadata(\n            current_work_dir" in change
+    assert "finalize_pr_metadata(" in bug
+    assert "current_work_dir" in bug
+    assert "finalize_pr_metadata(" in change
+    assert "current_work_dir" in change
     assert "finalize_pr_metadata(cwd, changed_paths=files_to_commit" in fix
     assert "finalize_pr_metadata(worktree, changed_paths=changed" in checkup
     assert "**Stage all changes**" not in change_pr_prompt
     assert "Do not run `git add -A`" in change_pr_prompt
+    assert "- Use `git add -A`" not in checkup_pr_prompt
+    assert "\ngit add -A\n" not in checkup_pr_prompt
     assert "stage_paths_scoped(current_work_dir, changed_files)" in change
