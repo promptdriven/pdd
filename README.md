@@ -3339,6 +3339,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
 - **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
 - **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").
+- **`PDD_ALLOW_INTERACTIVE`**: Opt in to interactive-only providers during automatic model selection. Models marked `interactive_only=True` in `llm_model.csv` (e.g. `github_copilot/*` device-flow OAuth, `chatgpt/*` ChatGPT subscription / `codex login`, `lm_studio/*`, `ollama/*`) require interactive human auth or a running local server and hang in non-interactive contexts (Cloud Run, CI, library import). By default they are skipped in the automatic candidate cascade so headless contexts fast-fail instead of hanging. Set `PDD_ALLOW_INTERACTIVE=1` from a real terminal to re-include them. An explicitly configured base model (`PDD_MODEL_DEFAULT`) is always honored regardless of this setting.
 
 #### Agentic Workflow Variables
 
@@ -3808,6 +3809,7 @@ It performs the following steps:
 *   **Normalizes** LiteLLM model IDs and applies only exact reviewed aliases from the manifest. Runtime fuzzy matching is intentionally disabled so model identity decisions stay reviewable. Reasoning-effort variants such as `-high`, `-medium`, `-low`, and `-minimal` remain distinct unless the manifest explicitly maps them.
 *   **Falls back** gracefully — if the manifest is missing or malformed, the run still succeeds using a curated static fallback dict for local-runner roots like `lm_studio/`, `ollama/`, aliases, and not-yet-reviewed models.
 *   Applies pricing overrides, deprecation/placeholder filtering, dedup, and a per-provider Pareto filter, then writes the resulting CSV.
+*   **Emits** the `interactive_only` column, setting it to `True` for the provider roots that require interactive human auth or a running local server (`github_copilot`, `chatgpt`, `lm_studio`, `ollama`) and `False` for everyone else. Automatic model selection skips `interactive_only` rows unless `PDD_ALLOW_INTERACTIVE` is set (see [Core Environment Variables](#core-environment-variables)).
 
 **Usage:**
 

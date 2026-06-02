@@ -4141,7 +4141,7 @@
     }
   },
   {
-    "reason": "Configuration data for llm model.",
+    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.",
     "description": "Defines llm model settings and data. Used by runtime modules.",
     "dependencies": [],
     "priority": 115,

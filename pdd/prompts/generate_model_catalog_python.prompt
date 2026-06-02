@@ -25,7 +25,8 @@ match model identities at runtime.
 1. Use stdlib + `litellm` only as hard dependencies. Define:
    - `ELO_CUTOFF = 1300`
    - `MAX_COST_PER_MTOK = 100.0`
-   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location"]`
+   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location","interactive_only"]`
+   - `_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama", "chatgpt"}` — provider roots that require interactive human auth/connect (device-flow OAuth, a ChatGPT subscription / `codex login` token, or a local server) and therefore hang in non-interactive contexts (Cloud Run, CI, library import). This includes the hand-managed `chatgpt/*` subscription rows, which carry an empty api_key and rely on device-flow auth.
    - `AGENTIC_ELO_MANIFEST_PATH = Path(__file__).parent / "data" / "arena_elo_manifest.json"`
    - `AGENTIC_ELO_MANIFEST_SCHEMA_VERSION = 2`
    - `ARENA_LEADERBOARD_POLICY` describing the reviewed-manifest policy.
@@ -58,6 +59,7 @@ match model identities at runtime.
    - Convert token costs to per-million (round 6), then apply exact `PRICE_OVERRIDES`.
    - Resolve provider display/api key via `PROVIDERS`; fallback to root provider; final fallback `(litellm_provider.replace("_"," ").title(), f"{ROOT}_API_KEY")`.
    - Infer `structured_output`, `reasoning_type`, `max_reasoning_tokens`, `location`, and `base_url`.
+   - Emit `interactive_only`: `True` when the row's provider root (`_get_provider_root`) is in `_INTERACTIVE_ONLY_PROVIDERS`, else `False`. Apply this to every emitted row, including the seeded/preserved local-runner rows from `_DEFAULT_LOCAL_RUNNER_ROWS` and an existing catalog.
    - Seed canonical local-runner rows from `_DEFAULT_LOCAL_RUNNER_ROWS` and preserve additional user local-runner rows from an existing catalog, re-resolving ELO and applying the same cutoff.
 6. Post-processing (exact order):
    - Fix C: remove dated/versioned variants when an undated equivalent exists.
