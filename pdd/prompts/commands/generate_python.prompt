@@ -5,7 +5,7 @@
   "cli": {
     "commands": [
       {"name": "generate", "description": "Generate code from prompt or trigger agentic architecture from GitHub issue"},
-      {"name": "test", "description": "Generate or enhance unit tests (agentic or manual mode)"},
+      {"name": "test", "description": "Generate or enhance unit tests, or generate/link prompt user stories"},
       {"name": "example", "description": "Generate context examples from prompt and code"}
     ]
   }
@@ -19,6 +19,7 @@
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
 <pdd-dependency>template_registry_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 % You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
 
 % Role & Scope
@@ -45,10 +46,12 @@
      - **Logic**: Call `context_generator_main`.
      - **Decorators**: `@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`. The `clears_run_report=True` flag mirrors the `generate` decorator so a successful `pdd example` invalidates any stale `.pdd/meta/<module>_<language>_run.json` for the affected module; without it, fingerprints would be refreshed while runtime verification state could still describe the pre-mutation example output.
 
-  3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
+  3. **test**: Supports Agentic issue testing, user-story validation artifacts, and Manual (`--manual`) unit-test generation.
      - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--clean-restart`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
      - **Agentic Mode**: Triggered if first arg is a GitHub issue URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. `--clean-restart` is valid only in this agentic GitHub issue mode and must reject arbitrary HTTP/GitHub non-issue URLs.
-     - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
+     - **Story Generation Mode**: Triggered when not `--manual` and every positional arg is a `.prompt` file. Generate a reviewable `user_stories/story__*.md` artifact from the provided prompt file(s) via `generate_user_story`, honor `--output` and `PDD_USER_STORIES_DIR`, and surface the generated story path plus linked prompts.
+     - **Story Metadata Linking Mode**: Triggered when not `--manual` and exactly one positional arg is a Markdown story file whose basename starts with `story__`. Call `cache_story_prompt_links` so existing stories receive or refresh `pdd-story-prompts` metadata used by `pdd detect --stories`.
+     - **Manual Unit-Test Mode**: Triggered by `--manual`, or by non-URL non-story inputs that fall through to legacy test generation. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
 
 % Implementation Details
@@ -59,11 +62,12 @@
   - Use `rich.console.Console` for stylized output in agentic modes.
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
+  <include>context/operation_log_example.py</include>
   <include select="def:code_generator_main">context/code_generator_main_example.py</include>
   <include select="def:run_agentic_architecture,def:run_incremental_architecture">context/agentic_architecture_example.py</include>
   <include>context/context_generator_main_example.py</include>
   <include select="def:cmd_test_main">context/cmd_test_main_example.py</include>
+  <include select="def:generate_user_story,def:cache_story_prompt_links" mode="interface">pdd/user_story_tests.py</include>
   <include>context/agentic_test_example.py</include>
   <include>context/track_cost_example.py</include>
   <utils.auth_service>
