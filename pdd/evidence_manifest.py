@@ -18,9 +18,11 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
+from .contract_ir import parse_prompt_contracts
+from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
 from .sync_order import extract_includes_from_file
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
@@ -258,9 +260,22 @@ def _contract_statuses(  # pylint: disable=too-many-return-statements
                 "status": rule.status,
                 "stories": rule.stories,
                 "tests": rule.tests,
+                "waiver": rule.waiver,
+                "waiver_status": getattr(rule, "waiver_status", None),
+                "waiver_expires": getattr(rule, "waiver_expires", None),
             }
             for rule in result.rules
         },
+        "waivers": [
+            {
+                "id": waiver.raw_id,
+                "rule_id": waiver.rule_id,
+                "reason": waiver.reason,
+                "approved_by": waiver.approved_by,
+                "expires": waiver.expires.isoformat() if waiver.expires else None,
+            }
+            for waiver in parse_prompt_contracts(path).waivers
+        ],
     }
 
 
@@ -328,6 +343,24 @@ def _safe_slug(value: str) -> str:
     return slug or "run"
 
 
+def devunit_slug_for_prompt(prompt_path: str | Path) -> Optional[str]:
+    """Return the devunit evidence filename slug for a prompt (matches latest manifests).
+
+    Uses :func:`infer_module_identity` for path-qualified basenames (e.g.
+    ``frontend/page`` for ``prompts/frontend/page_python.prompt``), then applies
+    the same :func:`_safe_slug` normalization as :func:`write_evidence_manifest`.
+    """
+    path = Path(prompt_path)
+    from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
+
+    basename, _language = infer_module_identity(path)
+    if not basename:
+        basename = path.stem or None
+    if not basename:
+        return None
+    return _safe_slug(basename)
+
+
 def validation_from_sync(
     sync_result: Mapping[str, Any],
     *,
@@ -355,14 +388,18 @@ def validation_from_sync(
         for operation in lang_result.get("operations_completed") or []:
             operations.add(str(operation))
 
-    overall_success = sync_result.get("overall_success")
-    if overall_success is None:
-        successes = [
-            bool(lang_result.get("success"))
-            for lang_result in by_language.values()
-            if isinstance(lang_result, dict)
-        ]
-        overall_success = bool(successes) and all(successes)
+    lang_successes = [
+        bool(lang_result.get("success"))
+        for lang_result in by_language.values()
+        if isinstance(lang_result, dict) and "success" in lang_result
+    ]
+    if lang_successes:
+        # Prefer per-language outcomes over a stale top-level overall_success flag.
+        overall_success = all(lang_successes)
+    elif sync_result.get("overall_success") is not None:
+        overall_success = bool(sync_result.get("overall_success"))
+    else:
+        overall_success = False
 
     test_operations = {"test", "crash", "fix", "test_extend"}
     if not skip_tests and operations & test_operations:
@@ -377,6 +414,53 @@ def validation_from_sync(
     return validation
 
 
+def collect_sync_evidence_paths(
+    basename: str,
+    sync_result: Mapping[str, Any],
+    *,
+    project_root: Path | str | None = None,
+) -> tuple[Optional[Path], list[Path]]:
+    """Resolve prompt and generated output paths for a completed ``pdd sync`` run."""
+    from .sync_determine_operation import get_pdd_file_paths  # pylint: disable=import-outside-toplevel
+
+    root = Path(project_root or Path.cwd()).resolve()
+    by_language = sync_result.get("results_by_language")
+    if not isinstance(by_language, dict):
+        by_language = {"python": sync_result}
+
+    languages = [lang for lang in by_language if lang != "_"]
+    language = languages[0] if len(languages) == 1 else "python"
+
+    try:
+        pdd_files = get_pdd_file_paths(basename, language, str(root / "prompts"))
+    except Exception:  # pylint: disable=broad-except
+        return None, []
+
+    prompt = pdd_files.get("prompt")
+    outputs: list[Path] = []
+    for key in ("code", "test", "example"):
+        candidate = pdd_files.get(key)
+        if candidate is not None and candidate.is_file():
+            outputs.append(candidate.resolve())
+    prompt_path = prompt.resolve() if prompt is not None and prompt.is_file() else None
+    return prompt_path, outputs
+
+
+
+def grounding_kwargs_from_ctx(
+    ctx_obj: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build write_evidence_manifest grounding kwargs from a Click ctx.obj mapping."""
+    obj = dict(ctx_obj or {})
+    grounding = obj.get("last_grounding")
+    examples_used = None
+    if isinstance(grounding, Mapping):
+        examples_used = grounding.get("selected_examples")
+    reviewed = grounding_reviewed_for_manifest(obj, examples_used)
+    return {"grounding": grounding, "reviewed": reviewed}
+
+
+
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     command: str,
@@ -389,6 +473,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     logs: Optional[Mapping[str, Optional[str]]] = None,
     basename: Optional[str] = None,
     project_root: Optional[str | Path] = None,
+    grounding: Optional[Mapping[str, Any]] = None,
+    reviewed: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
@@ -405,12 +491,16 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         prompt_path = Path(prompt_file)
         if not prompt_path.is_absolute():
             prompt_path = root / prompt_path
-    if basename is None and prompt_path:
-        from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
-
-        basename, _ = infer_module_identity(prompt_path)
-        basename = basename or prompt_path.stem
-    basename = _safe_slug(basename or command.replace("pdd ", "", 1))
+    resolved_from_prompt = False
+    if basename is None and prompt_path is not None:
+        slug = devunit_slug_for_prompt(prompt_path)
+        if slug:
+            basename = slug
+            resolved_from_prompt = True
+    if basename is None:
+        basename = _safe_slug(command.replace("pdd ", "", 1))
+    elif not resolved_from_prompt:
+        basename = _safe_slug(basename)
 
     timestamp = datetime.now(timezone.utc)
     run_id = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{basename}"
@@ -421,6 +511,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     }
     if logs:
         log_values.update(logs)
+
+    grounding_block = normalize_grounding(grounding, reviewed=reviewed)
 
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -440,7 +532,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
             "model": model or None,
             "temperature": temperature,
             "cost_usd": float(cost_usd),
-            "grounding_examples": [],
+            "grounding": grounding_block,
+            "grounding_examples": list(grounding_block.get("selected_examples") or []),
         },
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),

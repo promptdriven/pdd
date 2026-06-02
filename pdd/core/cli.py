@@ -107,6 +107,7 @@ def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
         or ("checkup", "contract") in pairs
         or ("checkup", "contracts") in pairs
         or ("checkup", "coverage") in pairs
+        or ("checkup", "gate") in pairs
         or ("contracts", "check") in pairs
     )
 
@@ -431,6 +432,8 @@ def cli(
         os.environ.pop("PDD_QUIET", None)
     ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
+    if review_examples:
+        ctx.obj["grounding_review_decisions"] = []
     ctx.obj["local"] = local
     # Propagate --local flag to environment for llm_invoke cloud detection
     if local:

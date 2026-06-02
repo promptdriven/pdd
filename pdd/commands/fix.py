@@ -103,6 +103,24 @@ def _is_user_story_file(value: str) -> bool:
         "(syntax/import and timeout/flaky heuristics)."
     ),
 )
+@click.option(
+    "--compress-test-context",
+    is_flag=True,
+    default=None,
+    help="Automatically compress test context to failing tests only.",
+)
+@click.option(
+    "--context-compression",
+    type=click.Choice(["off", "test", "examples", "contracts", "all"]),
+    default=None,
+    help="Set global context compression mode.",
+)
+@click.option(
+    "--compression-fallback",
+    type=click.Choice(["full", "error"]),
+    default=None,
+    help="Behavior when context compression fails (default: full).",
+)
 @click.pass_context
 @log_operation(operation="fix", clears_run_report=True)
 @track_cost
@@ -130,6 +148,9 @@ def fix(
     agentic_fallback: bool,
     protect_tests: bool,
     failure_aware_retries: bool,
+    compress_test_context: Optional[bool],
+    context_compression: Optional[str],
+    compression_fallback: Optional[str],
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """
     Fix code/tests manually, apply a story-driven prompt fix, or orchestrate an agentic issue fix.
@@ -268,6 +289,9 @@ def fix(
                 temperature=None,
                 protect_tests=protect_tests,
                 failure_aware_retries=failure_aware_retries,
+                compress_test_context=bool(compress_test_context),
+                context_compression=context_compression,
+                compression_fallback=compression_fallback,
             )
 
             total_cost += cost

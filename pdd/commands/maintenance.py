@@ -3,7 +3,7 @@ Maintenance commands (sync, auto_deps, setup).
 """
 import os
 import click
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 from pathlib import Path
 
 from ..architecture_sync import sync_prompts_to_architecture
@@ -14,9 +14,58 @@ from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility, echo_model_line
-from ..evidence_manifest import validation_from_sync, write_evidence_manifest
+from ..evidence_manifest import (
+    collect_sync_evidence_paths,
+    validation_from_sync,
+    write_evidence_manifest,
+)
 
 DEFAULT_SYNC_BUDGET = 20.0
+
+
+def _write_sync_evidence_manifest(
+    *,
+    basename: str,
+    result: Mapping[str, Any],
+    total_cost: float,
+    model_name: str,
+    skip_tests: bool,
+    skip_verify: bool,
+    dry_run: bool,
+    temperature: float,
+    quiet: bool,
+) -> None:
+    """Write or refresh the dev-unit evidence manifest for a sync attempt."""
+    project_root = Path.cwd()
+    prompt_path, output_files = collect_sync_evidence_paths(
+        basename,
+        result,
+        project_root=project_root,
+    )
+    manifest_path = write_evidence_manifest(
+        command="pdd sync",
+        basename=basename,
+        prompt_file=prompt_path,
+        output_files=output_files,
+        model=model_name,
+        cost_usd=total_cost,
+        temperature=temperature,
+        validation=validation_from_sync(
+            result,
+            skip_tests=skip_tests,
+            skip_verify=skip_verify,
+            dry_run=dry_run,
+        ),
+        project_root=project_root,
+    )
+    if not quiet:
+        click.echo(
+            click.style(
+                f"Evidence manifest: {manifest_path}",
+                fg="cyan",
+            )
+        )
+
 
 @click.command("sync")
 @click.argument("basename", required=False)
@@ -305,23 +354,33 @@ def sync(
             one_session=effective_one_session,
         )
         if evidence:
-            write_evidence_manifest(
-                command="pdd sync",
+            _write_sync_evidence_manifest(
                 basename=basename,
-                model=model_name,
-                cost_usd=total_cost,
+                result=result,
+                total_cost=total_cost,
+                model_name=model_name,
+                skip_tests=skip_tests,
+                skip_verify=skip_verify,
+                dry_run=dry_run,
                 temperature=ctx.obj.get("temperature", 0.0),
-                validation=validation_from_sync(
-                    result,
-                    skip_tests=skip_tests,
-                    skip_verify=skip_verify,
-                    dry_run=dry_run,
-                ),
+                quiet=ctx.obj.get("quiet", False),
             )
         return str(result), total_cost, model_name
     except click.Abort:
         raise
     except Exception as exception:
+        if evidence and basename and not _is_github_issue_url(basename):
+            _write_sync_evidence_manifest(
+                basename=basename,
+                result={"overall_success": False, "results_by_language": {}},
+                total_cost=0.0,
+                model_name="",
+                skip_tests=skip_tests,
+                skip_verify=skip_verify,
+                dry_run=dry_run,
+                temperature=ctx.obj.get("temperature", 0.0),
+                quiet=ctx.obj.get("quiet", False),
+            )
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
 
@@ -509,11 +568,57 @@ def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> 
     )
     click.echo(summary)
 
+    total_rules = 0
+    total_stories = 0
+    has_contracts = False
+    for entry in result.get("results", []):
+        summary_data = entry.get("contract_summary")
+        if summary_data:
+            has_contracts = True
+            total_rules += len(summary_data.get("rules", []))
+            total_stories += len(summary_data.get("stories", []))
+
+    if has_contracts:
+        click.echo(
+            f"Total contracts: {total_rules} rules, {total_stories} stories "
+            "across synced modules."
+        )
+
     for entry in result.get("results", []):
         if entry.get("updated"):
             click.echo(f"UPDATED {entry['filename']}")
+            summary_data = entry.get("contract_summary")
+            if summary_data:
+                click.echo(
+                    f"  Contracts: {len(summary_data.get('rules', []))} rules, "
+                    f"{len(summary_data.get('stories', []))} stories"
+                )
+                ev_status = summary_data.get("evidence_status")
+                if ev_status == "stale":
+                    click.echo(
+                        click.style(
+                            f"  Warning: evidence is stale for {entry['filename']}",
+                            fg="yellow",
+                        )
+                    )
+                elif ev_status == "missing" and summary_data.get("rules"):
+                    click.echo(
+                        click.style(
+                            f"  Warning: evidence is missing for {entry['filename']}",
+                            fg="red",
+                        )
+                    )
+                elif ev_status == "error":
+                    click.echo(
+                        click.style(
+                            f"  Warning: evidence status error for {entry['filename']}",
+                            fg="yellow",
+                        )
+                    )
         elif not entry.get("success"):
             click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
+        for warning in entry.get("warnings", []):
+            click.echo(f"WARNING {entry['filename']}: {warning}")
 
     for filename in result.get("registered", []):
         click.echo(f"REGISTERED {filename}")

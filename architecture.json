@@ -81,6 +81,21 @@
             "returns": "Optional[str]"
           },
           {
+            "name": "extract_step_report",
+            "signature": "(text: Optional[str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "normalize_step_comments_state",
+            "signature": "(raw: Any) -> Set[int]",
+            "returns": "Set[int]"
+          },
+          {
+            "name": "post_step_comment_once",
+            "signature": "(*, repo_owner: str, repo_name: str, issue_number: int, step_num: int, body: str, posted_steps: Set[int], cwd: Path) -> bool",
+            "returns": "bool"
+          },
+          {
             "name": "_sanitize_comment_body",
             "signature": "(body: Optional[str], max_chars: int = 25_000) -> str",
             "returns": "str"
@@ -450,6 +465,51 @@
     }
   },
   {
+    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
+    "dependencies": [],
+    "priority": 18,
+    "filename": "resurface_check_Python.prompt",
+    "filepath": "extensions/recruiting/resurface_check.py",
+    "tags": [
+      "backend",
+      "api",
+      "scheduling",
+      "nurture"
+    ],
+    "context_urls": [
+      {
+        "url": "https://cloud.google.com/scheduler/docs/creating",
+        "purpose": "Cloud Scheduler daily job configuration"
+      },
+      {
+        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
+        "purpose": "Firestore compound queries for contribution threshold scanning"
+      },
+      {
+        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
+        "purpose": "GitHub API for merged PR count verification"
+      },
+      {
+        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
+        "purpose": "Cloud Functions HTTP entry point for scheduler triggers"
+      }
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/recruiting_resurface_check",
+            "auth": "cloud-scheduler",
+            "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Enhances test plan with contract/schema validation and accessibility test cases.",
     "description": "Step 5b of the 18-step agentic test workflow. Enhances the test plan with OpenAPI contract validation and axe-core accessibility test cases.",
     "dependencies": [],
@@ -500,7 +560,7 @@
     }
   },
   {
-    "reason": "Creates manual testing checklist for browser-based exploratory testing via npx playwright.",
+    "reason": "Creates manual testing checklist for browser-based exploratory testing via playwright-cli.",
     "description": "Step 7 of the 18-step agentic test workflow. Creates checklist with page-by-page, user-story, and accessibility spot-check strategies.",
     "dependencies": [],
     "priority": 212,
@@ -525,7 +585,7 @@
     }
   },
   {
-    "reason": "Executes manual/exploratory browser tests against a web application using npx playwright.",
+    "reason": "Executes manual/exploratory browser tests against a web application using playwright-cli.",
     "description": "Step 8 of the 18-step agentic test workflow. Executes checklist items via playwright-cli commands and reports PASS/FAIL with evidence.",
     "dependencies": [],
     "priority": 213,
@@ -1150,22 +1210,34 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable"
+            "returns": "Callable",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]"
+            "returns": "Tuple[Any, str]",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs)",
-            "returns": "Tuple[List[str], List[str]]"
+            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
+            "returns": "Tuple[List[str], List[str]]",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str)",
-            "returns": "bool"
+            "signature": "(path_str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -1236,7 +1308,9 @@
     "dependencies": [
       "construct_paths_python.prompt",
       "insert_includes_python.prompt",
-      "operation_log_python.prompt"
+      "validate_prompt_includes_python.prompt",
+      "operation_log_python.prompt",
+      "auto_deps_architecture_python.prompt"
     ],
     "priority": 35,
     "filename": "auto_deps_main_python.prompt",
@@ -1352,13 +1426,9 @@
     }
   },
   {
-    "reason": "Scans and summarizes directory files via LLM, producing a CSV with per-file metadata and content-hash caching.",
+    "reason": "Recursively discovers and summarizes files in a directory using LLM with caching.",
     "description": "Generates overview of files in a directory. Used for context in LLM prompts.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "path_resolution_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 39,
     "filename": "summarize_directory_python.prompt",
     "filepath": "pdd/summarize_directory.py",
@@ -1373,7 +1443,10 @@
           {
             "name": "summarize_directory",
             "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
-            "returns": "Tuple[str, float, str]"
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -1549,15 +1622,9 @@
     }
   },
   {
-    "reason": "Analyzes a prompt and its directory to automatically discover and generate dependency include tags with selective extraction attributes.",
+    "reason": "Automatically selects relevant code and doc includes for prompts using two-stage retrieval.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "summarize_directory_python.prompt",
-      "embed_retrieve_python.prompt",
-      "path_resolution_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 45,
     "filename": "auto_include_python.prompt",
     "filepath": "pdd/auto_include.py",
@@ -1572,7 +1639,10 @@
           {
             "name": "auto_include",
             "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
-            "returns": "Tuple[str, str, float, str]"
+            "returns": "Tuple[str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -1866,13 +1936,9 @@
     }
   },
   {
-    "reason": "CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).",
+    "reason": "CLI entry point for the bug command.",
     "description": "Command-line interface for bug. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "agentic_bug_python.prompt",
-      "bug_to_unit_test_python.prompt",
-      "core/cloud_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 55,
     "filename": "bug_main_python.prompt",
     "filepath": "pdd/bug_main.py",
@@ -1925,14 +1991,9 @@
     }
   },
   {
-    "reason": "Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.",
+    "reason": "CLI entry point for the code generator command.",
     "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method \u2014 declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter \u2014 declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift \u2014 annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError \u2014 for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix \u2014 so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) \u2014 `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError \u2014 when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. Both new exceptions share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. The conformance and public-surface / test-churn gate-call sites in `code_generator_main` gate on `generated_code_content is not None` (NOT a truthy check) so an empty provider response over an existing module / test file still trips PublicSurfaceRegressionError / TestChurnError instead of silently truncating to 0 bytes; for non-Python artifacts the gates cannot inspect (JSON, YAML, prompts, etc.) `code_generator_main` additionally raises `click.UsageError(\"Refusing to overwrite ...\")` immediately before the write when existing content is non-empty and the generated content is empty/whitespace-only. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case.",
     "dependencies": [
-      "construct_paths_python.prompt",
-      "preprocess_python.prompt",
-      "code_generator_python.prompt",
-      "incremental_code_generator_python.prompt",
-      "core/cloud_python.prompt",
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
       "_keyring_timeout_python.prompt"
@@ -2145,15 +2206,9 @@
     }
   },
   {
-    "reason": "Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.",
+    "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "auto_include_python.prompt",
-      "preprocess_python.prompt",
-      "path_resolution_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2168,7 +2223,18 @@
           {
             "name": "insert_includes",
             "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
-            "returns": "Tuple[str, str, float, str]"
+            "returns": "Tuple[str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -2207,7 +2273,7 @@
     }
   },
   {
-    "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
+    "reason": "CLI entry point for the update command.",
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
@@ -2328,7 +2394,7 @@
     }
   },
   {
-    "reason": "Classify pytest / verification output so `fix_error_loop` can adapt retries by failure type (syntax/import, assertion/logic, timeout/flaky).",
+    "reason": "Classifies test/verification failure modes for failure-aware retries.",
     "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop to skip unproductive retries on syntax/import or timeout/flaky failures.",
     "dependencies": [],
     "priority": 64,
@@ -2381,9 +2447,10 @@
   },
   {
     "reason": "Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.",
-    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
+    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations. Supports two-phase focused repair for large dev units via fix_focus, and failure-aware early exit for syntax/import and timeout/flaky failures.",
     "dependencies": [
-      "failure_classification_python.prompt"
+      "failure_classification_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2404,7 +2471,7 @@
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, compress_test_context=False, context_compression=None, compression_fallback=None)",
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None)",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2416,13 +2483,91 @@
     }
   },
   {
-    "reason": "Orchestrates single-pass fixes, iterative fixes, optional cloud execution, and optional auto-submit of successful fixes.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets or when fast-path targets do not match product-code slices.",
+    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, focused test slicing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names OR when fast-path names match no product-code slices (e.g. assertion-only failures where only test functions appear in the traceback), but skips that LLM call and returns [] when ast.parse(code) raises SyntaxError so syntax-broken large files fall back instead of sending an unchanged full source payload. Focused test slicing preserves setup/teardown, fixtures, class attributes, non-test helper methods, and referenced non-collecting top-level support definitions such as TestBase; it falls back to the full test file when the dependency-preserving slice is not meaningfully smaller.",
     "dependencies": [
-      "fix_error_loop_python.prompt",
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 64,
+    "filename": "fix_focus_python.prompt",
+    "filepath": "pdd/fix_focus.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "is_large",
+            "signature": "(code: str, unit_test: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "build_skeleton",
+            "signature": "(code: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "extract_function_names_from_traceback",
+            "signature": "(error: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "prepare_focused_inputs",
+            "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]",
+            "returns": "Optional[FocusedInputs]"
+          },
+          {
+            "name": "reconstruct_code",
+            "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str",
+            "returns": "str"
+          }
+        ],
+        "models": [
+          {
+            "name": "DiagnosisResult",
+            "fields": [
+              "function_names: list[str]"
+            ]
+          },
+          {
+            "name": "FunctionSlice",
+            "fields": [
+              "name: str",
+              "qualname: str",
+              "start_line: int",
+              "end_line: int",
+              "source: str",
+              "indent: int"
+            ]
+          },
+          {
+            "name": "FocusedInputs",
+            "fields": [
+              "focused_code: str",
+              "focused_tests: str",
+              "slices: list[FunctionSlice]"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1760
+    }
+  },
+  {
+    "reason": "CLI entry point for the fix command; single-pass cloud/local modes use fix_focus for large dev units and auto-submit short-circuits in cloud executors with a bounded Device Flow JWT call.",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "dependencies": [
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
-      "core/cloud_python.prompt"
+      "core/cloud_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2433,13 +2578,12 @@
       "python"
     ],
     "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
+      "type": "cli",
+      "cli": {
+        "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx, prompt_file, code_file, unit_test_file, error_file, output_test, output_code, output_results, loop, verification_program, max_attempts, budget, auto_submit, agentic_fallback=True, strength, temperature, protect_tests=False, test_files=None, failure_aware_retries=True, compress_test_context=False, context_compression=None, compression_fallback=None)",
-            "returns": "Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compress_test_context: bool = False, context_compression: str | None = None, compression_fallback: str | None = None) -> Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -2720,7 +2864,7 @@
     }
   },
   {
-    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
+    "reason": "Coordinates sync workflow steps and state management.",
     "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
@@ -2739,9 +2883,148 @@
       "module": {
         "functions": [
           {
+            "name": "load_sync_log",
+            "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
+            "returns": "List[Dict[str, Any]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_sync_log_entry",
+            "signature": "(decision, budget_remaining: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "update_sync_log_entry",
+            "signature": "(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "append_sync_log",
+            "signature": "(basename: str, language: str, entry: Dict[str, Any])",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "log_sync_event",
+            "signature": "(basename: str, language: str, event: str, details: Dict[str, Any] = None)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "save_run_report",
+            "signature": "(report: Dict[str, Any], basename: str, language: str, atomic_state: Optional['AtomicStateUpdate'] = None)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
             "name": "sync_orchestration",
-            "signature": "(basename, target_coverage=90.0, language='python', prompts_dir='prompts', code_dir='src', examples_dir='examples', tests_dir='tests', max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, dry_run=False, force=False, strength=DEFAULT_STRENGTH, temperature=0.0, time_param=0.25, verbose=False, quiet=False, output_cost=None, review_examples=False, local=False, context_config=None, context_override=None, confirm_callback=None, no_steer=False, steer_timeout=DEFAULT_STEER_TIMEOUT_S, agentic_mode=False, compress_examples=False, compress_test_context=False, context_compression=None, compression_fallback=None)",
-            "returns": "Dict[str, Any]"
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, rc, out, err, basename: str, language: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__enter__",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__exit__",
+            "signature": "(self, exc_type, exc_val, exc_tb)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_run_report",
+            "signature": "(self, report: Dict[str, Any], path: Path)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_fingerprint",
+            "signature": "(self, fingerprint: Dict[str, Any], path: Path)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "read_pipe",
+            "signature": "(pipe, chunks)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_confirm_callback",
+            "signature": "() -> Optional[Callable[[str, str], bool]]",
+            "returns": "Optional[Callable[[str, str], bool]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "sync_worker_logic",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "confirming_callback",
+            "signature": "(msg: str, title: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "headless_confirming_callback",
+            "signature": "(msg: str, title: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, rc, out, err)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -2849,8 +3132,8 @@
     "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 75,
-    "filename": "agentic_bug_step5_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_reproduce_LLM.prompt",
+    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -2971,8 +3254,8 @@
     "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step12_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
+    "filename": "agentic_bug_step10_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3325,6 +3608,30 @@
     },
     "position": {
       "x": 3000,
+      "y": 0
+    }
+  },
+  {
+    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
+    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 95,
+    "filename": "extract_auto_include_LLM.prompt",
+    "filepath": "prompts/extract_auto_include_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 1800,
       "y": 0
     }
   },
@@ -3834,7 +4141,7 @@
     }
   },
   {
-    "reason": "Configuration data for llm model.",
+    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.",
     "description": "Defines llm model settings and data. Used by runtime modules.",
     "dependencies": [],
     "priority": 115,
@@ -3912,6 +4219,27 @@
     }
   },
   {
+    "reason": "Configuration data for pdd theme.",
+    "description": "Defines pdd theme settings and data. Used by runtime modules.",
+    "dependencies": [],
+    "priority": 119,
+    "filename": "pdd_theme_json.prompt",
+    "filepath": "pdd_theme.json",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 4800,
+      "y": 1100
+    }
+  },
+  {
     "reason": "Module that post-process the string output of a LLM so that the code can be run.",
     "description": "Implements functionality to post-process the string output of a LLM so that the code can be run. Integrates with PDD workflow.",
     "dependencies": [],
@@ -3986,7 +4314,7 @@
     }
   },
   {
-    "reason": "Captures and parses pytest output, supporting compressed context markers and extracting test results into JSON.",
+    "reason": "Parses pytest output for automated error handling.",
     "description": "Extracts test results, failures, and error messages from pytest output. Provides structured data for fix workflows.",
     "dependencies": [],
     "priority": 123,
@@ -3998,12 +4326,80 @@
       "testing"
     ],
     "interface": {
-      "type": "cli",
-      "cli": {
-        "commands": [
+      "type": "module",
+      "module": {
+        "functions": [
           {
-            "name": "pytest_output",
-            "description": "Capture the output of pytest and save it to a JSON file"
+            "name": "extract_failing_files_from_output",
+            "signature": "(pytest_output: str) -> list[str]",
+            "returns": "list[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_pytest_and_capture_output",
+            "signature": "(test_file: str) -> dict",
+            "returns": "dict",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "save_output_to_json",
+            "signature": "(output: dict, output_file: str = 'pytest.json')",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "pytest_runtest_logreport",
+            "signature": "(self, report)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "pytest_sessionfinish",
+            "signature": "(self, session)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "capture_logs",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_logs",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -4011,6 +4407,46 @@
     "position": {
       "x": 6280,
       "y": 0
+    }
+  },
+  {
+    "reason": "Implements regression analysis functionality.",
+    "description": "Provides regression analysis capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 124,
+    "filename": "regression_analysis_log.prompt",
+    "filepath": "regression_analysis.log",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 5960,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Implements regression functionality.",
+    "description": "Provides regression capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 125,
+    "filename": "regression_bash.prompt",
+    "filepath": "regression.sh",
+    "tags": [
+      "cli",
+      "shell"
+    ],
+    "interface": {
+      "type": "cli"
+    },
+    "position": {
+      "x": 5400,
+      "y": 440
     }
   },
   {
@@ -4057,6 +4493,26 @@
     },
     "position": {
       "x": 10200,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Generates run generated from specifications.",
+    "description": "Creates run generated using LLM. Handles input processing, generation, and output validation.",
+    "dependencies": [],
+    "priority": 127,
+    "filename": "run_generated_python.prompt",
+    "filepath": "pdd/run_generated.py",
+    "tags": [
+      "generation",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 6880,
       "y": 0
     }
   },
@@ -4743,6 +5199,26 @@
     }
   },
   {
+    "reason": "Module that test the prompt for a given prompt file.",
+    "description": "Implements functionality to test the prompt for a given prompt file. Integrates with PDD workflow.",
+    "dependencies": [],
+    "priority": 143,
+    "filename": "prompt_tester_python.prompt",
+    "filepath": "pdd/prompt_tester.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 6280,
+      "y": 1020
+    }
+  },
+  {
     "reason": "Provides real-time progress visualization for sync.",
     "description": "Displays animated progress indicators, step status, and cost tracking during sync operations.",
     "dependencies": [],
@@ -4867,7 +5343,7 @@
     }
   },
   {
-    "reason": "CLI wrapper for splitting a prompt into sub-prompt and modified-prompt.",
+    "reason": "CLI entry point for the split command.",
     "description": "Command-line interface for split. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [],
     "priority": 147,
@@ -4878,13 +5354,12 @@
       "python"
     ],
     "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
+      "type": "cli",
+      "cli": {
+        "commands": [
           {
             "name": "split_main",
-            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[Dict[str, str], float, str]",
-            "returns": "Tuple[Dict[str, str], float, str]"
+            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[Dict[str, str], float, str]"
           }
         ]
       }
@@ -4895,7 +5370,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.",
+    "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
     "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostics before re-raising the final failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
     "dependencies": [
       "core/cloud_python.prompt",
@@ -4911,13 +5386,12 @@
       "sync"
     ],
     "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
+      "type": "cli",
+      "cli": {
+        "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx, basename, max_attempts, budget, skip_verify, skip_tests, target_coverage, dry_run, no_steer, steer_timeout, agentic_mode, one_session, compress_examples, compress_test_context, context_compression, compression_fallback)",
-            "returns": "Tuple[Dict[str, Any], float, str]"
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool) -> Tuple[Dict[str, Any], float, str]"
           }
         ]
       }
@@ -4928,13 +5402,9 @@
     }
   },
   {
-    "reason": "Analyzes prompt changes and incrementally patches existing code or triggers full regeneration.",
+    "reason": "Applies targeted patches to existing code based on prompt changes.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "preprocess_python.prompt",
-      "postprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -4949,8 +5419,11 @@
         "functions": [
           {
             "name": "incremental_code_generator",
-            "signature": "(original_prompt, new_prompt, existing_code, language, strength, temperature, time, force_incremental, verbose, preprocess_prompt)",
-            "returns": "Tuple[Optional[str], bool, float, str]"
+            "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
+            "returns": "Tuple[Optional[str], bool, float, str]",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -5129,7 +5602,7 @@
     }
   },
   {
-    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, discovers cross-project context, invokes orchestrator.",
+    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Also wraps guarded incremental PRD-to-architecture propagation for issue URLs and local PRD files, including shell-safe target-directory validation, repo-relative status paths, subproject sync hints, and GitHub status comment redaction.",
     "dependencies": [
       "agentic_architecture_orchestrator_python.prompt",
@@ -5204,15 +5677,15 @@
         "commands": [
           {
             "name": "generate",
-            "description": "Generate code from prompt or trigger agentic architecture from GitHub issue"
+            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
           },
           {
             "name": "test",
-            "description": "Generate or enhance unit tests (agentic or manual mode)"
+            "description": "Generate or enhance tests through agentic issue mode or manual prompt/code mode."
           },
           {
             "name": "example",
-            "description": "Generate context examples from prompt and code"
+            "description": "Generate context examples from a prompt and code file."
           }
         ]
       }
@@ -5251,7 +5724,7 @@
     }
   },
   {
-    "reason": "Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.",
+    "reason": "Applies guarded incremental PRD changes to architecture.json and related prompts without full regeneration.",
     "description": "Reads a PRD diff from hash/provenance metadata and ignored local raw-baseline cache, asks the LLM for a structured architecture patch, validates dependency, prompt filename, filepath, and file invariants deterministically, rejects unsafe or secret-like code filepaths before reads, retries invalid patches with explicit validation feedback, writes targeted architecture updates atomically, validates prompt previews under the write lock to avoid lost edits, syncs prompt metadata tags, creates prompts for new modules, deletes prompts for removed modules, updates prompt Requirements through detect_change/change, and avoids persisting raw PRD or GitHub issue/comment text in tracked metadata.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -5274,13 +5747,13 @@
         "functions": [
           {
             "name": "run_incremental_prd_propagation",
-            "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple of success flag, message, cost, model, and changed files"
+            "signature": "(prd_source: str, *, architecture_path: Path | str, prompts_dir: Path | str, project_root: Path | str | None, issue_content: Optional[str], dry_run: bool, verbose: bool, quiet: bool, strength: float, temperature: float, time: float, max_patch_attempts: int, update_prompt_requirements: bool, generate_new_prompts: bool)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "apply_architecture_patch",
-            "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
-            "returns": "Validated in-memory architecture patch application result"
+            "signature": "(raw_architecture: Any, patch: ArchitecturePatch)",
+            "returns": "PatchApplication"
           }
         ]
       }
@@ -5382,12 +5855,36 @@
     }
   },
   {
-    "reason": "Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).",
+    "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
+    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
+    "dependencies": [],
+    "priority": 166,
+    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 15560,
+      "y": 440
+    }
+  },
+  {
+    "reason": "Generates E2E tests that verify the bug at a system level.",
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
-    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
+    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5407,7 +5904,7 @@
     }
   },
   {
-    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
+    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues, with optional clean restart.",
     "description": "Orchestrates the 13-step agentic change workflow. Supports `clean_restart=True` to ignore any persisted solving state for the issue and start a fresh full pdd-issue flow from the target base branch (issue #1149). Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -5460,8 +5957,11 @@
         "functions": [
           {
             "name": "run_agentic_change",
-            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -5668,7 +6168,7 @@
     }
   },
   {
-    "reason": "LLM template: analyzes doc changes and discovers associated documents for atomic sync at change-time.",
+    "reason": "LLM prompt template for analyzing documentation changes needed.",
     "description": "Step 5 of the agentic change workflow. Analyzes how documentation should change to support the new feature.",
     "dependencies": [],
     "priority": 178,
@@ -5764,7 +6264,7 @@
     }
   },
   {
-    "reason": "LLM template: implements prompt and doc changes atomically, including Step 5's associated-document edits in the same commit.",
+    "reason": "LLM prompt template for implementing prompt changes in a git worktree.",
     "description": "Step 9 of the agentic change workflow. Implements the prompt changes (modifying .prompt files and documentation) in a git worktree; scoped to prompt/doc edits only.",
     "dependencies": [],
     "priority": 182,
@@ -5788,7 +6288,7 @@
     }
   },
   {
-    "reason": "Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation, code cleanup, and a final PR-mode checkup gate that re-validates CI when it pushes additional fixes.",
+    "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and cleanup.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and final full PR-mode checkup.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
@@ -5862,9 +6362,7 @@
   {
     "reason": "CLI entry point for the 11-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
     "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
-    "dependencies": [
-      "agentic_e2e_fix_orchestrator_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 184,
     "filename": "agentic_e2e_fix_python.prompt",
     "filepath": "pdd/agentic_e2e_fix.py",
@@ -6217,7 +6715,8 @@
     "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
     "dependencies": [
-      "agentic_common_python.prompt"
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
     ],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
@@ -6959,22 +7458,34 @@
           {
             "name": "run_agentic_sync",
             "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]"
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "run_global_sync",
             "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]"
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder, strength, temperature, and context_override are forwarded via sync_options so child retries keep the parent config/model knobs"
+            ]
           },
           {
             "name": "_is_github_issue_url",
             "signature": "(s: str) -> bool",
-            "returns": "bool"
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "_parse_llm_response",
             "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]",
-            "returns": "Tuple[List[str], bool, List[Dict]]"
+            "returns": "Tuple[List[str], bool, List[Dict]]",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -7104,7 +7615,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches the GitHub issue when one is provided (optional in PR mode), loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
     "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7197,14 +7708,90 @@
           {
             "name": "run_checkup_review_loop",
             "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool, quiet: bool, use_github_state: bool) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]"
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "Creates one PR worktree for the entire loop session via _setup_pr_worktree",
+              "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
+              "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
+              "Can invoke one alias-normalized fixer_fallback when the primary fixer reports success=False (typical: credential-limit). Before the fallback runs, captures the pre-fix HEAD SHA and resets the worktree (git reset --hard <sha> + git clean -fd) so failed primary edits do not leak into the next commit. The fallback is skipped when it resolves to the primary fixer, the active reviewer, or the originally configured reviewer (ReviewLoopState.original_reviewer) to preserve reviewer/fixer role independence. On success the fallback becomes ReviewLoopState.active_fixer and drives every subsequent round; the fallback is one-shot for the entire loop. Both the failed primary FixResult and the fallback FixResult (success or failure) are appended to state.fixes for the audit trail; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so trip-wire tokens cannot downgrade an otherwise-verified fallback verdict",
+              "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
+              "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper with force_with_lease_on_non_fast_forward disabled (refuses to leave tokenized URL in git config)",
+              "If the PR head advances remotely during the fixer turn, fetches refs/heads/<head_ref> from the updated head repo with token auth fallback, runs a plain git rebase --onto FETCH_HEAD <upstream> HEAD where <upstream> is local_base_sha when supplied (typically pre_fix_sha, per Issue #1433 Bug #3 + codex pass-2 F3 to replay the FULL multi-commit local range from agentic autoheal) and falls back to HEAD~1 for the legacy single-commit case, then retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
+              "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
+              "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
+              "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
+              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify \u2014 state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
+              "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
+              "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
+              "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)",
+              "Issue #1092: at every clean-exit site (round-start LLM clean, review-only clean, post-verify clean, pending-findings-empty early exit, and fallback-reviewer clean), invokes _enforce_gates_before_clean to run pdd.checkup_gates over the loop-owned worktree; any failing deterministic gate (PR-range git diff --check, prettier --check, a non-mutating Python syntax check via builtin compile(), optional ruff/black/mypy/`npx --no-install tsc --noEmit`) is converted to a synthetic blocker ReviewFinding (reviewer prefix `gate:`) that the loop feeds back into the fixer rather than declaring clean",
+              "Issue #1092 base-ref refresh: when config.enable_gates is True the loop calls pdd.agentic_checkup_orchestrator._refresh_pr_base_ref after _fetch_pr_metadata, fetching the PR's base branch into the dedicated tracking ref refs/remotes/pdd-checkup/pr-{N}/base (NEVER refs/remotes/origin/<base>, which would mutate the operator's tracking refs when their origin is a fork) and populating pr_metadata['base_local_ref']. The fetch is bounded by a 60s subprocess timeout so a stalled transport cannot hold the review loop forever. The refresh helper resolves a trusted absolute git binary through pdd.checkup_gates and uses the sanitized gate env for its git-root, remote, and fetch subprocesses, so PATH=.:$PATH cannot execute a PR-shipped ./git before gate discovery. The review-loop short-circuit that skipped _fetch_pr_metadata in review-only mode is suppressed when gates are enabled so review-only on non-main-base PRs still gets the PR-range git-diff-check guarantee. discover_gates resolves base_ref from pr_metadata['base_local_ref'] first and falls back to the raw base_ref name when the refresh helper succeeded but did not land the ref",
+              "Issue #1092 fail-closed on refresh error: when _refresh_pr_base_ref populates pr_metadata['base_ref_fetch_error'] (subprocess CalledProcessError, TimeoutExpired, or other failure), _enforce_gates_before_clean appends a crash-row to state.gate_runs (phase='base-ref-refresh') and returns a single synthetic gate:base-ref blocker ReviewFinding. The loop refuses the clean verdict the same way it does for a crashed gate runner \u2014 never silently falls back to origin/main or worktree-only git diff --check, both of which would let an LLM clean verdict ride over a check we cannot prove ran against the right base",
+              "Issue #1092 fail-closed on metadata fetch: when _fetch_pr_metadata returns no usable base_ref (gh API outage, auth error, invalid JSON), the loop sets pr_metadata['base_ref_fetch_error'] BEFORE the refresh-call site so the same gate:base-ref fail-closed path engages \u2014 the pre-fix guard (if pr_metadata.get('base_ref')) silently skipped the refresh and let gates run with base_ref=None",
+              "Issue #1092 fail-closed on changed-files fallback: _pr_changed_files_all walks the base-candidate list using a trusted absolute git binary plus the sanitized gate env, then falls back to HEAD~1...HEAD only when every authoritative base diff failed. When the caller passed a real pr_metadata (base_ref or base_local_ref set) and the scanner had to fall back, the scanner records pr_metadata['changed_files_fallback']. _enforce_gates_before_clean then emits a single gate:changed-files blocker (phase='changed-files-resolution') so iter-30 node_modules and iter-27/iter-32 config-touched skips cannot be silently bypassed by a truncated inventory missing earlier-commit poisoning (iter-34 Finding 1). The same trusted git path is used by the sibling _pr_changed_python_files scanner so static drift detection cannot execute a PR-shipped ./git either. The same sentinel is also set \u2014 and same blocker emitted \u2014 when _pr_changed_files_all RAISES; the previous 'swallow into []' path proceeded with an empty inventory and let the safety skips no-op (iter-35 Finding 1). Exception text is scrubbed before storage. The fallback path stays valid when no base_ref was expected (unit-test paths)",
+              "Issue #1433 Bug #1 (pre-flight base-merge probe): immediately after _setup_pr_worktree and _refresh_pr_base_ref but BEFORE the first reviewer round, calls _detect_pr_base_merge_conflict(worktree, pr_metadata['base_local_ref']). The helper verifies the base ref with git rev-parse --verify, then runs `git merge-tree --write-tree --no-messages <base_local_ref> HEAD` (requires git >= 2.38; exit 0 = clean, exit 1 = conflict, other = cannot decide). Fail-OPEN on cannot-decide so non-PR worktrees, old git, or unresolvable refs do not become a new spurious block. When a real conflict is detected the loop creates a synthetic blocker ReviewFinding (reviewer='preflight:base-merge', area='pr-merge-conflict', round_number=0), persists preflight-base-merge-conflict.txt under artifacts_dir, sets reviewer_status[reviewer]='findings' + stop_reason, renders the final report via _finalize, posts via _post_review_loop_report, and returns with zero LLM spend. Codex review pass-2 finding F5: pre-flight only probes against base_local_ref freshly fetched by _refresh_pr_base_ref \u2014 a stale origin/<base> fallback would risk false positives on fork-origin operators. When base_ref_fetch_error is set or base_local_ref is unavailable the pre-flight is skipped and the existing gate:base-ref blocker handles the base problem",
+              "Issue #1433 Bug #3 (push fixer-subprocess commits): _commit_and_push_if_changed accepts a pre_fix_sha kwarg the loop captures via git rev-parse HEAD before invoking the fixer. When the fixer subprocess (typically codex autoheal) already committed inside the worktree, _git_changed_files returns empty (working tree is clean) but HEAD has moved past pre_fix_sha. The pre-fix function returned 'No changes to push' and the autoheal commit silently rotted. The helper now treats current_head != pre_fix_sha as has_unpushed_local_commits INDEPENDENTLY of the dirty flag (codex pass-2 F2 \u2014 the previous `not changed and ...` gate failed when the worktree had only filtered .pdd/checkup-context / .pdd/meta artifacts) and pushes the existing commits AS-IS, preserving the original author/message (e.g., 'Codex Local Autoheal') without creating a redundant PDD-Bot commit on top",
+              "Issue #1433 Bug #3 + codex pass-2 F3 (rebase full local range): _rebase_onto_updated_pr_head accepts a local_base_sha kwarg (typically pre_fix_sha). When supplied, the rebase upstream is `<local_base_sha>` instead of the hard-coded `HEAD~1`, so a multi-commit local range (typical for agentic autoheal that lands two or more commits per round) replays in full onto FETCH_HEAD. The pre-F3 single-commit HEAD~1..HEAD form is preserved when local_base_sha is None or equal to fixer_sha so legacy/test callers see no behaviour change",
+              "Issue #1433 Bug #3 (extended guard attention): the loop body unions _git_changed_files(worktree) with _files_changed_since(worktree, pre_fix_sha) before invoking _check_architecture_registry_edit_guard and _check_prompt_source_guard. _files_changed_since parses `git diff --name-status -z --find-renames <pre_fix_sha>..HEAD` and surfaces BOTH old and new paths for R records (matching the _git_changed_files contract via git_porcelain) and the destination only for C records (codex pass-2 F4 \u2014 the previous --name-only form let a committed rename of a prompt-owned code file out of pdd/ slip past the guard). The union ensures the #1063 prompt-source and #1081 registry-edit guards still fire on changes the fixer subprocess COMMITTED rather than leaving in the working tree",
+              "Issue #1433 Bug #3 + codex pass-2 F1 (guard baseline pinned to pre_fix_sha): _check_prompt_source_guard, _check_architecture_registry_edit_guard, _load_prompt_source_map, and _path_exists_at_head all accept a head_ref kwarg (default 'HEAD' preserves backward compat for non-loop callers including the reviewer-prompt companion-files collector). The loop pins head_ref=pre_fix_sha when computing the guard baseline so the comparison is against the pre-fixer snapshot. Without this, a fixer subprocess that COMMITTED a registry repoint/removal would compare the post-fix registry against itself \u2014 zero diff \u2014 and bypass both guards entirely (defeating the protections #1063 and #1081 originally added). _path_exists_at_head's 'did this path exist at baseline?' check also threads head_ref so the unregistered-new-code scan judges additions against the pre-fix tree",
+              "Issue #1433 Bug #4 (reviewer companion source-of-truth attention): _run_review computes _collect_companion_source_of_truth_files(worktree, pr_metadata) and threads it into _review_prompt via the companion_source_of_truth kwarg. _format_companion_source_of_truth renders a `## Companion Source-Of-Truth Files To Inspect` section listing {code_path, prompt_path, prompt_in_diff, architecture_in_diff} for every code file in the PR diff. Codex pass-6 finding 1: the skip condition is `prompt_in_diff AND arch_entry_in_diff` where arch_entry_in_diff is a PER-ENTRY signal computed via _arch_entries_changed_set (canonical sorted-keys JSON comparison of base vs HEAD architecture.json entries per code_path); pass-5's prompt-only skip rule missed the case where module A's prompt was co-edited but A's architecture entry was unchanged (an arch.json edit for unrelated module B set the global signal True and hid A's at-risk arch surface). Reuses _load_prompt_source_map (which reads `git show HEAD:architecture.json` to derive the canonical code <-> prompt mapping) and _pr_changed_files_all. Always fail-open: any git/IO/JSON error returns [] so the section just disappears from the prompt rather than breaking the round. Codex pass-4 finding 2 + pass-5 finding 2 + pass-6 finding 2: when the eligible set exceeds max_entries (default 200) the collector appends a synthetic marker dict {`__truncated__`: True, `total_eligible`, `shown`, `omitted_code_paths` bounded at `max_entries // 2`, `omitted_paths_remaining`}; _run_review additionally persists the FULL eligible list as a sidecar JSON artifact (`round-{N}-{mode}-companion-source-of-truth.json` under artifacts_dir) and passes the artifact path to the formatter so the truncation note instructs the reviewer to either confirm artifact-based coverage or REPORT a `severity=blocker` finding (reviewer='companion-scope', area='workflow'). The bounded prompt section + sidecar artifact together keep the prompt context budget predictable while giving the reviewer (and post-hoc audits) the complete coverage record"
+            ]
           },
           {
             "name": "parse_reviewers",
             "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]",
-            "returns": "Tuple[str, ...]"
+            "returns": "Tuple[str, ...]",
+            "sideEffects": [
+              "None"
+            ]
           }
-        ]
+        ],
+        "dataclasses": [
+          "ReviewLoopContext",
+          "ReviewLoopConfig",
+          "ReviewLoopState",
+          "ReviewFinding",
+          "ReviewResult",
+          "FixResult"
+        ],
+        "config_knobs": [
+          "reviewers",
+          "reviewer",
+          "fixer",
+          "reviewer_fallback",
+          "fixer_fallback",
+          "review_only",
+          "max_rounds",
+          "max_cost",
+          "max_minutes",
+          "require_all_reviewers_clean",
+          "continue_on_reviewer_limit",
+          "require_final_fresh_review",
+          "blocking_severities",
+          "clean_reviewer_states",
+          "fallback_reviewer_on_failure",
+          "timeout_adder",
+          "reasoning_time",
+          "enable_gates",
+          "gate_timeout",
+          "gate_allow"
+        ],
+        "artifacts_layout": {
+          "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
+          "per_round": [
+            "round-{N}-{review|verify|fallback}-{role}.prompt.txt",
+            "round-{N}-{review|verify|fallback}-{role}.output.txt",
+            "round-{N}-{review|verify|fallback}-{role}.findings.json",
+            "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
+            "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
+            "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
+            "dedup-state-round-{N}.json"
+          ],
+          "final": [
+            "final-report.md",
+            "final-state.json"
+          ]
+        }
       }
     },
     "position": {
@@ -7296,7 +7883,7 @@
     }
   },
   {
-    "reason": "Multi-step pdd checkup orchestrator; PR mode supports an optional issue, reviewing the PR on its own merits.",
+    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR. In PR mode the linked issue is OPTIONAL: with no issue (issue_url/issue_number absent) the PR is reviewed on its own merits and _step7_passed drops the issue_aligned requirement (verdict = code findings only), the issue-thread per-step/error/final posts are skipped, and _post_pr_mode_final_report posts only to the PR thread; with an issue present the issue-alignment gate is unchanged. Issue #1212 contract: Step 5 emits a structured failure_signal block normalised into context['step5_failure_signal']; Step 6.1's prompt renders that block. The Step 5 status word is parsed into three states \u2014 pass/ok/success/passed/clean (logically clean), skipped/skip/no_tests/n/a/n_a (verification did not run; sets context['step5_verification_skipped']=1 and is detected from the parsed status alone regardless of the provider success flag, round-10 #1), and everything else including a missing/malformed block (logical failure, fail closed). The fixer is skipped for both clean and skipped; a dedicated pre-push gate refuses any push when the skipped flag is set because tests never ran \u2014 including when the worktree is clean (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user). The gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time rather than trusting only the in-memory context cache (round-10 #3: context is not part of the saved workflow state, so a mid-loop interruption can resume with the cached Step 5 skipped block but an empty context cache). The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND context['pr_scope_changed_files'] (the local merge-base diff), tolerating GitHub API outages when the local base is healthy. The scope-allowed set extends pr_file_set with Step 5 failure paths and justified EXPANSION_ITEMS paths so the guard matches the Step 6 prompt's allowance for editing failing test files / causally-connected files without an explicit marker; the causal guard remains the backstop for zero-overlap fixes. EXPANSION_ITEMS justification is per-marker; trailing continuation lines only count when they carry semantic content (prefix marker, path mention, or causal keyword) so indented/bulleted padding cannot whitelist a path. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] (not from start_step) so a manual --start-step 7 still trips the side-effect guard. A clean Steps-3/4/5 run never commits or pushes side-effect edits left by non-fixer tooling. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is NOT guarded on the raw output being truthy, so an empty/missing Step 5 output is itself a fail-closed condition (no test evidence) that routes to the logical-failure branch (pass-17 #1: provider success with empty Step 5 output must not slip through as a verified result). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt, calls _post_pr_mode_final_report(refusal_message) to post the terminal status to PR/issue threads, calls clear_workflow_state(...) to discard the saved cache so the next rerun reruns Step 5 instead of replaying the stale skipped/failed output (and avoids a duplicate final-report comment), and returns (False, f'{refusal}{suffix}', ...) before Step 7 runs; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and follows the same post-then-clear-then-return pattern. Because load_workflow_state loads the GitHub state comment with PRIORITY over local state (round-17), clear_workflow_state now returns a bool and github_clear_state falls back to neutralising the state-comment body (stripping the PDD_WORKFLOW_STATE marker via _github_edit_comment) when a DELETE fails, so a token without delete scope can no longer leave stale remote state that replays the refusal forever; the orchestrator appends a cleanup warning to the returned message when the clear is still unconfirmed. The SAME unconfirmed-clear warning is appended on the terminal-success path (external review #1215 Finding 2): that path captures clear_workflow_state's bool instead of discarding it so a failed remote clear cannot let the next run resume from completed state \u2014 the checkup still returns success, the warning is informational. As a second, independent backstop for the same hole, load_workflow_state-side resume DISCARDS any cached state whose (FAILED-corrected) last_completed_step has already reached STEP_ORDER[-1] (the terminal step) when no start_step_override is given: a completed run's lingering state (left behind precisely because its best-effort remote clear failed) must not be resumed, or the rerun would skip every step and replay the cached Step 7 verdict as 'Checkup complete' without re-verifying the PR head. On discard it resets last_completed_step to 0 but preserves github_comment_id=loaded_gh_id so the fresh run PATCHes the lingering state comment rather than creating a duplicate. Because context persists across fix-verify iterations and context['step5_failure_signal'] is written ONLY on the failing Step 5 path, the orchestrator clears it (and step5_failure_signal_missing) to '' whenever a later iteration's Step 5 is clean or skipped so Step 6 is never driven by a prior iteration's stale failure block (external review #1215 Finding 1); the provider-success/logical-failure branch also prints the scrubbed failure detail unconditionally (even in quiet mode) like the provider-failure path (external review #1215 Finding 3). Non-PR no-fix runs are unaffected. The pre-push diff size gate (PDD_CHECKUP_DIFF_LOC_LIMIT, default 800 added LoC; 0 disables; unparseable falls back to default) refuses oversized pushes unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry. Small companion files are exempt; diffuse death-by-a-thousand-cuts diffs still require every path covered.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists. In PR mode _handle_step_result suppresses its per-step issue comment for Step 7 (the orchestrator's canonical final report already covers it) so the issue thread does not get duplicate Step 7 reporting; earlier-step progress comments and issue-mode Step 7 comments are unaffected (external review #1215 Finding 3). Issue #1212 safety contract: (a) Step 5 MUST emit a structured ```failure_signal``` block (command, exit_code, status, failing_ids, artifact_path, output); the orchestrator parses it via _parse_failure_signal_block, treats empty fail/error-status fields as missing, synthesises a normalised block into context['step5_failure_signal'] that Step 6's prompt explicitly references, and maps the status word to one of three states (clean / skipped / failure) with fail-closed defaults \u2014 a missing block or unrecognised status counts as a logical failure (round-8 #1) so the fixer runs rather than silently passing. A 'skipped'/'skip'/'no_tests'/'n/a'/'n_a' status sets context['step5_verification_skipped']=1 \u2014 detected from the parsed status INDEPENDENT of the provider success flag (round-10 #1: an agent can emit a coherent skipped block even when its provider call timed out) \u2014 and triggers a dedicated pre-push gate that refuses any commit/push because tests never ran (round-9 #1), including the no-changes-clean-worktree path (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user); the gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time so a mid-loop interruption + resume cannot slip past via a missing in-memory cache (round-10 #3). (b) The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND the local merge-base diff in context['pr_scope_changed_files'] (round-8 #2 \u2014 tolerates GitHub API outages), parses both formats with regex `^-\\s+([A-Z][A-Z0-9]*):\\s*(.+?)\\s*$` (uppercase words from the API formatter, short git statuses M/A/R100 from the local-diff formatter), extends the scope-allowed set with Step 5 failure paths (round-8 #3 \u2014 matches the Step 6 prompt's allowance for editing failing test files and causally-connected files without an EXPANSION_ITEMS marker; the causal guard remains the backstop for zero-overlap fixes), parses EXPANSION_ITEMS as a structured per-marker allowlist requiring BOTH a non-empty path list AND a per-marker causal justification (_parse_expansion_items); follow-up lines only count when they carry semantic content (round-7 #1: prefix marker, path mention, or causal keyword \u2014 bare indentation/bullets do not qualify). (c) A clean PR run (Steps 3, 4, AND 5 all reported success \u2192 fixer skipped) MUST NOT commit or push worktree changes from non-fixer steps; a dedicated clean-run side-effect guard fires before scope/causal/size checks. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] so a manual --start-step 7 without prior fixer state still trips the guard (round-7 #2). (d) Pre-push diff sanity gate (_diff_size_added_lines_by_path returning per-path counts; total via _diff_size_added_lines + DIFF_SIZE_ADDED_LOC_LIMIT, overridable via PDD_CHECKUP_DIFF_LOC_LIMIT \u2014 0 disables, unparseable falls back to default) refuses pushes adding more than the configured added-line threshold unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry; small companion files are exempt (round-9 #2). A diffuse over-limit diff with no individually oversized path falls back to the original strict 'every changed path covered' rule so death-by-a-thousand-cuts diffs are still blocked. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is not guarded on truthiness so an empty/missing Step 5 output fails closed as a logical failure (pass-17 #1). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt and returns (False, ...) \u2014 calling _post_pr_mode_final_report(refusal_message) before returning so PR/issue threads receive a terminal status comment even without a Step 7 output, then clear_workflow_state(...) so the next rerun reruns Step 5 rather than replaying the stale cache; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and returns (False, ...) the same way. clear_workflow_state returns a bool and github_clear_state neutralises a state comment that cannot be DELETEd (round-17) so stale GitHub state \u2014 which load_workflow_state prefers over local \u2014 cannot replay the refusal on the next run. Non-PR no-fix runs are unaffected.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7532,8 +8119,7 @@
       "inputs": {
         "project_root": "Absolute path to the project root directory",
         "architecture_path": "Absolute path to the architecture JSON file to update"
-      },
-      "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
+      }
     }
   },
   {
@@ -7566,9 +8152,7 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [
-      "agentic_common_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -7801,12 +8385,10 @@
     }
   },
   {
-    "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
+    "reason": "Registers the pdd checkup CLI command for project health checks and lint dispatch.",
     "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
-      "agentic_checkup_python.prompt",
-      "commands/prompt_python.prompt",
-      "commands/contracts_python.prompt"
+      "agentic_checkup_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -7832,9 +8414,11 @@
     }
   },
   {
-    "reason": "Implements deterministic prompt and story linting and a read-only advisory LLM ambiguity pass.",
+    "reason": "Deterministic prompt and user-story lint for vague terms and observable contract outcomes.",
     "description": "Scans .prompt contract sections and story__*.md acceptance criteria for undefined vague terms and missing observable-outcome verbs. Optional read-only LLM ambiguity pass uses prompt_lint_LLM.prompt without preprocessing or executing directives from the lint target.",
-    "dependencies": [],
+    "dependencies": [
+      "prompt_lint_LLM.prompt"
+    ],
     "priority": 237,
     "filename": "prompt_lint_python.prompt",
     "filepath": "pdd/prompt_lint.py",
@@ -7871,7 +8455,7 @@
     }
   },
   {
-    "reason": "Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.",
+    "reason": "Shared Click implementation for pdd checkup lint (not a top-level pdd prompt command).",
     "description": "Defines the prompt_lint Click command invoked via pdd checkup lint dispatch. Supports deterministic scan, --stories, --json, --strict, and opt-in --llm advisory review. Read-only: never writes prompt or story files.",
     "dependencies": [
       "prompt_lint_python.prompt"
@@ -7941,6 +8525,7 @@
       "sync_determine_operation_python.prompt",
       "operation_log_python.prompt",
       "agentic_sync_runner_python.prompt",
+      "user_story_tests_python.prompt",
       "agentic_common_python.prompt",
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
@@ -8251,7 +8836,7 @@
     }
   },
   {
-    "reason": "LLM prompt for agentic split step 0: classify the user's intent so later steps can re-weight their rubric. Intent is inferred from the target file, optional user-provided hint, and project signals. Defaults to REDUCE_MONOLITH.",
+    "reason": "LLM prompt for agentic split step 0: intent classification from target file + optional user flag.",
     "description": "Step 0 of agentic split. Infers user intent (REDUCE_MONOLITH, ENABLE_PARALLEL_WORK, EXTRACT_REUSABLE_LAYER, REDUCE_TEST_TIME) from target and CLI hints; step 4 re-weights rubric by intent.",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
@@ -8278,7 +8863,7 @@
     }
   },
   {
-    "reason": "LLM prompt for agentic split step 6a: for one child, decide whether its dominant symbol contains multiple responsibilities that should be extracted as phase helpers. Agent-only judgment \u2014 no line thresholds in Python.",
+    "reason": "LLM prompt for agentic split step 6a: per-child phase extraction analysis before step 6.",
     "description": "Step 6a of agentic split. Detects whether the largest symbol inside each child warrants phase helper extraction; produces phase_plan consumed by step 6.",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
@@ -8305,7 +8890,7 @@
     }
   },
   {
-    "reason": "LLM prompt for agentic split step 9: after the main pipeline and repair have completed, decide whether any child remains too monolithic for its responsibility and should trigger a second refinement pass. Agent-only judgment \u2014 no line thresholds in Python.",
+    "reason": "LLM prompt for agentic split step 9: refine-check decision after repair.",
     "description": "Step 9 of agentic split. Evaluates whether the largest child is still too monolithic and warrants a focused refinement pass (step 6a + step 6 rerun on that child).",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
@@ -8376,10 +8961,9 @@
     }
   },
   {
-    "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers for orchestrators.",
+    "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers used by multiple orchestrators.",
     "description": "Provides setup_worktree, get_git_root, resolve_main_ref, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker. Used by bug, split, and change orchestrators.",
     "dependencies": [
-      "agentic_common_python.prompt",
       "git_porcelain_python.prompt"
     ],
     "priority": 224,
@@ -8397,58 +8981,18 @@
       "module": {
         "functions": [
           {
+            "name": "setup_worktree",
+            "signature": "(cwd: Path, issue_number: int, quiet: bool, *, resume_existing: bool = False, branch_prefix: str = 'fix', worktree_prefix: str = 'fix')",
+            "returns": "Tuple[Optional[Path], Optional[str]]"
+          },
+          {
             "name": "get_git_root",
             "signature": "(cwd: Path)",
             "returns": "Optional[Path]"
           },
           {
-            "name": "worktree_exists",
-            "signature": "(cwd: Path, worktree_path: Path)",
-            "returns": "bool"
-          },
-          {
-            "name": "branch_exists",
-            "signature": "(cwd: Path, branch: str)",
-            "returns": "bool"
-          },
-          {
-            "name": "remove_worktree",
-            "signature": "(cwd: Path, worktree_path: Path)",
-            "returns": "Tuple[bool, str]"
-          },
-          {
-            "name": "delete_branch",
-            "signature": "(cwd: Path, branch: str)",
-            "returns": "Tuple[bool, str]"
-          },
-          {
             "name": "resolve_main_ref",
             "signature": "(git_root: Path)",
-            "returns": "str"
-          },
-          {
-            "name": "setup_worktree",
-            "signature": "(cwd, issue_number, quiet, *, resume_existing, branch_prefix, worktree_prefix)",
-            "returns": "Tuple[Optional[Path], Optional[str]]"
-          },
-          {
-            "name": "get_modified_and_untracked",
-            "signature": "(cwd: Path)",
-            "returns": "List[str]"
-          },
-          {
-            "name": "check_target_file_unchanged",
-            "signature": "(cwd, target_file, baseline_sha)",
-            "returns": "Tuple[bool, Optional[str]]"
-          },
-          {
-            "name": "revert_out_of_scope_changes_with_dirs",
-            "signature": "(cwd, allowed_dirs, allowed_files)",
-            "returns": "List[Path]"
-          },
-          {
-            "name": "extract_block_marker",
-            "signature": "(output, name)",
             "returns": "str"
           }
         ]
@@ -8460,11 +9004,9 @@
     }
   },
   {
-    "reason": "Provides deterministic lint-command resolution for Python files (ruff + mypy).",
+    "reason": "Resolves language-specific lint commands (ruff, eslint, etc.) used by split validation and repair.",
     "description": "Returns a list of LintCommand objects for a given file; empty list signals agentic fallback.",
-    "dependencies": [
-      "get_test_command_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 223,
     "filename": "get_lint_commands_python.prompt",
     "filepath": "pdd/get_lint_commands.py",
@@ -8494,10 +9036,10 @@
     "reason": "Defines the main PDDCLI click.Group, global CLI options, result callback, and duplicate-guard recording.",
     "description": "Core CLI logic: PDDCLI click.Group, global options, entry function, and result callback that records only successful runs to the duplicate guard store.",
     "dependencies": [
-      "core/dump_python.prompt",
-      "core/errors_python.prompt",
-      "core/utils_python.prompt",
-      "core/duplicate_cli_guard_python.prompt",
+      "dump_python.prompt",
+      "errors_python.prompt",
+      "utils_python.prompt",
+      "duplicate_cli_guard_python.prompt",
       "agentic_common_python.prompt",
       "auto_update_python.prompt",
       "track_cost_python.prompt",
@@ -8855,17 +9397,6 @@
             "signature": "(entries: Iterable[PorcelainEntry]) -> Iterator[str]",
             "returns": "Iterator[str]"
           }
-        ],
-        "classes": [
-          {
-            "name": "PorcelainEntry",
-            "description": "Frozen dataclass: status (two-char XY), path (new-or-only path, fsdecoded), old_path (Optional[str] for R/C records; copy old_path is source-only, not changed).",
-            "fields": [
-              "status: str",
-              "path: str",
-              "old_path: Optional[str]"
-            ]
-          }
         ]
       }
     }
@@ -8957,7 +9488,7 @@
     }
   },
   {
-    "reason": "Parses contract-related sections from prompt files into a structured intermediate representation.",
+    "reason": "Parses prompt contract sections into a deterministic IR.",
     "description": "Extracts contract_rules, coverage, waivers, vocabulary, capabilities, and related metadata from .prompt files and stories for downstream deterministic checks.",
     "dependencies": [],
     "priority": 239,
@@ -9006,7 +9537,7 @@
     }
   },
   {
-    "reason": "Implements deterministic checks for prompt contract sections and story coverage references.",
+    "reason": "Deterministic contract authoring checks for prompt and story artifacts.",
     "description": "Implements structural lint for contract sections (modal verbs, IDs, coverage refs, waivers) and validates MUST-NOT coverage using leading coverage entries only.",
     "dependencies": [
       "contract_ir_python.prompt"
@@ -9047,7 +9578,7 @@
     }
   },
   {
-    "reason": "Defines the `pdd contracts check` CLI group for deterministic contract checks.",
+    "reason": "Exposes deterministic contract checks via Click CLI.",
     "description": "Implements `pdd contracts check` for running contract_check over files/directories with optional JSON output.",
     "dependencies": [
       "contract_check_python.prompt"
@@ -9073,7 +9604,7 @@
     }
   },
   {
-    "reason": "Selects bounded, code-only simplify targets without including generated, evidence, dependency, lock, or ignored files.",
+    "reason": "Selects bounded source-code targets for the Claude Code simplify candidate workflow while excluding generated and ignored artifacts.",
     "description": "Discovers source files eligible for pdd checkup simplify from a path, staged changes, or a git baseline diff.",
     "dependencies": [],
     "priority": 4,
@@ -9098,7 +9629,7 @@
     }
   },
   {
-    "reason": "Invokes Claude Code's bundled simplify skill directly without routing through generic agentic prompts.",
+    "reason": "Invokes Claude Code bundled /simplify for the default simplify engine.",
     "description": "Finds the Claude CLI, builds slash messages, and runs /simplify with JSON output parsing.",
     "dependencies": [],
     "priority": 5,
@@ -9134,7 +9665,7 @@
     }
   },
   {
-    "reason": "Maps simplify engines (claude, codex, gemini, opencode, auto) to Claude Code or agentic task execution.",
+    "reason": "Selects and runs simplify engines (claude, codex, gemini, opencode, auto) for checkup simplify.",
     "description": "Resolves engine names, checks provider availability, and dispatches to Claude Code or agentic workflow execution.",
     "dependencies": [
       "checkup_simplify_claude_python.prompt"
@@ -9176,7 +9707,7 @@
     }
   },
   {
-    "reason": "Uses Claude Code's bundled simplify skill to sample conservative cleanup candidates and select a verified result without exposing unrelated local edits.",
+    "reason": "Orchestrates multi-engine simplify candidates in isolated worktrees and copies back a conservatively selected verified result.",
     "description": "Provides multi-attempt candidate simplification for changed code while enforcing file scope, backups, evidence, and optional verification.",
     "dependencies": [
       "checkup_file_selection_python.prompt",
@@ -9206,1174 +9737,201 @@
     }
   },
   {
-    "reason": "Validates prompt-level completeness: all modules have prompt files, prompts capture module specs, dependencies correct.",
-    "description": "Validates prompt-level completeness: all modules have prompt files, prompts capture module specs, dependencies correct.",
-    "dependencies": [
-      "agentic_arch_step9_prompts_LLM.prompt"
+    "reason": "Loads YAML and built-in policy for evidence gate require/allow/limit rules.",
+    "description": "Resolves `pdd checkup gate --policy` overrides merged with default gate policy.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "gate_policy_python.prompt",
+    "filepath": "pdd/gate_policy.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "python"
     ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "default_policy",
+            "signature": "() -> GatePolicy",
+            "returns": "GatePolicy"
+          },
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[Path]) -> GatePolicy",
+            "returns": "GatePolicy"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Reads dev-unit evidence manifests and exposes freshness helpers for policy enforcement.",
+    "description": "Loads `.pdd/evidence/devunits/*.latest.json` and compares on-disk prompt/output hashes to manifest records.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "evidence_store_python.prompt",
+    "filepath": "pdd/evidence_store.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_latest_manifests",
+            "signature": "(project_root: Path) -> list[Path]",
+            "returns": "list[Path]"
+          },
+          {
+            "name": "output_freshness",
+            "signature": "(manifest: ManifestView, project_root: Path) -> list[OutputFreshness]",
+            "returns": "list[OutputFreshness]"
+          },
+          {
+            "name": "prompt_freshness",
+            "signature": "(manifest: ManifestView) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Checkup-scoped CLI for evidence policy gate (no top-level pdd gate).",
+    "description": "Dispatches `pdd checkup gate` to `run_gate_policy` with JSON and YAML policy options.",
+    "dependencies": [
+      "gate_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "commands/gate_python.prompt",
+    "filepath": "pdd/commands/gate.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "commands",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    }
+  },
+  {
+    "reason": "Evaluates evidence manifest policy for CI merge gates on dev units.",
+    "description": "Runs deterministic checks on validation status, stale outputs, contract coverage, and cost limits.",
+    "dependencies": [
+      "evidence_store_python.prompt",
+      "gate_policy_python.prompt",
+      "contract_check_python.prompt",
+      "coverage_contracts_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "gate_python.prompt",
+    "filepath": "pdd/gate_main.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_gate_policy",
+            "signature": "(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult",
+            "returns": "GateResult"
+          },
+          {
+            "name": "evaluate_manifest",
+            "signature": "(manifest: ManifestView, project_root: Path, policy: GatePolicy, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> list[GateFailure]",
+            "returns": "list[GateFailure]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Loads optional .pdd/grounding_policy.yaml and checks per-run grounding evidence against required-review and required-pin rules for critical modules.",
+    "description": "Policy library for the grounding evidence recorded by pdd generate. Library-only; CI integration (pdd gate) will be wired separately.",
+    "dependencies": [],
     "priority": 243,
-    "filename": "agentic_arch_step10_completeness_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step10_completeness_LLM.prompt",
+    "filename": "grounding_policy_python.prompt",
+    "filepath": "pdd/grounding_policy.py",
     "tags": [
-      "llm"
+      "module",
+      "python",
+      "grounding",
+      "policy"
     ],
     "interface": {
       "type": "module",
       "module": {
         "functions": [
           {
-            "name": "validate_completeness",
-            "signature": "(architecture_json: str, prd_summary: str, issue_content: str)",
-            "returns": "str ('VALID' or list of completeness errors)"
+            "name": "load_policy",
+            "signature": "(path: Optional[str] = None) -> GroundingPolicy",
+            "returns": "GroundingPolicy"
+          },
+          {
+            "name": "check",
+            "signature": "(policy: GroundingPolicy, module: str, grounding: Dict[str, Any]) -> List[PolicyViolation]",
+            "returns": "List[PolicyViolation]"
           }
         ]
       }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
     }
   },
   {
-    "reason": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
-    "description": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
-    "dependencies": [
-      "agentic_arch_step10_completeness_LLM.prompt"
-    ],
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
+    "dependencies": [],
     "priority": 244,
-    "filename": "agentic_arch_step11_sync_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step11_sync_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_sync",
-            "signature": "(architecture_json: str)",
-            "returns": "str ('VALID' or list of sync errors)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
-    "description": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
-    "dependencies": [
-      "agentic_arch_step11_sync_LLM.prompt"
-    ],
-    "priority": 245,
-    "filename": "agentic_arch_step12_deps_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step12_deps_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_dependency_graph",
-            "signature": "()",
-            "returns": "str ('VALID' or list of dependency errors)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
-    "description": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
-    "dependencies": [
-      "agentic_arch_step12_deps_LLM.prompt"
-    ],
-    "priority": 246,
-    "filename": "agentic_arch_step13_fix_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step13_fix_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "fix_validation",
-            "signature": "(failed_step: str, failed_output: str)",
-            "returns": "str (list of fixes applied)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Assesses PRD complexity and auto-creates sub-issues if too complex for single-project generation.",
-    "description": "Assesses PRD complexity and auto-creates sub-issues if too complex for single-project generation.",
-    "dependencies": [
-      "agentic_arch_step1_analyze_prd_LLM.prompt"
-    ],
-    "priority": 247,
-    "filename": "agentic_arch_step1b_complexity_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step1b_complexity_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "assess_complexity",
-            "signature": "(issue_content: str, step1_output: str)",
-            "returns": "str ('MANAGEABLE' or 'COMPLEX' with splitting strategies)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Scans existing codebase to detect installed packages, code patterns, reusable modules, and naming conventions.",
-    "description": "Scans existing codebase to detect installed packages, code patterns, reusable modules, and naming conventions.",
-    "dependencies": [
-      "agentic_arch_step2_analyze_LLM.prompt"
-    ],
-    "priority": 248,
-    "filename": "agentic_arch_step2b_codebase_scan_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step2b_codebase_scan_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "scan_codebase",
-            "signature": "(issue_content: str, step1_output: str, step2_output: str)",
-            "returns": "str (codebase profile with packages, patterns, reusable modules)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
-    "description": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
-    "dependencies": [
-      "agentic_arch_step3_research_LLM.prompt"
-    ],
-    "priority": 249,
-    "filename": "agentic_arch_step4_data_model_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step4_data_model_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "design_data_model",
-            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
-            "returns": "str (data model with entities, relationships, storage decisions)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
-    "description": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
-    "dependencies": [
-      "agentic_arch_step4_data_model_LLM.prompt"
-    ],
-    "priority": 250,
-    "filename": "agentic_arch_step5_design_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step5_design_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "design_modules",
-            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)",
-            "returns": "str (module list with dependencies, priorities, interfaces)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Validates module design completeness against original PRD before expensive generation steps.",
-    "description": "Validates module design completeness against original PRD before expensive generation steps.",
-    "dependencies": [
-      "agentic_arch_step5_design_LLM.prompt"
-    ],
-    "priority": 251,
-    "filename": "agentic_arch_step5b_completeness_gate_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step5b_completeness_gate_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_module_design_completeness",
-            "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str)",
-            "returns": "str ('VALID' or list of coverage gaps)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Fixes module design gaps identified by the completeness gate, adding missing modules to the design.",
-    "description": "Fixes module design gaps identified by the completeness gate, adding missing modules to the design.",
-    "dependencies": [
-      "agentic_arch_step5b_completeness_gate_LLM.prompt"
-    ],
-    "priority": 252,
-    "filename": "agentic_arch_step5b_fix_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step5b_fix_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "fix_module_design",
-            "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str, completeness_errors: str)",
-            "returns": "str (corrected module design)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
-    "description": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
-    "dependencies": [
-      "agentic_arch_step5_design_LLM.prompt"
-    ],
-    "priority": 253,
-    "filename": "agentic_arch_step6_research_deps_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step6_research_deps_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "research_deps",
-            "signature": "(issue_content: str, step5_output: str)",
-            "returns": "str (enriched module list with web resource URLs)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
-    "description": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
-    "dependencies": [
-      "agentic_arch_step6_research_deps_LLM.prompt"
-    ],
-    "priority": 254,
-    "filename": "agentic_arch_step7_generate_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step7_generate_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "generate_architecture",
-            "signature": "(issue_content: str, step1-6_outputs: str)",
-            "returns": "str (valid JSON array matching architecture schema)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.",
-    "description": "Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.",
-    "dependencies": [
-      "agentic_arch_step7_generate_LLM.prompt"
-    ],
-    "priority": 255,
-    "filename": "agentic_arch_step7b_review_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step7b_review_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "review_architecture",
-            "signature": "(architecture_json: str, step1_output: str, step2_output: str, step4_output: str)",
-            "returns": "str ('REVIEW_RESULT: CLEAN' or 'REVIEW_RESULT: FIXED (N issues)')"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates shared context documents (data dictionary, API contracts, integration points) as structured YAML files that are included in module prompts via include tags, ensuring cross-module consistency at sync time.",
-    "description": "Generates shared context documents (data dictionary, API contracts, integration points) as structured YAML files that are included in module prompts via include tags, ensuring cross-module consistency at sync time.",
-    "dependencies": [
-      "agentic_arch_step8_pddrc_LLM.prompt"
-    ],
-    "priority": 256,
-    "filename": "agentic_arch_step8_5_context_docs_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step8_5_context_docs_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "generate_context_docs",
-            "signature": "(step2_output: str, step4_output: str, step2b_output: str, step7_output: str)",
-            "returns": "str (list of generated context document files)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
-    "description": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
-    "dependencies": [
-      "agentic_arch_step7_generate_LLM.prompt"
-    ],
-    "priority": 257,
-    "filename": "agentic_arch_step8_pddrc_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step8_pddrc_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "generate_pddrc",
-            "signature": "(architecture_json: str)",
-            "returns": "str (path to .pddrc file)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
-    "description": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
-    "dependencies": [
-      "agentic_arch_step8_pddrc_LLM.prompt"
-    ],
-    "priority": 258,
-    "filename": "agentic_arch_step9_prompts_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step9_prompts_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "generate_prompts",
-            "signature": "(architecture_json: str, pddrc_content: str)",
-            "returns": "str (list of generated prompt files)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Cross-file consistency audit of all generated prompt files, catching and fixing naming inconsistencies across prompts before validation.",
-    "description": "Cross-file consistency audit of all generated prompt files, catching and fixing naming inconsistencies across prompts before validation.",
-    "dependencies": [
-      "agentic_arch_step9_prompts_LLM.prompt"
-    ],
-    "priority": 259,
-    "filename": "agentic_arch_step9b_cross_audit_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step9b_cross_audit_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "cross_audit_prompts",
-            "signature": "(step2_output: str, step7_output: str)",
-            "returns": "str ('AUDIT_RESULT: CONSISTENT' or 'AUDIT_RESULT: INCONSISTENT' with fixes applied)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).",
-    "description": "Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).",
-    "dependencies": [],
-    "priority": 260,
-    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "description": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "dependencies": [],
-    "priority": 261,
-    "filename": "agentic_bug_step12_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "command",
-      "command": {
-        "name": "agentic_bug_step10",
-        "description": "Generate draft PR with failing tests and link to GitHub issue"
-      }
-    }
-  },
-  {
-    "reason": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
-    "description": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
-    "dependencies": [],
-    "priority": 262,
-    "filename": "api_key_scanner_python.prompt",
-    "filepath": "pdd/api_key_scanner.py",
+    "filename": "pdd/evidence_manifest_python.prompt",
+    "filepath": "pdd/evidence_manifest.py",
     "tags": [
       "module",
-      "python"
+      "python",
+      "evidence"
     ],
     "interface": {
       "type": "module",
       "module": {
         "functions": [
           {
-            "name": "scan_environment",
-            "signature": "() -> Dict[str, KeyInfo]",
-            "returns": "Dict[str, KeyInfo]"
+            "name": "write_evidence_manifest",
+            "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path",
+            "returns": "Path"
           },
           {
-            "name": "get_provider_key_names",
-            "signature": "() -> List[str]",
-            "returns": "List[str]"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Auto-registered module: commands/checkup_simplify_python.prompt",
-    "description": "Auto-registered module: commands/checkup_simplify_python.prompt",
-    "dependencies": [
-      "checkup_simplify_python.prompt"
-    ],
-    "priority": 263,
-    "filename": "commands/checkup_simplify_python.prompt",
-    "filepath": "pdd/commands/checkup_simplify.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
-    "description": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
-    "dependencies": [],
-    "priority": 264,
-    "filename": "config_resolution_python.prompt",
-    "filepath": "pdd/config_resolution.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "resolve_effective_config",
-            "signature": "(ctx, resolved_config, param_overrides=None)",
-            "returns": "Dict[str, Any]"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Detects and reports conflicts within prompt files.",
-    "description": "Detects and reports conflicts within prompt files.",
-    "dependencies": [],
-    "priority": 265,
-    "filename": "conflicts_in_prompts_python.prompt",
-    "filepath": "pdd/conflicts_in_prompts.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Resolves configuration, validates input files, and determines output paths.",
-    "description": "Resolves configuration, validates input files, and determines output paths.",
-    "dependencies": [],
-    "priority": 266,
-    "filename": "construct_paths_python.prompt",
-    "filepath": "pdd/construct_paths.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "construct_paths",
-            "signature": "(input_file_paths, force, quiet, command, command_options, create_error_file=True, context_override=None, confirm_callback=None, path_resolution_mode=None)",
-            "returns": "Tuple[Dict[str, Any], dict, dict[str, str], str]"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
-    "description": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
-    "dependencies": [],
-    "priority": 267,
-    "filename": "content_selector_python.prompt",
-    "filepath": "pdd/content_selector.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "ContentSelector.select",
-            "signature": "(content: str, selectors: list[str], file_path: str = None, mode: str = \"full\")",
-            "returns": "str"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Utility for dumping diagnostic information.",
-    "description": "Utility for dumping diagnostic information.",
-    "dependencies": [],
-    "priority": 268,
-    "filename": "core/dump_python.prompt",
-    "filepath": "pdd/core/dump.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Central error handling and reporting for the CLI.",
-    "description": "Central error handling and reporting for the CLI.",
-    "dependencies": [],
-    "priority": 269,
-    "filename": "core/errors_python.prompt",
-    "filepath": "pdd/core/errors.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "General purpose utility functions for the PDD core.",
-    "description": "General purpose utility functions for the PDD core.",
-    "dependencies": [],
-    "priority": 270,
-    "filename": "core/utils_python.prompt",
-    "filepath": "pdd/core/utils.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Defines durable debug snapshot (core dump) requirements for PDD CLI + sync.",
-    "description": "Defines durable debug snapshot (core dump) requirements for PDD CLI + sync.",
-    "dependencies": [],
-    "priority": 271,
-    "filename": "core_dump_requirements_LLM.prompt",
-    "filepath": "prompts/core_dump_requirements_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "core_dump_requirements",
-            "signature": "()",
-            "returns": "Specification (text)"
-          },
-          {
-            "name": "acceptance_criteria",
-            "signature": "()",
-            "returns": "List[str]"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Cross-sub-issue reconciliation: audits shared types, API contracts, and enum values across related sub-issues to prevent inconsistencies.",
-    "description": "Cross-sub-issue reconciliation: audits shared types, API contracts, and enum values across related sub-issues to prevent inconsistencies.",
-    "dependencies": [],
-    "priority": 272,
-    "filename": "cross_issue_reconcile_LLM.prompt",
-    "filepath": "prompts/cross_issue_reconcile_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "reconcile_sub_issues",
-            "signature": "(architecture_json: str, related_issues: str)",
-            "returns": "str ('RECONCILE_RESULT: CONSISTENT' or 'RECONCILE_RESULT: CONFLICTS_FIXED' with FILES_MODIFIED)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "CLI subcommand that garbage-collects orphaned .pdd/extracts/ entries not referenced by any prompt.",
-    "description": "CLI subcommand that garbage-collects orphaned .pdd/extracts/ entries not referenced by any prompt.",
-    "dependencies": [
-      "include_query_extractor_python.prompt",
-      "preprocess_python.prompt",
-      "path_resolution_python.prompt"
-    ],
-    "priority": 274,
-    "filename": "extracts_prune_python.prompt",
-    "filepath": "pdd/extracts_prune.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "cli",
-      "cli": {
-        "commands": [
-          {
-            "name": "pdd extracts prune",
-            "description": "Delete orphaned extracts cache entries not referenced by any prompt file."
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
-    "description": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
-    "dependencies": [],
-    "priority": 275,
-    "filename": "firecrawl_cache_python.prompt",
-    "filepath": "pdd/firecrawl_cache.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "get_firecrawl_cache",
-            "signature": "() -> FirecrawlCache",
-            "returns": "FirecrawlCache"
-          },
-          {
-            "name": "clear_firecrawl_cache",
-            "signature": "() -> int",
-            "returns": "int"
-          },
-          {
-            "name": "get_firecrawl_cache_stats",
-            "signature": "() -> dict",
+            "name": "validation_from_sync",
+            "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict",
             "returns": "dict"
+          },
+          {
+            "name": "resolve_generate_output_paths",
+            "signature": "(prompt_file, *, output=None, ...) -> list[str]",
+            "returns": "list[str]"
           }
         ]
       }
-    }
-  },
-  {
-    "reason": "Frontend API contract and client module for local server, architecture workflows, remote cloud sessions, and WebSockets.",
-    "description": "Frontend API contract and client module for local server, architecture workflows, remote cloud sessions, and WebSockets.",
-    "dependencies": [],
-    "priority": 276,
-    "filename": "frontend/api_typescript.prompt",
-    "filepath": "prompts/frontend/api_typescript.prompt",
-    "tags": [
-      "module"
-    ],
-    "interface": {
-      "type": "frontend",
-      "frontend": {
-        "pages": [
-          {
-            "name": "api",
-            "route": "N/A (utility module)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Manages a sequential task queue for pdd commands with auto/manual execution modes and persistence.",
-    "description": "Manages a sequential task queue for pdd commands with auto/manual execution modes and persistence.",
-    "dependencies": [],
-    "priority": 277,
-    "filename": "frontend/hooks/useTaskQueue_typescript.prompt",
-    "filepath": "prompts/frontend/hooks/useTaskQueue_typescript.prompt",
-    "tags": [
-      "module"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "useTaskQueue",
-            "signature": "(options?: UseTaskQueueOptions)",
-            "returns": "Object"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Handles semantic extraction from files using LLMs with persistent caching for reproducibility.",
-    "description": "Handles semantic extraction from files using LLMs with persistent caching for reproducibility.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt",
-      "path_resolution_python.prompt"
-    ],
-    "priority": 278,
-    "filename": "include_query_extractor_python.prompt",
-    "filepath": "pdd/include_query_extractor.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "IncludeQueryExtractor.extract",
-            "signature": "(file_path: str, query: str)",
-            "returns": "str"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Loads and caches prompt templates from the prompts directory.",
-    "description": "Loads and caches prompt templates from the prompts directory.",
-    "dependencies": [],
-    "priority": 279,
-    "filename": "load_prompt_template_python.prompt",
-    "filepath": "pdd/load_prompt_template.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
-    "description": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
-    "dependencies": [],
-    "priority": 280,
-    "filename": "model_tester_python.prompt",
-    "filepath": "pdd/model_tester.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "test_model_interactive",
-            "signature": "() -> None",
-            "returns": "None"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of sequential sync/fix/test calls.",
-    "description": "Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of sequential sync/fix/test calls.",
-    "dependencies": [
-      "code_generator_main_python.prompt",
-      "fix_code_loop_python.prompt",
-      "fix_verification_errors_loop_python.prompt",
-      "generate_test_python.prompt",
-      "fix_error_loop_python.prompt"
-    ],
-    "priority": 281,
-    "filename": "one_session_sync_python.prompt",
-    "filepath": "pdd/one_session_sync.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
-    "description": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
-    "dependencies": [],
-    "priority": 282,
-    "filename": "pddrc_initializer_python.prompt",
-    "filepath": "pdd/pddrc_initializer.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "offer_pddrc_init",
-            "signature": "() -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "infer_contexts_from_scan",
-            "signature": "(scan_dir: str, repo_root: str, code_files: List[str]) -> Dict[str, Dict]",
-            "returns": "Dict[str, Dict]"
-          },
-          {
-            "name": "ensure_pddrc_for_scan",
-            "signature": "(scan_dir: str, repo_root: str, code_files: List[str], quiet: bool = False) -> Optional[Path]",
-            "returns": "Optional[Path]"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Post-generation conformance verification: checks generated code against architecture.json interface declarations for symbol and convention mismatches.",
-    "description": "Post-generation conformance verification: checks generated code against architecture.json interface declarations for symbol and convention mismatches.",
-    "dependencies": [],
-    "priority": 283,
-    "filename": "post_gen_verify_LLM.prompt",
-    "filepath": "prompts/post_gen_verify_LLM.prompt",
-    "tags": [
-      "llm"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "verify_conformance",
-            "signature": "(architecture_entry: dict, generated_code: str)",
-            "returns": "str ('PASS' or 'FAIL' with mismatch details)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
-    "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
-    "dependencies": [
-      "path_resolution_python.prompt",
-      "content_selector_python.prompt",
-      "include_query_extractor_python.prompt"
-    ],
-    "priority": 284,
-    "filename": "preprocess_python.prompt",
-    "filepath": "pdd/preprocess.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "preprocess",
-            "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen, examples_dir, tests_dir)",
-            "returns": "str"
-          },
-          {
-            "name": "get_file_path",
-            "signature": "(file_name)",
-            "returns": "str"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
-    "description": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
-    "dependencies": [
-      "api_key_scanner_python.prompt"
-    ],
-    "priority": 285,
-    "filename": "provider_manager_python.prompt",
-    "filepath": "pdd/provider_manager.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "add_provider_from_registry",
-            "signature": "() -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "add_custom_provider",
-            "signature": "() -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "remove_models_by_provider",
-            "signature": "() -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "remove_individual_models",
-            "signature": "() -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "parse_api_key_vars",
-            "signature": "(api_key_field: str) -> List[str]",
-            "returns": "List[str]"
-          },
-          {
-            "name": "api_key_aliases",
-            "signature": "(key_name: str) -> List[str]",
-            "returns": "List[str]"
-          },
-          {
-            "name": "expand_api_key_vars",
-            "signature": "(api_key_field: str) -> List[str]",
-            "returns": "List[str]"
-          },
-          {
-            "name": "api_key_requirements_satisfied",
-            "signature": "(api_key_field: str, configured_key_names: Iterable[str]) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "resolve_api_key_from_env",
-            "signature": "(key_name: str, env: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], Optional[str]]",
-            "returns": "Tuple[Optional[str], Optional[str]]"
-          },
-          {
-            "name": "preferred_api_key_name",
-            "signature": "(key_name: str) -> str",
-            "returns": "str"
-          },
-          {
-            "name": "is_multi_credential",
-            "signature": "(api_key_field: str) -> bool",
-            "returns": "bool"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "REST API endpoints for architecture.json validation and bidirectional sync with prompt files.",
-    "description": "REST API endpoints for architecture.json validation and bidirectional sync with prompt files.",
-    "dependencies": [
-      "architecture_sync_python.prompt",
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
-    "priority": 286,
-    "filename": "server/routes/architecture_python.prompt",
-    "filepath": "pdd/server/routes/architecture.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "validate_architecture",
-            "signature": "(request: ValidateArchitectureRequest)",
-            "returns": "ValidationResult"
-          },
-          {
-            "name": "sync_from_prompts",
-            "signature": "(request: SyncRequest)",
-            "returns": "SyncResult"
-          },
-          {
-            "name": "generate_tags_for_prompt",
-            "signature": "(request: GenerateTagsRequest)",
-            "returns": "GenerateTagsResult"
-          },
-          {
-            "name": "rearrange_graph_layout",
-            "signature": "(request: RearrangeRequest)",
-            "returns": "RearrangeResult"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "FastAPI route for browsing and inspecting the .pdd/extracts/ LLM extraction cache via the pdd connect web UI.",
-    "description": "FastAPI route for browsing and inspecting the .pdd/extracts/ LLM extraction cache via the pdd connect web UI.",
-    "dependencies": [
-      "include_query_extractor_python.prompt",
-      "preprocess_python.prompt"
-    ],
-    "priority": 287,
-    "filename": "server/routes/extracts_python.prompt",
-    "filepath": "pdd/server/routes/extracts.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "GET /api/v1/extracts",
-            "signature": "(check_freshness: bool = true)",
-            "returns": "ExtractListResponse"
-          },
-          {
-            "name": "GET /api/v1/extracts/{cache_key}",
-            "signature": "(cache_key: str)",
-            "returns": "ExtractContent"
-          },
-          {
-            "name": "GET /api/v1/extracts/for-prompt",
-            "signature": "(prompt_path: str)",
-            "returns": "list[PromptExtractInfo]"
-          },
-          {
-            "name": "POST /api/v1/extracts/prune",
-            "signature": "(dry_run: bool = false)",
-            "returns": "PruneResponse"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Utility for counting tokens in prompt strings for cost estimation.",
-    "description": "Utility for counting tokens in prompt strings for cost estimation.",
-    "dependencies": [],
-    "priority": 288,
-    "filename": "server/token_counter_python.prompt",
-    "filepath": "pdd/server/token_counter.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    }
-  },
-  {
-    "reason": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
-    "description": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
-    "dependencies": [],
-    "priority": 289,
-    "filename": "template_expander_python.prompt",
-    "filepath": "pdd/template_expander.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "expand_template",
-            "signature": "(template: str, context: Dict[str, Any])",
-            "returns": "str"
-          }
-        ]
-      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
     }
   }
 ]

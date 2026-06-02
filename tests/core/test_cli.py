@@ -231,6 +231,11 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['output_cost'] is None
     assert ctx.obj['local'] is False
     assert ctx.obj['review_examples'] is False
+    assert 'grounding_review_decisions' not in ctx.obj
+    assert ctx.obj.get('compress_examples') is None
+    assert ctx.obj.get('compress_test_context') is None
+    assert ctx.obj.get('context_compression') is None
+    assert ctx.obj.get('compression_fallback') is None
     assert ctx.obj['time'] == DEFAULT_TIME
     mock_auto_update.assert_called_once_with()
 
@@ -270,8 +275,43 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['output_cost'] == "./output/costs.csv"
     assert ctx.obj['local'] is True
     assert ctx.obj['review_examples'] is True
+    assert ctx.obj['grounding_review_decisions'] == []
     assert ctx.obj['time'] == 0.7
     mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.cli.construct_paths')
+def test_cli_context_compression_flags(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
+    """Global compression flags populate ctx.obj and export env vars."""
+    files = create_dummy_files("test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    @cli_command.command()
+    @click.argument('prompt_file')
+    @click.pass_context
+    def generate(ctx, prompt_file):
+        mock_main(ctx=ctx)
+
+    result = runner.invoke(cli_command, [
+        "--compress-examples",
+        "--compress-test-context",
+        "--context-compression", "all",
+        "--compression-fallback", "error",
+        "generate", str(files["test.prompt"]),
+    ])
+    assert result.exit_code == 0
+    ctx = mock_main.call_args.kwargs.get('ctx')
+    assert ctx.obj['compress_examples'] is True
+    assert ctx.obj['compress_test_context'] is True
+    assert ctx.obj['context_compression'] == "all"
+    assert ctx.obj['compression_fallback'] == "error"
+    assert os.environ.get("PDD_COMPRESS_EXAMPLES") == "1"
+    assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+    assert os.environ.get("PDD_CONTEXT_COMPRESSION") == "all"
+    assert os.environ.get("PDD_COMPRESSION_FALLBACK") == "error"
+
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
