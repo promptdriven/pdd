@@ -191,6 +191,25 @@ def test_codex_api_key_keeps_gate_and_bridge_consistent(codex_env, monkeypatch, 
     assert cs._token_dir_has_usable_auth(Path(os.environ["CHATGPT_TOKEN_DIR"])) is True
 
 
+def test_bridge_fresh_codex_api_key_beats_stale_staged_copy(codex_env, monkeypatch):
+    """Issue #1318 review FM2 (round 3): a freshly-rotated CODEX_API_KEY must be
+    restaged over a stale prior-staged token when $CODEX_HOME/auth.json is
+    unusable — the bridge must not silently keep serving the stale staged copy.
+    """
+    codex_home, bridged = codex_env
+    # A stale token was staged by a prior run.
+    bridged.mkdir(parents=True, exist_ok=True)
+    (bridged / "auth.json").write_text(json.dumps({"access_token": "STALE-staged-token"}))
+    # The codex auth.json is now malformed (e.g. a broken/rotated login).
+    (codex_home / "auth.json").write_text("{ not valid json")
+    # The caller injects a fresh rotated token via the env var.
+    monkeypatch.setenv("CODEX_API_KEY", "FRESH-env-token-1234")
+
+    assert cs.bridge_codex_auth_for_litellm() is True
+    staged = json.loads((bridged / "auth.json").read_text())["access_token"]
+    assert staged == "FRESH-env-token-1234"  # fresh env token wins, not the stale copy
+
+
 # --------------------------------------------------------------------------- #
 # issue #1318 review FM2: the Codex-subscription default must not hijack an
 # explicit non-OpenAI provider pin whose model name merely contains "codex".

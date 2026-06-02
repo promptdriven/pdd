@@ -64,8 +64,10 @@ codex `auth.json` once.
      `CHATGPT_TOKEN_DIR`, so the `chatgpt/` route can authenticate without a
      logged-in `auth.json`. Precedence: a usable `auth.json` (rotation-aware) wins,
      then `CODEX_API_KEY`, then a previously-staged usable copy. A
-     malformed/unreadable `auth.json` MUST NOT short-circuit the bridge to failure
-     while a usable env token exists. INVARIANT: this must stay consistent with
+     malformed/unreadable `auth.json` MUST NOT short-circuit the bridge — neither to
+     failure NOR to a stale previously-staged copy — while a non-empty `CODEX_API_KEY`
+     is set; the freshly-injected env token is (re)staged instead, so a rotated key
+     always wins over a stale staged copy. INVARIANT: this must stay consistent with
      `has_codex_subscription_auth()` (which treats a non-empty `CODEX_API_KEY` as
      usable) — whenever detection reports a usable subscription, the bridge must be
      able to stage a usable token; never return `has=True` with `bridge=False`.

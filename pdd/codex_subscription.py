@@ -205,33 +205,35 @@ def bridge_codex_auth_for_litellm() -> bool:
                 return True
             # Configured but unusable: fall through and populate from codex below.
 
-        # 2. Prefer a usable codex auth.json (rotation-aware): flatten and stage
-        #    it. A malformed/unreadable auth.json must NOT short-circuit to
-        #    failure while a usable env token or prior staged copy still exists —
-        #    that mismatch is the has=True/bridge=False stranding (issue #1318).
+        # 2. Prefer a *usable* codex auth.json (rotation-aware): flatten, stage,
+        #    and use it. Only a usable source short-circuits here — a
+        #    malformed/unreadable auth.json must NOT win, otherwise a stale prior-
+        #    staged copy gets reused even when the caller set a freshly-rotated
+        #    CODEX_API_KEY (issue #1318 review FM2). Unusable sources fall through.
         source = _codex_auth_path()
         if source.is_file():
             try:
-                if not (dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime):
-                    flat = _flatten_codex_tokens(json.loads(source.read_text()))
-                    if flat is not None:
-                        _write_private_json(dest, flat)
-                        logger.debug(
-                            "Bridged codex auth from %s to %s for litellm chatgpt/ provider.",
-                            source, dest,
-                        )
+                source_flat = _flatten_codex_tokens(json.loads(source.read_text()))
             except (OSError, ValueError):
-                # Unreadable / invalid-JSON auth.json: fall through to the env
-                # token / prior staged copy below instead of failing the bridge.
-                pass
-            if _token_dir_has_usable_auth(dest_dir):
-                os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
-                return True
+                source_flat = None  # unreadable / invalid JSON -> not usable
+            if source_flat is not None:
+                # Re-stage only when the source is newer than the bridged copy
+                # (rotation-aware), then use it — preferred over the env token.
+                if not (dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime):
+                    _write_private_json(dest, source_flat)
+                    logger.debug(
+                        "Bridged codex auth from %s to %s for litellm chatgpt/ provider.",
+                        source, dest,
+                    )
+                if _token_dir_has_usable_auth(dest_dir):
+                    os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
+                    return True
 
         # 3. No usable codex auth.json. A non-empty CODEX_API_KEY carries the token
-        #    directly (headless/CI — issue #1318); stage it so detection
-        #    (has_codex_subscription_auth) and staging never disagree. Then fall
-        #    back to any previously-staged usable copy.
+        #    directly (headless/CI — issue #1318); stage it FIRST so a freshly
+        #    rotated env token always wins over a possibly-stale prior staged copy,
+        #    and so detection (has_codex_subscription_auth) and staging never
+        #    disagree. Then fall back to any previously-staged usable copy.
         if _stage_codex_api_key_token(dest, dest_dir):
             return True
         if _token_dir_has_usable_auth(dest_dir):
