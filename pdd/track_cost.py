@@ -4,11 +4,10 @@ import csv
 import os
 import click
 from rich import print as rprint
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
-# Tracks cost-CSV paths we've already warned the user about for the
-# "legacy header, attempted_models column will be omitted" case. Keyed on
-# absolute path so a long-running session doesn't spam the same notice.
+# Tracks cost-CSV paths we've already warned the user about for legacy headers.
+# Keyed on absolute path so a long-running session doesn't spam the same notice.
 _legacy_csv_warned: set = set()
 
 
@@ -81,6 +80,7 @@ def track_cost(func):
                     if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
                         command_name = ctx.command.name
                         cost, model_name = extract_cost_and_model(result)
+                        input_tokens, output_tokens = extract_token_counts(result)
 
                         attempted_models_list = ctx.obj.get('attempted_models') if ctx.obj and isinstance(ctx.obj, dict) else None
                         if not attempted_models_list:
@@ -94,6 +94,8 @@ def track_cost(func):
                             'model': model_name,
                             'command': command_name,
                             'cost': cost,
+                            'input_tokens': input_tokens if input_tokens is not None else '',
+                            'output_tokens': output_tokens if output_tokens is not None else '',
                             'input_files': ';'.join(input_files),
                             'output_files': ';'.join(output_files),
                             'attempted_models': attempted_models,
@@ -102,27 +104,39 @@ def track_cost(func):
                         file_exists = os.path.isfile(output_cost_path)
                         file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
 
-                        legacy_fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
-                        new_fieldnames = legacy_fieldnames + ['attempted_models']
+                        new_fieldnames = [
+                            'timestamp', 'model', 'command', 'cost',
+                            'input_tokens', 'output_tokens',
+                            'input_files', 'output_files', 'attempted_models',
+                        ]
 
                         fieldnames = new_fieldnames
                         if file_has_content:
                             with open(output_cost_path, 'r', encoding='utf-8') as f:
-                                first_line = f.readline().strip()
-                                if 'attempted_models' not in first_line:
-                                    fieldnames = legacy_fieldnames
-                                    del row['attempted_models']
+                                first_line = f.readline()
+                                parsed_header = next(csv.reader([first_line]), [])
+                                fieldnames = parsed_header or new_fieldnames
+                                missing_new_columns = [
+                                    column for column in (
+                                        'input_tokens', 'output_tokens',
+                                        'attempted_models',
+                                    )
+                                    if column not in fieldnames
+                                ]
+                                if missing_new_columns:
                                     abs_path = os.path.abspath(output_cost_path)
                                     if abs_path not in _legacy_csv_warned:
                                         _legacy_csv_warned.add(abs_path)
+                                        missing = ', '.join(missing_new_columns)
                                         rprint(
                                             "[yellow]Note: cost CSV "
                                             f"'{output_cost_path}' uses the legacy "
-                                            "header; the new 'attempted_models' "
-                                            "column will not be recorded. Delete or "
+                                            f"header; the new column(s) {missing} "
+                                            "will not be recorded. Delete or "
                                             "rename the file to start fresh with the "
-                                            "attempted_models column.[/yellow]"
+                                            "expanded columns.[/yellow]"
                                         )
+                        row = {field: row.get(field, '') for field in fieldnames}
 
                         with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -155,6 +169,77 @@ def extract_cost_and_model(result: Any) -> Tuple[Any, str]:
     if isinstance(result, tuple) and len(result) >= 3:
         return result[-2], result[-1]
     return '', ''
+
+
+def _coerce_token_count(value: Any) -> Optional[int]:
+    """Convert a token count to int when it is a valid non-negative number."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        token_count = int(value)
+    except (TypeError, ValueError):
+        return None
+    if token_count < 0:
+        return None
+    return token_count
+
+
+def _read_token_pair(payload: Any) -> Tuple[Optional[int], Optional[int]]:
+    """Read direct input/output token keys or attributes from one object."""
+    if isinstance(payload, dict):
+        input_value = payload.get('input_tokens')
+        output_value = payload.get('output_tokens')
+        return _coerce_token_count(input_value), _coerce_token_count(output_value)
+
+    input_value = getattr(payload, 'input_tokens', None)
+    output_value = getattr(payload, 'output_tokens', None)
+    return _coerce_token_count(input_value), _coerce_token_count(output_value)
+
+
+def extract_token_counts(result: Any) -> Tuple[Optional[int], Optional[int]]:
+    """Extract input/output token counts from result payloads when present."""
+    seen: set[int] = set()
+
+    def _scan(value: Any) -> Tuple[Optional[int], Optional[int]]:
+        if value is None or isinstance(value, (str, bytes, int, float, bool)):
+            return None, None
+
+        value_id = id(value)
+        if value_id in seen:
+            return None, None
+        seen.add(value_id)
+
+        input_tokens, output_tokens = _read_token_pair(value)
+        if input_tokens is not None or output_tokens is not None:
+            return input_tokens, output_tokens
+
+        children: List[Any] = []
+        if isinstance(value, dict):
+            for key in ('usage', 'tokens', 'token_usage', 'metadata', 'response'):
+                if key in value:
+                    children.append(value[key])
+            children.extend(value.values())
+        elif isinstance(value, (tuple, list)):
+            children.extend(value[:-2] if isinstance(value, tuple) and len(value) >= 3 else value)
+        else:
+            for attr in ('usage', 'tokens', 'token_usage', 'metadata', 'response'):
+                if hasattr(value, attr):
+                    children.append(getattr(value, attr))
+
+        found_input = None
+        found_output = None
+        for child in children:
+            child_input, child_output = _scan(child)
+            if found_input is None and child_input is not None:
+                found_input = child_input
+            if found_output is None and child_output is not None:
+                found_output = child_output
+            if found_input is not None and found_output is not None:
+                break
+        return found_input, found_output
+
+    return _scan(result)
+
 
 def collect_files(args, kwargs) -> Tuple[List[str], List[str]]:
     input_files: List[str] = []

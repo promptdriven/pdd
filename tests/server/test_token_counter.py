@@ -9,6 +9,7 @@ from pdd.server.token_counter import (
     count_tokens,
     get_context_limit,
     estimate_cost,
+    estimate_completion_cost,
     get_token_metrics,
     CostEstimate,
     TokenMetrics,
@@ -223,14 +224,40 @@ def test_estimate_cost_partial_match(mock_pricing_csv):
     assert estimate.cost_per_million == 15.00
 
 
-def test_estimate_cost_fallback_defaults(mock_pricing_csv):
-    """Falls back to known defaults when model not found in CSV."""
+def test_estimate_cost_unknown_model_returns_none(mock_pricing_csv):
+    """Unknown model pricing must be explicit None, not a guessed default."""
     token_counter._load_model_pricing.cache_clear()
-    # "unknown-model" not in CSV → falls back to claude-sonnet-4-20250514 ($3.00/M)
     estimate = estimate_cost(1000, "unknown-super-model", mock_pricing_csv)
+    assert estimate is None
+
+
+def test_estimate_completion_cost_uses_input_and_output_rates(mock_pricing_csv):
+    """Completion estimates include separate deterministic input/output rates."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_completion_cost(
+        input_tokens=1_000_000,
+        predicted_output_tokens=500_000,
+        model="gpt-4",
+        pricing_csv=mock_pricing_csv,
+    )
+
     assert estimate is not None
-    assert estimate.model == "claude-sonnet-4-20250514"
-    assert estimate.cost_per_million == 3.00
+    assert estimate.input_cost == pytest.approx(30.00)
+    assert estimate.output_cost == pytest.approx(30.00)
+    assert estimate.total_cost == pytest.approx(60.00)
+    assert estimate.input_tokens == 1_000_000
+    assert estimate.output_tokens == 500_000
+    assert estimate.input_cost_per_million == 30.00
+    assert estimate.output_cost_per_million == 60.00
+
+
+def test_estimate_completion_cost_unknown_model_returns_none(mock_pricing_csv):
+    """Completion pricing also refuses to invent prices for unknown models."""
+    token_counter._load_model_pricing.cache_clear()
+    assert (
+        estimate_completion_cost(1000, 1000, "unknown-super-model", mock_pricing_csv)
+        is None
+    )
 
 
 def test_estimate_cost_serialization(mock_pricing_csv):
@@ -239,10 +266,17 @@ def test_estimate_cost_serialization(mock_pricing_csv):
     estimate = estimate_cost(1000, "gpt-4", mock_pricing_csv)
     data = estimate.to_dict()
     assert data["input_cost"] == pytest.approx(0.03)
+    assert data["output_cost"] == pytest.approx(0.0)
+    assert data["total_cost"] == pytest.approx(0.03)
     assert data["currency"] == "USD"
     assert data["tokens"] == 1000
+    assert data["input_tokens"] == 1000
+    assert data["output_tokens"] == 0
     assert "model" in data
+    assert "matched_model" in data
     assert "cost_per_million" in data
+    assert "input_cost_per_million" in data
+    assert "output_cost_per_million" in data
 
 
 # ---------------------------------------------------------------------------

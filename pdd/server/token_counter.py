@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Dict
+from typing import Any, Callable, Optional, Dict, NamedTuple
 
 import litellm
 import tiktoken
@@ -88,6 +88,26 @@ class CostEstimate:
     tokens: int
     cost_per_million: float
     currency: str = "USD"
+    output_cost: float = 0.0
+    total_cost: Optional[float] = None
+    matched_model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    input_cost_per_million: Optional[float] = None
+    output_cost_per_million: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Populate compatibility/default fields."""
+        if self.total_cost is None:
+            self.total_cost = self.input_cost + self.output_cost
+        if self.matched_model is None:
+            self.matched_model = self.model
+        if self.input_tokens is None:
+            self.input_tokens = self.tokens
+        if self.output_tokens is None:
+            self.output_tokens = 0
+        if self.input_cost_per_million is None:
+            self.input_cost_per_million = self.cost_per_million
 
     def to_dict(self) -> Dict:
         """Serialize to dict."""
@@ -97,6 +117,13 @@ class CostEstimate:
             "tokens": self.tokens,
             "cost_per_million": self.cost_per_million,
             "currency": self.currency,
+            "output_cost": round(self.output_cost, 6),
+            "total_cost": round(self.total_cost, 6) if self.total_cost is not None else None,
+            "matched_model": self.matched_model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "input_cost_per_million": self.input_cost_per_million,
+            "output_cost_per_million": self.output_cost_per_million,
         }
 
 
@@ -250,25 +277,55 @@ def get_context_limit(model: str) -> Optional[int]:
         return None
 
 
+class ModelPricing(NamedTuple):
+    """Per-million-token input and output pricing for a model."""
+
+    input_cost_per_million: float
+    output_cost_per_million: float
+
+
 @lru_cache(maxsize=1)
-def _load_model_pricing(csv_path: str) -> Dict[str, float]:
+def _load_model_pricing(csv_path: str) -> Dict[str, ModelPricing]:
     """Load model pricing from CSV (cached)."""
-    pricing: Dict[str, float] = {}
+    pricing: Dict[str, ModelPricing] = {}
 
     try:
         with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 model = row.get("model", "")
-                input_cost = row.get("input", "0")
+                input_cost = row.get("input")
+                output_cost = row.get("output")
+                if not model or input_cost in (None, "") or output_cost in (None, ""):
+                    continue
                 try:
-                    pricing[model] = float(input_cost)
-                except ValueError:
+                    pricing[model] = ModelPricing(
+                        float(input_cost),
+                        float(output_cost),
+                    )
+                except (TypeError, ValueError):
                     continue
     except (FileNotFoundError, PermissionError):
         pass
 
     return pricing
+
+
+def _find_model_pricing(
+    model: str,
+    pricing: Dict[str, ModelPricing],
+) -> Optional[tuple[str, ModelPricing]]:
+    """Find valid pricing for model using exact, then conservative partial match."""
+    if model in pricing:
+        return model, pricing[model]
+
+    model_lower = model.lower()
+    for csv_model, rates in pricing.items():
+        csv_model_lower = csv_model.lower()
+        if model_lower in csv_model_lower or csv_model_lower in model_lower:
+            return csv_model, rates
+
+    return None
 
 
 def estimate_cost(
@@ -295,40 +352,69 @@ def estimate_cost(
     if not pricing:
         return None
 
-    cost_per_million = None
-    matched_model = model
-
-    # Exact match first
-    if model in pricing:
-        cost_per_million = pricing[model]
-    else:
-        # Partial/substring match
-        model_lower = model.lower()
-        for csv_model, cost in pricing.items():
-            if model_lower in csv_model.lower() or csv_model.lower() in model_lower:
-                cost_per_million = cost
-                matched_model = csv_model
-                break
-
-    if cost_per_million is None:
-        # Fall back to well-known defaults present in most pricing CSVs
-        for default_model in ["claude-sonnet-4-20250514", "gpt-4o", "claude-3-5-sonnet-latest"]:
-            if default_model in pricing:
-                cost_per_million = pricing[default_model]
-                matched_model = default_model
-                break
-
-    if cost_per_million is None:
+    match = _find_model_pricing(model, pricing)
+    if match is None:
         return None
+    matched_model, rates = match
 
     # Pricing is expressed per million tokens
-    input_cost = (token_count / 1_000_000) * cost_per_million
+    input_cost = (token_count / 1_000_000) * rates.input_cost_per_million
 
     return CostEstimate(
         input_cost=input_cost,
         model=matched_model,
+        matched_model=matched_model,
         tokens=token_count,
-        cost_per_million=cost_per_million,
+        input_tokens=token_count,
+        output_tokens=0,
+        cost_per_million=rates.input_cost_per_million,
+        input_cost_per_million=rates.input_cost_per_million,
+        output_cost_per_million=rates.output_cost_per_million,
+    )
+
+
+def estimate_completion_cost(
+    input_tokens: int,
+    predicted_output_tokens: int,
+    model: str,
+    pricing_csv: Optional[Path] = None,
+) -> Optional[CostEstimate]:
+    """
+    Estimate combined input and predicted output cost for a completion.
+
+    Returns None when pricing is unavailable or the model has no valid pricing
+    row. Unknown models must not borrow another model's price.
+    """
+    if pricing_csv is None or not pricing_csv.exists():
+        return None
+
+    pricing = _load_model_pricing(str(pricing_csv))
+    if not pricing:
+        return None
+
+    match = _find_model_pricing(model, pricing)
+    if match is None:
+        return None
+    matched_model, rates = match
+
+    input_cost = (input_tokens / 1_000_000) * rates.input_cost_per_million
+    output_cost = (
+        predicted_output_tokens / 1_000_000
+    ) * rates.output_cost_per_million
+    total_cost = input_cost + output_cost
+
+    return CostEstimate(
+        input_cost=input_cost,
+        output_cost=output_cost,
+        total_cost=total_cost,
+        model=matched_model,
+        matched_model=matched_model,
+        tokens=input_tokens,
+        input_tokens=input_tokens,
+        output_tokens=predicted_output_tokens,
+        cost_per_million=rates.input_cost_per_million,
+        input_cost_per_million=rates.input_cost_per_million,
+        output_cost_per_million=rates.output_cost_per_million,
     )
 
 
