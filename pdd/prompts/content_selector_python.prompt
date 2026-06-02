@@ -11,6 +11,9 @@
 }
 </pdd-interface>
 
+<pdd-dependency>pytest_slicer_python.prompt</pdd-dependency>
+<pdd-dependency>api_contract_slicer_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -86,8 +89,6 @@ Deterministic content extraction from files based on line ranges, Python AST str
 - Use `rich.console.Console` with a custom theme for formatted error messages. Print error context (including file path when available) before raising `SelectorError`.
 
 % Dependencies
-<pdd-dependency>pytest_slicer_python.prompt</pdd-dependency>
-<pdd-dependency>api_contract_slicer_python.prompt</pdd-dependency>
 <pytest_slicer_interface>
   <include mode="interface">pdd/pytest_slicer.py</include>
 </pytest_slicer_interface>
