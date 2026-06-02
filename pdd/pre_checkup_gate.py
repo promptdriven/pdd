@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -82,6 +83,23 @@ def _pushd(path: Path) -> Iterable[None]:
         yield
     finally:
         os.chdir(old)
+
+
+def _file_content_sig(path: Path) -> Optional[str]:
+    """sha256 of a file's bytes, or None if unreadable. Used to detect whether
+    drift-sync ACTUALLY rewrote a file (so the gate validates only the files it
+    produced, never a pre-existing-broken file it merely left untouched)."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _rel_within(path: Path, worktree: Path) -> Optional[str]:
+    try:
+        return path.resolve().relative_to(worktree.resolve()).as_posix()
+    except (ValueError, TypeError):
+        return None
 
 
 def _norm(path: str) -> str:
@@ -209,19 +227,28 @@ def _touched_architecture_json_error(
             "graph as empty"
         )
     # The container is recognized, but each entry must be a usable module mapping
-    # — a dict with at least a `filename` or `filepath`. A recognized container
-    # full of malformed entries ([{}] / {"modules": [{}]}) parses but maps
-    # nothing, so drift-sync no-ops and the gate passes vacuously; a non-dict
-    # member (["oops"]) makes the downstream entry.get(...) raise, crashing the
-    # gate fail-closed with an opaque error instead of a deterministic verdict.
-    # Block both. (All real entries satisfy this — verified 270/270; an empty
-    # list / {"modules": []} has no entries and is a legitimate empty state.)
+    # — a dict with a non-empty STRING `filename` or `filepath`. Malformed entries
+    # ([{}] / {"modules": [{}]}) map nothing -> vacuous pass; a non-dict member
+    # (["oops"]) makes the downstream entry.get(...) raise -> fail-closed crash;
+    # a non-string field ([{"filename": 1}]) is coerced by _norm(str(1)) into a
+    # bogus path that maps nothing -> vacuous pass. Block all three. This is the
+    # STRUCTURAL terminus: the gate validates that entries are well-formed enough
+    # to derive a module graph, but does NOT verify the referenced files exist or
+    # match a language — that is architecture_sync's full-schema job, not a smoke
+    # gate's. (All 270 real entries satisfy this; [] / {"modules": []} is a
+    # legitimate empty state and does not block.)
     entries = data if isinstance(data, list) else data.get("modules", [])
-    bad = sum(
-        1
-        for e in entries
-        if not (isinstance(e, dict) and (e.get("filename") or e.get("filepath")))
-    )
+
+    def _usable_entry(e: Any) -> bool:
+        if not isinstance(e, dict):
+            return False
+        fn, fp = e.get("filename"), e.get("filepath")
+        return bool(
+            (isinstance(fn, str) and fn.strip())
+            or (isinstance(fp, str) and fp.strip())
+        )
+
+    bad = sum(1 for e in entries if not _usable_entry(e))
     if bad:
         return (
             "architecture.json (changed by this PR) has malformed module "
@@ -346,7 +373,9 @@ def _run_drift_sync(
         if basename and rel_code:
             basename_to_code[basename] = rel_code
 
+    arch_path = worktree / "architecture.json"
     if only_files:
+        arch_sig_before = _file_content_sig(arch_path)
         try:
             result = sync_all_prompts_to_architecture(
                 prompts_dir=worktree / "pdd" / "prompts",
@@ -361,9 +390,13 @@ def _run_drift_sync(
         except Exception as exc:
             target = failures if strict else warnings
             target.append(f"architecture-sync raised for {sorted(only_files)}: {_scrub(exc)}")
-        # sync_all_prompts_to_architecture may have rewritten architecture.json;
-        # revalidate it in build/smoke even if the PR diff did not include it.
-        synced_paths.append("architecture.json")
+        # Revalidate architecture.json ONLY if sync actually rewrote it. Adding it
+        # unconditionally would block a PR on a PRE-EXISTING broken architecture.json
+        # that the PR never touched and sync left unchanged — a false-block on infra
+        # not of this PR's doing. (A sync that *writes* a broken file is still
+        # caught, because then the content changed.)
+        if _file_content_sig(arch_path) != arch_sig_before:
+            synced_paths.append("architecture.json")
 
     for filename, (prompt_path, code_path) in prompt_pairs.items():
         try:
@@ -396,6 +429,24 @@ def _run_drift_sync(
                     prompt_drifts, example_drifts = [], []
 
                 for drift in prompt_drifts:
+                    # Snapshot the module's regenerable files BEFORE heal — code
+                    # and example (heal may rewrite either via `pdd update` /
+                    # `pdd example`). After heal, add only the ones whose content
+                    # ACTUALLY changed, so build/smoke validates the tree heal
+                    # PRODUCED (broken regenerated code OR example is caught) while
+                    # a pre-existing-broken file heal left untouched does not
+                    # false-block.
+                    candidate_paths: List[Path] = []
+                    bn_code = basename_to_code.get(getattr(drift, "basename", None))
+                    if bn_code:
+                        candidate_paths.append(worktree / bn_code)
+                    for attr in ("code_path", "example_path"):
+                        dp = getattr(drift, attr, None)
+                        if dp:
+                            candidate_paths.append(Path(dp))
+                    before_sigs = {
+                        str(tp): _file_content_sig(tp) for tp in candidate_paths
+                    }
                     try:
                         healed = heal_module(drift, env)
                     except Exception as exc:
@@ -411,22 +462,11 @@ def _run_drift_sync(
                         )
                     elif healed is None:
                         warnings.append(f"heal-module skipped {drift.basename}")
-                    # heal regenerated this module's code (`pdd update`); validate
-                    # the regenerated file in build/smoke so a heal that produces
-                    # broken code is caught instead of passing (it was never in the
-                    # original PR diff).
-                    code_rel = basename_to_code.get(getattr(drift, "basename", None))
-                    if code_rel is None:
-                        dp = getattr(drift, "code_path", None)
-                        if dp:
-                            try:
-                                code_rel = Path(dp).resolve().relative_to(
-                                    worktree.resolve()
-                                ).as_posix()
-                            except (ValueError, TypeError):
-                                code_rel = None
-                    if code_rel:
-                        synced_paths.append(code_rel)
+                    for tp in candidate_paths:
+                        if _file_content_sig(tp) != before_sigs.get(str(tp)):
+                            rel = _rel_within(tp, worktree)
+                            if rel:
+                                synced_paths.append(rel)
 
                 try:
                     remaining_updates, remaining_other = detect_drift(

@@ -667,6 +667,96 @@ def test_drift_sync_reports_only_real_mutations(monkeypatch, tmp_path):
     assert [p for p in outcome.synced_paths if p != "architecture.json"] == [], outcome.synced_paths
 
 
+def _foo_prompt_repo(tmp_path, arch="[{\"filename\":\"foo_python.prompt\",\"filepath\":\"pdd/foo.py\"}]"):
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "foo.py").write_text("def ok():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pdd" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>x</pdd-reason>\n", encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(arch, encoding="utf-8")
+
+
+def test_pre_existing_broken_arch_untouched_does_not_false_block(monkeypatch, tmp_path):
+    """Regression (round-7): adding architecture.json to the validated set
+    unconditionally when sync ran false-blocked a prompt-only PR on a PRE-EXISTING
+    broken architecture.json the PR never touched and sync left unchanged. It must
+    be revalidated ONLY when sync actually rewrote it."""
+    _foo_prompt_repo(tmp_path, arch='{"oops": 1}')  # pre-existing broken, PR doesn't touch it
+    monkeypatch.setattr(pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True})
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None))
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+    passed, message, _ = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["pdd/prompts/foo_python.prompt"], quiet=True, timeout_per_check=20.0
+    )
+    assert passed is True, message
+
+
+def test_sync_that_writes_broken_arch_is_caught(monkeypatch, tmp_path):
+    """But a sync that itself REWRITES architecture.json into a broken state is
+    still caught (the content changed, so it is revalidated)."""
+    _foo_prompt_repo(tmp_path)  # valid before sync
+
+    def corrupt_sync(**_k):
+        (tmp_path / "architecture.json").write_text('{"modules": ["oops"]}', encoding="utf-8")
+        return {"success": True}
+
+    monkeypatch.setattr(pre_checkup_gate, "sync_all_prompts_to_architecture", corrupt_sync)
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None))
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+    passed, message, _ = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["pdd/prompts/foo_python.prompt"], quiet=True, timeout_per_check=20.0
+    )
+    assert passed is False, message
+    assert "infrastructure error" not in message, message
+
+
+def test_gate_validates_heal_regenerated_example(monkeypatch, tmp_path):
+    """Regression (round-7): the produced-tree validation tracked only regenerated
+    code; a heal that rewrites a broken EXAMPLE must be caught too. Tracked by
+    content change of the module's example_path."""
+    _foo_prompt_repo(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "foo_example.py").write_text("print('ok')\n", encoding="utf-8")
+    drift = SimpleNamespace(
+        basename="foo", operation="update", reason="r", language="python",
+        code_path=str(tmp_path / "pdd" / "foo.py"),
+        example_path=str(tmp_path / "context" / "foo_example.py"),
+    )
+
+    def heal_breaks_example(_d, _e):
+        (tmp_path / "context" / "foo_example.py").write_text("def broken(:\n", encoding="utf-8")
+        return True
+
+    calls = {"n": 0}
+
+    def fake_detect(**_k):
+        calls["n"] += 1
+        return ([drift], []) if calls["n"] == 1 else ([], [])
+
+    monkeypatch.setattr(pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True})
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None))
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", fake_detect)
+    monkeypatch.setattr(pre_checkup_gate, "heal_module", heal_breaks_example)
+    passed, message, _ = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["pdd/prompts/foo_python.prompt"], quiet=True, timeout_per_check=30.0
+    )
+    assert passed is False, message
+    assert "foo_example.py" in message, message
+
+
+def test_touched_nonstring_entry_metadata_blocks(tmp_path):
+    """Regression (round-7): a touched architecture.json whose entry filename/
+    filepath is a truthy NON-string ([{"filename": 1}]) must block — `1` is
+    truthy but `_norm(str(1))` maps nothing, a vacuous pass under the prior
+    truthy-only check. (Structural terminus: the gate does NOT check the files
+    referenced exist — that is architecture_sync's job.)"""
+    arch = tmp_path / "architecture.json"
+    for bad in ['[{"filename": 1}]', '{"modules":[{"filepath": 1}]}']:
+        arch.write_text(bad, encoding="utf-8")
+        err = pre_checkup_gate._touched_architecture_json_error(tmp_path, ["architecture.json"])
+        assert err and "malformed module entries" in err, (bad, err)
+
+
 def test_caller_compat_resolves_from_dot_import_submodule(tmp_path):
     """Regression: `from . import api; api.build(...)` (and `from . import api as a`)
     binds the SUBMODULE, so the call is a module.attr call. The sweep must resolve
