@@ -211,7 +211,7 @@ def test_drift_passes_from_evidence_without_policy_gate(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with patch("pdd.drift_main._GATE_POLICY_AVAILABLE", False):
+    with patch("pdd.drift_main._POLICY_CHECK_AVAILABLE", False):
         report = run_drift(
             "refund_payment",
             tmp_path,
@@ -433,16 +433,19 @@ def test_drift_applies_default_max_cost_for_non_dry_run(tmp_path: Path) -> None:
 
 def test_drift_policy_fails_closed_when_gate_unavailable(tmp_path: Path) -> None:
     _prompt, code = _write_fixture(tmp_path)
+    _prompt.write_text(
+        _prompt.read_text(encoding="utf-8")
+        + "\n<capabilities>\n- MAY write refund records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
     stable_source = code.read_text(encoding="utf-8")
-    (tmp_path / ".pdd").mkdir(parents=True)
-    (tmp_path / ".pdd" / "policy.yml").write_text("rules: []\n", encoding="utf-8")
 
     def _fake_regenerate(_prompt_path: Path, output_path: Path, **kwargs) -> float:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(stable_source, encoding="utf-8")
         return 0.0
 
-    with patch("pdd.drift_main._GATE_POLICY_AVAILABLE", False):
+    with patch("pdd.drift_main._POLICY_CHECK_AVAILABLE", False):
         with patch("pdd.drift_main._regenerate_code", side_effect=_fake_regenerate):
             report = run_drift("refund_payment", tmp_path, runs=1, dry_run=False)
 

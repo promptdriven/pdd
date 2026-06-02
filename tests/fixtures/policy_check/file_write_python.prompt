@@ -1,0 +1,8 @@
+<pdd-reason>Read-only helper.</pdd-reason>
+
+<capabilities>
+- MAY read configuration.
+- MUST NOT write files to disk.
+</capabilities>
+
+Read configuration only.

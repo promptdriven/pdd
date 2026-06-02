@@ -1533,6 +1533,53 @@ def _discover_python_gates(
     return gates
 
 
+def _discover_policy_gates(
+    worktree: Path,
+    changed_files: Sequence[str],
+) -> List[Gate]:
+    """Emit ``pdd policy check`` gates for changed Python files with capability contracts."""
+    from .policy_check import (  # pylint: disable=import-outside-toplevel
+        prompt_has_capabilities,
+        resolve_policy_prompt_for_code,
+    )
+
+    gates: List[Gate] = []
+    cli = [sys.executable, "-m", "pdd.cli"]
+    for rel in changed_files:
+        if not rel.endswith(".py"):
+            continue
+        code_path = worktree / rel
+        if not code_path.is_file():
+            continue
+        prompt_path = resolve_policy_prompt_for_code(worktree, rel)
+        if prompt_path is None or not prompt_has_capabilities(prompt_path):
+            continue
+        try:
+            prompt_label = str(prompt_path.relative_to(worktree))
+        except ValueError:
+            prompt_label = str(prompt_path)
+        gates.append(
+            Gate(
+                name=f"policy:{rel}",
+                cmd=[
+                    *cli,
+                    "policy",
+                    "check",
+                    str(code_path.resolve()),
+                    "--prompt",
+                    str(prompt_path.resolve()),
+                ],
+                source=f"{prompt_label}:<capabilities>",
+                required_fix_hint=(
+                    f"Run `pdd policy check {rel} --prompt {prompt_label}` locally and "
+                    "fix capability violations, or add a justified "
+                    "`# pdd-policy-ignore` on the flagged line."
+                ),
+            )
+        )
+    return gates
+
+
 def _script_references_pr_modified_config(
     script_command: str, pr_changed_set: set
 ) -> bool:
@@ -2074,6 +2121,7 @@ def discover_gates(
         gates.append(_git_diff_check_gate(trusted_git, base_spec))
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
     gates.extend(_discover_python_gates(worktree, changed_files, base_ref=base_ref))
+    gates.extend(_discover_policy_gates(worktree, changed_files))
     # Stable order: git-diff-check first, then language-specific gates
     # in discovery order. The runner walks the list left-to-right so
     # operators see consistent artifact filenames across rounds.

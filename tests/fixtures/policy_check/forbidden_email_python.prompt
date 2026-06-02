@@ -1,0 +1,8 @@
+<pdd-reason>Notifier that must not send email.</pdd-reason>
+
+<capabilities>
+- MAY write audit events.
+- MUST NOT send emails.
+</capabilities>
+
+Record audit events only.

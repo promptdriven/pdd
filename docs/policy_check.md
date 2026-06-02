@@ -2,6 +2,8 @@
 
 `pdd policy check` is a deterministic safety layer that validates generated code against natural-language capability contracts. It uses AST-based static analysis to ensure that modules stay within their allowed side-effect boundaries.
 
+This is **not** the same as `pdd checkup gate`, which evaluates evidence-manifest YAML rules under `.pdd/`. Capability policy checks are driven by `<capabilities>` in module prompts.
+
 ## Capabilities and Side Effects
 
 In PDD, you can define what a module is allowed (or forbidden) to do using the `<capabilities>` section in your prompt:
@@ -20,71 +22,82 @@ In PDD, you can define what a module is allowed (or forbidden) to do using the `
 
 The policy checker parses these rules and enforces them against the generated Python code.
 
+### Keyword vocabulary (v1)
+
+Capabilities are matched with simple substring checks on each bullet (case-insensitive). Use words from these families so the checker understands intent:
+
+| Category | Example words in the bullet |
+|----------|-----------------------------|
+| Network / HTTP | `network`, `api`, `http`, `endpoint`, `provider`, `request`, `url` |
+| Shell | `shell`, `command`, `subprocess`, `exec` |
+| Files | `file`, `write`, `delete`, `persist`, `storage` |
+| Environment | `env`, `environment`, `configuration` |
+| Email | `email`, `mail`, `smtp` |
+
+`MUST NOT` bullets that mention a family block that category; `MAY` / `SHOULD` bullets that mention a family allow it.
+
 ## Supported Checks
 
-The initial version of the policy checker focuses on high-risk side effects in Python:
+The initial version focuses on high-risk side effects in Python:
 
-- **Forbidden Imports:** Detects imports of libraries related to networking, shell execution, or sensitive system access.
-- **Network Access:** Flags use of libraries like `requests`, `httpx`, `urllib3`, etc., unless explicitly allowed.
-- **Shell Execution:** Detects calls to `subprocess`, `os.system`, `shutil.rmtree`, and other shell-like commands.
-- **Environment Reads:** Flags access to `os.environ` or `os.getenv` for sensitive environment variables.
-- **Sensitive Data Leaks:** Detects logging or printing of variables named `token`, `secret`, `password`, `api_key`, `cvv`, etc.
-- **File Writes:** Flags writes to the filesystem outside of the allowed scope.
+- **Forbidden imports:** Network, email, and shell-related libraries unless allowed.
+- **Network access:** `requests`, `httpx`, `urllib3`, `socket`, etc.
+- **Shell execution:** `os.system`, `subprocess.*`, etc.
+- **Environment reads:** `os.getenv`, `os.environ`, unless allowed.
+- **Sensitive data leaks:** Logging/printing names or string literals suggesting `token`, `secret`, `password`, `cvv`, `pan`, etc. (word-boundary match).
+- **File writes:** `open(..., "w")`, `Path.write_text`, `os.remove`, etc. Read-only `open()` is not flagged.
+
+### Deferred in v1
+
+- Full static taint analysis
+- Import/call allowlists against arbitrary “out-of-scope” modules (use `<pdd-dependency>` + review instead)
+- Parsing structured `ALLOW …` waiver lines (prompt-level waivers only match when category and message both appear in the waiver text)
 
 ## Command Usage
 
 ```bash
-# Check a specific file against its prompt
+# Check a specific file (prompt auto-discovered when possible)
 pdd policy check src/refund_payment.py
 
-# Check a file with an explicit prompt override
+# Explicit prompt
 pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt
 
-# Output results as JSON for CI integration
-pdd policy check src/refund_payment.py --json
+# JSON for CI (capabilities + issues)
+pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --json
 
-# Run in strict mode (fails on any side-effect if capabilities are missing)
+# Strict: flag side effects even when <capabilities> is missing
 pdd policy check src/refund_payment.py --strict
+
+# Evidence manifest with validation.policy
+pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --evidence
 ```
+
+Directory targets skip common vendor folders (`.git`, `venv`, `node_modules`, `__pycache__`, `.pdd`, etc.).
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All targets passed |
+| `1` | Violations found (default mode) |
+| `2` | Violations in `--strict` mode, or a file could not be parsed |
 
 ## Handling False Positives (Waivers)
 
-Static analysis can sometimes produce false positives. PDD provides two ways to waive these warnings:
-
-### 1. Inline Waivers
-
-Add a comment on the line that trips the policy checker:
+### Inline waivers
 
 ```python
 import os
-# pdd-policy-ignore: reading non-sensitive env var
+# pdd-policy-ignore: non-secret config path
 config_path = os.getenv("APP_CONFIG_PATH")
 ```
 
-### 2. Prompt-Level Waivers
+### Prompt-level waivers (experimental)
 
-Define allowed exceptions in the `<waivers>` section of your prompt:
+`<waivers>` entries suppress a finding only when **both** the issue category and message substring appear in the waiver block. Prefer inline waivers until structured waiver IDs land.
 
-```xml
-<waivers>
-- ALLOW os.getenv("APP_CONFIG_PATH"): required for configuration discovery.
-</waivers>
-```
+## Integration
 
-## Integration with Evidence
-
-Policy checks are automatically included in evidence manifests when run with the `--evidence` flag. This allows you to prove that a module has been validated against its security policy.
-
-```bash
-pdd sync --evidence
-```
-
-The manifest will contain a `policy` field in the `validation` section:
-
-```json
-{
-  "validation": {
-    "policy": "passed"
-  }
-}
-```
+- **`pdd checkup --pr --review-loop`:** When a changed `.py` file has a prompt with `<capabilities>`, a `policy:<path>` gate runs `pdd policy check`.
+- **`pdd checkup drift`:** Runs policy check when the prompt defines `<capabilities>` (not when only evidence gate YAML exists).
+- **Evidence:** `--evidence` sets `validation.policy` to `passed` or `failed`. Sync may populate the same field via `validation_from_sync`.

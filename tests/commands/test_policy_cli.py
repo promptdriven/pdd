@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from pdd import cli
@@ -41,6 +42,34 @@ def test_policy_check_strict_exits_with_failure_code() -> None:
         env=_CLI_ENV,
     )
     assert result.exit_code == 2, result.output
+
+
+def test_policy_check_evidence_writes_validation_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--evidence`` records aggregate validation.policy for gate consumers."""
+    monkeypatch.chdir(tmp_path)
+    target = FIXTURE_DIR / "forbidden_network.py"
+    prompt = FIXTURE_DIR / "forbidden_network_python.prompt"
+    result = CliRunner().invoke(
+        cli.cli,
+        [
+            "policy",
+            "check",
+            str(target),
+            "--prompt",
+            str(prompt),
+            "--evidence",
+        ],
+        env=_CLI_ENV,
+    )
+    assert result.exit_code != 0, result.output
+    manifest = tmp_path / ".pdd" / "evidence" / "runs"
+    files = list(manifest.glob("*.json"))
+    assert files
+    data = json.loads(files[0].read_text(encoding="utf-8"))
+    assert data["validation"]["policy"] == "failed"
 
 
 def test_policy_check_json_lists_targets() -> None:

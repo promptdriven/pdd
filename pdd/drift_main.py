@@ -23,9 +23,9 @@ except ImportError:  # pragma: no cover
 try:
     from .policy_check import run_policy_check as _run_policy_check_impl
 
-    _GATE_POLICY_AVAILABLE = True
+    _POLICY_CHECK_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    _GATE_POLICY_AVAILABLE = False
+    _POLICY_CHECK_AVAILABLE = False
 
     def _run_policy_check_impl(*_args, **_kwargs):
         class _Result:
@@ -477,26 +477,25 @@ def _verify_configured(manifest: Optional[ManifestView]) -> bool:
     return _validation_key_configured(manifest, ("verify",))
 
 
-def _policy_configured(project_root: Path, manifest: Optional[ManifestView], prompt_path: Optional[Path] = None) -> bool:
-    policy_paths = (
-        project_root / ".pdd" / "policy.yml",
-        project_root / ".pdd" / "policy.yaml",
-        project_root / "policy.yml",
-        project_root / "policy.yaml",
-    )
-    if any(path.is_file() for path in policy_paths):
-        return True
-    
+def _capability_policy_configured(
+    project_root: Path,
+    manifest: Optional[ManifestView],
+    prompt_path: Optional[Path] = None,
+) -> bool:
+    """Return True when capability policy checks should run for this dev unit.
+
+    Distinct from ``pdd checkup gate`` evidence YAML (``.pdd/policy.yml``): drift
+    only keys off manifest validation fields and ``<capabilities>`` in the prompt.
+    """
     if _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS):
         return True
-        
+
     if prompt_path and prompt_path.is_file():
         try:
             content = prompt_path.read_text(encoding="utf-8")
-            if "<capabilities>" in content:
-                return True
-        except Exception:
-            pass
+        except OSError:
+            return False
+        return "<capabilities>" in content
 
     return False
 
@@ -522,9 +521,9 @@ def _run_policy_check(
     code_path: Path,
 ) -> tuple[bool, bool, bool]:
     """Return ``(passed, skipped, unavailable)`` for policy evaluation."""
-    if not _policy_configured(project_root, manifest, prompt_path):
+    if not _capability_policy_configured(project_root, manifest, prompt_path):
         return True, True, False
-    if not _GATE_POLICY_AVAILABLE:
+    if not _POLICY_CHECK_AVAILABLE:
         return False, False, True
 
     # Policy check requires the source path and optionally the prompt path
@@ -684,9 +683,12 @@ def run_drift(
     candidate_apis: list[str] = []
     total_cost = 0.0
     cost_budget_exceeded = False
-    policy_check_skipped = not _policy_configured(project_root, manifest, prompt_path)
+    policy_check_skipped = not _capability_policy_configured(
+        project_root, manifest, prompt_path
+    )
     policy_check_unavailable = (
-        _policy_configured(project_root, manifest, prompt_path) and not _GATE_POLICY_AVAILABLE
+        _capability_policy_configured(project_root, manifest, prompt_path)
+        and not _POLICY_CHECK_AVAILABLE
     )
 
     with tempfile.TemporaryDirectory(prefix="pdd-drift-") as temp_name:

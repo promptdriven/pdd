@@ -86,6 +86,72 @@ def test_invalid_python_fails_gracefully(tmp_path: Path) -> None:
     assert any(i.category == "system" for i in result.issues)
 
 
+def test_endpoint_capability_allows_network_keywords() -> None:
+    """Issue #828 example bullets using 'endpoint' allow network libraries."""
+    prompt = FIXTURE_DIR / "allowed_refund_python.prompt"
+    text = (FIXTURE_DIR / "allowed_refund.py").read_text(encoding="utf-8")
+    text += "\nimport requests\n"
+    target = FIXTURE_DIR / "_tmp_endpoint.py"
+    target.write_text(text, encoding="utf-8")
+    try:
+        result = run_policy_check(target, prompt)
+        assert result.passed
+    finally:
+        target.unlink(missing_ok=True)
+
+
+def test_forbidden_email_import() -> None:
+    prompt = FIXTURE_DIR / "forbidden_email_python.prompt"
+    target = FIXTURE_DIR / "forbidden_email.py"
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "email" for i in result.issues)
+
+
+def test_file_write_open_mode_detected() -> None:
+    prompt = FIXTURE_DIR / "file_write_python.prompt"
+    target = FIXTURE_DIR / "file_write.py"
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "file" for i in result.issues)
+
+
+def test_read_only_open_allowed() -> None:
+    prompt = FIXTURE_DIR / "file_write_python.prompt"
+    target = FIXTURE_DIR / "read_only_open.py"
+    result = run_policy_check(target, prompt)
+    assert result.passed
+
+
+def test_inline_waiver_suppresses_issue(tmp_path: Path) -> None:
+    prompt = FIXTURE_DIR / "file_write_python.prompt"
+    target = tmp_path / "waived.py"
+    target.write_text(
+        "def persist(data: str) -> None:\n"
+        "    # pdd-policy-ignore: test fixture allows write\n"
+        "    with open('out.txt', 'w', encoding='utf-8') as handle:\n"
+        "        handle.write(data)\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert result.passed
+
+
+def test_percent_format_logging_detected(tmp_path: Path) -> None:
+    prompt = FIXTURE_DIR / "sensitive_log_python.prompt"
+    target = tmp_path / "percent_log.py"
+    target.write_text(
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def audit(secret: str) -> None:\n"
+        "    logger.info('value %s', secret)\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "leakage" for i in result.issues)
+
+
 def test_policy_check_cli_json_output() -> None:
     """CLI ``--json`` returns structured findings for CI integration."""
     target = FIXTURE_DIR / "forbidden_network.py"

@@ -147,6 +147,24 @@ class TestDiscoverGates:
         assert "py_compile" not in gate.cmd[3]
         assert gate.cmd[-1].endswith("a.py")
 
+    def test_emits_policy_gate_when_capabilities_present(self, tmp_path: Path) -> None:
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "svc_python.prompt").write_text(
+            "<capabilities>\n- MUST NOT send emails.\n</capabilities>\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "svc.py").write_text("import smtplib\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=("svc.py",))
+        policy_gates = [g for g in gates if g.name.startswith("policy:")]
+        assert len(policy_gates) == 1
+        assert "policy" in policy_gates[0].cmd
+        assert "check" in policy_gates[0].cmd
+        assert "--prompt" in policy_gates[0].cmd
+
     def test_py_compile_required_fix_hint_does_not_recommend_bare_py_compile(
         self, tmp_path: Path
     ) -> None:
