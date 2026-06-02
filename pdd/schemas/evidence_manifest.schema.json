@@ -52,7 +52,22 @@
       "required": ["status", "rules"],
       "properties": {
         "status": {"enum": ["available", "not_applicable", "not_available"]},
-        "rules": {"type": "object"}
+        "rules": {"type": "object"},
+        "waivers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "rule_id", "reason", "approved_by", "expires"],
+            "properties": {
+              "id": {"type": "string"},
+              "rule_id": {"type": "string"},
+              "reason": {"type": "string"},
+              "approved_by": {"type": "string"},
+              "expires": {"type": ["string", "null"]}
+            },
+            "additionalProperties": false
+          }
+        }
       }
     },
     "validation": {
