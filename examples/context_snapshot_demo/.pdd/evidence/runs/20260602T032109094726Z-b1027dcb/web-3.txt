@@ -1,0 +1,1 @@
+[Error: FIRECRAWL_API_KEY not set. Cannot scrape https://example.test/pdd-snapshot-demo]
