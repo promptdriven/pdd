@@ -5607,3 +5607,38 @@ class TestSetupPrWorktreeStaleBranchRealGit:
         # NOT the old cryptic fetch failure.
         assert "Failed to fetch PR" not in err
         assert "refusing to fetch" not in err
+
+    def test_resume_branch_in_live_worktree_returns_actionable_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        local, lgit = self._make_clone_with_pr(tmp_path)
+        branch = _pr_worktree_branch_name(local, 77)
+        # Resume mode is used when saved PR state points at a missing checkup
+        # worktree. If the scoped branch is still checked out in another live
+        # worktree, git refuses the fetch into that branch. This must surface as
+        # the same actionable conflict as fresh setup, not "Failed to fetch PR".
+        live = tmp_path / "live-resume-wt"
+        assert lgit("worktree", "add", "-q", "-b", branch, str(live), "HEAD").returncode == 0
+
+        wt, err = _setup_pr_worktree(
+            local,
+            "acme",
+            "thing",
+            77,
+            quiet=True,
+            resume_existing=True,
+        )
+
+        assert wt is None
+        assert err is not None
+        assert "live worktree" in err
+        assert "git worktree remove" in err
+        assert "live-resume-wt" in err
+        assert "Failed to fetch PR" not in err
+        assert "refusing to fetch" not in err

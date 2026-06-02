@@ -1082,6 +1082,15 @@ def _setup_pr_worktree(
                 f"{location}. Remove it and retry: {remove_hint}. "
                 f"(git: {del_err.strip()})"
             )
+    elif has_branch and resume_existing:
+        holder = _worktree_holding_branch(git_root, branch_name)
+        if holder:
+            return None, (
+                f"Cannot resume the PR #{pr_number} checkup worktree: branch "
+                f"{branch_name} is still checked out in another live worktree "
+                f"(checked out at {holder}). Remove it and retry: "
+                f"git worktree remove {holder}."
+            )
 
     # Resolve which remote actually has this PR. Prefer a configured remote
     # (uses the user's auth + caching); fall back to the explicit GitHub URL
