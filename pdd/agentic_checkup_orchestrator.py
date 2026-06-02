@@ -796,7 +796,9 @@ def _scrub_secrets(text: str) -> str:
     return fn(text)
 
 
-def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
+def _step7_passed(
+    step7_output: str, pr_mode: bool, has_issue: bool = True
+) -> Tuple[bool, str]:
     """Parse Step 7's JSON report and decide whether the checkup may proceed.
 
     The Step 7 prompt (``agentic_checkup_step7_verify_LLM.prompt``) requires
@@ -815,7 +817,9 @@ def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
     Returns ``(passed, failure_reason)`` where ``passed`` is True iff:
 
     * ``success`` is ``True``;
-    * in PR mode, ``issue_aligned`` is ``True``;
+    * in PR mode WITH a source issue (``has_issue``), ``issue_aligned`` is
+      ``True``; with no issue (#1292) the alignment gate is dropped and the
+      verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
 
     Fails closed: if no JSON object can be extracted, returns
@@ -852,7 +856,7 @@ def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
             f"Message: {payload.get('message') or '<no message>'}",
         )
 
-    if pr_mode and payload.get("issue_aligned") is not True:
+    if pr_mode and has_issue and payload.get("issue_aligned") is not True:
         return (
             False,
             f"Step 7 reported issue_aligned=false — PR does not resolve the "
@@ -1861,16 +1865,30 @@ def _run_agentic_checkup_orchestrator_inner(
         (success, final_message, total_cost, model_used)
     """
     pr_mode = pr_url is not None and pr_number is not None
+    # Issue #1292: in PR mode the source issue is optional. ``has_issue`` is
+    # False when the caller passed an empty ``issue_url`` (merit-review PR
+    # mode): the issue-alignment gate is dropped, the LLM issue context is
+    # blanked, and per-step progress + the duplicate issue-thread post are
+    # suppressed (``issue_number`` here is the PR number, so those posts would
+    # otherwise land on — and flood — the PR thread). With a real issue,
+    # behaviour is byte-for-byte unchanged.
+    has_issue = bool((issue_url or "").strip()) and issue_url not in ("null", "None")
     if test_scope not in ("full", "targeted"):
         raise ValueError(
             f"test_scope must be 'full' or 'targeted', got {test_scope!r}"
         )
     pr_test_scope = test_scope if pr_mode else "full"
     if not quiet:
-        console.print(
-            f"[bold]Running checkup for issue #{issue_number}: "
-            f"\"{issue_title}\"[/bold]"
-        )
+        if pr_mode and not has_issue:
+            console.print(
+                f"[bold]Running checkup for PR #{pr_number} "
+                f"(no source issue — reviewing on its own merits)[/bold]"
+            )
+        else:
+            console.print(
+                f"[bold]Running checkup for issue #{issue_number}: "
+                f"\"{issue_title}\"[/bold]"
+            )
 
     # Context accumulation — grows across steps.
     context: Dict[str, str] = {
@@ -1880,6 +1898,11 @@ def _run_agentic_checkup_orchestrator_inner(
         "repo_name": repo_name,
         "issue_number": str(issue_number),
         "issue_title": issue_title,
+        # #1292: when False (PR mode, no source issue) the step prompts review
+        # the PR on its own merits and skip GitHub issue-thread posting; the
+        # issue_url/issue_content/issue_title fields above are empty in that
+        # case while issue_number stays the PR number (the postable thread).
+        "has_issue": "true" if has_issue else "false",
         "architecture_json": architecture_json,
         "pddrc_content": pddrc_content,
         "project_root": str(cwd),
@@ -2394,7 +2417,17 @@ def _run_agentic_checkup_orchestrator_inner(
             # PR mode only; earlier steps' progress comments are unaffected, and
             # issue-mode runs still post a Step 7 comment (they have no separate
             # final-report post).
-            if description and not (pr_mode and step_num == 7):
+            #
+            # #1292: in no-issue PR mode the per-step comment thread is the PR
+            # itself (issue_number == pr_number), so posting every step's
+            # progress would flood the PR. Suppress ALL per-step progress
+            # comments there — the orchestrator still posts the single
+            # canonical final report to the PR. With a source issue, progress
+            # lands on the issue thread (unchanged).
+            suppress_step_comment = (pr_mode and step_num == 7) or (
+                pr_mode and not has_issue
+            )
+            if description and not suppress_step_comment:
                 _maybe_post_step_comment(step_num, description, persistable_output, iteration)
         else:
             step_outputs[step_key] = f"FAILED: {persistable_output}"
@@ -2470,7 +2503,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # to the post-push reverify output. The "All Issues Fixed" string
         # alone is just a loop-exit sentinel; the structured verdict is
         # what tells us the rebased tree actually satisfies the contract.
-        passed, reason = _step7_passed(output, pr_mode=pr_mode)
+        passed, reason = _step7_passed(output, pr_mode=pr_mode, has_issue=has_issue)
         if not passed:
             return (
                 False,
@@ -2481,7 +2514,12 @@ def _run_agentic_checkup_orchestrator_inner(
         return None
 
     def _post_pr_mode_final_report(final_step7_output: str) -> str:
-        """Post the canonical PR-mode final report to PR + issue threads.
+        """Post the canonical PR-mode final report to the PR thread.
+
+        With a source issue it is also posted to the issue thread; with no
+        issue (#1292) the issue-thread post is skipped — ``issue_number`` is
+        the PR number there, so a second post would only duplicate the PR
+        comment.
 
         Returns a ``status_suffix`` (empty when reporting is not applicable
         or both posts succeeded). On failure, the rendered body is also
@@ -2511,17 +2549,23 @@ def _run_agentic_checkup_orchestrator_inner(
             context.get("pr_push_output", ""),
         )
         pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
-        step_posted = post_step_comment(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            issue_number=issue_number,
-            step_num=7,
-            total_steps=TOTAL_STEPS,
-            description="Verification & Final Report",
-            output=final_step7_output,
-            cwd=cwd,
-            body=body,
-        )
+        if has_issue:
+            step_posted = post_step_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=7,
+                total_steps=TOTAL_STEPS,
+                description="Verification & Final Report",
+                output=final_step7_output,
+                cwd=cwd,
+                body=body,
+            )
+        else:
+            # No source issue (#1292): issue_number is the PR number, so the
+            # issue-thread post would duplicate the PR comment above. The PR
+            # post is the single canonical report.
+            step_posted = True
         if pr_posted and step_posted:
             return ""
 
@@ -2789,11 +2833,12 @@ def _run_agentic_checkup_orchestrator_inner(
                     use_github_state=use_github_state,
                 )
                 if not _cleared:
+                    _state_thread = "the PR" if not has_issue else "the issue"
                     _clear_warn = (
-                        " (warning: could not confirm workflow-state "
-                        "cleanup — a rerun may replay the cached Step 5 "
-                        "result; delete the PDD_WORKFLOW_STATE comment "
-                        "on the issue manually if the refusal repeats)"
+                        f" (warning: could not confirm workflow-state "
+                        f"cleanup — a rerun may replay the cached Step 5 "
+                        f"result; delete the PDD_WORKFLOW_STATE comment "
+                        f"on {_state_thread} manually if the refusal repeats)"
                     )
                     if not quiet:
                         console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
@@ -2855,7 +2900,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # return tuple. Returning success when Step 7 reported failure
         # would be the same anti-pattern as the fix-mode push case.
         nofix_gate_passed, nofix_gate_reason = _step7_passed(
-            nofix_step7_output, pr_mode=pr_mode
+            nofix_step7_output, pr_mode=pr_mode, has_issue=has_issue
         )
 
         # Skip step 8.
@@ -3318,7 +3363,7 @@ def _run_agentic_checkup_orchestrator_inner(
             )
             max_reason = max_msg
             max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output, pr_mode=pr_mode
+                step7_output, pr_mode=pr_mode, has_issue=has_issue
             )
             if not max_gate_passed:
                 max_reason = f"{max_msg} {max_gate_reason}"
@@ -3354,7 +3399,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # with `issue_aligned: false` or unfixed critical issues could be
         # marked green by downstream consumers.
         # --------------------------------------------------------------
-        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode)
+        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode, has_issue=has_issue)
         if not gate_passed:
             if not quiet:
                 console.print(
@@ -3961,10 +4006,13 @@ def _run_agentic_checkup_orchestrator_inner(
                 if no_changes_clean_run:
                     push_ok, push_message = True, "No changes to push."
                 else:
+                    _fix_ref = (
+                        f"#{issue_number}" if has_issue else f"PR #{pr_number}"
+                    )
                     push_ok, push_message = _commit_and_push_if_changed(
                         worktree_path,
                         pr_metadata,
-                        f"fix: apply checkup fixes for #{issue_number}",
+                        f"fix: apply checkup fixes for {_fix_ref}",
                     )
                 step_outputs["pr_push"] = push_message
                 context["pr_push_output"] = push_message
@@ -4194,11 +4242,16 @@ def _run_agentic_checkup_orchestrator_inner(
         use_github_state=use_github_state,
     )
     if not _state_cleared:
+        _state_thread2 = (
+            "the issue"
+            if bool((issue_url or "").strip()) and issue_url not in ("null", "None")
+            else "the PR"
+        )
         _clear_warn = (
-            " (warning: could not confirm workflow-state cleanup — a rerun "
-            "may replay the cached completed state; delete the "
-            "PDD_WORKFLOW_STATE comment on the issue manually if a stale "
-            "verdict reappears)"
+            f" (warning: could not confirm workflow-state cleanup — a rerun "
+            f"may replay the cached completed state; delete the "
+            f"PDD_WORKFLOW_STATE comment on {_state_thread2} manually if a stale "
+            f"verdict reappears)"
         )
         if not quiet:
             console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")

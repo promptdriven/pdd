@@ -6475,3 +6475,144 @@ class TestSetupWorktreeStaleBranch:
         assert err is None, f"Expected no error on resume but got: {err!r}"
         assert wt_path is not None
         mock_delete.assert_not_called()
+
+
+# Issue #1292: _step7_passed must drop the issue_aligned gate in no-issue
+# PR mode (review the PR on its own merits), while keeping it for PR+issue.
+# ---------------------------------------------------------------------------
+
+
+class TestStep7PassedMeritReview:
+    """The Step 7 verdict gate under #1292's optional-issue PR mode."""
+
+    MERIT_VERDICT = (
+        '```json\n'
+        '{"success": true, "message": "ok", "issues": [], "changed_files": []}\n'
+        '```'
+    )
+    CRITICAL_VERDICT = (
+        '```json\n'
+        '{"success": true, "message": "bug", '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "null deref", "module": "x.py"}]}\n'
+        '```'
+    )
+
+    def test_issue_aligned_required_when_issue_present(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.MERIT_VERDICT, pr_mode=True, has_issue=True
+        )
+        assert not passed
+        assert "issue_aligned" in reason
+
+    def test_issue_aligned_dropped_when_no_issue(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.MERIT_VERDICT, pr_mode=True, has_issue=False
+        )
+        assert passed, reason
+
+    def test_merit_review_still_gates_unfixed_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.CRITICAL_VERDICT, pr_mode=True, has_issue=False
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_has_issue_defaults_true_preserves_legacy_behavior(self):
+        """Omitting has_issue must behave like today's PR+issue gate."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, _ = _step7_passed(self.MERIT_VERDICT, pr_mode=True)
+        assert not passed  # issue_aligned still required by default
+
+
+class TestNoIssuePrModePosting:
+    """#1292: in no-issue PR mode the PR is the only comment thread.
+
+    Per-step progress posts (`post_step_comment_once`) and the duplicate
+    issue-thread final report (`post_step_comment`) are suppressed; exactly
+    one canonical report lands on the PR via `post_pr_comment`. With a real
+    issue, the legacy dual-thread behaviour is preserved.
+    """
+
+    def _run(self, tmp_path, *, has_issue: bool):
+        from unittest.mock import patch as _patch
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")
+            if step_num == 7:
+                return (
+                    True,
+                    "<step_report>ok</step_report>\n" + ALL_ISSUES_FIXED,
+                    0.1,
+                    "model",
+                )
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+        )
+        args = {**_PR_ARGS_1212, "use_github_state": True, "cwd": tmp_path}
+        if not has_issue:
+            # run_agentic_checkup aliases the thread to the PR and blanks the
+            # issue context when there is no source issue.
+            args.update(
+                issue_url="",
+                issue_content="",
+                issue_title="",
+                issue_number=args["pr_number"],
+            )
+
+        per_step: List = []
+        final_issue: List = []
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], \
+             patches[10], \
+             _patch(
+                 "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+                 side_effect=lambda *a, **k: per_step.append(k.get("step_num")) or True,
+             ), \
+             _patch(
+                 "pdd.agentic_checkup_orchestrator.post_step_comment",
+                 side_effect=lambda *a, **k: final_issue.append(1) or True,
+             ), \
+             _patch(
+                 "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                 return_value=True,
+             ) as ppc:
+            run_agentic_checkup_orchestrator(**args)
+        return per_step, final_issue, ppc
+
+    def test_no_issue_suppresses_progress_and_dup_final_report(self, tmp_path):
+        per_step, final_issue, ppc = self._run(tmp_path, has_issue=False)
+        # Exactly one canonical report, posted to the PR thread.
+        assert ppc.call_count == 1, f"expected 1 PR comment, got {ppc.call_count}"
+        # The issue-thread final report is skipped (it would duplicate the PR post).
+        assert final_issue == [], (
+            f"issue-thread final report must be skipped with no issue, "
+            f"saw {len(final_issue)}"
+        )
+        # No per-step progress comments — they would flood the PR thread.
+        assert per_step == [], (
+            f"per-step progress posts must be suppressed with no issue, saw {per_step}"
+        )
+
+    def test_with_issue_keeps_progress_and_dual_final_report(self, tmp_path):
+        per_step, final_issue, ppc = self._run(tmp_path, has_issue=True)
+        # Behaviour unchanged: per-step progress posts to the issue thread...
+        assert per_step, "with a source issue, per-step progress comments must still post"
+        # ...and the final report posts to BOTH the PR and the issue thread.
+        assert ppc.call_count == 1
+        assert final_issue, "with a source issue, the issue-thread final report must still post"

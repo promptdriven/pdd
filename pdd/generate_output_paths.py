@@ -29,7 +29,7 @@ COMMAND_OUTPUT_KEYS: Dict[str, List[str]] = {
     'crash': ['output', 'output_program'],
     'trace': ['output'],
     'bug': ['output'],
-    'auto-deps': ['output'],
+    'auto-deps': ['output', 'csv'],
     'verify': ['output_results', 'output_code', 'output_program'],
     'sync': ['generate_output_path', 'test_output_path', 'example_output_path'],
 }
@@ -63,7 +63,10 @@ DEFAULT_FILENAMES: Dict[str, Dict[str, str]] = {
     },
     'trace': {'output': '{basename}_trace_results.log'},
     'bug': {'output': 'test_{basename}_bug{ext}'},
-    'auto-deps': {'output': '{basename}_with_deps.prompt'},
+    'auto-deps': {
+        'output': '{basename}_with_deps.prompt',
+        'csv': 'project_dependencies.csv',
+    },
     'verify': {
         'output_results': '{basename}_verify_results.log',
         'output_code': '{basename}_verified{ext}',
@@ -101,7 +104,10 @@ ENV_VAR_MAP: Dict[str, Dict[str, str]] = {
     },
     'trace': {'output': 'PDD_TRACE_OUTPUT_PATH'},
     'bug': {'output': 'PDD_BUG_OUTPUT_PATH'},
-    'auto-deps': {'output': 'PDD_AUTO_DEPS_OUTPUT_PATH'},
+    'auto-deps': {
+        'output': 'PDD_AUTO_DEPS_OUTPUT_PATH',
+        'csv': 'PDD_AUTO_DEPS_CSV_PATH',
+    },
     'verify': {
         'output_results': 'PDD_VERIFY_RESULTS_OUTPUT_PATH',
         'output_code': 'PDD_VERIFY_CODE_OUTPUT_PATH',
@@ -145,7 +151,10 @@ CONTEXT_CONFIG_MAP: Dict[str, Dict[str, str]] = {
     },
     'trace': {'output': 'generate_output_path'},
     'bug': {'output': 'test_output_path'},
-    'auto-deps': {'output': 'generate_output_path'},
+    'auto-deps': {
+        'output': 'generate_output_path',
+        'csv': 'auto_deps_csv_path',
+    },
     'verify': {
         'output_results': 'generate_output_path',
         'output_code': 'generate_output_path',

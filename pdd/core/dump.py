@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import click
 import requests
+from pdd.path_resolution import get_default_resolver
 
 try:
     from .. import __version__
@@ -19,6 +20,8 @@ except ImportError:
     # Fallback for environments where `pdd` resolves as a namespace package.
     __version__ = "unknown"
 from .errors import console, get_core_dump_errors
+
+_PATH_RESOLUTION_ERRORS = (OSError, RuntimeError, ValueError)
 
 
 def _extract_sync_steps_from_file_contents(file_contents: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -100,6 +103,67 @@ def garbage_collect_core_dumps(keep: int = 10) -> int:
             pass
 
     return deleted
+
+
+def _detect_project_root_from_cwd_for_model_csv(max_levels: int = 5) -> Path:
+    """Search upward from CWD using the model CSV project-root markers."""
+    try:
+        current_dir = Path.cwd().resolve()
+        for _ in range(max_levels):
+            if (
+                (current_dir / ".git").exists()
+                or (current_dir / "pyproject.toml").exists()
+                or (current_dir / "data").is_dir()
+                or (current_dir / ".env").exists()
+            ):
+                return current_dir
+            parent = current_dir.parent
+            if parent == current_dir:
+                break
+            current_dir = parent
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+    return Path.cwd().resolve()
+
+
+def _resolve_active_llm_model_csv() -> Optional[Path]:
+    """Return the active llm_model.csv path using llm_invoke's precedence."""
+    try:
+        user_model_csv_path = Path.home() / ".pdd" / "llm_model.csv"
+        if user_model_csv_path.is_file():
+            return user_model_csv_path.resolve()
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+
+    try:
+        resolver = get_default_resolver()
+        project_root = resolver.resolve_project_root()
+        project_root_from_env = (
+            resolver.pdd_path_env is not None
+            and project_root == resolver.pdd_path_env
+        )
+        project_csv_from_env = project_root / ".pdd" / "llm_model.csv"
+        if project_root_from_env and project_csv_from_env.is_file():
+            return project_csv_from_env.resolve()
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+
+    try:
+        project_root_from_cwd = _detect_project_root_from_cwd_for_model_csv()
+        project_csv_from_cwd = project_root_from_cwd / ".pdd" / "llm_model.csv"
+        if project_csv_from_cwd.is_file():
+            return project_csv_from_cwd.resolve()
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+
+    try:
+        package_csv = Path(__file__).resolve().parents[1] / "data" / "llm_model.csv"
+        if package_csv.is_file():
+            return package_csv.resolve()
+    except (IndexError, OSError, RuntimeError, ValueError):
+        pass
+
+    return None
 
 
 def _write_core_dump(
@@ -189,6 +253,10 @@ def _write_core_dump(
         for config_file in config_files:
             if config_file.exists() and config_file.is_file():
                 core_dump_files.add(str(config_file.resolve()))
+
+        llm_model_csv = _resolve_active_llm_model_csv()
+        if llm_model_csv is not None:
+            core_dump_files.add(str(llm_model_csv))
 
         for file_path in core_dump_files:
             try:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -38,33 +38,45 @@ def _call_litellm_with_timeout(
     **kwargs: Any,
 ) -> Any:
     """
-    Run a litellm call in a worker thread with a hard timeout.
+    Run a litellm call in a daemon worker thread with a hard timeout.
 
     Raises TimeoutError if the call doesn't finish in time, so callers can
-    treat hangs the same way they treat exceptions. The orphaned worker
-    thread is left to clean up on its own (it'll exit when litellm's
-    internal poll loop ends or when the interpreter shuts down).
+    treat hangs the same way they treat exceptions.
+
+    The worker is a *daemon* thread on purpose. litellm's provider-detection
+    can misroute a model into a provider that performs a blocking device-code
+    OAuth poll (e.g. ``chatgpt``/``github_copilot``) which never returns
+    without human interaction. A non-daemon worker — such as the ones spawned
+    by ``ThreadPoolExecutor`` — would keep the interpreter alive at exit
+    (Python's atexit handler joins all pool workers), wedging the whole
+    process. This was observed hanging an otherwise-passing pytest run in CI
+    for ~10 min until a chunk timeout killed it. A daemon thread is abandoned
+    cleanly and dies with the process instead.
     """
     # Resolve the timeout dynamically so tests (and operators) can tune
     # ``_LITELLM_CALL_TIMEOUT_SEC`` at runtime.
     effective_timeout = timeout if timeout is not None else _LITELLM_CALL_TIMEOUT_SEC
-    # Don't use ``with ThreadPoolExecutor``: its __exit__ calls
-    # ``shutdown(wait=True)`` which would block on the orphaned worker
-    # thread, defeating the timeout. Instead shutdown(wait=False) and let
-    # the worker exit on its own when litellm's poll loop completes.
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-probe")
-    try:
-        future = executor.submit(fn, *args, **kwargs)
+    result_holder: list[Any] = [None]
+    error_holder: list[Any] = [None]
+
+    def _run() -> None:
         try:
-            return future.result(timeout=effective_timeout)
-        except FuturesTimeoutError as exc:
-            future.cancel()
-            raise TimeoutError(
-                f"litellm call {getattr(fn, '__qualname__', repr(fn))} timed out"
-                f" after {effective_timeout:.1f}s (likely provider-detection hang)"
-            ) from exc
-    finally:
-        executor.shutdown(wait=False)
+            result_holder[0] = fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - re-raised on the calling thread
+            error_holder[0] = exc
+
+    worker = threading.Thread(target=_run, name="litellm-probe", daemon=True)
+    worker.start()
+    worker.join(timeout=effective_timeout)
+
+    if worker.is_alive():
+        raise TimeoutError(
+            f"litellm call {getattr(fn, '__qualname__', repr(fn))} timed out"
+            f" after {effective_timeout:.1f}s (likely provider-detection hang)"
+        )
+    if error_holder[0] is not None:
+        raise error_holder[0]
+    return result_holder[0]
 
 
 @dataclass

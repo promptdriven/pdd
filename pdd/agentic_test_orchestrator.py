@@ -429,7 +429,6 @@ def run_agentic_test_orchestrator(
                 body=(
                     "## Step 0/18: Workflow Startup\n\n"
                     "- **Mode**: Clean restart\n"
-                    f"- **Model**: {model_used}\n"
                     "- **Command**: pdd test"
                 ),
                 posted_steps=step_comments_set,
