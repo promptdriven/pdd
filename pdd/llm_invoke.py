@@ -2597,6 +2597,13 @@ def _raise_if_provider_challenge_error(
     _raise_if_provider_challenge_response(str(error), model_name, item_index)
 
 
+def _is_provider_challenge_validation_error(error: BaseException) -> bool:
+    """Return True when a fallback-triggering validation error is a provider challenge."""
+    return isinstance(error, SchemaValidationError) and _is_provider_challenge_response(
+        getattr(error, "raw_response", None)
+    )
+
+
 def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     """Rows backed by the ChatGPT/Codex subscription provider."""
     return model_df[
@@ -4015,11 +4022,31 @@ def llm_invoke(
         pass
 
     attempt_counter = 0
+    skip_chatgpt_family = False
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+        is_chatgpt_candidate = str(model_name_litellm).lower().startswith("chatgpt/")
+
+        if skip_chatgpt_family and is_chatgpt_candidate:
+            _record_attempt(str(model_name_litellm))
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.model_skipped",
+                model=str(model_name_litellm),
+                provider=str(provider),
+                api_key_env_names=_api_key_field_names(api_key_name),
+                reason="chatgpt_family_provider_challenge",
+            )
+            if verbose:
+                logger.info(
+                    "[SKIP] Skipping %s because another chatgpt/* model returned "
+                    "a provider challenge in this call.",
+                    model_name_litellm,
+                )
+            continue
 
         # Record this candidate before any pre-call validation/skip logic so
         # models skipped mid-call (context window pre-check, missing api_key,
@@ -4572,6 +4599,7 @@ def llm_invoke(
                                     final_result = f"ERROR: Failed to parse structured output from Responses API. Raw: {repr(result_text)[:200]}"
                         else:
                             final_result = result_text
+                        _raise_if_provider_challenge_response(final_result, model_name_litellm, 0)
 
                         if verbose:
                             logger.info(f"[RESULT] Model Used: {model_name_litellm}")
@@ -5234,6 +5262,7 @@ def llm_invoke(
 
                 final_result = results if use_batch_mode else results[0]
                 final_thinking = thinking_outputs if use_batch_mode else thinking_outputs[0]
+                _raise_if_provider_challenge_response(final_result, model_name_litellm, 0)
 
                 # --- Verbose Output for Success ---
                 if verbose:
@@ -5322,6 +5351,8 @@ def llm_invoke(
             except SchemaValidationError as e:
                 # Issue #168: Schema validation failures now trigger model fallback
                 last_exception = e
+                if is_chatgpt_candidate and _is_provider_challenge_validation_error(e):
+                    skip_chatgpt_family = True
                 _emit_llm_attribution(
                     attribution_context,
                     "llm_invoke.schema_validation_error",
