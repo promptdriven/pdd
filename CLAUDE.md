@@ -13,6 +13,9 @@ This repository contains the public PDD CLI. Keep changes focused on the open-so
 - Regression tests: `make regression`
 - Lint check: `make lint` or `pylint pdd/<module>.py`
 
+## Model Selection
+- `llm_model.csv` has an `interactive_only` column. Rows marked `True` (e.g. `github_copilot/*`, `chatgpt/*`, `lm_studio/*`, `ollama/*`) require interactive human auth (device-flow OAuth or a ChatGPT subscription / `codex login` token) or a running local server and hang in non-interactive contexts (Cloud Run, CI, library import). `_select_model_candidates` skips them in the automatic candidate cascade by default; set `PDD_ALLOW_INTERACTIVE=1` from a terminal to opt in. An explicitly configured `PDD_MODEL_DEFAULT` is always honored.
+
 ## Code Style
 - Python 3.12+, four-space indentation, and PEP 8 conventions.
 - Use type hints for public functions.

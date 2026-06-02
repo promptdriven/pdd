@@ -363,7 +363,7 @@ def generate_script_with_claude(
     )
     prompt = build_claude_prompt(context)
     completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout)
-    script = strip_markdown_fence(completed.stdout.strip())
+    script = normalize_release_video_script(strip_markdown_fence(completed.stdout.strip()))
     if len(script) < 200:
         raise ReleaseVideoError("Claude Code produced an unexpectedly short release video script.")
     return script.rstrip() + "\n"
@@ -381,6 +381,12 @@ Requirements:
 - Lead with the most user-visible change.
 - Mention the release tag.
 - Use plain Markdown.
+- Structure the script with 3-5 timestamped level-2 Markdown section headings,
+  exactly like "## Release hook (0:00 - 0:12)"; the automated video pipeline
+  parses those "## " headings.
+- Use the PDS script format: every spoken narration block starts with
+  "NARRATOR:" on its own line, and every non-spoken visual cue starts with
+  "VISUAL:" on its own line.
 - Include a title, a short hook, narration beats, and visual direction cues.
 - Keep it suitable for an automated video pipeline: no tables, no footnotes, no citations, no code fences.
 - Output only the script.
@@ -500,6 +506,179 @@ def ensure_command_exists(executable: str, label: str) -> None:
 def strip_markdown_fence(text: str) -> str:
     match = re.fullmatch(r"```(?:markdown|md)?\s*(.*?)\s*```", text, flags=re.DOTALL)
     return match.group(1).strip() if match else text
+
+
+def normalize_release_video_script(script: str) -> str:
+    script = ensure_release_video_sections(script)
+    script = ensure_timestamped_headings(script)
+    return ensure_narrator_blocks(script)
+
+
+def ensure_release_video_sections(script: str) -> str:
+    """Ensure PDS can split the script into scene sections."""
+    script = script.strip()
+    if re.search(r"(?m)^##\s+\S", script):
+        return script
+
+    lines = script.splitlines()
+    normalized: list[str] = []
+    inserted = 0
+    used_headings: set[str] = set()
+    visual_cue_re = re.compile(
+        r"^\s*(?:\*\*)?\[(?:Visual|Scene|Shot|On[- ]screen):\s*(?P<cue>[^\]]+)\](?:\*\*)?\s*$",
+        flags=re.IGNORECASE,
+    )
+
+    for line in lines:
+        match = visual_cue_re.match(line)
+        if match:
+            heading = unique_heading(heading_from_visual_cue(match.group("cue")), used_headings)
+            if normalized and normalized[-1].strip():
+                normalized.append("")
+            normalized.extend([f"## {heading}", "", line])
+            inserted += 1
+        else:
+            normalized.append(line)
+
+    if inserted:
+        return "\n".join(normalized).strip()
+
+    heading = "Release Overview"
+    if lines and re.match(r"^#\s+\S", lines[0]):
+        return "\n".join([lines[0], "", f"## {heading}", *lines[1:]]).strip()
+    return f"## {heading}\n\n{script}"
+
+
+def ensure_timestamped_headings(script: str) -> str:
+    lines = script.splitlines()
+    heading_indexes = [
+        index for index, line in enumerate(lines) if re.match(r"^##\s+\S", line)
+    ]
+    if not heading_indexes:
+        return script
+
+    section_count = len(heading_indexes)
+    total_seconds = max(60, min(90, section_count * 15))
+    for section_index, line_index in enumerate(heading_indexes):
+        heading_text = lines[line_index].removeprefix("##").strip()
+        if has_heading_timestamp(heading_text):
+            continue
+        start = round(section_index * total_seconds / section_count)
+        end = round((section_index + 1) * total_seconds / section_count)
+        clean_heading = strip_heading_timestamp(heading_text)
+        lines[line_index] = f"## {clean_heading} ({format_timestamp(start)} - {format_timestamp(end)})"
+    return "\n".join(lines).strip()
+
+
+def has_heading_timestamp(heading_text: str) -> bool:
+    return bool(re.search(r"\(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\)\s*$", heading_text))
+
+
+def strip_heading_timestamp(heading_text: str) -> str:
+    return re.sub(r"\s*\(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\)\s*$", "", heading_text).strip()
+
+
+def format_timestamp(total_seconds: int) -> str:
+    minutes, seconds = divmod(max(0, total_seconds), 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def ensure_narrator_blocks(script: str) -> str:
+    lines = script.splitlines()
+    has_narrator = any(is_narrator_label(line) for line in lines)
+    normalized: list[str] = []
+    in_narrator = False
+
+    for line in lines:
+        stripped = line.strip()
+        visual = visual_cue_text(line)
+        if is_narrator_label(line):
+            append_spaced(normalized, "NARRATOR:")
+            in_narrator = True
+        elif visual:
+            append_spaced(normalized, f"VISUAL: {visual}")
+            in_narrator = False
+        elif not stripped:
+            normalized.append("")
+        elif re.match(r"^#{1,2}\s+\S", stripped):
+            normalized.append(stripped)
+            in_narrator = False
+        elif has_narrator:
+            normalized.append(line)
+        else:
+            if not in_narrator:
+                append_spaced(normalized, "NARRATOR:")
+                in_narrator = True
+            normalized.append(line)
+
+    return trim_repeated_blank_lines(normalized)
+
+
+def is_narrator_label(line: str) -> bool:
+    return bool(re.match(r"^\s*(?:\*\*)?NARRATOR:(?:\*\*)?\s*$", line, flags=re.IGNORECASE))
+
+
+def visual_cue_text(line: str) -> str | None:
+    stripped = line.strip()
+    label_match = re.match(
+        r"^(?:\*\*)?(?:VISUAL|Visual direction|Scene|Shot|On[- ]screen):\s*(?P<cue>.+?)(?:\*\*)?$",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if label_match:
+        return clean_visual_cue(label_match.group("cue"))
+
+    bracket_match = re.match(
+        r"^(?:\*\*)?\[(?:(?:VISUAL|Scene|Shot|On[- ]screen):\s*)?(?P<cue>[^\]]+)\](?:\*\*)?$",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if bracket_match:
+        cue = clean_visual_cue(bracket_match.group("cue"))
+        if re.match(r"^(show|cut to|display|zoom|pan|overlay|terminal|github|makefile)\b", cue, flags=re.IGNORECASE):
+            return cue
+    return None
+
+
+def clean_visual_cue(cue: str) -> str:
+    return cue.strip().strip("*").strip()
+
+
+def append_spaced(lines: list[str], value: str) -> None:
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(value)
+
+
+def trim_repeated_blank_lines(lines: list[str]) -> str:
+    normalized: list[str] = []
+    previous_blank = False
+    for line in lines:
+        blank = not line.strip()
+        if blank and previous_blank:
+            continue
+        normalized.append(line.rstrip())
+        previous_blank = blank
+    return "\n".join(normalized).strip()
+
+
+def heading_from_visual_cue(cue: str) -> str:
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cue)
+    words = re.findall(r"[A-Za-z0-9]+", cleaned)
+    heading = " ".join(words[:8]).title()
+    return heading or "Release Highlight"
+
+
+def unique_heading(heading: str, used_headings: set[str]) -> str:
+    candidate = heading
+    suffix = 2
+    while candidate.lower() in used_headings:
+        candidate = f"{heading} {suffix}"
+        suffix += 1
+    used_headings.add(candidate.lower())
+    return candidate
 
 
 def truncate(text: str, max_chars: int) -> str:

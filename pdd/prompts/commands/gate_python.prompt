@@ -1,0 +1,18 @@
+% Write `pdd/commands/gate.py`, Click CLI for ``pdd checkup gate``.
+
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>gate_python.prompt</pdd-dependency>
+
+<pdd-reason>Exposes evidence policy enforcement under the checkup command group (no top-level ``pdd gate``).</pdd-reason>
+
+% Public API
+- `gate_cmd` Click command: `pdd checkup gate [TARGET] [--policy PATH] [--stories-dir PATH] [--tests-dir PATH] [--json]`
+
+% Behavior
+- `TARGET` omitted: evaluate all `.pdd/evidence/devunits/*.latest.json` under the project root.
+- `TARGET` basename: evaluate one dev unit's latest manifest.
+- `TARGET` path ending in `.latest.json`: evaluate that manifest file.
+- Exit 0 on pass, 1 on failure; `--json` emits structured `GateResult`.
+
+% Code output
+- Code: `pdd/commands/gate.py`

@@ -193,13 +193,20 @@ def example_example_command():
     Options:
         --output PATH: Where to save the generated example code
         --format FORMAT: Output format (default: code). Valid values:
-            - code: Honors any non-empty suffix on --output verbatim; synthesizes the language
-                    extension from BUILTIN_EXT_MAP only when --output has no suffix or is omitted.
+            - code: Honors any non-empty suffix on --output verbatim; when --output has no
+                    suffix (or is omitted) the language extension is synthesized from the
+                    canonical language_format.csv via get_extension (the same table
+                    construct_paths uses), falling back to BUILTIN_EXT_MAP only when the CSV
+                    is unavailable. An empty CSV extension (e.g. Makefile) leaves a bare name
+                    unchanged.
             - md:   Forces a lowercase .md suffix on the resolved output path, replacing any
                     other suffix (including .MD) on --output.
-            When the wrapper rewrites an explicit --output (bare name under 'code', or non-.md
-            under 'md') and the rewritten file already exists, the user is prompted to confirm
-            the overwrite unless --force is set.
+            When the wrapper overrides an extension the user explicitly supplied (e.g. --format
+            md turning --output foo.yml into foo.md), a warning naming BOTH the requested and
+            the resolved path is emitted even when no overwrite collision exists (respecting
+            --quiet). Completing a bare --output name with the language extension is the
+            documented default and stays silent. If the rewritten file already exists, the user
+            is also prompted to confirm the overwrite unless --force is set.
     
     Returns:
         Tuple[str, float, str]: (example_code, total_cost_in_dollars, model_name)

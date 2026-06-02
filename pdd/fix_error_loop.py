@@ -441,6 +441,9 @@ def fix_error_loop(
         target_test = focused_inputs.focused_tests if focused_inputs else unit_test_content
         classification = failure_classification_hint(classify_failure(output_log)) if failure_aware_retries else None
         effective_protect_tests = protect_tests or bool(focused_inputs)
+        # Track whether *this* attempt's fix came from the cloud path (vs a
+        # local fallback) so the success log line can prove the cloud path.
+        attempt_used_cloud = False
         try:
             if use_cloud:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
@@ -457,6 +460,7 @@ def fix_error_loop(
                     effective_protect_tests,
                     classification,
                 )
+                attempt_used_cloud = True
             else:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                     target_test, target_code, prompt, output_log, error_log_file,
@@ -525,6 +529,10 @@ def fix_error_loop(
         with open(error_log_file, "a", encoding="utf-8") as log_file:
             log_file.write(format_log_for_output(attempt, output_log, analysis, verification_output + "\n" + new_log, model_name))
         if new_fails == 0 and new_errs == 0:
+            if attempt_used_cloud:
+                console.print(
+                    f"[cyan]Cloud fix completed. Model: {model_name}, Cost: ${total_cost:.6f}[/cyan]"
+                )
             return True, next_test, next_code, total_attempts, total_cost, model_name
         prev_total = int(current_state["fails"]) + int(current_state["errs"])
         current_state = {"fails": new_fails, "errs": new_errs, "warns": new_warns, "code": next_code, "test": next_test, "iteration": attempt}

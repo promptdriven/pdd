@@ -1,0 +1,11 @@
+{
+  "pdd_version": "0.0.257",
+  "timestamp": "2026-06-02T05:32:50.786435+00:00",
+  "command": "example",
+  "prompt_hash": null,
+  "code_hash": null,
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": null
+}

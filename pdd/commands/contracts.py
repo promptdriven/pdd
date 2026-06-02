@@ -8,6 +8,8 @@ from typing import Optional
 import click
 
 from ..contract_check import ContractResult, check_directory, check_prompt, check_stories
+from ..contract_ir import parse_prompt_contracts
+from ..waiver_policy import summarize_waivers
 
 
 def _exit_code(results: list[ContractResult], *, strict: bool) -> int:
@@ -56,14 +58,36 @@ def contracts_check(
         prompts_dir = target_path if target_path.is_dir() else target_path.parent
         results.extend(check_stories(Path(stories_dir), prompts_dir, strict=strict))
 
+    waiver_rows_by_path: dict[str, list[dict[str, object]]] = {}
+    for result in results:
+        if result.path.suffix != ".prompt":
+            continue
+        ir = parse_prompt_contracts(result.path)
+        waiver_rows_by_path[str(result.path)] = summarize_waivers(ir.waivers, ir.known_rule_ids)
+
     if as_json:
-        click.echo(json.dumps([result.as_dict() for result in results], indent=2))
+        payload: list[dict[str, object]] = []
+        for result in results:
+            row = result.as_dict()
+            row["waivers"] = waiver_rows_by_path.get(str(result.path), [])
+            payload.append(row)
+        click.echo(json.dumps(payload, indent=2))
     else:
         for result in results:
             click.echo(
                 f"{result.path}: {result.warn_count} warning(s), "
                 f"{result.error_count} error(s)"
             )
+            waiver_rows = waiver_rows_by_path.get(str(result.path), [])
+            if waiver_rows:
+                click.echo("  Waivers:")
+                for waiver in waiver_rows:
+                    expires = waiver.get("expires") or "-"
+                    click.echo(
+                        "    "
+                        f"{waiver.get('id')}: rule={waiver.get('rule_id')} "
+                        f"status={waiver.get('status')} expires={expires}"
+                    )
             for issue in result.issues:
                 click.echo(f"  {issue.level.upper()} {issue.code}: {issue.message}")
 

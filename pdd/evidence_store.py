@@ -9,18 +9,22 @@ from typing import Any, Optional
 
 
 def sha256_file(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file's contents."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def load_json(path: Path) -> dict[str, Any]:
+    """Load a UTF-8 JSON object from ``path``."""
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def devunits_dir(project_root: Path) -> Path:
+    """Return ``.pdd/evidence/devunits`` for a project root."""
     return project_root / ".pdd" / "evidence" / "devunits"
 
 
 def list_latest_manifests(project_root: Path) -> list[Path]:
+    """List sorted ``*.latest.json`` paths under the dev-unit evidence directory."""
     directory = devunits_dir(project_root)
     if not directory.is_dir():
         return []
@@ -28,6 +32,7 @@ def list_latest_manifests(project_root: Path) -> list[Path]:
 
 
 def basename_from_manifest_path(path: Path) -> str:
+    """Derive a dev-unit basename from a ``*.latest.json`` filename."""
     name = path.name
     if name.endswith(".latest.json"):
         return name[: -len(".latest.json")]
@@ -39,6 +44,7 @@ def resolve_prompt_path(
     basename: str,
     manifest: Optional[dict[str, Any]] = None,
 ) -> Optional[Path]:
+    """Resolve the prompt file for a dev unit from manifest metadata or ``prompts/``."""
     if manifest:
         routine_prompt = (manifest.get("prompt") or {}).get("path")
         if routine_prompt:
@@ -67,6 +73,8 @@ def resolve_prompt_path(
 
 @dataclass
 class OutputFreshness:
+    """Hash comparison for one manifest output path."""
+
     path: str
     expected_sha256: str
     current_sha256: str
@@ -74,7 +82,9 @@ class OutputFreshness:
 
 
 @dataclass
-class ManifestView:
+class ManifestView:  # pylint: disable=too-many-instance-attributes
+    """Normalized view of a dev-unit or rule evidence manifest."""
+
     path: Path
     basename: str
     schema: str
@@ -89,6 +99,7 @@ class ManifestView:
 
     @classmethod
     def from_file(cls, path: Path, project_root: Path) -> ManifestView:
+        """Build a view from an on-disk manifest JSON file."""
         data = load_json(path)
         basename = basename_from_manifest_path(path)
         schema = str(data.get("schema") or data.get("schema_version") or "unknown")
@@ -120,6 +131,7 @@ def output_freshness(
     manifest: ManifestView,
     project_root: Path,
 ) -> list[OutputFreshness]:
+    """Compare manifest output hashes to files on disk under ``project_root``."""
     results: list[OutputFreshness] = []
     for record in manifest.outputs:
         rel = record.get("path")
@@ -151,10 +163,24 @@ def output_freshness(
     return results
 
 
-def prompt_freshness(manifest: ManifestView, project_root: Path) -> bool:
-    if not manifest.rule_manifest or manifest.prompt_path is None:
+def prompt_freshness(manifest: ManifestView) -> bool:
+    """Return whether the prompt file hash still matches the manifest record."""
+    if manifest.prompt_path is None:
         return True
-    expected = str(manifest.raw.get("prompt_sha256") or "")
+    expected = str(
+        manifest.raw.get("prompt_sha256")
+        or (manifest.raw.get("prompt") or {}).get("sha256")
+        or ""
+    )
     if not expected:
         return True
     return sha256_file(manifest.prompt_path) == expected
+
+
+def prompt_changed_since_manifest(manifest: ManifestView) -> bool:
+    """Return True when the prompt file is newer than its evidence manifest."""
+    if manifest.prompt_path is None:
+        return False
+    if not manifest.prompt_path.is_file() or not manifest.path.is_file():
+        return False
+    return manifest.prompt_path.stat().st_mtime > manifest.path.stat().st_mtime

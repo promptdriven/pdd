@@ -134,6 +134,11 @@ complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suf
 complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
 
 # checkup command
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and not __fish_seen_subcommand_from gate" -a gate -d "Enforce dev-unit evidence policy"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from gate" -l policy -r -d "Policy YAML file"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from gate" -l stories-dir -r -d "User stories directory for contract coverage"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from gate" -l tests-dir -r -d "Tests directory for contract coverage"
+complete -c pdd -n "__fish_seen_subcommand_from checkup; and __fish_seen_subcommand_from gate" -l json -d "Emit machine-readable JSON"
 complete -c pdd -n "__fish_seen_subcommand_from checkup; and not __fish_seen_subcommand_from simplify" -a simplify -d "Sample simplify candidates"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l validate-arch-includes -d "Validate architecture includes"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l project-root -r -d "Project root directory"

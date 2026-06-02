@@ -11,10 +11,11 @@ Validation: Lenient - missing tags are OK, only update fields that have tags pre
 """
 
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from lxml import etree
 
@@ -915,12 +916,292 @@ def _merge_interface_signatures(
     merged_interface['module']['functions'] = merged_functions
     return merged_interface, warnings
 
+
+_CRITICAL_HEADER_RE = re.compile(r"\bCRITICAL\b", re.IGNORECASE)
+
+
+def _rule_header_is_critical(header_line: str) -> bool:
+    """True when the rule title line marks the rule as critical (header only)."""
+    return bool(_CRITICAL_HEADER_RE.search(header_line))
+
+
+def _manifest_rule_entry(manifest_rules: Dict[str, Any], rule_id: str) -> Dict[str, Any]:
+    """Look up a manifest contracts.rules entry with case-insensitive rule IDs."""
+    rid = rule_id.upper()
+    if rid in manifest_rules:
+        entry = manifest_rules[rid]
+        return entry if isinstance(entry, dict) else {}
+    for key, value in manifest_rules.items():
+        if str(key).upper() == rid and isinstance(value, dict):
+            return value
+    return {}
+
+
+def _aggregate_coverage_status(coverage_summary: Dict[str, int], *, has_rules: bool) -> str:
+    """Map build_coverage summary counts to architecture contract_summary coverage_status."""
+    if not has_rules:
+        return "none"
+    total = coverage_summary.get("total", 0)
+    if total == 0:
+        return "none"
+    unchecked = coverage_summary.get("unchecked", 0)
+    failed = coverage_summary.get("failed", 0)
+    checked = coverage_summary.get("checked", 0)
+    waived = coverage_summary.get("waived", 0)
+    story_only = coverage_summary.get("story_only", 0)
+    test_only = coverage_summary.get("test_only", 0)
+
+    if failed > 0:
+        return "partial"
+    if unchecked == 0:
+        if checked == total:
+            return "full"
+        if checked + waived == total:
+            return "full"
+        if checked + story_only + waived == total and test_only == 0:
+            return "story-only"
+        return "partial"
+    if checked or story_only or test_only or waived:
+        return "partial"
+    return "none"
+
+
+def _story_paths_from_coverage(
+    coverage_rules: List[Any],
+    stories_dir: Path,
+    project_root: Path,
+) -> List[str]:
+    """Collect unique story paths relative to project_root from rule coverage."""
+    try:
+        stories_prefix = stories_dir.relative_to(project_root).as_posix()
+    except ValueError:
+        stories_prefix = stories_dir.name or "user_stories"
+
+    linked: set[str] = set()
+    for rule_cov in coverage_rules:
+        for story_name in rule_cov.stories:
+            if "/" in story_name:
+                linked.add(story_name)
+            else:
+                linked.add(f"{stories_prefix}/{story_name}")
+    return sorted(linked)
+
+
+def _latest_evidence_manifest_path(project_root: Path, prompt_path: Path) -> Optional[Path]:
+    """Resolve ``.pdd/evidence/devunits/<slug>.latest.json`` for a prompt module."""
+    from .evidence_manifest import devunit_slug_for_prompt
+    from .evidence_store import devunits_dir
+
+    slug = devunit_slug_for_prompt(prompt_path)
+    if not slug:
+        return None
+    latest = devunits_dir(project_root) / f"{slug}.latest.json"
+    return latest if latest.is_file() else None
+
+
+def _prompt_file_sha256(prompt_path: Path, *, prompt_text: Optional[str] = None) -> str:
+    if prompt_text is not None:
+        return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+
+
+def _sync_module_result_row(filename: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize per-module sync output for CLI and API consumers."""
+    return {
+        "filename": filename,
+        "success": result["success"],
+        "updated": result["updated"],
+        "changes": result["changes"],
+        "error": result.get("error"),
+        "warnings": result.get("warnings", []),
+        "contract_summary": result.get("contract_summary"),
+    }
+
+
+def _extract_contract_summary(
+    prompt_path: Path,
+    project_root: Path,
+    *,
+    prompt_text: Optional[str] = None,
+    stories_dir: Optional[Path] = None,
+    tests_dir: Optional[Path] = None,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Extract contract metadata and evidence status for one prompt module.
+
+    Returns (summary_dict, warning_messages). Uses build_coverage for rule status
+    so architecture.json stays aligned with pdd coverage and evidence manifests.
+    """
+    from .contract_ir import parse_prompt_contracts, parse_prompt_contracts_text
+    from .coverage_contracts import (
+        STATUS_UNCHECKED,
+        CoverageResult,
+        build_coverage,
+    )
+
+    empty_summary: Dict[str, Any] = {
+        "rules": [],
+        "critical": [],
+        "stories": [],
+        "capabilities": [],
+        "coverage_status": "none",
+        "evidence_status": "missing",
+        "waived": [],
+        "unchecked": [],
+    }
+    summary_warnings: List[str] = []
+
+    resolved_stories = stories_dir if stories_dir is not None else project_root / "user_stories"
+    resolved_tests = tests_dir if tests_dir is not None else project_root / "tests"
+    if not resolved_stories.is_dir():
+        resolved_stories = project_root / "user_stories"
+    if not resolved_tests.is_dir():
+        resolved_tests = project_root / "tests"
+
+    try:
+        coverage: CoverageResult = build_coverage(
+            prompt_path,
+            resolved_stories,
+            resolved_tests,
+            prompt_text=prompt_text,
+        )
+        if prompt_text is not None:
+            ir = parse_prompt_contracts_text(prompt_text, prompt_path)
+        else:
+            ir = parse_prompt_contracts(prompt_path)
+
+        if coverage.error:
+            summary_warnings.append(f"contract_summary: {coverage.error}")
+        for read_error in coverage.read_errors:
+            summary_warnings.append(f"contract_summary: {read_error}")
+
+        rules = [rule.rule_id for rule in coverage.rules]
+        ir_by_id = {
+            rule.raw_id.upper(): rule
+            for rule in ir.rules
+            if rule.raw_id != "(unnumbered)"
+        }
+        critical: List[str] = []
+        for rule_cov in coverage.rules:
+            ir_rule = ir_by_id.get(rule_cov.rule_id.upper())
+            if ir_rule and _rule_header_is_critical(ir_rule.line):
+                critical.append(rule_cov.rule_id)
+
+        capabilities: List[str] = []
+        if "capabilities" in ir.sections:
+            capabilities = [
+                line.strip().lstrip("-* ").strip()
+                for line in ir.sections["capabilities"].splitlines()
+                if line.strip().lstrip("-* ").strip()
+            ]
+
+        unchecked = [
+            rule.rule_id
+            for rule in coverage.rules
+            if rule.status == STATUS_UNCHECKED
+        ]
+        waived = sorted(
+            {
+                *(rule.waiver.upper() for rule in coverage.rules if rule.waiver),
+                *(w.raw_id.upper() for w in ir.waivers),
+            }
+        )
+        linked_stories = _story_paths_from_coverage(
+            coverage.rules, resolved_stories, project_root
+        )
+        coverage_status = _aggregate_coverage_status(
+            coverage.summary,
+            has_rules=coverage.has_contract_rules,
+        )
+
+        evidence_status = "missing"
+        latest_evidence_path = _latest_evidence_manifest_path(project_root, prompt_path)
+        if latest_evidence_path is not None:
+            try:
+                manifest = json.loads(latest_evidence_path.read_text(encoding="utf-8"))
+                manifest_prompt_sha = manifest.get("prompt", {}).get("sha256")
+                actual_prompt_sha = _prompt_file_sha256(prompt_path, prompt_text=prompt_text)
+                if manifest_prompt_sha == actual_prompt_sha:
+                    evidence_status = "fresh"
+                else:
+                    evidence_status = "stale"
+
+                manifest_contracts = manifest.get("contracts", {})
+                if manifest_contracts.get("status") == "available" and rules:
+                    manifest_rules = manifest_contracts.get("rules", {})
+                    manifest_unchecked = 0
+                    manifest_checked = 0
+                    for rid in rules:
+                        entry = _manifest_rule_entry(manifest_rules, rid)
+                        status = str(entry.get("status", "")).lower()
+                        if status == STATUS_UNCHECKED:
+                            manifest_unchecked += 1
+                        elif status in ("checked", "waived"):
+                            manifest_checked += 1
+                    if manifest_unchecked == 0 and manifest_checked == len(rules):
+                        coverage_status = "full"
+                    elif manifest_checked > 0:
+                        coverage_status = "partial"
+            except (OSError, json.JSONDecodeError, TypeError) as exc:
+                evidence_status = "error"
+                summary_warnings.append(f"contract_summary: evidence manifest unreadable: {exc}")
+
+        rules_detail = {rule.rule_id: rule.as_dict() for rule in coverage.rules}
+
+        return {
+            "rules": rules,
+            "critical": critical,
+            "stories": linked_stories,
+            "capabilities": capabilities,
+            "coverage_status": coverage_status,
+            "evidence_status": evidence_status,
+            "waived": waived,
+            "unchecked": unchecked,
+            "rules_detail": rules_detail,
+        }, summary_warnings
+    except Exception as exc:  # pylint: disable=broad-except
+        summary = dict(empty_summary)
+        summary["coverage_status"] = "error"
+        summary["evidence_status"] = "error"
+        summary["error"] = str(exc)
+        return summary, [f"contract_summary: {exc}"]
+
+
+def validate_contract_summary(summary: Dict[str, Any]) -> List[str]:
+    """Validate a contract_summary dict against the published JSON Schema.
+
+    Returns a list of human-readable validation errors (empty when valid).
+    """
+    import jsonschema
+
+    schema_path = Path(__file__).resolve().parent / "schemas" / "architecture_contract_summary.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(schema)
+    return sorted({f"{err.json_path}: {err.message}" for err in validator.iter_errors(summary)})
+
+
+def _contract_summary_is_empty(summary: Dict[str, Any]) -> bool:
+    """True when the summary carries no contract, story, or evidence signal."""
+    if summary.get("evidence_status") not in (None, "missing"):
+        return False
+    return (
+        not summary.get("rules")
+        and not summary.get("critical")
+        and not summary.get("stories")
+        and not summary.get("capabilities")
+        and not summary.get("waived")
+        and not summary.get("unchecked")
+        and summary.get("coverage_status") in (None, "none")
+    )
+
+
 def update_architecture_from_prompt(
     prompt_filename: str,
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
     dry_run: bool = False,
     prompt_content_override: Optional[str] = None,
+    stories_dir: Optional[Path] = None,
+    tests_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Update a single architecture.json entry from its prompt file tags.
@@ -947,6 +1228,8 @@ def update_architecture_from_prompt(
         - updated: bool (True if any fields changed)
         - changes: Dict mapping field names to {'old': ..., 'new': ...}
         - error: Optional[str] (error message if success=False)
+        - warnings: List[str] (non-fatal issues, including contract_summary)
+        - contract_summary: Optional[Dict] (latest summary when computed)
 
     Example:
         >>> result = update_architecture_from_prompt("llm_invoke_python.prompt")
@@ -1087,7 +1370,33 @@ def update_architecture_from_prompt(
                 module_entry['dependencies'] = tag_dependencies
                 updated = True
 
-        # 6. Write back to architecture.json (if updated and not dry run)
+        project_root = find_project_root(prompts_dir)
+        new_summary, summary_warnings = _extract_contract_summary(
+            prompt_path,
+            project_root,
+            prompt_text=prompt_content_override,
+            stories_dir=stories_dir,
+            tests_dir=tests_dir,
+        )
+
+        warnings.extend(summary_warnings)
+        if new_summary.get("error"):
+            warnings.append(f"contract_summary: {new_summary['error']}")
+
+        old_summary = module_entry.get("contract_summary")
+        summary_changed = old_summary != new_summary
+        should_persist_summary = (
+            old_summary is not None or not _contract_summary_is_empty(new_summary)
+        )
+        if summary_changed and should_persist_summary:
+            changes["contract_summary"] = {"old": old_summary, "new": new_summary}
+            if _contract_summary_is_empty(new_summary):
+                module_entry.pop("contract_summary", None)
+            else:
+                module_entry["contract_summary"] = new_summary
+            updated = True
+
+        # 7. Write back to architecture.json (if updated and not dry run)
         if updated and not dry_run:
             arch_data[module_index] = module_entry
             raw_on_disk = json.loads(architecture_path.read_text(encoding='utf-8'))
@@ -1110,7 +1419,8 @@ def update_architecture_from_prompt(
             'updated': updated,
             'changes': changes,
             'error': None,
-            'warnings': warnings
+            'warnings': warnings,
+            'contract_summary': module_entry.get("contract_summary"),
         }
 
     except Exception as e:
@@ -1118,7 +1428,9 @@ def update_architecture_from_prompt(
             'success': False,
             'updated': False,
             'changes': {},
-            'error': f'Unexpected error: {str(e)}'
+            'error': f'Unexpected error: {str(e)}',
+            'warnings': [],
+            'contract_summary': None,
         }
 
 
@@ -1174,6 +1486,10 @@ def sync_all_prompts_to_architecture(
 
     arch_data = extract_modules(json.loads(architecture_path.read_text(encoding='utf-8')))
 
+    project_root = find_project_root(prompts_dir)
+    resolved_stories_dir = project_root / "user_stories"
+    resolved_tests_dir = project_root / "tests"
+
     results = []
     errors = []
     updated_count = 0
@@ -1192,7 +1508,9 @@ def sync_all_prompts_to_architecture(
             filename,
             prompts_dir,
             architecture_path,
-            dry_run
+            dry_run,
+            stories_dir=resolved_stories_dir,
+            tests_dir=resolved_tests_dir,
         )
 
         # Track statistics
@@ -1202,13 +1520,7 @@ def sync_all_prompts_to_architecture(
             errors.append(f"{filename}: {result['error']}")
 
         # Store detailed result
-        results.append({
-            'filename': filename,
-            'success': result['success'],
-            'updated': result['updated'],
-            'changes': result['changes'],
-            'error': result.get('error')
-        })
+        results.append(_sync_module_result_row(filename, result))
 
     return {
         'success': len(errors) == 0,
@@ -1428,15 +1740,7 @@ def sync_prompts_to_architecture(
                     architecture_path=resolved_architecture_path,
                     dry_run=dry_run,
                 )
-                results.append(
-                    {
-                        "filename": normalized_filename,
-                        "success": result["success"],
-                        "updated": result["updated"],
-                        "changes": result["changes"],
-                        "error": result.get("error"),
-                    }
-                )
+                results.append(_sync_module_result_row(normalized_filename, result))
                 if result["success"] and result["updated"]:
                     updated_count += 1
                 elif not result["success"]:

@@ -3,6 +3,7 @@
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
 <pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
 <pdd-dependency>commands/contracts_python.prompt</pdd-dependency>
+<pdd-dependency>commands/gate_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
 
@@ -55,6 +56,7 @@
   - For `target == "lint"`, delegate remaining args to `prompt_lint.main(...)`, enabling `pdd checkup lint`.
   - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
   - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
+  - For `target == "gate"`, delegate remaining args to `gate_cmd.main(...)` with `prog_name="pdd checkup gate"`; do not register a top-level `pdd gate` command.
   - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.

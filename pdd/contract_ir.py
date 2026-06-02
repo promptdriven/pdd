@@ -681,19 +681,7 @@ def _build_vocabulary_terms(sections: dict[str, str]) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def parse_prompt_contracts(path: Path) -> PromptContractIR:
-    """Parse one prompt file into the shared authoring IR."""
-    parsed = PromptContractIR(path=path)
-
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        parsed.parse_error = f'File not found: "{path}"'
-        return parsed
-    except OSError as exc:
-        parsed.parse_error = str(exc)
-        return parsed
-
+def _populate_prompt_contract_ir(parsed: PromptContractIR, text: str) -> PromptContractIR:
     parsed.sections = extract_sections(text)
     parsed.vocabulary_terms = _build_vocabulary_terms(parsed.sections)
 
@@ -718,6 +706,28 @@ def parse_prompt_contracts(path: Path) -> PromptContractIR:
         parsed.formalizations = _parse_formalization_section(formal_text)
 
     return parsed
+
+
+def parse_prompt_contracts_text(text: str, path: Path) -> PromptContractIR:
+    """Parse prompt contract IR from in-memory text while keeping ``path`` identity."""
+    parsed = PromptContractIR(path=path)
+    return _populate_prompt_contract_ir(parsed, text)
+
+
+def parse_prompt_contracts(path: Path) -> PromptContractIR:
+    """Parse one prompt file into the shared authoring IR."""
+    parsed = PromptContractIR(path=path)
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        parsed.parse_error = f'File not found: "{path}"'
+        return parsed
+    except OSError as exc:
+        parsed.parse_error = str(exc)
+        return parsed
+
+    return _populate_prompt_contract_ir(parsed, text)
 
 
 def parse_directory(directory: Path) -> list[PromptContractIR]:

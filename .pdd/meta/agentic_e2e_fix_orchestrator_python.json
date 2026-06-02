@@ -1,13 +1,14 @@
 {
-  "pdd_version": "0.0.239",
-  "timestamp": "2026-05-26T00:00:00.000000+00:00",
+  "pdd_version": "0.0.257",
+  "timestamp": "2026-06-02T05:35:45.135425+00:00",
   "command": "test",
   "prompt_hash": "3db920baa54e4b2a67fee0dc24de08e26087b7f60ce9687b2fd7261b14f1f621",
-  "code_hash": "11567925282ad868351a3e5417d8227923c987c77ecf4f560ea42117d332a01c",
+  "code_hash": "605779bd8be274f89d045972413cd2ce394cf4e6c808e24bfd7f4674fb10b17d",
   "example_hash": "8cc5f11b0430113ad52c918cdbabafe254cf01667eb66e1ac8837f5cea965024",
-  "test_hash": "e61b1965bb24ac23b74f073278c1d99f26efad9f883d1b07848558d7d26c6396",
+  "test_hash": "f15b0ccd990d7ab178700b28211c4e46f29f991500272c73583149309572607c",
   "test_files": {
-    "test_agentic_e2e_fix_orchestrator.py": "e61b1965bb24ac23b74f073278c1d99f26efad9f883d1b07848558d7d26c6396"
+    "test_agentic_e2e_fix_orchestrator.py": "f15b0ccd990d7ab178700b28211c4e46f29f991500272c73583149309572607c",
+    "test_agentic_e2e_fix_orchestrator_resume_prompt.py": "8e29ea7eb6330f75fa53b2699663f417b43cb063b8ac5613f34cbf0a6ceaa917"
   },
   "include_deps": {
     "context/agentic_bug_orchestrator_example.py": "23b545fc0f892e14ee9660902d3f7e04893f0b793246c1ea9d559656fd39ffe6",

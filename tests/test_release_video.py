@@ -119,9 +119,14 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
 
     assert "https://youtu.be/pdd-release" in result.stdout
     output_dir = tmp_path / "videos" / "v1.1.0"
-    assert (output_dir / "release_video_script.md").read_text(encoding="utf8").startswith(
-        "# PDD v1.1.0 Release Video"
-    )
+    script_text = (output_dir / "release_video_script.md").read_text(encoding="utf8")
+    assert script_text.startswith("# PDD v1.1.0 Release Video")
+    assert "\n## Release Overview (0:00 - 1:00)" in script_text
+    assert "\nNARRATOR:\n" in script_text
+    assert "\nVISUAL: show the changelog" in script_text
+    claude_prompt = (repo / "claude_prompt.txt").read_text(encoding="utf8")
+    assert 'exactly like "## Release hook (0:00 - 0:12)"' in claude_prompt
+    assert '"NARRATOR:" on its own line' in claude_prompt
     pds_call = json.loads(capture.read_text(encoding="utf8"))["argv"]
     assert pds_call[:2] == ["release-video", "create"]
     assert pds_call[pds_call.index("--target") + 1] == "publish"

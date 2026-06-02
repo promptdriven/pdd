@@ -1,0 +1,12 @@
+% Write `pdd/gate_policy.py`, YAML policy loader for ``pdd checkup gate``.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Defines built-in and file-backed require/allow/limit policy for evidence gate checks.</pdd-reason>
+
+% Public API
+- `default_policy() -> GatePolicy`
+- `load_policy(path: Optional[Path]) -> GatePolicy`
+
+% Code output
+- Code: `pdd/gate_policy.py`

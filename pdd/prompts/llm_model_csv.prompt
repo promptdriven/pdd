@@ -1,3 +1,5 @@
+<pdd-reason>Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.</pdd-reason>
+
 % You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers: 
     - 'provider': OpenAI, Anthropic, etc.
     - 'model': the available model strings for that provider (e.g. "gpt-5-nano")
@@ -8,5 +10,6 @@
     - 'base_url': Optional base URL for specific providers (e.g., Azure, Ollama)
     - 'max_reasoning_tokens': Optional maximum tokens for internal reasoning (Integer, nullable)
     - 'structured_output': Boolean indicating if the model reliably supports structured output (True/False)
+    - 'interactive_only': Boolean (True/False). True for providers that require interactive human auth or a running local server (e.g. github_copilot device-flow OAuth, chatgpt subscription / codex login, lm_studio, ollama). Such rows hang in non-interactive contexts, so model selection skips them by default unless PDD_ALLOW_INTERACTIVE is set. Defaults to False for keyed providers.
 
 % Search the internet to get this data. Check to make sure this is valid CSV format

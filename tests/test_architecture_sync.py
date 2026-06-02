@@ -4,13 +4,17 @@ Unit tests for architecture_sync module.
 Tests bidirectional sync between architecture.json and prompt file metadata tags.
 """
 
+import hashlib
 import json
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
 
 from pdd.architecture_sync import (
+    _contract_summary_is_empty,
+    _extract_contract_summary,
     _find_renamed_prompt_file,
     _infer_filepath,
     _infer_module_tags,
@@ -3929,3 +3933,578 @@ def test_register_untracked_prompts_preserves_dict_format(tmp_path):
     assert isinstance(reloaded.get("modules"), list), "modules key should be preserved"
     filenames = {m["filename"] for m in reloaded["modules"]}
     assert "new_Python.prompt" in filenames, "Newly registered prompt should be in modules"
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _contract_summary_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Minimal project layout for contract_summary sync tests."""
+    (tmp_path / ".pdd").mkdir()
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "refund_python.prompt",
+                    "filepath": "src/refund.py",
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path, prompts_dir, arch_path
+
+
+def test_extract_contract_summary_prompt_only(tmp_path):
+    """Prompt with contract_rules yields rules and capabilities; no stories or evidence."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        textwrap.dedent(
+            """\
+            <contract_rules>
+            R1 - Refund cap
+            The system MUST cap refunds.
+            R2 - CRITICAL audit
+            The system MUST log refunds.
+            </contract_rules>
+            <capabilities>
+            - reads_payments
+            - writes_refunds
+            </capabilities>
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    summary, warnings = _extract_contract_summary(prompt_path, project_root)
+
+    assert warnings == []
+    assert summary["rules"] == ["R1", "R2"]
+    assert summary["critical"] == ["R2"]
+    assert summary["capabilities"] == ["reads_payments", "writes_refunds"]
+    assert summary["stories"] == []
+    assert summary["coverage_status"] == "none"
+    assert summary["evidence_status"] == "missing"
+
+
+def test_extract_contract_summary_with_story(tmp_path):
+    """Story links and covers contribute story-only coverage."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        textwrap.dedent(
+            """\
+            <contract_rules>
+            R1 - Refund cap
+            The system MUST cap refunds.
+            </contract_rules>
+            """
+        ),
+        encoding="utf-8",
+    )
+    stories_dir = tmp_path / "user_stories"
+    stories_dir.mkdir()
+    story_path = stories_dir / "story__refund.md"
+    story_path.write_text(
+        textwrap.dedent(
+            """\
+            <pdd-story-prompts>
+            refund_python.prompt
+            </pdd-story-prompts>
+
+            ## Covers
+            - R1: refund cap
+
+            ## Acceptance Criteria
+            - Refund is capped correctly.
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _warnings = _extract_contract_summary(prompt_path, project_root)
+
+    assert summary["rules"] == ["R1"]
+    assert summary["stories"] == ["user_stories/story__refund.md"]
+    assert summary["coverage_status"] == "story-only"
+    assert summary["unchecked"] == []
+
+
+def test_extract_contract_summary_fresh_and_stale_evidence(tmp_path):
+    """Evidence manifest SHA match yields fresh; mismatch yields stale."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - X\nMUST x.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    evidence_dir = tmp_path / ".pdd" / "evidence" / "devunits"
+    evidence_dir.mkdir(parents=True)
+    latest = evidence_dir / "refund.latest.json"
+    latest.write_text(
+        json.dumps(
+            {
+                "prompt": {"sha256": _sha256_file(prompt_path)},
+                "contracts": {"status": "not_applicable"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fresh, _ = _extract_contract_summary(prompt_path, project_root)
+    assert fresh["evidence_status"] == "fresh"
+
+    latest.write_text(
+        json.dumps({"prompt": {"sha256": "0" * 64}, "contracts": {"status": "not_applicable"}}),
+        encoding="utf-8",
+    )
+    stale, _ = _extract_contract_summary(prompt_path, project_root)
+    assert stale["evidence_status"] == "stale"
+
+
+def test_extract_contract_summary_legacy_prompt_without_contracts(tmp_path):
+    """Prompts without contract sections return an empty, non-error summary."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        "<pdd-reason>Legacy module</pdd-reason>\n",
+        encoding="utf-8",
+    )
+
+    summary, warnings = _extract_contract_summary(prompt_path, project_root)
+
+    assert summary["rules"] == []
+    assert summary["coverage_status"] == "none"
+    assert summary["evidence_status"] == "missing"
+    assert summary["unchecked"] == []
+    assert "error" not in summary
+    assert warnings == []
+
+
+def test_update_architecture_from_prompt_writes_contract_summary(tmp_path):
+    """Sync writes contract_summary into architecture.json for a module."""
+    project_root, prompts_dir, arch_path = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        textwrap.dedent(
+            """\
+            <pdd-reason>Refund handler</pdd-reason>
+            <contract_rules>
+            R1 - Refund cap
+            The system MUST cap refunds.
+            </contract_rules>
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = update_architecture_from_prompt(
+        "refund_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+
+    assert result["success"] is True
+    assert result["updated"] is True
+    assert "contract_summary" in result["changes"]
+    arch_data = json.loads(arch_path.read_text(encoding="utf-8"))
+    module = arch_data[0]
+    assert module["contract_summary"]["rules"] == ["R1"]
+    assert module["contract_summary"]["unchecked"] == ["R1"]
+    assert module["reason"] == "Refund handler"
+    assert "rules_detail" in module["contract_summary"]
+
+
+def test_extract_contract_summary_unchecked_and_waived(tmp_path):
+    """Unchecked rules and waivers surface in contract_summary."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        textwrap.dedent(
+            """\
+            <contract_rules>
+            R1 - Covered
+            The system MUST do R1.
+            R2 - Open
+            The system MUST do R2.
+            </contract_rules>
+            <coverage>
+            R1: WAIVED W1
+            </coverage>
+            <waivers>
+            W1
+            rule: R1
+            reason: temporary
+            </waivers>
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _ = _extract_contract_summary(prompt_path, project_root)
+
+    assert "R1" in summary["rules"]
+    assert "R2" in summary["unchecked"]
+    assert "W1" in summary["waived"]
+
+
+def test_extract_contract_summary_manifest_available_full_coverage(tmp_path):
+    """Manifest contracts.available refines coverage_status to full when all rules checked."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - A\nMUST a.\nR2 - B\nMUST b.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    evidence_dir = tmp_path / ".pdd" / "evidence" / "devunits"
+    evidence_dir.mkdir(parents=True)
+    latest = evidence_dir / "refund.latest.json"
+    latest.write_text(
+        json.dumps(
+            {
+                "prompt": {"sha256": _sha256_file(prompt_path)},
+                "contracts": {
+                    "status": "available",
+                    "rules": {
+                        "R1": {"status": "checked", "stories": ["story__a.md"], "tests": ["test_a"]},
+                        "R2": {"status": "checked", "stories": ["story__b.md"], "tests": ["test_b"]},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _ = _extract_contract_summary(prompt_path, project_root)
+
+    assert summary["evidence_status"] == "fresh"
+    assert summary["coverage_status"] == "full"
+
+
+def test_extract_contract_summary_evidence_only_without_contracts(tmp_path):
+    """Fresh evidence without contract rules still yields a persisted summary."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text("<pdd-reason>Legacy</pdd-reason>\n", encoding="utf-8")
+    evidence_dir = tmp_path / ".pdd" / "evidence" / "devunits"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "refund.latest.json").write_text(
+        json.dumps(
+            {
+                "prompt": {"sha256": _sha256_file(prompt_path)},
+                "contracts": {"status": "not_applicable", "rules": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary, _ = _extract_contract_summary(prompt_path, project_root)
+
+    assert summary["rules"] == []
+    assert summary["evidence_status"] == "fresh"
+    assert not _contract_summary_is_empty(summary)
+
+
+def test_update_architecture_clears_contract_summary_when_rules_removed(tmp_path):
+    """Removing contract_rules drops contract_summary from architecture.json."""
+    project_root, prompts_dir, arch_path = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - X\nMUST x.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    update_architecture_from_prompt(
+        "refund_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+    prompt_path.write_text("<pdd-reason>Legacy only</pdd-reason>\n", encoding="utf-8")
+    result = update_architecture_from_prompt(
+        "refund_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+    module = json.loads(arch_path.read_text(encoding="utf-8"))[0]
+    assert "contract_summary" not in module
+    assert result["updated"] is True
+
+
+def test_update_architecture_prompt_content_override_uses_override_for_summary(tmp_path):
+    """contract_summary follows prompt_content_override, not stale on-disk prompt."""
+    project_root, prompts_dir, arch_path = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text("<pdd-reason>On disk</pdd-reason>\n", encoding="utf-8")
+    override = textwrap.dedent(
+        """\
+        <pdd-reason>Override</pdd-reason>
+        <contract_rules>
+        R9 - Only in memory
+        MUST override.
+        </contract_rules>
+        """
+    )
+    result = update_architecture_from_prompt(
+        "refund_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        prompt_content_override=override,
+    )
+    assert result["success"] is True
+    assert result["contract_summary"]["rules"] == ["R9"]
+
+
+def test_sync_all_returns_contract_summary_per_module(tmp_path):
+    """sync_all_prompts_to_architecture includes contract_summary on each result row."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    (prompts_dir / "mod_python.prompt").write_text(
+        "<contract_rules>\nR1 - A\nMUST a.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    arch_path.write_text(
+        json.dumps([{"filename": "mod_python.prompt", "filepath": "mod.py", "priority": 1}]),
+        encoding="utf-8",
+    )
+
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+
+    assert result["success"] is True
+    row = result["results"][0]
+    assert row["contract_summary"]["rules"] == ["R1"]
+
+
+def test_update_architecture_contract_summary_warnings_on_read_errors(tmp_path, monkeypatch):
+    """Non-fatal coverage read errors are returned as sync warnings."""
+    project_root, prompts_dir, arch_path = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - X\nMUST x.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+
+    def _fake_build_coverage(path, stories_dir, tests_dir, **kwargs):  # noqa: ANN001
+        from pdd.coverage_contracts import CoverageResult, RuleCoverage
+
+        return CoverageResult(
+            path=path,
+            has_contract_rules=True,
+            rules=[RuleCoverage(rule_id="R1", status="unchecked")],
+            read_errors=["story file unreadable: broken.md"],
+        )
+
+    monkeypatch.setattr("pdd.coverage_contracts.build_coverage", _fake_build_coverage)
+
+    result = update_architecture_from_prompt(
+        "refund_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+
+    assert any("story file unreadable" in w for w in result["warnings"])
+
+
+def test_extract_contract_summary_finds_evidence_from_write_evidence_manifest(tmp_path):
+    """Production manifest basename (refund.latest.json) is used, not prompt stem."""
+    from pdd.evidence_manifest import write_evidence_manifest
+
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - X\nMUST x.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "src" / "refund.py"
+    output.parent.mkdir(parents=True)
+    output.write_text("def refund():\n    pass\n", encoding="utf-8")
+
+    write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt_path,
+        output_files=[output],
+        model="local-model",
+        cost_usd=0.0,
+        temperature=0.0,
+        project_root=project_root,
+    )
+
+    wrong_stem = tmp_path / ".pdd" / "evidence" / "devunits" / "refund_python.latest.json"
+    assert not wrong_stem.is_file()
+
+    summary, _ = _extract_contract_summary(prompt_path, project_root)
+    assert summary["evidence_status"] == "fresh"
+
+
+def test_extract_contract_summary_nested_prompt_evidence_slug(tmp_path):
+    """Nested prompt identities use _safe_slug basenames (frontend-page.latest.json)."""
+    from pdd.evidence_manifest import write_evidence_manifest
+
+    project_root = tmp_path
+    (project_root / ".pdd").mkdir()
+    prompt_path = project_root / "prompts" / "frontend" / "page_python.prompt"
+    prompt_path.parent.mkdir(parents=True)
+    (project_root / "tests").mkdir()
+    (project_root / "user_stories").mkdir()
+    prompt_path.write_text(
+        "<contract_rules>\nR1 - Page\nThe system MUST render page.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+
+    write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt_path,
+        project_root=project_root,
+    )
+
+    wrong_path = (
+        project_root / ".pdd" / "evidence" / "devunits" / "frontend" / "page.latest.json"
+    )
+    assert not wrong_path.is_file()
+    latest = project_root / ".pdd" / "evidence" / "devunits" / "frontend-page.latest.json"
+    assert latest.is_file()
+
+    summary, _ = _extract_contract_summary(prompt_path, project_root)
+    assert summary["evidence_status"] == "fresh"
+
+
+def test_prompt_content_override_preserves_story_metadata_scope(tmp_path):
+    """Override content must not change prompt filename used for story scoping."""
+    project_root, prompts_dir, arch_path = _contract_summary_fixture(tmp_path)
+    stories = project_root / "user_stories"
+    stories.mkdir(exist_ok=True)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        textwrap.dedent(
+            """\
+            <pdd-reason>On disk</pdd-reason>
+            <contract_rules>
+            R1 - Refund cap
+            MUST cap refunds.
+            </contract_rules>
+            """
+        ),
+        encoding="utf-8",
+    )
+    (stories / "story__refund_cap.md").write_text(
+        textwrap.dedent(
+            """\
+            <!-- pdd-story-prompts: refund_python.prompt -->
+            # Refund cap story
+
+            ## Acceptance Criteria
+            - R1 is satisfied in tests.
+
+            ## Covers
+            - R1: refunds are capped.
+            """
+        ),
+        encoding="utf-8",
+    )
+    override = textwrap.dedent(
+        """\
+        <pdd-reason>Override</pdd-reason>
+        <contract_rules>
+        R1 - Refund cap
+        MUST cap refunds.
+        </contract_rules>
+        """
+    )
+
+    result = update_architecture_from_prompt(
+        "refund_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        prompt_content_override=override,
+        stories_dir=stories,
+        tests_dir=project_root / "tests",
+    )
+
+    summary = result["contract_summary"]
+    assert any("story__refund_cap.md" in path for path in summary["stories"])
+    assert summary["coverage_status"] != "none"
+
+
+def test_sync_all_propagates_warnings(tmp_path, monkeypatch):
+    """sync_all_prompts_to_architecture keeps per-module warnings on each result row."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    (prompts_dir / "mod_python.prompt").write_text(
+        "<contract_rules>\nR1 - A\nMUST a.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    arch_path.write_text(
+        json.dumps([{"filename": "mod_python.prompt", "filepath": "mod.py", "priority": 1}]),
+        encoding="utf-8",
+    )
+
+    def _fake_update(*_args, **_kwargs):  # noqa: ANN002
+        return {
+            "success": True,
+            "updated": True,
+            "changes": {},
+            "error": None,
+            "warnings": ["contract_summary: story file unreadable: broken.md"],
+            "contract_summary": {"rules": ["R1"]},
+        }
+
+    monkeypatch.setattr(
+        "pdd.architecture_sync.update_architecture_from_prompt",
+        _fake_update,
+    )
+
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+
+    row = result["results"][0]
+    assert row["warnings"] == ["contract_summary: story file unreadable: broken.md"]
+
+
+def test_sync_prompts_to_architecture_named_files_propagates_warnings(
+    tmp_path, monkeypatch,
+):
+    """Named-file sync_prompts_to_architecture keeps warnings on each result row."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps([{"filename": "mod_python.prompt", "filepath": "mod.py", "priority": 1}]),
+        encoding="utf-8",
+    )
+
+    def _fake_update(*_args, **_kwargs):  # noqa: ANN002
+        return {
+            "success": True,
+            "updated": False,
+            "changes": {},
+            "error": None,
+            "warnings": ["contract_summary: evidence manifest unreadable: bad json"],
+            "contract_summary": {"rules": ["R1"]},
+        }
+
+    monkeypatch.setattr(
+        "pdd.architecture_sync.update_architecture_from_prompt",
+        _fake_update,
+    )
+
+    result = sync_prompts_to_architecture(
+        filenames=["mod_python.prompt"],
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+
+    row = result["results"][0]
+    assert row["warnings"] == ["contract_summary: evidence manifest unreadable: bad json"]
+    assert row["contract_summary"]["rules"] == ["R1"]

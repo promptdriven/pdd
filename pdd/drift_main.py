@@ -24,7 +24,7 @@ try:
     from .gate_main import run_gate_policy as _run_gate_policy_impl
 
     _GATE_POLICY_AVAILABLE = True
-except ModuleNotFoundError:  # pragma: no cover - optional until gate lands on main
+except (ModuleNotFoundError, ImportError):  # pragma: no cover - gate optional on this branch
     _GATE_POLICY_AVAILABLE = False
 
     def _run_gate_policy_impl(*_args, **_kwargs):

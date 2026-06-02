@@ -1,0 +1,15 @@
+% Write `pdd/evidence_store.py`, read helpers for dev-unit evidence manifests.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Loads `.pdd/evidence/devunits/*.latest.json` and exposes freshness helpers for the evidence policy gate.</pdd-reason>
+
+% Public API
+- `devunits_dir(project_root: Path) -> Path`
+- `list_latest_manifests(project_root: Path) -> list[Path]`
+- `ManifestView.from_file(path: Path, project_root: Path) -> ManifestView`
+- `output_freshness(manifest: ManifestView, project_root: Path) -> list[OutputFreshness]`
+- `prompt_freshness(manifest: ManifestView) -> bool`
+
+% Code output
+- Code: `pdd/evidence_store.py`

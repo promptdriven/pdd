@@ -131,6 +131,30 @@ export interface ArchitectureInterface {
   };
 }
 
+/** Per-module contract/evidence summary from architecture sync (issue #830). */
+export interface ArchitectureContractSummary {
+  rules: string[];
+  critical: string[];
+  stories: string[];
+  capabilities: string[];
+  coverage_status: 'none' | 'partial' | 'story-only' | 'full' | 'error';
+  evidence_status: 'missing' | 'fresh' | 'stale' | 'error';
+  waived: string[];
+  unchecked: string[];
+  rules_detail?: Record<
+    string,
+    {
+      rule_id: string;
+      status: string;
+      stories: string[];
+      tests: string[];
+      waiver?: string | null;
+      failures?: string[];
+    }
+  >;
+  error?: string;
+}
+
 export interface ArchitectureModule {
   reason: string;
   description: string;
@@ -140,6 +164,7 @@ export interface ArchitectureModule {
   filepath: string;
   tags?: string[];
   interface?: ArchitectureInterface;
+  contract_summary?: ArchitectureContractSummary;
   // Graph position (optional, saved when user drags nodes)
   position?: {
     x: number;

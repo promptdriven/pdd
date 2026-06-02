@@ -99,6 +99,15 @@ class TokenMatch:
         return True
 
 
+@dataclass
+class SteerEntry:
+    """Mid-run user steering entry (typically from GitHub issue comments)."""
+
+    comment_id: str
+    author: str
+    body: str
+
+
 def detect_control_token(
     output: Optional[str],
     token: str,
@@ -2148,6 +2157,7 @@ def run_agentic_task(
     deadline: Optional[float] = None,
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[SteerEntry]] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -2167,6 +2177,7 @@ def run_agentic_task(
             top-level ``pdd --time`` flag. When provided, overrides the
             ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
             means "fall back to env" so unplumbed call sites keep working.
+        steers: Optional list of mid-run steering entries to inject into the instruction.
 
     Returns:
         (success, output_text, cost_usd, provider_used)
@@ -2207,8 +2218,17 @@ def run_agentic_task(
             f"{user_feedback}\n"
         )
 
+    steering_section = ""
+    if steers:
+        steering_section = "\n\n## Steered user input (mid-run)\n"
+        steering_section += (
+            "The following comments arrived during this run. Factor them into this step:\n"
+        )
+        for steer in steers:
+            steering_section += f"- @{steer.author} ({steer.comment_id}): {steer.body}\n"
+
     full_instruction = (
-        f"{instruction}{feedback_section}\n\n"
+        f"{instruction}{feedback_section}{steering_section}\n\n"
         "You have full file access to explore and modify files as needed."
     )
 
@@ -4382,6 +4402,257 @@ def validate_cached_state(
 
 
 # --- High Level State Wrappers ---
+
+
+def _steer_cursor_initialized(state: Dict[str, Any]) -> bool:
+    """True when GitHub polling may run without treating all history as new steers."""
+    if state.get("steer_cursor_seeded"):
+        return True
+    return state.get("last_steered_comment_id") is not None
+
+
+def _gh_api_list_issue_comments_cmd(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    since: Optional[str] = None,
+) -> List[str]:
+    """Build ``gh api`` argv for listing issue comments.
+
+    ``gh`` treats ``-f`` field parameters as a POST body unless ``--method GET``
+    is set, which would 422 on the comments collection endpoint.
+    """
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+        "--method",
+        "GET",
+        "--paginate",
+        "--slurp",
+    ]
+    if since:
+        cmd.extend(["-f", f"since={since}"])
+    return cmd
+
+
+def _fetch_issue_comments_via_gh(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+    since: Optional[str] = None,
+) -> List[Dict]:
+    """List issue comments via ``gh api``; returns [] on failure."""
+    if not _find_cli_binary("gh"):
+        return []
+    cmd = _gh_api_list_issue_comments_cmd(
+        repo_owner, repo_name, issue_number, since=since
+    )
+    try:
+        res = _subprocess_run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception:
+        return []
+    if res.returncode != 0:
+        return []
+    return _load_gh_paginated_comments(res.stdout)
+
+
+def seed_issue_steer_cursor(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+) -> bool:
+    """Set steer cursor to the current issue comment tail without returning steers.
+
+    Call once at workflow start so ``drain_issue_steers`` only picks up comments
+    posted after the run began. Uses the maximum comment id on the issue (all
+    authors, including bots) so later bot progress comments do not rewind the id
+    cursor.
+    """
+    comments = _fetch_issue_comments_via_gh(
+        repo_owner, repo_name, issue_number, cwd=cwd
+    )
+    max_id_val = -1
+    latest_timestamp: Optional[str] = None
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        try:
+            cid_val = int(cid) if cid is not None else 0
+        except (ValueError, TypeError):
+            cid_val = 0
+        if cid_val > max_id_val:
+            max_id_val = cid_val
+        created_at = comment.get("created_at")
+        if created_at and (
+            latest_timestamp is None or created_at > latest_timestamp
+        ):
+            latest_timestamp = created_at
+
+    if max_id_val >= 0:
+        state["last_steered_comment_id"] = str(max_id_val)
+    if latest_timestamp:
+        state["last_steer_at"] = latest_timestamp
+    state["steer_cursor_seeded"] = True
+    return True
+
+
+def drain_issue_steers(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+) -> List[SteerEntry]:
+    """Drain mid-run user steering inputs (env handoff or GitHub issue comments).
+
+    Sources (in priority order):
+    - ``PDD_STEER_JSON`` env var: JSON list of objects with ``comment_id``,
+      ``author``, and ``body`` fields.
+    - GitHub issue comments via ``gh api`` (when available).
+
+    Persists steering cursor fields in ``state`` for idempotency:
+    - ``last_steered_comment_id`` (str)
+    - ``last_steer_at`` (ISO timestamp from GitHub, best-effort)
+    - ``steer_generation`` (int, increments when new steers are applied)
+    - ``steer_cursor_seeded`` (bool, set by ``seed_issue_steer_cursor``)
+
+    GitHub polling is skipped until ``seed_issue_steer_cursor`` (or a resumed
+    state with ``last_steered_comment_id``) establishes a baseline cursor.
+    """
+    steers: List[SteerEntry] = []
+
+    # 1) Env handoff (useful for local tests and cloud runners)
+    steer_json = os.environ.get("PDD_STEER_JSON")
+    if steer_json:
+        try:
+            entries = json.loads(steer_json)
+        except json.JSONDecodeError:
+            entries = None
+        if isinstance(entries, list):
+            try:
+                last_id_val = int(state.get("last_steered_comment_id") or -1)
+            except (ValueError, TypeError):
+                last_id_val = -1
+            max_id_val = last_id_val
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                cid_raw = entry.get("comment_id", "")
+                try:
+                    cid_val = int(cid_raw)
+                except (ValueError, TypeError):
+                    continue
+                if cid_val <= last_id_val:
+                    continue
+                steers.append(
+                    SteerEntry(
+                        comment_id=str(cid_val),
+                        author=str(entry.get("author", "unknown")),
+                        body=str(entry.get("body", "")),
+                    )
+                )
+                if cid_val > max_id_val:
+                    max_id_val = cid_val
+            if steers:
+                state["last_steered_comment_id"] = str(max_id_val)
+                state["steer_generation"] = state.get("steer_generation", 0) + 1
+                return steers
+
+    # 2) GitHub poll (best-effort)
+    if not _find_cli_binary("gh"):
+        return []
+
+    if not _steer_cursor_initialized(state):
+        # Without a run-start baseline, every historical human comment would be
+        # treated as a mid-run steer. Call seed_issue_steer_cursor() first.
+        return []
+
+    since = state.get("last_steer_at")
+    last_id = state.get("last_steered_comment_id")
+
+    comments = _fetch_issue_comments_via_gh(
+        repo_owner,
+        repo_name,
+        issue_number,
+        cwd=cwd,
+        since=since if since else None,
+    )
+
+    try:
+        last_id_val = int(last_id) if last_id is not None else -1
+    except (ValueError, TypeError):
+        last_id_val = -1
+
+    max_id_val = last_id_val
+    latest_timestamp = since
+    new_steers: List[SteerEntry] = []
+
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        try:
+            cid_val = int(cid) if cid is not None else 0
+        except (ValueError, TypeError):
+            cid_val = 0
+        if cid_val <= last_id_val:
+            continue
+
+        user = comment.get("user", {}) or {}
+        if user.get("type") == "Bot":
+            continue
+
+        body = str(comment.get("body", "") or "")
+
+        # Filter out PDD state/progress markers and bot/status comments.
+        if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
+            continue
+        if "PDD-INCREMENTAL-STATUS" in body:
+            continue
+        if "PDD_WORKFLOW_STATE" in body:
+            continue
+        if re.search(r"^## Step \d+/\d+:", body, re.MULTILINE):
+            continue
+
+        created_at = comment.get("created_at")
+        author = str(user.get("login", "unknown") or "unknown")
+
+        new_steers.append(
+            SteerEntry(
+                comment_id=str(cid_val),
+                author=author,
+                body=body.strip(),
+            )
+        )
+
+        if cid_val > max_id_val:
+            max_id_val = cid_val
+        if latest_timestamp is None or (created_at and created_at > latest_timestamp):
+            latest_timestamp = created_at
+
+    if new_steers:
+        state["last_steered_comment_id"] = str(max_id_val)
+        state["last_steer_at"] = latest_timestamp
+        state["steer_generation"] = state.get("steer_generation", 0) + 1
+        return new_steers
+
+    return []
+
 
 def load_workflow_state(
     cwd: Path,

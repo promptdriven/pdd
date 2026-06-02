@@ -611,6 +611,35 @@ def test_sync_architecture_reports_summary_and_success(mock_sync_prompts, mock_a
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_echoes_module_warnings(mock_sync_prompts, mock_auto_update, runner):
+    """Per-module contract_summary warnings from sync results appear in CLI output."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {
+                "filename": "refund_python.prompt",
+                "success": True,
+                "updated": True,
+                "changes": {},
+                "error": None,
+                "warnings": ["contract_summary: story file unreadable: broken.md"],
+            },
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    assert "WARNING refund_python.prompt:" in result.output
+    assert "story file unreadable" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
 def test_sync_architecture_passes_filenames_and_dry_run(mock_sync_prompts, mock_auto_update, runner):
     """Specific prompt filenames and --dry-run should flow into the shared helper."""
     mock_sync_prompts.return_value = {

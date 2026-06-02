@@ -367,7 +367,7 @@ Detect and break infinite loops with these limits:
 - Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
-- Consecutive fix operations: Break after 5
+- Consecutive fix operations: Break after `MAX_CONSECUTIVE_FIXES` (5) only when the outer fix loop is no longer making progress. Before applying the breaker, read the latest run report with `read_run_report(basename, language, paths=pdd_files)` so subproject `.pdd/meta` state is honored (issue #1211), compare its `tests_failed` count with the previous consecutive fix operation, and treat the loop as making progress only when the count strictly decreases. Reset/update the previous fix failure count from path-aware run-report reads; if the count is unavailable or does not decrease at the threshold, break with a distinct no-progress consecutive-fix error.
 - Consecutive no-op fix operations: Track consecutive fix operations where no LLM is invoked (cost is 0.0 and model name is empty/none/unknown), and fail fast with LogicalFailure if it reaches 2
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
 - Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
