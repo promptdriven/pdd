@@ -1110,6 +1110,7 @@ def _setup_worktree(
     #    present.
     _prune_worktrees(git_root)
     has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
     if has_branch:
         if resume_existing:
             if not quiet:
@@ -1120,16 +1121,16 @@ def _setup_worktree(
             deleted, del_err = _delete_branch(git_root, branch_name)
             if deleted:
                 has_branch = False
-            else:
-                # After pruning, a still-undeletable branch is genuinely checked
-                # out in another LIVE worktree. Surface a clear, actionable error
-                # instead of the cryptic "Failed to create worktree" that the
-                # `git worktree add -b` would otherwise raise.
-                return None, (
-                    f"Cannot reset stale branch '{branch_name}': {del_err.strip()}. "
-                    f"It is still checked out in another git worktree — remove that "
-                    f"worktree ('git worktree remove <path>' or 'git worktree prune') "
-                    f"and retry."
+                deleted_branch = True
+            elif not quiet:
+                # Pruning could not free the branch (it is still checked out by
+                # another worktree). Do NOT hard-fail the checkup: reuse the
+                # existing branch via a forced worktree add (step 3) instead of
+                # recreating it with `-b` (which would raise "a branch named ...
+                # already exists").
+                console.print(
+                    f"[yellow]Could not delete {branch_name} ({del_err.strip()}); "
+                    f"reusing it via a forced worktree add.[/yellow]"
                 )
 
     # 3. Create worktree
@@ -1139,6 +1140,16 @@ def _setup_worktree(
         if has_branch and resume_existing:
             subprocess.run(
                 ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        elif has_branch and not deleted_branch:
+            # The branch survived deletion (still checked out elsewhere). Reuse
+            # it with --force so a stale/duplicate worktree registration cannot
+            # block setup, rather than `-b` (which would fail: branch exists).
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root,
                 capture_output=True,
                 check=True,

@@ -6502,7 +6502,8 @@ class TestSetupWorktreeStaleBranch:
     then refuses ("checked out at <gone path>") and the subsequent
     ``git worktree add -b`` fails with "a branch named ... already exists",
     failing the whole checkup. ``_setup_worktree`` now prunes stale worktree
-    registrations first, and surfaces a clear error for a genuine live conflict.
+    registrations first, and — when the branch still cannot be deleted — reuses
+    it via a forced worktree add instead of hard-failing (issue #1281 contract).
     """
 
     @staticmethod
@@ -6543,7 +6544,11 @@ class TestSetupWorktreeStaleBranch:
         assert err is None, err
         assert wt is not None and wt.exists()
 
-    def test_branch_checked_out_in_live_worktree_gives_clear_error(self, tmp_path):
+    def test_branch_still_checked_out_recovers_via_forced_reuse(self, tmp_path):
+        # When the branch cannot be deleted because it is still checked out in
+        # another worktree, checkup must NOT hard-fail: it reuses the existing
+        # branch via a forced worktree add (issue #1281 / #1299 contract:
+        # "_delete_branch failure does not hard fail").
         from pdd.agentic_checkup_orchestrator import _setup_worktree
 
         git = self._init_repo(tmp_path)
@@ -6551,7 +6556,11 @@ class TestSetupWorktreeStaleBranch:
         git("worktree", "add", "-q", "-b", "checkup/issue-9", str(live), "HEAD")
 
         wt, err = _setup_worktree(tmp_path, issue_number=9, quiet=True, resume_existing=False)
-        assert wt is None
-        assert err and "another git worktree" in err
-        # Must NOT be the cryptic pre-fix message.
-        assert "Failed to create worktree" not in err
+        assert err is None, err
+        assert wt is not None and wt.exists()
+        # The checkup worktree is checked out on the reused branch.
+        head = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=wt, capture_output=True, text=True,
+        ).stdout.strip()
+        assert head == "checkup/issue-9", head
