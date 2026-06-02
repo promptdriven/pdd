@@ -10,6 +10,7 @@
   }
 }
 </pdd-interface>
+<pdd-dependency>commands/replay_python.prompt</pdd-dependency>
 
 % Goal
 Write the command registration module `pdd/commands/__init__.py`.
@@ -33,6 +34,7 @@ Write the command registration module `pdd/commands/__init__.py`.
     - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
     - `preprocess` (from `.misc`)
+    - `replay` (from `.replay`)
     - `extracts` (from `.extracts`)
     - `report_core` (from `.report`)
     - `install_completion_cmd` (as `name="install_completion"`), `verify` (from `.utility`)

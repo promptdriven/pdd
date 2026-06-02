@@ -23,7 +23,10 @@ from .grounding_provenance import grounding_reviewed_for_manifest, normalize_gro
 from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 2
-_NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
+_NONDETERMINISTIC_TAG_RE = re.compile(
+    r"<(?:shell|web)\b|<include[^>]*\bquery\s*=",
+    re.IGNORECASE,
+)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
     re.IGNORECASE,
@@ -38,6 +41,15 @@ _INCLUDE_SELF_CLOSING_RE = re.compile(
 )
 _BACKTICK_INCLUDE_RE = re.compile(r"```<([^>]*?)>```", re.DOTALL)
 _CONTRACT_RULES_RE = re.compile(r"<contract_rules\b", re.IGNORECASE)
+
+
+def _has_active_tag(pattern: re.Pattern[str], content: str) -> bool:
+    """Return True only when *pattern* matches outside fenced/inline code spans."""
+    code_spans = _extract_code_spans(content)
+    for m in pattern.finditer(content):
+        if not _intersects_any_span(m.start(), m.end(), code_spans):
+            return True
+    return False
 
 
 @contextmanager
@@ -186,7 +198,9 @@ def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[
 
 def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[str]:
     """Hash of prompt text after the same deterministic include expansion as generation."""
-    if _UNSUPPORTED_EXPANSION_RE.search(content) or _NONDETERMINISTIC_TAG_RE.search(content):
+    if _has_active_tag(_UNSUPPORTED_EXPANSION_RE, content) or _has_active_tag(
+        _NONDETERMINISTIC_TAG_RE, content
+    ):
         return None
     try:
         with _project_cwd(project_root):
@@ -215,7 +229,7 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
             "uses_nondeterministic_tags": False,
         }
     content = path.read_text(encoding="utf-8")
-    nondeterministic = bool(_NONDETERMINISTIC_TAG_RE.search(content))
+    nondeterministic = _has_active_tag(_NONDETERMINISTIC_TAG_RE, content)
     return {
         "path": _display_path(path, project_root),
         "sha256": _sha256_bytes(content.encode("utf-8")),
@@ -341,6 +355,35 @@ def resolve_test_output_paths(  # pylint: disable=too-many-arguments
 def _safe_slug(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
     return slug or "run"
+
+
+def _dynamic_artifact_records(
+    artifacts: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Summarize captured shell, web, and query-include snapshot artifacts."""
+
+    shell_records: list[dict[str, Any]] = []
+    web_records: list[dict[str, Any]] = []
+    query_records: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_type = str(artifact.get("type") or "")
+        path = artifact.get("path")
+        digest = artifact.get("sha256")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            continue
+        record: dict[str, Any] = {"path": path, "sha256": digest}
+        metadata = artifact.get("metadata")
+        if isinstance(metadata, Mapping):
+            record["metadata"] = dict(metadata)
+        if artifact.get("redaction_applied"):
+            record["redaction_applied"] = True
+        if artifact_type == "shell":
+            shell_records.append(record)
+        elif artifact_type == "web":
+            web_records.append(record)
+        elif artifact_type == "query_include":
+            query_records.append(record)
+    return shell_records, web_records, query_records
 
 
 def devunit_slug_for_prompt(prompt_path: str | Path) -> Optional[str]:
@@ -487,6 +530,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     skip_policy: bool = False,
     dry_run: bool = False,
     output_dir: Optional[str | Path] = None,
+    context_snapshot: Optional[Mapping[str, Any]] = None,
     grounding: Optional[Mapping[str, Any]] = None,
     reviewed: bool = False,
 ) -> Path:
@@ -546,7 +590,20 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     if logs:
         log_values.update(logs)
 
+    snapshot_context = dict(context_snapshot or {})
+    snapshot_expanded = snapshot_context.get("expanded_prompt")
+    if isinstance(snapshot_expanded, Mapping) and isinstance(snapshot_expanded.get("sha256"), str):
+        prompt["expanded_sha256"] = snapshot_expanded["sha256"]
+    if snapshot_context.get("uses_nondeterministic_context") is not None:
+        prompt["uses_nondeterministic_tags"] = bool(
+            snapshot_context.get("uses_nondeterministic_context")
+        )
+
+    artifacts = list(snapshot_context.get("artifacts") or [])
+    shell_snapshots, web_snapshots, query_snapshots = _dynamic_artifact_records(artifacts)
     grounding_block = normalize_grounding(grounding, reviewed=reviewed)
+    snapshot_grounding = list(snapshot_context.get("grounding_examples") or [])
+    grounding_examples = list(grounding_block.get("selected_examples") or []) or snapshot_grounding
 
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -559,15 +616,16 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         "prompt": prompt,
         "context": {
             "includes": _prompt_include_records(prompt_path, root) if prompt_path else [],
-            "web_snapshots": [],
-            "shell_snapshots": [],
+            "web_snapshots": web_snapshots,
+            "shell_snapshots": shell_snapshots,
+            "query_snapshots": query_snapshots,
         },
         "generation": {
             "model": model or None,
             "temperature": temperature,
             "cost_usd": float(cost_usd),
             "grounding": grounding_block,
-            "grounding_examples": list(grounding_block.get("selected_examples") or []),
+            "grounding_examples": grounding_examples,
         },
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),
@@ -579,6 +637,32 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "logs": log_values,
     }
+    if snapshot_context:
+        manifest["context_snapshot"] = {
+            "enabled": True,
+            "manifest_path": snapshot_context.get("manifest_path"),
+            "snapshot_dir": snapshot_context.get("snapshot_dir"),
+            "expanded_prompt": snapshot_expanded,
+            "expanded_prompt_path": (
+                snapshot_expanded.get("path")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "expanded_sha256": (
+                snapshot_expanded.get("sha256")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "uses_nondeterministic_context": bool(
+                snapshot_context.get("uses_nondeterministic_context")
+            ),
+            "dynamic_tags": list(snapshot_context.get("dynamic_tags") or []),
+            "declared_dynamic_tags": list(snapshot_context.get("declared_dynamic_tags") or []),
+            "redaction_applied": bool(snapshot_context.get("redaction_applied")),
+            "redaction": snapshot_context.get("redaction"),
+            "artifacts": artifacts,
+            "run_id": snapshot_context.get("run_id"),
+        }
 
     runs_dir = root / ".pdd" / "evidence" / "runs"
     latest_dir = root / ".pdd" / "evidence" / "devunits"

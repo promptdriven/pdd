@@ -27,11 +27,34 @@ Manifests are written under:
 The versioned run path preserves audit history. The latest path provides a
 stable lookup for downstream automation.
 
+Snapshot-enabled runs also write replay artifacts:
+
+```bash
+pdd preprocess prompts/refund_python.prompt --snapshot
+pdd generate prompts/refund_python.prompt --output src/refund.py --snapshot-context
+pdd sync refund --snapshot-context
+pdd replay .pdd/evidence/runs/<run_id>.json
+```
+
+The run manifest remains `.pdd/evidence/runs/<run_id>.json`. Replayable
+expanded-prompt and dynamic-context artifacts live in the sibling directory
+`.pdd/evidence/runs/<run_id>/`.
+
+Snapshot manifests use **schema version 1**. Evidence manifests produced with
+`--evidence` use **schema version 2** and may embed a `context_snapshot` block
+pointing at the v1 snapshot manifest. Pass either file to `pdd replay`; replay
+resolves linked snapshot metadata and verifies the expanded prompt hash.
+
+Do not combine `pdd preprocess --recursive` with `--snapshot` when the prompt
+uses `<shell>`, `<web>`, or `query=` includes; recursive mode defers those tags
+so nothing is captured.
+
 Enforce policy on latest manifests before merge:
 
 ```bash
 pdd checkup gate
 pdd checkup gate <devunit> --json
+pdd checkup snapshot prompts/critical_python.prompt
 ```
 
 ## Contents
@@ -53,6 +76,10 @@ include grammar (`path=` attributes, self-closing tags, backtick includes, and
 `include-many`) and skips include-looking text inside fenced or inline code.
 If a prompt uses shell, web, variable, query-based, or otherwise effectful
 expansion, `expanded_sha256` is `null` rather than a guessed value.
+
+When snapshotting is enabled, the run manifest records the expanded prompt hash, whether nondeterministic tags were present, and the artifact paths and SHA-256 hashes for captured shell output, web content, and semantic include-query output. Static prompts with only deterministic includes record that no nondeterministic context was captured. Shell/web snapshots are redacted before hashing and storage for known authorization headers, bearer/basic tokens, URL credentials, provider keys, and secret-like assignments; metadata records whether redaction changed content. Raw environment dumps and unredacted bearer/API tokens must not be persisted.
+
+`pdd replay` reads a run artifact and reconstructs the expanded prompt context from the recorded snapshots. A successful replay means the prompt/context hash matches the original run; it does not assert that a later LLM generation will produce identical code.
 
 Missing stories or contracts are reported as `not_applicable`; they do not make
 an otherwise successful command fail. The schema is packaged at
@@ -112,7 +139,7 @@ For this feature, use the focused pytest gate (not full `pytest -q` collection
 on every environment):
 
 ```bash
-pytest -q tests/commands/test_evidence.py tests/test_evidence_manifest.py
+pytest -q tests/commands/test_evidence.py tests/test_evidence_manifest.py tests/test_context_snapshot_replay.py tests/test_context_snapshot_policy.py
 ```
 
 `pdd sync --evidence` records `unit_tests`, `verify`, and `policy` as `passed` or `failed`
