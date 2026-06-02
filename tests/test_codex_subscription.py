@@ -413,7 +413,9 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
 
     # Marker from build_chatgpt_schema_instruction().
     SCHEMA_MARKER = "valid JSON object matching this schema"
-    seen = []  # one entry per attempt: {"rf": bool, "schema": bool}
+    seen = []  # one entry per attempt: {"rf": bool, "schema": bool, "cache_disabled": bool}
+    cache_marker = object()
+    monkeypatch.setattr(li.litellm, "cache", cache_marker)
 
     def fake_completion(**kwargs):
         msgs = kwargs.get("messages") or []
@@ -421,7 +423,11 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
             isinstance(m, dict) and SCHEMA_MARKER in (m.get("content") or "")
             for m in msgs
         )
-        seen.append({"rf": "response_format" in kwargs, "schema": has_schema})
+        seen.append({
+            "rf": "response_format" in kwargs,
+            "schema": has_schema,
+            "cache_disabled": li.litellm.cache is None,
+        })
         # Return None content to force the cache-bypass retry path (one of the
         # three retry sites), so we verify the retry call re-injects the schema.
         msg = type("M", (), {"content": None, "role": "assistant"})()
@@ -445,6 +451,8 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
     assert all(s["schema"] for s in seen), (
         f"a chatgpt/ structured attempt lacked the schema instruction (retry regressed): {seen}"
     )
+    assert all(s["cache_disabled"] for s in seen), f"chatgpt/ call(s) used LiteLLM cache: {seen}"
+    assert li.litellm.cache is cache_marker
 
 
 def test_splice_collapses_gpt54_multi_message_output():

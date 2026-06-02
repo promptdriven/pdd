@@ -4606,7 +4606,14 @@ def llm_invoke(
                     # override is needed here.
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
-                    response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
+                    original_cache = litellm.cache
+                    if is_chatgpt_subscription:
+                        litellm.cache = None
+                    try:
+                        response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
+                    finally:
+                        if is_chatgpt_subscription:
+                            litellm.cache = original_cache
 
                 end_time = time_module.time()
                 _emit_llm_attribution(
@@ -4682,6 +4689,7 @@ def llm_invoke(
                                 try:
                                     retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
+                                    original_cache = litellm.cache
                                     litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
@@ -4710,7 +4718,7 @@ def llm_invoke(
                                         )
                                     finally:
                                         # Always restore cache, even if retry raises
-                                        litellm.cache = configured_cache
+                                        litellm.cache = original_cache
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens

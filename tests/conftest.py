@@ -30,8 +30,10 @@ from unittest import mock
 # ``tests/test_home_isolation.py`` pins these invariants.
 _PYTEST_FAKE_HOME = tempfile.mkdtemp(prefix="pdd-pytest-home-")
 atexit.register(shutil.rmtree, _PYTEST_FAKE_HOME, ignore_errors=True)
+_PYTEST_CHATGPT_TOKEN_DIR = os.path.join(_PYTEST_FAKE_HOME, ".cache", "pdd", "chatgpt")
 os.environ["HOME"] = _PYTEST_FAKE_HOME
 os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
+os.environ["PDD_CHATGPT_TOKEN_DIR"] = _PYTEST_CHATGPT_TOKEN_DIR
 
 import pytest
 from dotenv import load_dotenv
@@ -120,6 +122,8 @@ def _enforce_isolated_home(monkeypatch):
     """
     monkeypatch.setenv("HOME", _PYTEST_FAKE_HOME)
     monkeypatch.setenv("CODEX_HOME", os.path.join(_PYTEST_FAKE_HOME, ".codex"))
+    shutil.rmtree(_PYTEST_CHATGPT_TOKEN_DIR, ignore_errors=True)
+    monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", _PYTEST_CHATGPT_TOKEN_DIR)
 
 
 @pytest.fixture(scope="session")
