@@ -1,3 +1,14 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "code_generator_main", "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str] = None, original_prompt_file_path: Optional[str] = None, force_incremental_flag: bool = False, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False)", "returns": "Tuple[str, bool, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.</pdd-reason>
 
 <pdd-dependency>construct_paths_python.prompt</pdd-dependency>
@@ -30,6 +41,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Support both Cloud execution (via `requests` to a PDD API) and Local execution (via a local generator function).
     - Implement fallback logic: if Cloud fails (except for 402/401/403/400 errors), automatically retry using the local provider.
     - Support `PDD_CLOUD_ONLY` and `PDD_NO_LOCAL_FALLBACK` environment flags.
+    - Pass `compress` parameter to the local `code_generator` or the Cloud API.
 4. **Post-Processing**:
     - Support a `post_process_python` hook defined in front-matter or environment variables.
     - Handle both `stdin` and `argv` execution modes for post-processing scripts.

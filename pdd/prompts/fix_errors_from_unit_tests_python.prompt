@@ -60,7 +60,7 @@
     
     Step 3. Run the LLM prompt from Step 1 through llm_invoke:
         3a. Preprocess the input 'prompt' string using preprocess(recursive=False, double_curly_brackets=True).
-        3b. Preprocess the loaded 'fix_errors_from_unit_tests_LLM' template string using preprocess(recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'errors', 'prompt']).
+        3b. Preprocess the loaded 'fix_errors_from_unit_tests_LLM' template string using preprocess(recursive=False, double_curly_brackets=True, exclude=['unit_test', 'code', 'errors', 'prompt']).
         3c. Pass the following parameters to llm_invoke:
             - 'prompt' (the preprocessed template from Step 3b)
             - 'input_json' containing:

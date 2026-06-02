@@ -5,11 +5,13 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str], file_path: str = None, mode: str = \"full\")", "returns": "str"}
+      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")", "returns": "str"}
     ]
   }
 }
 </pdd-interface>
+
+<pdd-dependency>context/python_preamble.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
@@ -26,7 +28,7 @@ Deterministic content extraction from files based on line ranges, Python AST str
    - Accept `selectors` as a `list[str]` or a single comma-separated string
    - Skip empty/whitespace-only strings silently
    - Raise `SelectorError` for non-empty strings that don't match `kind:value` format
-4. When selectors is empty, return full content — unless `mode="interface"`, which produces a full-file interface
+4. When selectors is empty, return full content — unless `mode="interface"` (which produces a full-file interface) or `mode="compressed"` (which produces a full-file compressed version)
 5. Infer file type from `file_path` extension:
    - `.py` → Python, `.md`/`.markdown` → Markdown, `.json` → JSON, `.yaml`/`.yml` → YAML
    - Default to Python when `file_path` is `None`
@@ -73,6 +75,14 @@ Deterministic content extraction from files based on line ranges, Python AST str
 - For each function/async function: keep decorators, the full signature (may span multiple lines), and docstring. Replace body with `...` at the body's indentation level.
 - Within classes: keep decorators, class header, class docstring, class-level annotated assignments. Include public methods (processed as above). Exclude private methods (starting with `_`) except `__init__`.
 - With selectors + `mode="interface"`: apply interface transformation only to AST nodes overlapping the selected spans. If no AST nodes overlap, fall back to returning the raw span content.
+
+% Compression Mode (Python only)
+- `mode="compressed"`: optimized for dense few-shot examples.
+- Strip all docstrings (module, class, function) and their surrounding whitespace.
+- Strip all standalone comment blocks that aren't following code on the same line.
+- Preserve all executable logic, including full function and class bodies (do not replace with `...`).
+- Sibling Test Preservation: When the file path indicates a test file (starts with `test_` or ends with `_test.py`), MUST preserve the original test structure exactly (to keep the "mold walls" stable) but still strip docstrings.
+- If `mode="compressed"` is combined with selectors, apply compression only to the resulting extracted spans.
 
 % Error Reporting
 - Use `rich.console.Console` with a custom theme for formatted error messages. Print error context (including file path when available) before raising `SelectorError`.

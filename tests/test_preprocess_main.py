@@ -79,7 +79,7 @@ def test_preprocess_main_no_xml(basic_click_context):
             "fake prompt content",
             False,  # recursive
             False,  # double
-            exclude_keys=[],
+            exclude=[],
             _seen={str(Path("input.prompt").resolve())},
         )
         # xml_tagger should NOT be called in this scenario
@@ -197,7 +197,7 @@ def test_preprocess_main_recursive_and_double(basic_click_context):
             "some prompt for recursive test",
             True,   # recursive
             True,   # double
-            exclude_keys=["do_not_double_this"],
+            exclude=["do_not_double_this"],
             _seen={str(Path("recursive.prompt").resolve())},
         )
         mock_xml_tagger.assert_not_called()

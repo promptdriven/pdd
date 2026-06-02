@@ -1572,10 +1572,10 @@ def test_keyerror_handling_still_works_for_protected_keys(mock_dependencies, def
     Issue #393: KeyError handling still works when preprocess doesn't escape a key.
 
     After the preprocess fix, most unknown keys are escaped and become literal text.
-    However, if a key in exclude_keys is referenced but not actually in context,
+    However, if a key in exclude is referenced but not actually in context,
     a KeyError can still occur. This test verifies the error handling still works.
 
-    Note: This is an edge case that shouldn't happen in practice since exclude_keys
+    Note: This is an edge case that shouldn't happen in practice since exclude
     comes from context.keys().
     """
     mock_run, mock_load, mock_console = mock_dependencies
@@ -1688,11 +1688,11 @@ End template'''
     with patch("pdd.agentic_bug_orchestrator.preprocess") as mock_preprocess:
         def escape_braces(template, **kwargs):
             # Escape JSON braces but preserve {issue_url} and other context placeholders
-            exclude_keys = kwargs.get("exclude_keys", [])
+            exclude = kwargs.get("exclude", [])
             # Replace all single braces with double braces
             escaped = template.replace("{", "{{").replace("}", "}}")
             # Restore the context placeholders (un-double them)
-            for key in exclude_keys:
+            for key in exclude:
                 escaped = escaped.replace("{{" + key + "}}", "{" + key + "}")
             return escaped
 
@@ -1705,9 +1705,9 @@ End template'''
         assert mock_preprocess.called, "preprocess() must be called before .format()"
 
 
-def test_template_preprocessing_exclude_keys_contains_all_context_keys(mock_dependencies, default_args):
+def test_template_preprocessing_exclude_contains_all_context_keys(mock_dependencies, default_args):
     """
-    Verify exclude_keys parameter includes all context keys to prevent escaping placeholders.
+    Verify exclude parameter includes all context keys to prevent escaping placeholders.
     """
     mock_run, mock_load, mock_console = mock_dependencies
     mock_load.return_value = "Template for {issue_url}"
@@ -1724,10 +1724,10 @@ def test_template_preprocessing_exclude_keys_contains_all_context_keys(mock_depe
 
         run_agentic_bug_orchestrator(**default_args)
 
-        # Verify exclude_keys contains the context keys
+        # Verify exclude contains the context keys
         call_kwargs = mock_preprocess.call_args[1]
-        exclude_keys = call_kwargs.get("exclude_keys", [])
-        assert "issue_url" in exclude_keys, "issue_url must be in exclude_keys"
+        exclude = call_kwargs.get("exclude", [])
+        assert "issue_url" in exclude, "issue_url must be in exclude"
 
 
 def test_template_preprocessing_double_curly_brackets_enabled(mock_dependencies, default_args):
@@ -1790,8 +1790,8 @@ def test_step5_5_real_template_formats_without_keyerror():
     }
 
     # Apply preprocessing (the fix)
-    exclude_keys = list(context.keys())
-    processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+    exclude = list(context.keys())
+    processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude=exclude)
 
     # This should NOT raise KeyError - the bug was JSON braces like {"url": ...}
     # in prompting_guide.md being interpreted as format placeholders

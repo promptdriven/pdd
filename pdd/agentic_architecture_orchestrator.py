@@ -672,8 +672,8 @@ def run_agentic_architecture_orchestrator(
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
         prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
         formatted_prompt = prompt_template
         for key, value in context.items():
@@ -782,8 +782,8 @@ def run_agentic_architecture_orchestrator(
                 complexity_template_name = "agentic_arch_step1b_complexity_LLM"
                 complexity_template = load_prompt_template(complexity_template_name)
                 if complexity_template:
-                    exclude_keys_1b = list(context.keys())
-                    complexity_template = preprocess(complexity_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_1b)
+                    exclude_1b = list(context.keys())
+                    complexity_template = preprocess(complexity_template, recursive=True, double_curly_brackets=True, exclude=exclude_1b)
                     complexity_template = complexity_template.replace("{{", "{").replace("}}", "}")
                     formatted_complexity = complexity_template
                     for key, value in context.items():
@@ -834,8 +834,8 @@ def run_agentic_architecture_orchestrator(
             scan_template_name = "agentic_arch_step2b_codebase_scan_LLM"
             scan_template = load_prompt_template(scan_template_name)
             if scan_template:
-                exclude_keys_2b = list(context.keys())
-                scan_template = preprocess(scan_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_2b)
+                exclude_2b = list(context.keys())
+                scan_template = preprocess(scan_template, recursive=True, double_curly_brackets=True, exclude=exclude_2b)
                 scan_template = scan_template.replace("{{", "{").replace("}}", "}")
                 formatted_scan = scan_template
                 for key, value in context.items():
@@ -921,8 +921,8 @@ def run_agentic_architecture_orchestrator(
                     console.print(f"[yellow]Warning: Missing template {gate_template_name}, skipping 5b[/yellow]")
                 break
 
-            exclude_keys_5b = list(context.keys())
-            gate_template = preprocess(gate_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_5b)
+            exclude_5b = list(context.keys())
+            gate_template = preprocess(gate_template, recursive=True, double_curly_brackets=True, exclude=exclude_5b)
             gate_template = gate_template.replace("{{", "{").replace("}}", "}")
             formatted_gate = gate_template
             for key, value in context.items():
@@ -959,8 +959,8 @@ def run_agentic_architecture_orchestrator(
                 fix_template = load_prompt_template(fix_template_name)
                 if fix_template:
                     context["step5b_validation_output"] = gate_output
-                    exclude_keys_fix = list(context.keys())
-                    fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
+                    exclude_fix = list(context.keys())
+                    fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude=exclude_fix)
                     fix_template = fix_template.replace("{{", "{").replace("}}", "}")
                     formatted_fix = fix_template
                     for key, value in context.items():
@@ -1040,8 +1040,8 @@ def run_agentic_architecture_orchestrator(
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
         prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
         formatted_prompt = prompt_template
         for key, value in context.items():
@@ -1277,8 +1277,8 @@ def run_agentic_architecture_orchestrator(
             review_template_name = "agentic_arch_step7b_review_LLM"
             review_template = load_prompt_template(review_template_name)
             if review_template:
-                exclude_keys_7b = list(context.keys())
-                review_template = preprocess(review_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_7b)
+                exclude_7b = list(context.keys())
+                review_template = preprocess(review_template, recursive=True, double_curly_brackets=True, exclude=exclude_7b)
                 review_template = review_template.replace("{{", "{").replace("}}", "}")
                 formatted_review = review_template
                 for key, value in context.items():
@@ -1412,8 +1412,8 @@ def run_agentic_architecture_orchestrator(
         ctx_template_name = "agentic_arch_step8_5_context_docs_LLM"
         ctx_template = load_prompt_template(ctx_template_name)
         if ctx_template:
-            exclude_keys_8_5 = list(context.keys())
-            ctx_template = preprocess(ctx_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_8_5)
+            exclude_8_5 = list(context.keys())
+            ctx_template = preprocess(ctx_template, recursive=True, double_curly_brackets=True, exclude=exclude_8_5)
             ctx_template = ctx_template.replace("{{", "{").replace("}}", "}")
             formatted_ctx = ctx_template
             for key, value in context.items():
@@ -1493,8 +1493,8 @@ def run_agentic_architecture_orchestrator(
             return False, f"Missing prompt template: {template_name_9}", total_cost, model_used, []
 
         # Preprocess to expand <include> tags and escape curly braces
-        exclude_keys_9 = list(context.keys())
-        prompt_template_9 = preprocess(prompt_template_9, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9)
+        exclude_9 = list(context.keys())
+        prompt_template_9 = preprocess(prompt_template_9, recursive=True, double_curly_brackets=True, exclude=exclude_9)
 
         # Safe substitution (Issue #549): un-double template braces first, then substitute.
         prompt_template_9 = prompt_template_9.replace("{{", "{").replace("}}", "}")
@@ -1560,8 +1560,8 @@ def run_agentic_architecture_orchestrator(
                 else:
                     context["pddrc_content"] = ""
 
-            exclude_keys_9b = list(context.keys())
-            audit_template = preprocess(audit_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9b)
+            exclude_9b = list(context.keys())
+            audit_template = preprocess(audit_template, recursive=True, double_curly_brackets=True, exclude=exclude_9b)
             audit_template = audit_template.replace("{{", "{").replace("}}", "}")
             formatted_audit = audit_template
             for key, value in context.items():
@@ -1623,8 +1623,8 @@ def run_agentic_architecture_orchestrator(
         reconcile_template_name = "cross_issue_reconcile_LLM"
         reconcile_template = load_prompt_template(reconcile_template_name)
         if reconcile_template:
-            exclude_keys_9c = list(context.keys())
-            reconcile_template = preprocess(reconcile_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9c)
+            exclude_9c = list(context.keys())
+            reconcile_template = preprocess(reconcile_template, recursive=True, double_curly_brackets=True, exclude=exclude_9c)
             reconcile_template = reconcile_template.replace("{{", "{").replace("}}", "}")
             formatted_reconcile = reconcile_template
             for key, value in context.items():
@@ -1714,8 +1714,8 @@ def run_agentic_architecture_orchestrator(
                     return True  # Skip this validation if template missing
 
                 # Preprocess to expand <include> tags and escape curly braces
-                exclude_keys_val = list(context.keys())
-                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_val)
+                exclude_val = list(context.keys())
+                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude_val)
 
                 # Safe substitution (Issue #549): un-double template braces first, then substitute.
                 prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
@@ -1755,8 +1755,8 @@ def run_agentic_architecture_orchestrator(
                         context["failed_validation_output"] = output
 
                         # Preprocess to expand <include> tags and escape curly braces
-                        exclude_keys_fix = list(context.keys())
-                        fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_fix)
+                        exclude_fix = list(context.keys())
+                        fix_template = preprocess(fix_template, recursive=True, double_curly_brackets=True, exclude=exclude_fix)
 
                         # Safe substitution (Issue #549): un-double template braces first, then substitute.
                         fix_template = fix_template.replace("{{", "{").replace("}}", "}")

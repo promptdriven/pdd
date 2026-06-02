@@ -163,7 +163,7 @@ def insert_includes(
             insert_includes_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["actual_prompt_to_update", "actual_dependencies_to_insert"]
+            exclude=["actual_prompt_to_update", "actual_dependencies_to_insert"]
         )
 
         if verbose:

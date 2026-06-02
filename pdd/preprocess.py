@@ -225,7 +225,7 @@ def compute_user_intent_paths(text: str) -> set:
     return paths
 
 
-def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude: Optional[List[str]] = None, compress: bool = False, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     try:
         # Some tests patch template loading to return mock objects with .format().
         # In that case preprocessing is not applicable; return as string.
@@ -242,16 +242,16 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
         if _failed is None:
             _failed = []
         _DEBUG_EVENTS.clear()
-        _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
+        _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude={exclude}, compress={compress})")
         _dbg(f"Initial length: {len(prompt)} characters")
         if not _is_quiet_mode():
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
         prompt = process_backtick_includes(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
         _dbg("After backtick includes processed")
-        prompt = process_xml_tags(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
+        prompt = process_xml_tags(prompt, recursive, compress=compress, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
-            prompt = double_curly(prompt, exclude_keys)
+            prompt = double_curly(prompt, exclude)
             _dbg("After double_curly execution")
         # Scan for risky placeholders remaining outside code fences
         singles, templates = _scan_risky_placeholders(prompt)
@@ -445,7 +445,7 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
         iterations += 1
     return current_text
 
-def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def process_xml_tags(text: str, recursive: bool, compress: bool = False, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
     # If the caller supplied an explicit user-intent set, use it directly
@@ -466,8 +466,8 @@ def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _f
     else:
         user_intent_many_paths = None
     text = process_pdd_tags(text)
-    text = process_include_tags(text, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
-    text = process_include_many_tags(text, recursive, _failed=_failed, _user_intent_paths=user_intent_many_paths)
+    text = process_include_tags(text, recursive, compress=compress, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
+    text = process_include_many_tags(text, recursive, compress=compress, _failed=_failed, _user_intent_paths=user_intent_many_paths)
     text = process_shell_tags(text, recursive)
     text = process_web_tags(text, recursive)
     return text
@@ -485,7 +485,7 @@ def _parse_attrs(attr_str: str) -> dict:
         attrs["optional"] = "true"
     return attrs
 
-def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def process_include_tags(text: str, recursive: bool, compress: bool = False, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
     # Support both <include>path</include> and <include path="path" attrs... />
@@ -581,7 +581,10 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                     # Apply selectors if any
                     selectors_str = attrs.get('select')
                     lines_str = attrs.get('lines')
-                    mode = attrs.get('mode', 'full')
+                    # Default mode to "compressed" if compress=True and no explicit mode
+                    mode = attrs.get('mode')
+                    if not mode:
+                        mode = "compressed" if compress else "full"
 
                     if selectors_str or lines_str or mode != 'full':
                         selectors = []
@@ -887,6 +890,7 @@ def process_web_tags(text: str, recursive: bool) -> str:
 def process_include_many_tags(
     text: str,
     recursive: bool,
+    compress: bool = False,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
 ) -> str:
@@ -956,9 +960,9 @@ def process_include_many_tags(
         return replace_many(match)
     return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
-def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
-    if exclude_keys is None:
-        exclude_keys = []
+def double_curly(text: str, exclude: Optional[List[str]] = None) -> str:
+    if exclude is None:
+        exclude = []
     
     if not _is_quiet_mode():
         console.print("Doubling curly brackets...")
@@ -976,7 +980,7 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     text = re.sub(r'\{\{([^{}]*)\}\}', r'__ALREADY_DOUBLED__\1__END_ALREADY__', text)
     
     # Process excluded keys
-    for key in exclude_keys:
+    for key in exclude:
         pattern = r'\{(' + re.escape(key) + r')\}'
         text = re.sub(pattern, r'__EXCLUDED__\1__END_EXCLUDED__', text)
     

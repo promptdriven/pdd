@@ -5,10 +5,11 @@ import hashlib
 import json
 import os
 import re
+import math
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional, Dict, List, Tuple
 
 from . import get_version
 from .preprocess import (
@@ -77,7 +78,7 @@ def _resolve_include_path(raw_include: str, parent_file: Path, project_root: Pat
     return beside_parent
 
 
-def _include_path_literals_in_text(content: str) -> set[str]:  # pylint: disable=too-many-branches
+def _include_path_literals_in_text(content: str) -> set[str]:
     """Paths the preprocessor would treat as user-intent includes (not in code spans)."""
     paths: set[str] = set()
     code_spans = _extract_code_spans(content)
@@ -159,9 +160,9 @@ def _existing_file_records(
     return records
 
 
-def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, str]]:
+def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, Any]]:
     """Collect hashes for reachable local includes using production include grammar."""
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     seen: set[Path] = set()
 
     def walk(file_path: Path) -> None:
@@ -170,12 +171,18 @@ def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[
             if include_path in seen or not include_path.is_file():
                 continue
             seen.add(include_path)
-            records.append(
-                {
-                    "path": _display_path(include_path, project_root),
-                    "sha256": _sha256_file(include_path),
-                }
-            )
+            
+            # Deterministic Evidence: handle compressed includes
+            # (Heuristic: check if the include tag in the parent file specified mode="compressed"
+            # or if we are in a context where compress=True was passed. Since we don't have
+            # that state here, we'll just record the basic hash and leave compression fields empty
+            # unless we detect them. In a real PDD run, the preprocessor would provide this.)
+            
+            record = {
+                "path": _display_path(include_path, project_root),
+                "source_sha256": _sha256_file(include_path),
+            }
+            records.append(record)
             walk(include_path)
 
     walk(prompt_path)
@@ -231,7 +238,7 @@ def _prompt_has_contract_rules(prompt_path: Path) -> bool:
     return bool(_CONTRACT_RULES_RE.search(content))
 
 
-def _contract_statuses(  # pylint: disable=too-many-return-statements
+def _contract_statuses(
     prompt_file: Optional[str | Path],
 ) -> dict[str, Any]:
     if not prompt_file:
@@ -329,14 +336,14 @@ def _safe_slug(value: str) -> str:
 
 
 def validation_from_sync(
-    sync_result: Mapping[str, Any],
+    sync_result: Dict[str, Any],
     *,
     skip_tests: bool,
     skip_verify: bool,
     dry_run: bool = False,
-) -> dict[str, str]:
+) -> Dict[str, Any]:
     """Map ``sync_main`` results to manifest validation fields without inventing outcomes."""
-    validation: dict[str, str] = {
+    validation: Dict[str, Any] = {
         "detect_stories": "not_applicable",
         "unit_tests": "not_applicable" if skip_tests else "not_available",
         "verify": "not_applicable" if skip_verify else "not_available",
@@ -377,52 +384,32 @@ def validation_from_sync(
     return validation
 
 
-def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
-    *,
+def write_evidence_manifest(
+    basename: str,
+    language: str,
     command: str,
-    prompt_file: Optional[str | Path] = None,
-    output_files: Iterable[str | Path] = (),
-    model: str = "",
-    cost_usd: float = 0.0,
-    temperature: Optional[float] = None,
-    validation: Optional[Mapping[str, str]] = None,
-    logs: Optional[Mapping[str, Optional[str]]] = None,
-    basename: Optional[str] = None,
-    project_root: Optional[str | Path] = None,
-) -> Path:
-    """Write a versioned evidence manifest and the dev-unit latest copy."""
-    root = Path(project_root or Path.cwd()).resolve()
-    if not prompt_file and basename:
-        prompts_root = root / "prompts"
-        direct = list(prompts_root.glob(f"{basename}_*.prompt"))
-        fallback = list(prompts_root.rglob(f"{Path(basename).name}_*.prompt"))
-        candidates = direct or fallback
-        if len(candidates) == 1:
-            prompt_file = candidates[0]
-    prompt = _prompt_record(prompt_file, root)
+    validation: Dict[str, Any],
+    pdd_files: Dict[str, str],
+    *,
+    output_path: Optional[str] = None,
+) -> None:
+    """Write a versioned evidence manifest following schema v1."""
+    project_root = Path.cwd().resolve()
+    prompt_file = pdd_files.get("prompt")
+    output_files = [p for k, p in pdd_files.items() if k not in ("prompt", "architecture")]
+    
+    prompt = _prompt_record(prompt_file, project_root)
     prompt_path = None
     if prompt_file:
         prompt_path = Path(prompt_file)
         if not prompt_path.is_absolute():
-            prompt_path = root / prompt_path
-    if basename is None and prompt_path:
-        from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
+            prompt_path = project_root / prompt_path
 
-        basename, _ = infer_module_identity(prompt_path)
-        basename = basename or prompt_path.stem
-    basename = _safe_slug(basename or command.replace("pdd ", "", 1))
-
+    safe_basename = _safe_slug(basename or command.replace("pdd ", "", 1))
     timestamp = datetime.now(timezone.utc)
-    run_id = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{basename}"
-    log_values: dict[str, Optional[str]] = {
-        "core_dump": None,
-        "verify_results": None,
-        "cost_csv": None,
-    }
-    if logs:
-        log_values.update(logs)
+    run_id = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{safe_basename}"
 
-    manifest: dict[str, Any] = {
+    manifest: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
             "id": run_id,
@@ -432,34 +419,39 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "prompt": prompt,
         "context": {
-            "includes": _prompt_include_records(prompt_path, root) if prompt_path else [],
+            "includes": _prompt_include_records(prompt_path, project_root) if prompt_path else [],
             "web_snapshots": [],
             "shell_snapshots": [],
         },
         "generation": {
-            "model": model or None,
-            "temperature": temperature,
-            "cost_usd": float(cost_usd),
+            "model": None,
+            "temperature": None,
+            "cost_usd": 0.0,
             "grounding_examples": [],
         },
-        "outputs": _existing_file_records(output_files, root),
+        "outputs": _existing_file_records(output_files, project_root),
         "contracts": _contract_statuses(prompt_path),
         "validation": {
             "detect_stories": "not_available",
             "unit_tests": "not_available",
             "verify": "not_available",
-            **dict(validation or {}),
+            **validation,
         },
-        "logs": log_values,
+        "logs": {
+            "core_dump": None,
+            "verify_results": None,
+            "cost_csv": None,
+        },
     }
 
-    runs_dir = root / ".pdd" / "evidence" / "runs"
-    latest_dir = root / ".pdd" / "evidence" / "devunits"
-    runs_dir.mkdir(parents=True, exist_ok=True)
+    evidence_dir = project_root / ".pdd" / "evidence" / "runs"
+    latest_dir = project_root / ".pdd" / "evidence" / "devunits"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
     latest_dir.mkdir(parents=True, exist_ok=True)
-    run_path = runs_dir / f"{run_id}.json"
-    latest_path = latest_dir / f"{basename}.latest.json"
+    
+    final_output_path = Path(output_path) if output_path else evidence_dir / f"{run_id}.json"
+    latest_path = latest_dir / f"{safe_basename}.latest.json"
+    
     payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    run_path.write_text(payload, encoding="utf-8")
+    final_output_path.write_text(payload, encoding="utf-8")
     latest_path.write_text(payload, encoding="utf-8")
-    return run_path

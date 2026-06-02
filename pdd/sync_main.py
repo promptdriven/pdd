@@ -604,6 +604,8 @@ def sync_main(
     steer_timeout: Optional[float] = None,
     agentic_mode: bool = False,
     one_session: bool = False,
+    compress: bool = False,
+    evidence: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -767,6 +769,8 @@ def sync_main(
                 no_steer=no_steer,
                 steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                 agentic_mode=agentic_mode,
+                compress=compress,
+                evidence=evidence,
             )
         return {}, 0.0, ""
 
@@ -1183,6 +1187,7 @@ def sync_main(
                     verbose=verbose,
                     output_cost=output_cost,
                     review_examples=review_examples,
+                    evidence=evidence,
                     local=local,
                     context_config=resolved_config,
                     context_override=context_override,

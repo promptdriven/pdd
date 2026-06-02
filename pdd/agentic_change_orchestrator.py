@@ -1820,8 +1820,8 @@ def run_agentic_change_orchestrator(
 
         # Preprocess to expand <include> tags and escape curly braces
         # Exclude context keys from escaping so they can be substituted
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
 
         formatted_prompt = substitute_template_variables(prompt_template, context)
 
@@ -2148,8 +2148,8 @@ def run_agentic_change_orchestrator(
             context["review_iteration"] = review_iteration
             context["previous_fixes"] = previous_fixes
             # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+            exclude = list(context.keys())
+            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s11_prompt = substitute_template_variables(s11_template, context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
@@ -2185,8 +2185,8 @@ def run_agentic_change_orchestrator(
             s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
             context["step11_output"] = s11_output
             # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+            exclude = list(context.keys())
+            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s12_prompt = substitute_template_variables(s12_template, context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
@@ -2318,8 +2318,8 @@ def run_agentic_change_orchestrator(
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
         # Preprocess to escape curly braces in included content
-        exclude_keys = list(context.keys())
-        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude=exclude)
         s13_prompt = substitute_template_variables(s13_template, context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(

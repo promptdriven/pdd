@@ -465,57 +465,12 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
-    "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
-    "dependencies": [],
-    "priority": 18,
-    "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler daily job configuration"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore compound queries for contribution threshold scanning"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub API for merged PR count verification"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
-        "purpose": "Cloud Functions HTTP entry point for scheduler triggers"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_resurface_check",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
-          }
-        ]
-      }
-    }
-  },
-  {
     "reason": "Enhances test plan with contract/schema validation and accessibility test cases.",
     "description": "Step 5b of the 18-step agentic test workflow. Enhances the test plan with OpenAPI contract validation and axe-core accessibility test cases.",
     "dependencies": [],
     "priority": 210,
     "filename": "agentic_test_step5b_enhance_plan_LLM.prompt",
-    "filepath": "prompts/agentic_test_step5b_enhance_plan_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step5b_enhance_plan_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -540,7 +495,7 @@
     "dependencies": [],
     "priority": 211,
     "filename": "agentic_test_step6_coverage_LLM.prompt",
-    "filepath": "prompts/agentic_test_step6_coverage_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step6_coverage_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -565,7 +520,7 @@
     "dependencies": [],
     "priority": 212,
     "filename": "agentic_test_step7_checklist_LLM.prompt",
-    "filepath": "prompts/agentic_test_step7_checklist_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step7_checklist_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -590,7 +545,7 @@
     "dependencies": [],
     "priority": 213,
     "filename": "agentic_test_step8_manual_test_LLM.prompt",
-    "filepath": "prompts/agentic_test_step8_manual_test_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step8_manual_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -615,7 +570,7 @@
     "dependencies": [],
     "priority": 214,
     "filename": "agentic_test_step9_regression_LLM.prompt",
-    "filepath": "prompts/agentic_test_step9_regression_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step9_regression_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -640,7 +595,7 @@
     "dependencies": [],
     "priority": 215,
     "filename": "agentic_test_step10_validate_LLM.prompt",
-    "filepath": "prompts/agentic_test_step10_validate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step10_validate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -665,7 +620,7 @@
     "dependencies": [],
     "priority": 216,
     "filename": "agentic_test_step11_loop_LLM.prompt",
-    "filepath": "prompts/agentic_test_step11_loop_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step11_loop_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -690,7 +645,7 @@
     "dependencies": [],
     "priority": 217,
     "filename": "agentic_test_step15_plan_validation_LLM.prompt",
-    "filepath": "prompts/agentic_test_step15_plan_validation_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step15_plan_validation_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -922,7 +877,7 @@
     "dependencies": [],
     "priority": 25,
     "filename": "agentic_crash_explore_LLM.prompt",
-    "filepath": "prompts/agentic_crash_explore_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_crash_explore_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -946,7 +901,7 @@
     "dependencies": [],
     "priority": 26,
     "filename": "agentic_fix_explore_LLM.prompt",
-    "filepath": "prompts/agentic_fix_explore_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_fix_explore_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -971,7 +926,7 @@
     "dependencies": [],
     "priority": 27,
     "filename": "agentic_update_LLM.prompt",
-    "filepath": "prompts/agentic_update_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_update_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -995,7 +950,7 @@
     "dependencies": [],
     "priority": 28,
     "filename": "agentic_verify_explore_LLM.prompt",
-    "filepath": "prompts/agentic_verify_explore_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_verify_explore_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -1172,7 +1127,7 @@
     "dependencies": [],
     "priority": 32,
     "filename": "sync_analysis_LLM.prompt",
-    "filepath": "prompts/sync_analysis_LLM.prompt",
+    "filepath": "pdd/prompts/sync_analysis_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -1325,7 +1280,7 @@
         "functions": [
           {
             "name": "auto_deps_main",
-            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, _skip_finalization: bool = False)",
+            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, compress: bool = False, _skip_finalization: bool = False)",
             "returns": "Tuple[str, float, str]"
           }
         ]
@@ -1624,7 +1579,13 @@
   {
     "reason": "Automatically selects relevant code and doc includes for prompts using two-stage retrieval.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "summarize_directory_python.prompt",
+      "embed_retrieve_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 45,
     "filename": "auto_include_python.prompt",
     "filepath": "pdd/auto_include.py",
@@ -1638,7 +1599,7 @@
         "functions": [
           {
             "name": "auto_include",
-            "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
+            "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None, compress: bool = False)",
             "returns": "Tuple[str, str, float, str]",
             "sideEffects": [
               "None"
@@ -2208,7 +2169,13 @@
   {
     "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "auto_include_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2222,7 +2189,7 @@
         "functions": [
           {
             "name": "insert_includes",
-            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
+            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False)",
             "returns": "Tuple[str, str, float, str]",
             "sideEffects": [
               "None"
@@ -2255,7 +2222,7 @@
     ],
     "priority": 61,
     "filename": "split_LLM.prompt",
-    "filepath": "prompts/split_LLM.prompt",
+    "filepath": "pdd/prompts/split_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -2803,6 +2770,11 @@
       "module": {
         "functions": [
           {
+            "name": "sync_orchestration",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, compress: bool = False, evidence: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
             "name": "load_sync_log",
             "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
             "returns": "List[Dict[str, Any]]",
@@ -2852,8 +2824,9 @@
           },
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, compress: bool = False, evidence: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+,
             "sideEffects": [
               "None"
             ]
@@ -2981,7 +2954,7 @@
     "dependencies": [],
     "priority": 72,
     "filename": "agentic_bug_step1_duplicate_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step1_duplicate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step1_duplicate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3005,7 +2978,7 @@
     "dependencies": [],
     "priority": 73,
     "filename": "agentic_bug_step2_docs_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step2_docs_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step2_docs_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3029,7 +3002,7 @@
     "dependencies": [],
     "priority": 74,
     "filename": "agentic_bug_step3_triage_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step3_triage_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step3_triage_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3048,36 +3021,12 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step4 reproduce operations.",
-    "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15280,
-      "y": 660
-    }
-  },
-  {
     "reason": "Analyzes bug root cause and classifies scope as LOCALIZED/SIBLING_PATTERN/CROSS_CUTTING with mandatory sibling search.",
     "description": "Defines the prompt structure for agentic bug step6 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 76,
     "filename": "agentic_bug_step6_root_cause_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step6_root_cause_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step6_root_cause_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3101,7 +3050,7 @@
     "dependencies": [],
     "priority": 77,
     "filename": "agentic_bug_step8_test_plan_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step8_test_plan_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3126,7 +3075,7 @@
     "dependencies": [],
     "priority": 78,
     "filename": "agentic_bug_step9_generate_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_generate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step9_generate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3151,7 +3100,7 @@
     "dependencies": [],
     "priority": 79,
     "filename": "agentic_bug_step10_verify_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_verify_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step10_verify_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3170,37 +3119,12 @@
     }
   },
   {
-    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
-    "dependencies": [],
-    "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "command",
-      "command": {
-        "name": "agentic_bug_step10",
-        "description": "Generate draft PR with failing tests and link to GitHub issue"
-      }
-    },
-    "position": {
-      "x": 15000,
-      "y": 220
-    }
-  },
-  {
     "reason": "Fallback fix strategy for non-Python PDD projects where normal fix loop failed.",
     "description": "LLM prompt template for fixing failing tests in non-Python PDD projects. Runs as fallback after PDD normal fix loop failed multiple times. Follows PDD principle that prompt file is source of truth.",
     "dependencies": [],
     "priority": 81,
     "filename": "agentic_fix_nonpython_LLM.prompt",
-    "filepath": "prompts/agentic_fix_nonpython_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_fix_nonpython_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3225,7 +3149,7 @@
     "dependencies": [],
     "priority": 82,
     "filename": "agentic_fix_primary_LLM.prompt",
-    "filepath": "prompts/agentic_fix_primary_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_fix_primary_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3250,7 +3174,7 @@
     "dependencies": [],
     "priority": 83,
     "filename": "auto_include_LLM.prompt",
-    "filepath": "prompts/auto_include_LLM.prompt",
+    "filepath": "pdd/prompts/auto_include_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3320,7 +3244,7 @@
     "dependencies": [],
     "priority": 85,
     "filename": "bug_to_unit_test_LLM.prompt",
-    "filepath": "prompts/bug_to_unit_test_LLM.prompt",
+    "filepath": "pdd/prompts/bug_to_unit_test_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3344,7 +3268,7 @@
     "dependencies": [],
     "priority": 86,
     "filename": "change_LLM.prompt",
-    "filepath": "prompts/change_LLM.prompt",
+    "filepath": "pdd/prompts/change_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3367,7 +3291,7 @@
     "dependencies": [],
     "priority": 87,
     "filename": "code_patcher_LLM.prompt",
-    "filepath": "prompts/code_patcher_LLM.prompt",
+    "filepath": "pdd/prompts/code_patcher_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3421,7 +3345,7 @@
     "dependencies": [],
     "priority": 89,
     "filename": "conflict_LLM.prompt",
-    "filepath": "prompts/conflict_LLM.prompt",
+    "filepath": "pdd/prompts/conflict_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3444,7 +3368,7 @@
     "dependencies": [],
     "priority": 90,
     "filename": "continue_generation_LLM.prompt",
-    "filepath": "prompts/continue_generation_LLM.prompt",
+    "filepath": "pdd/prompts/continue_generation_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3467,7 +3391,7 @@
     "dependencies": [],
     "priority": 91,
     "filename": "detect_change_LLM.prompt",
-    "filepath": "prompts/detect_change_LLM.prompt",
+    "filepath": "pdd/prompts/detect_change_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3490,7 +3414,7 @@
     "dependencies": [],
     "priority": 92,
     "filename": "diff_analyzer_LLM.prompt",
-    "filepath": "prompts/diff_analyzer_LLM.prompt",
+    "filepath": "pdd/prompts/diff_analyzer_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3513,7 +3437,7 @@
     "dependencies": [],
     "priority": 94,
     "filename": "example_generator_LLM.prompt",
-    "filepath": "prompts/example_generator_LLM.prompt",
+    "filepath": "pdd/prompts/example_generator_LLM.prompt",
     "tags": [
       "config",
       "generation",
@@ -3532,36 +3456,12 @@
     }
   },
   {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
-      "y": 0
-    }
-  },
-  {
     "reason": "LLM prompt template for extract code operations.",
     "description": "Defines the prompt structure for extract code. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 96,
     "filename": "extract_code_LLM.prompt",
-    "filepath": "prompts/extract_code_LLM.prompt",
+    "filepath": "pdd/prompts/extract_code_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3585,7 +3485,7 @@
     "dependencies": [],
     "priority": 97,
     "filename": "extract_conflict_LLM.prompt",
-    "filepath": "prompts/extract_conflict_LLM.prompt",
+    "filepath": "pdd/prompts/extract_conflict_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3609,7 +3509,7 @@
     "dependencies": [],
     "priority": 98,
     "filename": "extract_detect_change_LLM.prompt",
-    "filepath": "prompts/extract_detect_change_LLM.prompt",
+    "filepath": "pdd/prompts/extract_detect_change_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3633,7 +3533,7 @@
     "dependencies": [],
     "priority": 99,
     "filename": "extract_program_code_fix_LLM.prompt",
-    "filepath": "prompts/extract_program_code_fix_LLM.prompt",
+    "filepath": "pdd/prompts/extract_program_code_fix_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3658,7 +3558,7 @@
     "dependencies": [],
     "priority": 100,
     "filename": "extract_prompt_change_LLM.prompt",
-    "filepath": "prompts/extract_prompt_change_LLM.prompt",
+    "filepath": "pdd/prompts/extract_prompt_change_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3682,7 +3582,7 @@
     "dependencies": [],
     "priority": 101,
     "filename": "extract_prompt_split_LLM.prompt",
-    "filepath": "prompts/extract_prompt_split_LLM.prompt",
+    "filepath": "pdd/prompts/extract_prompt_split_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3706,7 +3606,7 @@
     "dependencies": [],
     "priority": 102,
     "filename": "extract_prompt_update_LLM.prompt",
-    "filepath": "prompts/extract_prompt_update_LLM.prompt",
+    "filepath": "pdd/prompts/extract_prompt_update_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3730,7 +3630,7 @@
     "dependencies": [],
     "priority": 103,
     "filename": "extract_promptline_LLM.prompt",
-    "filepath": "prompts/extract_promptline_LLM.prompt",
+    "filepath": "pdd/prompts/extract_promptline_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3754,7 +3654,7 @@
     "dependencies": [],
     "priority": 104,
     "filename": "extract_unit_code_fix_LLM.prompt",
-    "filepath": "prompts/extract_unit_code_fix_LLM.prompt",
+    "filepath": "pdd/prompts/extract_unit_code_fix_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3779,7 +3679,7 @@
     "dependencies": [],
     "priority": 105,
     "filename": "extract_xml_LLM.prompt",
-    "filepath": "prompts/extract_xml_LLM.prompt",
+    "filepath": "pdd/prompts/extract_xml_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3834,7 +3734,7 @@
     "dependencies": [],
     "priority": 107,
     "filename": "find_verification_errors_LLM.prompt",
-    "filepath": "prompts/find_verification_errors_LLM.prompt",
+    "filepath": "pdd/prompts/find_verification_errors_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3857,7 +3757,7 @@
     "dependencies": [],
     "priority": 108,
     "filename": "fix_code_module_errors_LLM.prompt",
-    "filepath": "prompts/fix_code_module_errors_LLM.prompt",
+    "filepath": "pdd/prompts/fix_code_module_errors_LLM.prompt",
     "tags": [
       "config",
       "fix",
@@ -3881,7 +3781,7 @@
     "dependencies": [],
     "priority": 109,
     "filename": "fix_verification_errors_LLM.prompt",
-    "filepath": "prompts/fix_verification_errors_LLM.prompt",
+    "filepath": "pdd/prompts/fix_verification_errors_LLM.prompt",
     "tags": [
       "config",
       "fix",
@@ -3905,7 +3805,7 @@
     "dependencies": [],
     "priority": 110,
     "filename": "generate_test_LLM.prompt",
-    "filepath": "prompts/generate_test_LLM.prompt",
+    "filepath": "pdd/prompts/generate_test_LLM.prompt",
     "tags": [
       "generation",
       "llm",
@@ -3935,7 +3835,7 @@
     "dependencies": [],
     "priority": 111,
     "filename": "increase_tests_LLM.prompt",
-    "filepath": "prompts/increase_tests_LLM.prompt",
+    "filepath": "pdd/prompts/increase_tests_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3959,7 +3859,7 @@
     "dependencies": [],
     "priority": 112,
     "filename": "insert_includes_LLM.prompt",
-    "filepath": "prompts/insert_includes_LLM.prompt",
+    "filepath": "pdd/prompts/insert_includes_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4139,27 +4039,6 @@
     }
   },
   {
-    "reason": "Configuration data for pdd theme.",
-    "description": "Defines pdd theme settings and data. Used by runtime modules.",
-    "dependencies": [],
-    "priority": 119,
-    "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
-    "tags": [
-      "config"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 4800,
-      "y": 1100
-    }
-  },
-  {
     "reason": "Module that post-process the string output of a LLM so that the code can be run.",
     "description": "Implements functionality to post-process the string output of a LLM so that the code can be run. Integrates with PDD workflow.",
     "dependencies": [],
@@ -4330,46 +4209,6 @@
     }
   },
   {
-    "reason": "Implements regression analysis functionality.",
-    "description": "Provides regression analysis capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 124,
-    "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
-    "tags": [
-      "config"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 5960,
-      "y": 0
-    }
-  },
-  {
-    "reason": "Implements regression functionality.",
-    "description": "Provides regression capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 125,
-    "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
-    "tags": [
-      "cli",
-      "shell"
-    ],
-    "interface": {
-      "type": "cli"
-    },
-    "position": {
-      "x": 5400,
-      "y": 440
-    }
-  },
-  {
     "reason": "Renders Mermaid diagrams to HTML.",
     "description": "Converts Mermaid diagram specifications to HTML visualization. Used for architecture diagrams.",
     "dependencies": [],
@@ -4413,26 +4252,6 @@
     },
     "position": {
       "x": 10200,
-      "y": 0
-    }
-  },
-  {
-    "reason": "Generates run generated from specifications.",
-    "description": "Creates run generated using LLM. Handles input processing, generation, and output validation.",
-    "dependencies": [],
-    "priority": 127,
-    "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
-    "tags": [
-      "generation",
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    },
-    "position": {
-      "x": 6880,
       "y": 0
     }
   },
@@ -4518,7 +4337,7 @@
     "dependencies": [],
     "priority": 131,
     "filename": "summarize_file_LLM.prompt",
-    "filepath": "prompts/summarize_file_LLM.prompt",
+    "filepath": "pdd/prompts/summarize_file_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4916,7 +4735,7 @@
     "dependencies": [],
     "priority": 135,
     "filename": "trace_LLM.prompt",
-    "filepath": "prompts/trace_LLM.prompt",
+    "filepath": "pdd/prompts/trace_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4939,7 +4758,7 @@
     "dependencies": [],
     "priority": 136,
     "filename": "trim_results_LLM.prompt",
-    "filepath": "prompts/trim_results_LLM.prompt",
+    "filepath": "pdd/prompts/trim_results_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4962,7 +4781,7 @@
     "dependencies": [],
     "priority": 137,
     "filename": "trim_results_start_LLM.prompt",
-    "filepath": "prompts/trim_results_start_LLM.prompt",
+    "filepath": "pdd/prompts/trim_results_start_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4985,7 +4804,7 @@
     "dependencies": [],
     "priority": 138,
     "filename": "unfinished_prompt_LLM.prompt",
-    "filepath": "prompts/unfinished_prompt_LLM.prompt",
+    "filepath": "pdd/prompts/unfinished_prompt_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -5047,7 +4866,7 @@
     "dependencies": [],
     "priority": 140,
     "filename": "update_prompt_LLM.prompt",
-    "filepath": "prompts/update_prompt_LLM.prompt",
+    "filepath": "pdd/prompts/update_prompt_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -5103,7 +4922,7 @@
     ],
     "priority": 142,
     "filename": "main_gen_prompt.prompt",
-    "filepath": "prompts/main_gen_prompt.prompt",
+    "filepath": "pdd/prompts/main_gen_prompt.prompt",
     "tags": [
       "config"
     ],
@@ -5116,26 +4935,6 @@
     "position": {
       "x": 12000,
       "y": 2920
-    }
-  },
-  {
-    "reason": "Module that test the prompt for a given prompt file.",
-    "description": "Implements functionality to test the prompt for a given prompt file. Integrates with PDD workflow.",
-    "dependencies": [],
-    "priority": 143,
-    "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
-    "tags": [
-      "module",
-      "python",
-      "testing"
-    ],
-    "interface": {
-      "type": "module"
-    },
-    "position": {
-      "x": 6280,
-      "y": 1020
     }
   },
   {
@@ -5218,7 +5017,7 @@
     ],
     "priority": 145,
     "filename": "xml_convertor_LLM.prompt",
-    "filepath": "prompts/xml_convertor_LLM.prompt",
+    "filepath": "pdd/prompts/xml_convertor_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -5306,12 +5105,13 @@
       "sync"
     ],
     "interface": {
-      "type": "cli",
-      "cli": {
-        "commands": [
+      "type": "module",
+      "module": {
+        "functions": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool) -> Tuple[Dict[str, Any], float, str]"
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False)",
+            "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
       }
@@ -5391,7 +5191,7 @@
     ],
     "priority": 151,
     "filename": "fix_errors_from_unit_tests_LLM.prompt",
-    "filepath": "prompts/fix_errors_from_unit_tests_LLM.prompt",
+    "filepath": "pdd/prompts/fix_errors_from_unit_tests_LLM.prompt",
     "tags": [
       "config",
       "fix",
@@ -5621,7 +5421,7 @@
     "dependencies": [],
     "priority": 207,
     "filename": "incremental_prd_architecture_patch_LLM.prompt",
-    "filepath": "prompts/incremental_prd_architecture_patch_LLM.prompt",
+    "filepath": "pdd/prompts/incremental_prd_architecture_patch_LLM.prompt",
     "tags": [
       "llm",
       "architecture",
@@ -5689,7 +5489,7 @@
     "dependencies": [],
     "priority": 154,
     "filename": "agentic_arch_step1_analyze_prd_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step1_analyze_prd_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step1_analyze_prd_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5720,7 +5520,7 @@
     ],
     "priority": 155,
     "filename": "agentic_arch_step2_analyze_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step2_analyze_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step2_analyze_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5751,7 +5551,7 @@
     ],
     "priority": 156,
     "filename": "agentic_arch_step3_research_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step3_research_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step3_research_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5772,55 +5572,6 @@
     "position": {
       "x": 20400,
       "y": 800
-    }
-  },
-  {
-    "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
-    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
-    "dependencies": [],
-    "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15560,
-      "y": 440
-    }
-  },
-  {
-    "reason": "Generates E2E tests that verify the bug at a system level.",
-    "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
-    "dependencies": [],
-    "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template",
-      "testing"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15880,
-      "y": 440
     }
   },
   {
@@ -5900,7 +5651,7 @@
     ],
     "priority": 170,
     "filename": "agentic_change_step10_architecture_update_LLM.prompt",
-    "filepath": "prompts/agentic_change_step10_architecture_update_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step10_architecture_update_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5924,7 +5675,7 @@
     "dependencies": [],
     "priority": 171,
     "filename": "agentic_change_step11_identify_issues_LLM.prompt",
-    "filepath": "prompts/agentic_change_step11_identify_issues_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step11_identify_issues_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5948,7 +5699,7 @@
     "dependencies": [],
     "priority": 172,
     "filename": "agentic_change_step12_fix_issues_LLM.prompt",
-    "filepath": "prompts/agentic_change_step12_fix_issues_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step12_fix_issues_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5973,7 +5724,7 @@
     "dependencies": [],
     "priority": 173,
     "filename": "agentic_change_step13_create_pr_LLM.prompt",
-    "filepath": "prompts/agentic_change_step13_create_pr_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step13_create_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5997,7 +5748,7 @@
     "dependencies": [],
     "priority": 174,
     "filename": "agentic_change_step1_duplicate_LLM.prompt",
-    "filepath": "prompts/agentic_change_step1_duplicate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step1_duplicate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6021,7 +5772,7 @@
     "dependencies": [],
     "priority": 175,
     "filename": "agentic_change_step2_docs_LLM.prompt",
-    "filepath": "prompts/agentic_change_step2_docs_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step2_docs_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6045,7 +5796,7 @@
     "dependencies": [],
     "priority": 176,
     "filename": "agentic_change_step3_research_LLM.prompt",
-    "filepath": "prompts/agentic_change_step3_research_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step3_research_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6069,7 +5820,7 @@
     "dependencies": [],
     "priority": 177,
     "filename": "agentic_change_step4_clarify_LLM.prompt",
-    "filepath": "prompts/agentic_change_step4_clarify_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step4_clarify_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6093,7 +5844,7 @@
     "dependencies": [],
     "priority": 178,
     "filename": "agentic_change_step5_docs_change_LLM.prompt",
-    "filepath": "prompts/agentic_change_step5_docs_change_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step5_docs_change_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6117,7 +5868,7 @@
     "dependencies": [],
     "priority": 179,
     "filename": "agentic_change_step6_devunits_LLM.prompt",
-    "filepath": "prompts/agentic_change_step6_devunits_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step6_devunits_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6141,7 +5892,7 @@
     "dependencies": [],
     "priority": 180,
     "filename": "agentic_change_step7_architecture_LLM.prompt",
-    "filepath": "prompts/agentic_change_step7_architecture_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step7_architecture_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6165,7 +5916,7 @@
     "dependencies": [],
     "priority": 181,
     "filename": "agentic_change_step8_analyze_LLM.prompt",
-    "filepath": "prompts/agentic_change_step8_analyze_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step8_analyze_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6189,7 +5940,7 @@
     "dependencies": [],
     "priority": 182,
     "filename": "agentic_change_step9_implement_LLM.prompt",
-    "filepath": "prompts/agentic_change_step9_implement_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step9_implement_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6314,7 +6065,7 @@
     "dependencies": [],
     "priority": 185,
     "filename": "agentic_e2e_fix_step1_unit_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step1_unit_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step1_unit_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6340,7 +6091,7 @@
     "dependencies": [],
     "priority": 186,
     "filename": "agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6365,7 +6116,7 @@
     "dependencies": [],
     "priority": 187,
     "filename": "agentic_e2e_fix_step3_root_cause_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step3_root_cause_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step3_root_cause_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6390,7 +6141,7 @@
     "dependencies": [],
     "priority": 188,
     "filename": "agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6415,7 +6166,7 @@
     "dependencies": [],
     "priority": 189,
     "filename": "agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6440,7 +6191,7 @@
     "dependencies": [],
     "priority": 190,
     "filename": "agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6465,7 +6216,7 @@
     "dependencies": [],
     "priority": 191,
     "filename": "agentic_e2e_fix_step7_verify_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step7_verify_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step7_verify_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6490,7 +6241,7 @@
     "dependencies": [],
     "priority": 192,
     "filename": "agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6515,7 +6266,7 @@
     "dependencies": [],
     "priority": 193,
     "filename": "agentic_e2e_fix_step9_verify_all_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6540,7 +6291,7 @@
     "dependencies": [],
     "priority": 194,
     "filename": "agentic_test_generate_LLM.prompt",
-    "filepath": "prompts/agentic_test_generate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_generate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6701,7 +6452,7 @@
     "dependencies": [],
     "priority": 198,
     "filename": "agentic_test_step1_duplicate_LLM.prompt",
-    "filepath": "prompts/agentic_test_step1_duplicate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step1_duplicate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6726,7 +6477,7 @@
     "dependencies": [],
     "priority": 199,
     "filename": "agentic_test_step2_docs_LLM.prompt",
-    "filepath": "prompts/agentic_test_step2_docs_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step2_docs_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6751,7 +6502,7 @@
     "dependencies": [],
     "priority": 200,
     "filename": "agentic_test_step3_clarify_LLM.prompt",
-    "filepath": "prompts/agentic_test_step3_clarify_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step3_clarify_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6776,7 +6527,7 @@
     "dependencies": [],
     "priority": 201,
     "filename": "agentic_test_step4_detect_frontend_LLM.prompt",
-    "filepath": "prompts/agentic_test_step4_detect_frontend_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step4_detect_frontend_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6801,7 +6552,7 @@
     "dependencies": [],
     "priority": 202,
     "filename": "agentic_test_step5_test_plan_LLM.prompt",
-    "filepath": "prompts/agentic_test_step5_test_plan_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step5_test_plan_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6826,7 +6577,7 @@
     "dependencies": [],
     "priority": 203,
     "filename": "agentic_test_step6_generate_tests_LLM.prompt",
-    "filepath": "prompts/agentic_test_step6_generate_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step6_generate_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6851,7 +6602,7 @@
     "dependencies": [],
     "priority": 204,
     "filename": "agentic_test_step7_run_tests_LLM.prompt",
-    "filepath": "prompts/agentic_test_step7_run_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step7_run_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6876,7 +6627,7 @@
     "dependencies": [],
     "priority": 205,
     "filename": "agentic_test_step8_fix_iterate_LLM.prompt",
-    "filepath": "prompts/agentic_test_step8_fix_iterate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step8_fix_iterate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6902,7 +6653,7 @@
     "dependencies": [],
     "priority": 205,
     "filename": "agentic_test_step16_run_tests_LLM.prompt",
-    "filepath": "prompts/agentic_test_step16_run_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step16_run_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6927,7 +6678,7 @@
     "dependencies": [],
     "priority": 206,
     "filename": "agentic_test_step9_submit_pr_LLM.prompt",
-    "filepath": "prompts/agentic_test_step9_submit_pr_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -7108,7 +6859,7 @@
     "dependencies": [],
     "priority": 209,
     "filename": "generate_test_from_example_LLM.prompt",
-    "filepath": "prompts/generate_test_from_example_LLM.prompt",
+    "filepath": "pdd/prompts/generate_test_from_example_LLM.prompt",
     "tags": [
       "llm",
       "template",
@@ -7169,7 +6920,7 @@
     "dependencies": [],
     "priority": 211,
     "filename": "prompt_code_diff_LLM.prompt",
-    "filepath": "prompts/prompt_code_diff_LLM.prompt",
+    "filepath": "pdd/prompts/prompt_code_diff_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -7192,7 +6943,7 @@
     "dependencies": [],
     "priority": 212,
     "filename": "prompt_diff_LLM.prompt",
-    "filepath": "prompts/prompt_diff_LLM.prompt",
+    "filepath": "pdd/prompts/prompt_diff_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -8112,7 +7863,7 @@
     "dependencies": [],
     "priority": 222,
     "filename": "agentic_e2e_fix_step10_ci_validation_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8143,7 +7894,7 @@
     "dependencies": [],
     "priority": 223,
     "filename": "agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8574,7 +8325,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step1_survey_LLM.prompt",
-    "filepath": "prompts/agentic_split_step1_survey_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step1_survey_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8601,7 +8352,7 @@
     ],
     "priority": 227,
     "filename": "agentic_split_step2_diagnose_LLM.prompt",
-    "filepath": "prompts/agentic_split_step2_diagnose_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step2_diagnose_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8628,7 +8379,7 @@
     ],
     "priority": 228,
     "filename": "agentic_split_step3_investigate_LLM.prompt",
-    "filepath": "prompts/agentic_split_step3_investigate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step3_investigate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8655,7 +8406,7 @@
     ],
     "priority": 229,
     "filename": "agentic_split_step4_propose_options_LLM.prompt",
-    "filepath": "prompts/agentic_split_step4_propose_options_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step4_propose_options_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8682,7 +8433,7 @@
     ],
     "priority": 230,
     "filename": "agentic_split_step6_extract_LLM.prompt",
-    "filepath": "prompts/agentic_split_step6_extract_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step6_extract_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8709,7 +8460,7 @@
     ],
     "priority": 231,
     "filename": "agentic_split_step7_assess_LLM.prompt",
-    "filepath": "prompts/agentic_split_step7_assess_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step7_assess_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8736,7 +8487,7 @@
     ],
     "priority": 232,
     "filename": "agentic_split_step8_repair_LLM.prompt",
-    "filepath": "prompts/agentic_split_step8_repair_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step8_repair_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8763,7 +8514,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step0_intent_LLM.prompt",
-    "filepath": "prompts/agentic_split_step0_intent_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step0_intent_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8790,7 +8541,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step6a_phase_extract_LLM.prompt",
-    "filepath": "prompts/agentic_split_step6a_phase_extract_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step6a_phase_extract_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8817,7 +8568,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step9_refine_check_LLM.prompt",
-    "filepath": "prompts/agentic_split_step9_refine_check_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step9_refine_check_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -9112,7 +8863,7 @@
     "dependencies": [],
     "priority": 235,
     "filename": "agentic_sync_identify_modules_LLM.prompt",
-    "filepath": "prompts/agentic_sync_identify_modules_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_sync_identify_modules_LLM.prompt",
     "tags": [
       "llm"
     ],
@@ -9657,11 +9408,102 @@
     }
   },
   {
-    "reason": "Optional per-run JSON evidence manifests for supported commands.",
+    "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
+    "description": "Selects specific sections of source files. Supports line ranges, function/class definitions, and pattern matching.",
+    "dependencies": [
+      "context/python_preamble.prompt"
+    ],
+    "priority": 45,
+    "filename": "content_selector_python.prompt",
+    "filepath": "pdd/content_selector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ContentSelector.select",
+            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "description": "Handles prompt expansion and variable substitution. Core component of the PDD generation pipeline.",
+    "dependencies": [
+      "context/python_preamble.prompt",
+      "path_resolution_python.prompt",
+      "content_selector_python.prompt",
+      "include_query_extractor_python.prompt"
+    ],
+    "priority": 45,
+    "filename": "preprocess_python.prompt",
+    "filepath": "pdd/preprocess.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "preprocess",
+            "signature": "(prompt_content: str, recursive: bool = False, double_curly_brackets: bool = True, exclude: list[str] | None = None, compress: bool = False)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Handles semantic extraction from files using LLMs with persistent caching for reproducibility.",
+    "description": "Uses LLM to extract relevant information from files based on natural language queries. Caches results for performance.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
+    "priority": 45,
+    "filename": "include_query_extractor_python.prompt",
+    "filepath": "pdd/include_query_extractor.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "IncludeQueryExtractor.extract",
+            "signature": "(file_path: str, query: str)",
+            "returns": "str"
+          },
+          {
+            "name": "compute_cache_key",
+            "signature": "(file_path: str, query: str)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Writes optional per-run JSON evidence manifests for supported PDD commands.",
     "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
-    "dependencies": [],
+    "dependencies": [
+      "context/python_preamble.prompt"
+    ],
     "priority": 242,
-    "filename": "pdd/evidence_manifest_python.prompt",
+    "filename": "evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [
       "module",
@@ -9674,18 +9516,13 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(**, command: str, ...) -> Path",
-            "returns": "Path"
+            "signature": "(...)",
+            "returns": "None"
           },
           {
             "name": "validation_from_sync",
-            "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict",
-            "returns": "dict"
-          },
-          {
-            "name": "resolve_generate_output_paths",
-            "signature": "(prompt_file, *, output=None, ...) -> list[str]",
-            "returns": "list[str]"
+            "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)",
+            "returns": "Dict"
           }
         ]
       }

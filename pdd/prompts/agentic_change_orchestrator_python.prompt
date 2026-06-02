@@ -89,7 +89,7 @@ Step 10 bumped from 340s to 600s because the step now covers both architecture m
 
 % Prompt Preprocessing
 Before formatting each step's prompt template, apply a two-step process:
-1. Call `preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))` to expand `<include>` tags and escape curly braces in included content
+1. Call `preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))` to expand `<include>` tags and escape curly braces in included content
 2. Call `substitute_template_variables(processed_template, context)` to replace `{key}` placeholders
 
 This prevents curly braces in included prompt content from being treated as format variables.

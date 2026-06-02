@@ -133,7 +133,7 @@ Step-specific extra keys: 7_assess gets `quantitative_metrics` + `post_split_sta
 % Prompt Preprocessing
 For each LLM step:
 1. `load_prompt_template(template_name)` — abort with `f"Missing template: {template_name}"` if missing
-2. `processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))`
+2. `processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))`
 3. `formatted = substitute_template_variables(processed, context)`
 4. `run_agentic_task(instruction=formatted, cwd=current_work_dir, verbose, quiet, timeout=SPLIT_STEP_TIMEOUTS[step]+timeout_adder, label=step_or_per_child_label, max_retries=DEFAULT_MAX_RETRIES)`
 

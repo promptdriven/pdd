@@ -92,7 +92,7 @@ def preprocess_main(
                 prompt,
                 recursive,
                 double,
-                exclude_keys=exclude,
+                exclude=exclude,
                 _seen=initial_seen,
             )
             total_cost, model_name = 0.0, "N/A"

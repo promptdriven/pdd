@@ -2305,7 +2305,7 @@ def run_agentic_bug_orchestrator(
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))
 
         prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
         formatted_prompt = prompt_template

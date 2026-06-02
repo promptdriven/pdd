@@ -63,6 +63,7 @@ PDD is built on several fundamental concepts, detailed in the PDD methodology:
 4.  **Modularity**: Similar to code, prompts are designed as modular units, often linked via minimal "example" files that act as interfaces, promoting reusability and token efficiency.
 5.  **Synchronization**: A core tenet is maintaining synchronization between the prompt, the generated code, usage examples, and tests. Learning gained during implementation is fed back into the prompts, ensuring they remain accurate and up-to-date. This contrasts with patching approaches where documentation and original specifications often become stale.
 6.  **Batch-Oriented Workflow**: PDD is fundamentally designed as a batch process, allowing for scripted, reproducible generation, contrasting with the inherently interactive nature of many code-patching AI tools.
+7.  **Context-Preserving Compression**: As systems grow in complexity, the amount of relevant context (dependencies, examples, business rules) can exceed LLM context windows. PDD employs AST-based compression to strip non-essential documentation (docstrings, comments) from included code while preserving 100% of the executable logic. This enables dense context engineering, allowing the model to "see" more of the system's implementation without hitting token limits or losing semantic meaning.
 
 ## Key Benefits of PDD
 

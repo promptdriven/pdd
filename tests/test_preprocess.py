@@ -260,19 +260,19 @@ def test_include_js_doubles_curly_braces() -> None:
     assert result == expected
 
 # Test for excluding keys from doubling curly brackets
-def test_exclude_keys_from_doubling() -> None:
+def test_exclude_from_doubling() -> None:
     """Test excluding specific keys from doubling curly brackets."""
     prompt = "This is a test {key} and {exclude} {}"
     expected_output = "This is a test {{key}} and {exclude} {{}}"
 
-    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude']) == expected_output
+    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=['exclude']) == expected_output
 
 
-def test_exclude_keys_requires_exact_match() -> None:
+def test_exclude_requires_exact_match() -> None:
     """Exclude list should only skip doubling when the inner text is an exact match."""
     prompt = "Values {exclude_suffix} and {exclude}"
     expected = "Values {{exclude_suffix}} and {exclude}"
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude'])
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=['exclude'])
     assert result == expected
 
 # Test for recursive processing
@@ -839,12 +839,12 @@ def test_circular_includes() -> None:
 def test_mixed_excluded_nested_brackets() -> None:
     """Test mix of excluded and nested brackets.
 
-    exclude_keys protects exact {key} matches only. Nested patterns like
+    exclude protects exact {key} matches only. Nested patterns like
     {excluded{inner}} don't match the {excluded} regex, so all braces
     are doubled uniformly.
     """
     prompt = "Mix of {excluded{inner}} nesting"
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=["excluded"])
     # {excluded{inner}} doesn't match \{(excluded)\} regex, so all braces double
     assert result == "Mix of {{excluded{{inner}}}} nesting"
 
@@ -929,9 +929,9 @@ def test_z3_double_curly_brackets():
         concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True)
         assert concrete_output == concrete_expected, f"Concrete test case {i} failed"
 
-def test_z3_exclude_keys():
+def test_z3_exclude():
     """
-    Test that exclude_keys are properly handled when doubling curly brackets.
+    Test that exclude are properly handled when doubling curly brackets.
     """
     solver = create_solver()
     
@@ -956,7 +956,7 @@ def test_z3_exclude_keys():
     
     # Verify with concrete example
     concrete_input = "This is {key} with {excluded}"
-    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude=["excluded"])
     assert concrete_output == "This is {{key}} with {excluded}", "Concrete exclude keys test failed"
 
 def test_z3_code_block_handling():
