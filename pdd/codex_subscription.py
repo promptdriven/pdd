@@ -77,6 +77,19 @@ def _codex_auth_path() -> Path:
     return _codex_home() / "auth.json"
 
 
+def _codex_api_key_token() -> Optional[str]:
+    """Return a non-empty ``CODEX_API_KEY`` token, else ``None``.
+
+    Issue #1318: headless/CI environments inject the Codex/ChatGPT OAuth
+    ``access_token`` via ``CODEX_API_KEY`` instead of a logged-in ``auth.json``.
+    PDD treats the value as that ``access_token`` (litellm's ``chatgpt/`` provider
+    reads an OAuth bearer token, not an OpenAI ``sk-`` API key), so it is staged
+    as such by :func:`bridge_codex_auth_for_litellm`.
+    """
+    value = os.environ.get("CODEX_API_KEY", "").strip()
+    return value or None
+
+
 def _flatten_codex_tokens(auth: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Lift the OAuth fields to the top level litellm expects.
 
@@ -173,7 +186,17 @@ def bridge_codex_auth_for_litellm() -> bool:
 
         source = _codex_auth_path()
         if not source.is_file():
-            # No codex token to bridge; a previously staged *usable* file still works.
+            # No codex auth.json to bridge. A non-empty CODEX_API_KEY carries the
+            # token directly (headless/CI — issue #1318); stage it as the
+            # access_token litellm's chatgpt/ provider reads so the route can
+            # actually authenticate, not just pass the credential gate.
+            env_token = _codex_api_key_token()
+            if env_token:
+                _write_private_json(dest, {"access_token": env_token})
+                if _token_dir_has_usable_auth(dest_dir):
+                    os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
+                    return True
+            # Otherwise a previously staged *usable* file still works.
             if _token_dir_has_usable_auth(dest_dir):
                 os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
                 return True
@@ -210,15 +233,21 @@ def has_codex_subscription_auth() -> bool:
     """Return ``True`` when a usable ChatGPT subscription token is available.
 
     Checks an explicitly-configured ``CHATGPT_TOKEN_DIR`` (honoring
-    ``CHATGPT_AUTH_FILE``) first, then the codex CLI's ``auth.json``. "Usable"
-    means a real ``access_token`` is present — a garbage/empty file reads as
-    unavailable. Used by the credential check so a ``chatgpt/`` model is skipped
-    cleanly in non-interactive (``PDD_FORCE``) runs instead of hanging litellm on
-    an interactive device-login flow.
+    ``CHATGPT_AUTH_FILE``) first, then a non-empty ``CODEX_API_KEY`` env var
+    (issue #1318 — a token injected directly for headless/CI), then the codex
+    CLI's ``auth.json``. "Usable" means a real ``access_token`` is present — a
+    garbage/empty file reads as unavailable. Used by the credential check so a
+    ``chatgpt/`` model is skipped cleanly in non-interactive (``PDD_FORCE``) runs
+    instead of hanging litellm on an interactive device-login flow.
     """
     try:
         existing_dir = os.environ.get("CHATGPT_TOKEN_DIR")
         if existing_dir and _token_dir_has_usable_auth(Path(existing_dir).expanduser()):
+            return True
+        # A non-empty CODEX_API_KEY env var carries a Codex/ChatGPT token injected
+        # directly (headless/CI — issue #1318). bridge_codex_auth_for_litellm()
+        # stages it into the token dir litellm reads, so detection must agree.
+        if _codex_api_key_token():
             return True
         # Also honor a token PDD previously staged in its private bridge dir:
         # the runtime bridge treats that staged copy as usable, so setup/auth

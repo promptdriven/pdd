@@ -61,7 +61,7 @@ def test_flatten_returns_none_without_access_token():
 
 @pytest.fixture
 def codex_env(tmp_path, monkeypatch):
-    """Isolated CODEX_HOME + bridged dir; clears any inherited CHATGPT_TOKEN_DIR."""
+    """Isolated CODEX_HOME + bridged dir; clears inherited CHATGPT_TOKEN_DIR / CODEX_API_KEY."""
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     bridged = tmp_path / "bridged"
@@ -69,6 +69,9 @@ def codex_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", str(bridged))
     monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    # CODEX_API_KEY is now a usable subscription signal (issue #1318); clear any
+    # inherited value so detection/bridge tests start from a known-empty state.
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
     return codex_home, bridged
 
 
@@ -121,6 +124,90 @@ def test_has_codex_subscription_auth(codex_env):
     assert cs.has_codex_subscription_auth() is False
     (codex_home / "auth.json").write_text(json.dumps(_nested_auth()))
     assert cs.has_codex_subscription_auth() is True
+
+
+# --------------------------------------------------------------------------- #
+# issue #1318 review FM3: CODEX_API_KEY is a usable subscription signal that the
+# gate must accept AND the bridge must stage (else detection lies / route hangs).
+# --------------------------------------------------------------------------- #
+
+def test_has_codex_subscription_auth_accepts_codex_api_key(codex_env, monkeypatch):
+    # No auth.json, but a token injected directly via CODEX_API_KEY (headless/CI).
+    assert cs.has_codex_subscription_auth() is False
+    monkeypatch.setenv("CODEX_API_KEY", "env-injected-token-XXXX")
+    assert cs.has_codex_subscription_auth() is True
+
+
+def test_bridge_stages_codex_api_key_token(codex_env, monkeypatch):
+    # Gate-only would strand the call; the bridge must stage CODEX_API_KEY as the
+    # access_token litellm's chatgpt/ provider actually reads.
+    _, bridged = codex_env
+    monkeypatch.setenv("CODEX_API_KEY", "env-injected-token-XXXX")
+    assert cs.bridge_codex_auth_for_litellm() is True
+    staged = json.loads((bridged / "auth.json").read_text())
+    assert staged["access_token"] == "env-injected-token-XXXX"
+    assert os.environ["CHATGPT_TOKEN_DIR"] == str(bridged)
+    assert cs._token_dir_has_usable_auth(bridged) is True
+
+
+def test_bridge_prefers_auth_json_over_codex_api_key(codex_env, monkeypatch):
+    # A real (rotation-aware) auth.json wins when both are present.
+    codex_home, bridged = codex_env
+    (codex_home / "auth.json").write_text(json.dumps(_nested_auth(access="file-token-AAAA")))
+    monkeypatch.setenv("CODEX_API_KEY", "env-token-should-lose")
+    assert cs.bridge_codex_auth_for_litellm() is True
+    staged = json.loads((bridged / "auth.json").read_text())
+    assert staged["access_token"] == "file-token-AAAA"
+
+
+def test_empty_codex_api_key_is_not_a_signal(codex_env, monkeypatch):
+    # Whitespace-only / empty CODEX_API_KEY must NOT register as auth.
+    monkeypatch.setenv("CODEX_API_KEY", "   ")
+    assert cs.has_codex_subscription_auth() is False
+    assert cs.bridge_codex_auth_for_litellm() is False
+
+
+# --------------------------------------------------------------------------- #
+# issue #1318 review FM2: the Codex-subscription default must not hijack an
+# explicit non-OpenAI provider pin whose model name merely contains "codex".
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("model_id,expected", [
+    ("chatgpt/gpt-5.5", True),
+    ("openai/gpt-5.5", True),
+    ("openai/codex-mini", True),
+    ("gpt-5.5", True),
+    ("gpt-5.3-codex", True),
+    ("github_copilot/gpt-5.3-codex", False),     # explicit non-OpenAI provider
+    ("openrouter/openai/gpt-5.3-codex", False),  # routed via openrouter, not the sub
+    ("anthropic/claude-opus-4", False),
+    ("claude-opus-4-1", False),
+    ("", False),
+    (None, False),
+])
+def test_is_openai_codex_default_is_provider_aware(model_id, expected):
+    assert li._is_openai_codex_default(model_id) is expected
+
+
+def test_codex_default_does_not_hijack_explicit_nonopenai_provider(monkeypatch):
+    # Even with Codex auth present (the "both Claude and Codex auth" machine in
+    # the review), an explicit github_copilot/* pin must be left untouched.
+    monkeypatch.setattr(
+        "pdd.codex_subscription.has_codex_subscription_auth", lambda: True
+    )
+    df = pd.DataFrame([
+        {"provider": "GitHub Copilot", "model": "github_copilot/gpt-5.3-codex",
+         "api_key": "GITHUB_TOKEN", "coding_arena_elo": 1400},
+        {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.5",
+         "api_key": "", "coding_arena_elo": 1500},
+    ])
+    out_df, resolved, used = li._apply_codex_subscription_default(
+        df, "github_copilot/gpt-5.3-codex"
+    )
+    assert used is False
+    assert resolved == "github_copilot/gpt-5.3-codex"
+    # The explicit provider's row survives in the candidate universe.
+    assert (out_df["model"] == "github_copilot/gpt-5.3-codex").any()
 
 
 def test_is_chatgpt_subscription_model():

@@ -641,7 +641,7 @@ graph TB
 - **Core loop**: `pdd sync` runs the full auto-deps → generate → example → crash → verify → test → fix → update cycle for each module
 - **Health check**: `pdd checkup <url>` identifies what needs attention next; `pdd checkup --pr ...` reviews an existing PR on its own merits (add `--issue ...` to also verify it resolves a specific issue)
 - **Defect path**: `test <url>` or `bug <url>` surfaces failing tests → `fix <url>` resolves them
-- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules. Auth caveat: `sync <url>` still runs a LiteLLM-backed generate phase, so OAuth-only CLI setup is not enough; configure an API key first.
+- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules. Auth caveat: `sync <url>` still runs a LiteLLM-backed generate phase (the direct/local `llm_invoke` route), so it needs a direct credential rather than only an agentic-CLI OAuth login — a Codex/ChatGPT subscription (`codex login`) is the preferred no-API-key path (Issue #1318); an API key or a PDD Cloud login also works.
 
 ### Getting Started
 - **[`connect`](#18-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction

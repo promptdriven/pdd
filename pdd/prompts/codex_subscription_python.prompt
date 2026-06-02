@@ -56,6 +56,15 @@ codex `auth.json` once.
      `~/.codex`), flatten the nested `tokens` to top level, and write it 0600 in
      a 0700 private dir (`PDD_CHATGPT_TOKEN_DIR` override, else
      `~/.cache/pdd/chatgpt`), exporting `CHATGPT_TOKEN_DIR` to that dir.
+  3. If there is no `$CODEX_HOME/auth.json` but `CODEX_API_KEY` is set non-empty,
+     stage it as the top-level `access_token` in that same private dir (issue
+     #1318 — a token injected directly for headless/CI, e.g. a cloud worker),
+     exporting `CHATGPT_TOKEN_DIR`, so the `chatgpt/` route can authenticate
+     without a logged-in `auth.json`. A real `auth.json` is preferred over
+     `CODEX_API_KEY` when both are present because it is rotation-aware. This
+     keeps the bridge consistent with `has_codex_subscription_auth()`, which also
+     accepts `CODEX_API_KEY` — otherwise detection would report a usable
+     subscription that the bridge then fails to stage.
   Refresh the bridged copy only when the codex source is newer (rotation-aware),
   so a long-running worker picks up `codex`-rotated tokens.
 - `has_codex_subscription_auth() -> bool`: True when a usable subscription token

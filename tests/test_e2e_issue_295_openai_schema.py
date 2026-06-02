@@ -30,15 +30,27 @@ from pdd import cli
 
 
 @pytest.fixture(autouse=True)
-def set_pdd_path(monkeypatch):
-    """Set PDD_PATH to the pdd package directory for all tests in this module.
+def set_pdd_path(monkeypatch, tmp_path):
+    """Set PDD_PATH and isolate Codex/ChatGPT subscription auth for this module.
 
-    This is required because construct_paths uses PDD_PATH to find the language_format.csv
-    file for language detection.
+    construct_paths uses PDD_PATH to find language_format.csv for language
+    detection. These tests assert the OpenAI strict-mode schema path, which is
+    orthogonal to Codex-subscription routing — so neutralize every Codex auth
+    source (env vars AND on-disk auth files). Otherwise a developer/runner that
+    happens to have `codex login` (or a stale bridged token in
+    ``~/.cache/pdd/chatgpt``) flips llm_invoke onto the ``chatgpt/*`` default and
+    hard-fails on the OpenAI-only mock catalog with "no chatgpt/* rows"
+    (issue #1318 review — this is the CI failure these tests were hitting).
     """
     import pdd
     pdd_package_dir = Path(pdd.__file__).parent
     monkeypatch.setenv("PDD_PATH", str(pdd_package_dir))
+    # Point Codex auth detection at empty dirs and drop any env-injected token so
+    # has_codex_subscription_auth() is deterministically False for these tests.
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "_no_codex"))
+    monkeypatch.setenv("PDD_CHATGPT_TOKEN_DIR", str(tmp_path / "_no_chatgpt"))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
 
 
 class TestOpenAIStrictModeSchemaE2E:

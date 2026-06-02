@@ -2531,7 +2531,16 @@ def _truthy_env(name: str) -> bool:
 
 
 def _is_openai_codex_default(model_name: Any) -> bool:
-    """Return True for OpenAI/Codex model ids that can use ChatGPT subscription auth."""
+    """Return True for OpenAI/Codex model ids that can use ChatGPT subscription auth.
+
+    Only the OpenAI-subscription families qualify: ``chatgpt/*``, ``openai/*``
+    (gpt-5*/codex), and bare ``gpt-5*``/``*codex*`` ids that default to OpenAI.
+    A model id carrying an explicit *non*-OpenAI provider prefix
+    (e.g. ``github_copilot/gpt-5.3-codex``, ``openrouter/openai/gpt-5``) is the
+    caller deliberately choosing another provider, so it must NOT be captured by
+    the Codex-subscription default and silently rewritten to ``chatgpt/*`` —
+    even though its bare name contains ``gpt-5``/``codex`` (issue #1318 review).
+    """
     value = str(model_name or "").strip().lower()
     if not value:
         return False
@@ -2539,6 +2548,9 @@ def _is_openai_codex_default(model_name: Any) -> bool:
         return True
     if value.startswith("openai/"):
         value = value.split("/", 1)[1]
+    if "/" in value:
+        # A surviving provider prefix means an explicit non-OpenAI provider pin.
+        return False
     return value.startswith("gpt-5") or "codex" in value
 
 
