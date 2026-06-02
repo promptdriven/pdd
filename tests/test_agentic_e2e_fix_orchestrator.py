@@ -5555,6 +5555,55 @@ class TestStep11CodeCleanup:
         assert "pre_checkup_gate blocked" in msg
         checkup_mock.assert_not_called()
 
+    def test_gate_drift_sync_push_failure_blocks_checkup(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Issue #1293 (FM2): on gate pass, the gate's drift-sync heal edits
+        (prompt/example rewritten to match the fixed code) are committed and
+        pushed to the PR BEFORE checkup, so checkup does not review a stale PR
+        head. If that push fails, fail closed — do not run checkup."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ), patch(
+            # First call = the fix commit (succeeds); second = the post-gate
+            # drift-sync push (fails) → must fail closed before checkup.
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            side_effect=[(True, "fix committed"), (False, "push auth failed")],
+        ) as commit_mock, patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Checkup complete", 0.0, "model"),
+        ) as checkup_mock:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "drift-sync push failed" in msg
+        # The heal commit must have been attempted (a second _commit_and_push).
+        assert commit_mock.call_count >= 2
+        checkup_mock.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Regression tests for issue #1155: _verify_tests_independently safety nets

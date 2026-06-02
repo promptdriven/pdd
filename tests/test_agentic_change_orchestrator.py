@@ -218,7 +218,14 @@ def test_step13_prompt_includes_manual_review_lines(mock_dependencies, temp_cwd)
     assert "schema diverged" in s13_prompt
 
 
-def test_step13_prompt_includes_pre_checkup_gate_manual_review(mock_dependencies, temp_cwd):
+def test_step12_5_gate_failure_blocks_pr_creation(mock_dependencies, temp_cwd, monkeypatch):
+    """Issue #1293: a failed pre-checkup gate hard-blocks before Step 13 in
+    default (non-strict) mode — the change/feature PR must NOT be created with
+    mechanical breakage ("block: don't hand off to checkup until green").
+    Earlier behavior flag-and-continued in default mode; that is removed, so
+    Step 13 (PR creation) must never run when the gate fails."""
+    # Prove the block is unconditional: explicitly NOT in strict mode.
+    monkeypatch.delenv("PDD_STRICT_DOC_SYNC", raising=False)
     mocks = mock_dependencies
     mock_run = mocks["run"]
     mock_template_loader = mocks["template_loader"]
@@ -248,20 +255,21 @@ def test_step13_prompt_includes_pre_checkup_gate_manual_review(mock_dependencies
         "pdd.agentic_change_orchestrator.run_pre_checkup_gate",
         return_value=(False, "phase=build-smoke failures: py-compile failed", 0.0),
     ):
-        success, _, _, _, _ = run_agentic_change_orchestrator(
+        success, message, _, _, _ = run_agentic_change_orchestrator(
             issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
             repo_name="repo", issue_number=4242, issue_author="me",
-            issue_title="Gate surfacing", cwd=temp_cwd, verbose=False,
+            issue_title="Gate blocking", cwd=temp_cwd, verbose=False,
         )
 
-    assert success is True
+    assert success is False
+    assert "Stopped at step 12.5" in message
+    assert "py-compile failed" in message
+    # Step 13 (PR creation) must never run when the gate blocks.
     step13_calls = [
         c for c in mock_run.call_args_list
         if c.kwargs.get("label") == "step13"
     ]
-    s13_prompt = step13_calls[0].kwargs["instruction"]
-    assert "MANUAL_REVIEW: pre_checkup_gate" in s13_prompt
-    assert "py-compile failed" in s13_prompt
+    assert step13_calls == []
 
 
 def test_step13_surfaces_step10_associated_docs_conflicts(mock_dependencies, temp_cwd):

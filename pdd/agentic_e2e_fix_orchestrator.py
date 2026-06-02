@@ -3421,6 +3421,40 @@ def run_agentic_e2e_fix_orchestrator(
                 if not gate_success:
                     return False, gate_message, total_cost, model_used, changed_files
 
+                # Issue #1293 (FM2): the gate's drift-sync phase may have healed
+                # the prompt/example to match the fixed code (pdd update / pdd
+                # example). Those edits live only in this local worktree, but
+                # _run_final_checkup_on_pr reviews the PR head in its OWN
+                # checkout (.pdd/worktrees/checkup-pr-N) — so without committing
+                # and pushing them now, checkup would review a tree whose prompts
+                # are out of sync with the code, and the heal would be orphaned.
+                # Reuse _commit_and_push: it stages workflow-changed files vs the
+                # initial snapshot and filters .pdd/** (so the prompt/example
+                # sync lands while .pdd/meta fingerprint finalization stays with
+                # the post-merge sync, per the PR plan). It is a safe no-op
+                # (returns success) when the gate healed nothing.
+                gate_sync_ok, gate_sync_message = _commit_and_push(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    issue_title=issue_title,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    initial_file_hashes=initial_file_hashes,
+                    quiet=quiet,
+                )
+                if not gate_sync_ok:
+                    # A failed push leaves the PR head out of sync with the
+                    # gate's heal; fail closed rather than have checkup review a
+                    # stale tree.
+                    return (
+                        False,
+                        f"pre_checkup_gate drift-sync push failed: {gate_sync_message}",
+                        total_cost,
+                        model_used,
+                        changed_files,
+                    )
+                changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
+
                 checkup_success, checkup_message, checkup_cost, checkup_model = (
                     _run_final_checkup_on_pr(
                         issue_url=issue_url,

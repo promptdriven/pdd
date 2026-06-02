@@ -2269,7 +2269,6 @@ def run_agentic_change_orchestrator(
 
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
 
-    pre_checkup_manual_review = ""
     if worktree_path:
         gate_worktree = worktree_path
     else:
@@ -2293,23 +2292,27 @@ def run_agentic_change_orchestrator(
         total_cost += gate_cost
         state["total_cost"] = total_cost
         if not gate_success:
-            strict_gate = os.environ.get("PDD_STRICT_DOC_SYNC", "").lower() in ("1", "true", "yes")
-            if strict_gate:
-                state["step_outputs"]["12.5"] = f"FAILED: {gate_message}"
-                save_workflow_state(
-                    cwd, issue_number, "change", state, state_dir,
-                    repo_owner, repo_name, use_github_state, github_comment_id,
-                    dedupe=effective_clean_restart,
-                )
-                return (
-                    False,
-                    f"Stopped at step 12.5: {gate_message}",
-                    total_cost, model_used, changed_files,
-                )
-            pre_checkup_manual_review = f"MANUAL_REVIEW: pre_checkup_gate — {gate_message}"
-            if not quiet:
-                console.print(f"[yellow]{pre_checkup_manual_review}[/yellow]")
-    context["pre_checkup_gate_manual_review"] = pre_checkup_manual_review
+            # Issue #1293: block before checkup. Do NOT create the PR when the
+            # gate finds mechanical breakage or unhealable drift ("block: don't
+            # hand off to checkup until green"; the change/feature path must run
+            # the gate too). The gate already applies the strict/non-strict
+            # distinction internally (per pre_checkup_gate R7: in default mode a
+            # non-fatal drift-sync residual is reported but does NOT flip
+            # gate_success, while build/smoke failures and fatal drift always
+            # do), so the caller hard-blocks whenever gate_success is False — it
+            # must NOT re-check PDD_STRICT_DOC_SYNC and downgrade a real failure
+            # to an advisory MANUAL_REVIEW note that still ships a broken PR.
+            state["step_outputs"]["12.5"] = f"FAILED: {gate_message}"
+            save_workflow_state(
+                cwd, issue_number, "change", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+                dedupe=effective_clean_restart,
+            )
+            return (
+                False,
+                f"Stopped at step 12.5: {gate_message}",
+                total_cost, model_used, changed_files,
+            )
 
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []
@@ -2357,7 +2360,6 @@ def run_agentic_change_orchestrator(
             context.get("step9_output", "") or "",
             previous_fixes,
             synthesized_conflict_lines,
-            context.get("pre_checkup_gate_manual_review", "") or "",
         )
         context["clean_restart"] = "true" if effective_clean_restart else "false"
         git_root_for_pr_base = _get_git_root(current_work_dir) or current_work_dir
