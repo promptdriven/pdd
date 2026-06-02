@@ -19,7 +19,7 @@ pdd checkup drift <devunit> --max-cost 5.0
 - Compares each candidate's public API and hash against the pre-run baseline artifact.
 - Runs discovered local pytest tests against sandboxed candidate copies.
 - Re-runs configured story and verify checks when evidence marks them as required.
-- Runs policy checks when policy/evidence is configured (requires `pdd checkup gate` in the installed package).
+- Runs **capability** policy (`pdd checkup policy check`) when the prompt has `<capabilities>` or `validation.policy` is recorded; runs **evidence gate** policy when `.pdd/policy.yml` or gate validation keys are configured.
 - Applies a default `--max-cost` budget for non-dry-run regeneration (override with `--max-cost`).
 
 ## Behavioral Check Scope (important)

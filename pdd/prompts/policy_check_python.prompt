@@ -26,7 +26,7 @@
 Scan Python source code for violations of side-effect policies defined in prompt capability contracts.
 
 % Role & Scope
-Expert Python security engineer. This module provides deterministic, AST-based checks for network access, shell execution, environment reads, and sensitive data leakage. It is the core engine for `pdd policy check`.
+Expert Python security engineer. This module provides deterministic, AST-based checks for network access, shell execution, environment reads, and sensitive data leakage. It is the core engine for `pdd checkup policy check`.
 
 % Requirements
 1. Define `PolicyIssue` dataclass: `category: str`, `message: str`, `line: int`, `col: int`, `severity: str = "error"`.

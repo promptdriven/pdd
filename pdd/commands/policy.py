@@ -1,4 +1,4 @@
-"""Registers the pdd policy CLI command group for side-effect enforcement."""
+"""Capability policy CLI for ``pdd checkup policy`` (not a top-level command)."""
 from __future__ import annotations
 
 import json

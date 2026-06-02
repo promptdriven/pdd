@@ -31,7 +31,7 @@
 % Requirements
 1. Support multi-run regeneration (default 1 run if just checking current state).
 2. Compare candidate code against baseline using both hash and API signatures.
-3. Integrate with `pdd policy check` to ensure side-effect enforcement during drift.
+3. Integrate with `pdd checkup policy check` when the prompt defines `<capabilities>` (distinct from evidence `pdd checkup gate`).
 4. Calculate and report cost metrics across all runs.
 5. Support sandbox isolation for verification steps.
 

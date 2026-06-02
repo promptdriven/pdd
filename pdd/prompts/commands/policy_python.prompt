@@ -1,4 +1,4 @@
-<pdd-reason>Registers the pdd policy CLI command group for side-effect enforcement.</pdd-reason>
+<pdd-reason>Exposes capability policy under ``pdd checkup policy`` (no top-level ``pdd policy``).</pdd-reason>
 <pdd-interface>
 {
   "type": "cli",
@@ -26,11 +26,11 @@
 Provide a CLI interface for the deterministic side-effect policy checker.
 
 % Role & Scope
-CLI developer. This module implements the `pdd policy` command group and the `pdd policy check` subcommand.
+CLI developer. This module implements the `policy_group` Click group invoked only via `pdd checkup policy`.
 
 % Requirements
 1. Define a Click group `policy_group` with `name="policy"`.
-2. Implement `pdd policy check TARGET` command. `TARGET` can be a file or directory.
+2. Implement `pdd checkup policy check TARGET` command. `TARGET` can be a file or directory.
 3. Options:
    - `--prompt PATH`: Explicitly specify the prompt file to use for capability rules.
    - `--json`: Output results in machine-readable JSON format.
@@ -45,7 +45,7 @@ CLI developer. This module implements the `pdd policy` command group and the `pd
    - `0`: Clean (no violations).
    - `1`: Policy warnings found.
    - `2`: Errors (missing files, syntax errors, or violations in strict mode).
-6. Support `pdd checkup policy` as an alias (handled by the group name).
+6. Do not register `policy_group` on the top-level CLI; only `pdd/commands/checkup.py` dispatches to it.
 
 % Dependencies
 <contract_ir><include select="class:PromptContractIR,def:parse_prompt_contracts">pdd/contract_ir.py</include></contract_ir>

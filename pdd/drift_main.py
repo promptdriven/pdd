@@ -48,7 +48,8 @@ except (ModuleNotFoundError, ImportError):  # pragma: no cover - gate optional
 
 DEFAULT_MAX_COST_USD = 20.0
 _COST_RE = re.compile(r"(?:Total\s+)?Cost:\s*\$([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
-_POLICY_VALIDATION_KEYS = ("policy", "gate", "checkup_gate", "policy_gate")
+_CAPABILITY_MANIFEST_KEYS = ("policy",)
+_GATE_MANIFEST_KEYS = ("gate", "checkup_gate", "policy_gate")
 _SOURCE_TREE_ROOTS = frozenset({"src", "lib", "app"})
 _SKIP_VALIDATION_STATUSES = frozenset(
     {"", "not_applicable", "not_available", "skipped"}
@@ -503,7 +504,7 @@ def _evidence_gate_policy_configured(
     )
     if any(path.is_file() for path in policy_paths):
         return True
-    return _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS)
+    return _validation_key_configured(manifest, _GATE_MANIFEST_KEYS)
 
 
 def _capability_policy_configured(
@@ -517,7 +518,7 @@ def _capability_policy_configured(
     ``_evidence_gate_policy_configured``).
     """
     del project_root  # capability policy keys off prompt/manifest only
-    if _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS):
+    if _validation_key_configured(manifest, _CAPABILITY_MANIFEST_KEYS):
         return True
 
     if prompt_path and prompt_path.is_file():
