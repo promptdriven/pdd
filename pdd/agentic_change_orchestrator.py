@@ -2312,6 +2312,24 @@ def run_agentic_change_orchestrator(
                 f"Stopped at step 12.5: {gate_message}",
                 total_cost, model_used, changed_files,
             )
+        # Issue #1293/#1243: the gate's drift-sync runs run_metadata_sync, which
+        # writes prompt+code-only fingerprints (example/test hashes are null).
+        # Step 13's `git add -A` would otherwise commit those degraded
+        # fingerprints into the PR, arming the #1243 null-hash auto-heal loop.
+        # Restore tracked .pdd/meta so .pdd/meta fingerprint finalization is
+        # deferred to the post-merge sync (#1317) — matching the fix path, which
+        # filters .pdd/** from its commit. The gate's prompt / example /
+        # architecture sync is committed normally (only .pdd/meta is reverted).
+        try:
+            subprocess.run(
+                ["git", "checkout", "--", ".pdd/meta"],
+                cwd=gate_worktree,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
 
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []
