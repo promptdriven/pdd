@@ -21,13 +21,13 @@ except ImportError:  # pragma: no cover
     resolve_test_output_paths = None  # type: ignore[assignment,misc]
 
 try:
-    from .gate_main import run_gate_policy as _run_gate_policy_impl
+    from .policy_check import run_policy_check as _run_policy_check_impl
 
     _GATE_POLICY_AVAILABLE = True
-except ModuleNotFoundError:  # pragma: no cover - optional until gate lands on main
+except ImportError:  # pragma: no cover
     _GATE_POLICY_AVAILABLE = False
 
-    def _run_gate_policy_impl(*_args, **_kwargs):
+    def _run_policy_check_impl(*_args, **_kwargs):
         class _Result:
             passed = False
 
@@ -477,7 +477,7 @@ def _verify_configured(manifest: Optional[ManifestView]) -> bool:
     return _validation_key_configured(manifest, ("verify",))
 
 
-def _policy_configured(project_root: Path, manifest: Optional[ManifestView]) -> bool:
+def _policy_configured(project_root: Path, manifest: Optional[ManifestView], prompt_path: Optional[Path] = None) -> bool:
     policy_paths = (
         project_root / ".pdd" / "policy.yml",
         project_root / ".pdd" / "policy.yaml",
@@ -486,7 +486,19 @@ def _policy_configured(project_root: Path, manifest: Optional[ManifestView]) -> 
     )
     if any(path.is_file() for path in policy_paths):
         return True
-    return _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS)
+    
+    if _validation_key_configured(manifest, _POLICY_VALIDATION_KEYS):
+        return True
+        
+    if prompt_path and prompt_path.is_file():
+        try:
+            content = prompt_path.read_text(encoding="utf-8")
+            if "<capabilities>" in content:
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def _run_stories_check(prompt_path: Path, project_root: Path) -> tuple[bool, float]:
@@ -505,13 +517,18 @@ def _run_policy_check(
     project_root: Path,
     manifest: Optional[ManifestView],
     devunit: str,
+    *,
+    prompt_path: Path,
+    code_path: Path,
 ) -> tuple[bool, bool, bool]:
     """Return ``(passed, skipped, unavailable)`` for policy evaluation."""
-    if not _policy_configured(project_root, manifest):
+    if not _policy_configured(project_root, manifest, prompt_path):
         return True, True, False
     if not _GATE_POLICY_AVAILABLE:
         return False, False, True
-    return _run_gate_policy_impl(project_root, target=devunit).passed, False, False
+
+    # Policy check requires the source path and optionally the prompt path
+    return _run_policy_check_impl(code_path, prompt_path).passed, False, False
 
 
 def _run_verify_check(
@@ -615,6 +632,8 @@ def _evaluate_candidate(
         project_root,
         manifest,
         devunit,
+        prompt_path=prompt_path,
+        code_path=candidate,
     )
 
     return (
@@ -665,9 +684,9 @@ def run_drift(
     candidate_apis: list[str] = []
     total_cost = 0.0
     cost_budget_exceeded = False
-    policy_check_skipped = not _policy_configured(project_root, manifest)
+    policy_check_skipped = not _policy_configured(project_root, manifest, prompt_path)
     policy_check_unavailable = (
-        _policy_configured(project_root, manifest) and not _GATE_POLICY_AVAILABLE
+        _policy_configured(project_root, manifest, prompt_path) and not _GATE_POLICY_AVAILABLE
     )
 
     with tempfile.TemporaryDirectory(prefix="pdd-drift-") as temp_name:

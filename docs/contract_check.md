@@ -47,12 +47,18 @@ When present in a prompt file:
 |---------|---------|
 | `<contract_rules>` | Testable rules with IDs and modal verbs |
 | `<vocabulary>` | Definitions that suppress vague-term warnings (not `<covers>` / story `## Covers`) |
-| `<capabilities>` | What the module may do |
+| `<capabilities>` | What the module may do (deterministically enforced by `pdd policy check`) |
 | `<non_responsibilities>` | Explicit exclusions |
 | `<coverage>` | Story/test/waiver evidence per rule ID |
 | `<waivers>` | Formal waivers (`W1:`, expiry, approver) |
 
 Legacy prompts **without** these sections are skipped (zero issues).
+
+## Side-Effect Enforcement
+
+While `pdd checkup contract check` validates the *structure* of your contract sections, the side-effect rules in `<capabilities>` are enforced by `pdd policy check`. This command performs AST-based analysis of the generated code to ensure it respects the specified modals (`MAY` vs `MUST NOT`).
+
+See [docs/policy_check.md](policy_check.md) for details.
 
 ## Exit codes
 

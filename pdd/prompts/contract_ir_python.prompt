@@ -1,11 +1,66 @@
 <pdd-reason>Parses contract-related sections from prompt files into a structured intermediate representation.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "parse_prompt_contracts",
+        "signature": "(path: Path) -> PromptContractIR",
+        "returns": "PromptContractIR"
+      },
+      {
+        "name": "extract_capabilities",
+        "signature": "(text: str) -> List[Capability]",
+        "returns": "List[Capability]"
+      },
+      {
+        "name": "extract_sections",
+        "signature": "(text: str) -> Dict[str, str]",
+        "returns": "Dict[str, str]"
+      },
+      {
+        "name": "extract_rules",
+        "signature": "(rules_text: str) -> List[Rule]",
+        "returns": "List[Rule]"
+      },
+      {
+        "name": "extract_waivers",
+        "signature": "(waivers_text: str) -> List[Waiver]",
+        "returns": "List[Waiver]"
+      },
+      {
+        "name": "iter_covers_refs",
+        "signature": "(covers_text: str) -> List[CoversRef]",
+        "returns": "List[CoversRef]"
+      }
+    ],
+    "classes": [
+      { "name": "Capability" },
+      { "name": "Rule" },
+      { "name": "Waiver" },
+      { "name": "CoversRef" },
+      { "name": "PromptContractIR" }
+    ]
+  }
+}
+</pdd-interface>
 
 % Write `pdd/contract_ir.py`.
 
 <include>context/python_preamble.prompt</include>
 
+% Goal
+Parse contract-related sections from prompt files into a structured intermediate representation.
+
+% Role & Scope
+Expert Python engineer. This module extracts `<contract_rules>`, `<coverage>`, `<waivers>`, `<vocabulary>`, `<capabilities>`, and `<non_responsibilities>` from PDD prompts to support contract enforcement and documentation workflows.
+
 % Requirements
+- Define `Capability` dataclass with `modal`, `text`, `line`, and `is_must_not: bool`.
+- Define `Rule` dataclass for `<contract_rules>` entries, including `raw_id`, `modal`, `block`, and `is_must_not: bool`.
 - Extract `<contract_rules>`, `<coverage>`, `<waivers>`, `<vocabulary>`, `<capabilities>`, and `<non_responsibilities>` sections when present.
+- `extract_capabilities(text: str) -> List[Capability]` must parse individual lines, identifying and capturing all modals (`MAY`, `SHOULD`, `MUST NOT`, `MUST`, `SHALL NOT`, `MAY NOT`, etc.) to support both structural linting and the policy engine's allowance logic. Set `is_must_not=True` explicitly when the modal is `MUST NOT`, `SHALL NOT`, or `MAY NOT`.
 - Provide helpers used by the contract engine, including:
   - `parse_prompt_contracts(path: Path) -> PromptContractIR`
   - `extract_sections(text)`, `extract_rules(text)`, `extract_waivers(text)`

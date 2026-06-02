@@ -57,6 +57,8 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
+For deterministic side-effect policy validation (`pdd policy check`), see [docs/policy_check.md](docs/policy_check.md).
+
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
 ## Installation
 
@@ -3145,6 +3147,25 @@ pdd firecrawl-cache check <url>        # Check if a URL is cached
 ```
 
 **When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
+
+### 23. policy check
+
+Verify code compliance against side-effect policies (contracts) defined in prompt `<capabilities>` blocks. This is used by `pdd checkup --pr` and `pdd sync` to ensure generated code does not violate architectural or security constraints (e.g., unauthorized disk writes, network access).
+
+```bash
+# Verify policy compliance for a specific file
+pdd policy check src/module.py
+
+# Verify all changed files in a PR against their prompt policies
+pdd policy check --pr
+```
+
+**Options:**
+- `--pr`: Scan all changed files in the current PR.
+- `--strict`: Fail if any changed file lacks a corresponding prompt with a `<capabilities>` block.
+- `--output [text|json]`: Output format (default: text).
+
+**When to use**: Use `policy check` during local development or in CI to catch contract violations before they are merged. It provides a deterministic safety layer alongside agentic reviews.
 
 ## Example Review Process
 

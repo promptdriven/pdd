@@ -266,7 +266,7 @@ The four bugs filed in gltanaka/pdd#1433 expose specific reliability gaps in `ru
 <pdd.agentic_change><include select="def:_run_gh_command">context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
 <pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
-<pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">../pdd/list_drift_detection.py</include></pdd.list_drift_detection>
+<pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">../list_drift_detection.py</include></pdd.list_drift_detection>
 
 % Deliverables
 - Code: `pdd/checkup_review_loop.py`

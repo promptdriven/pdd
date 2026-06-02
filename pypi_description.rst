@@ -37,6 +37,7 @@ Key Features
 *   **Cloud & Local Execution**: Run securely in the cloud with GitHub SSO (no API keys needed) or switch to local mode with the ``--local`` flag for full control.
 *   **Comprehensive Command Suite**: A full set of tools to ``generate``, ``test``, ``fix``, ``update``, and ``split`` your code and prompts.
 *   **Intelligent Testing**: Generate new unit tests, or improve existing ones by analyzing coverage reports to hit your desired targets.
+*   **Side-Effect Policy Enforcement**: Use ``pdd policy check`` to ensure your code adheres to security and capability constraints defined in your prompts (e.g., forbidding unauthorized network or shell access).
 *   **Iterative Error Fixing**: Automatically find and correct errors in your code with commands like ``fix`` and ``crash``, which can loop until the issues are resolved.
 *   **Cost Tracking & Configuration**: Fine-tune AI model behavior with ``--strength`` and ``--temperature`` and track usage with optional cost reporting.
 *   **Cross-Language Support**: Work with Python, JavaScript, Java, C++, Go, and more, with automatic language detection from prompt filenames.
@@ -214,6 +215,16 @@ Attempt to fix failing code or tests in multiple loops:
        factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial.py errors.log
 
 PDD will keep trying (with a budget limit configurable by ``--budget``) until tests pass or attempts are exhausted.
+
+**Example – Policy Check**
+
+Verify that a module adheres to defined side-effect capabilities:
+
+.. code-block:: console
+
+   pdd policy check src/payment_processor.py --prompt prompts/payment_processor_python.prompt
+
+This will scan for unauthorized network calls, shell execution, or sensitive data leakage based on the prompt's ``<capabilities>`` section.
 
 Frequently Asked Questions (FAQ)
 --------------------------------

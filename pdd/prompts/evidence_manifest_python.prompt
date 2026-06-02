@@ -1,4 +1,29 @@
 <pdd-reason>Writes optional per-run JSON evidence manifests for supported PDD commands.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "write_evidence_manifest",
+        "signature": "(sync_result=None, *, command=None, prompt_file=None, output_files=(), model='', cost_usd=0.0, temperature=None, validation=None, logs=None, basename=None, project_root=None, skip_tests=False, skip_verify=False, skip_policy=False, dry_run=False, output_dir=None)",
+        "returns": "Path"
+      },
+      {
+        "name": "validation_from_sync",
+        "signature": "(sync_result, *, skip_tests, skip_verify, skip_policy=False, dry_run=False) -> Dict[str, str]",
+        "returns": "Dict[str, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Writes optional per-run JSON evidence manifests for supported PDD commands.
+
+% Role & Scope
+A utility module responsible for capturing and persisting the audit trail (evidence) of a PDD command execution, including hashes of inputs/outputs and validation results.
 
 % Write `pdd/evidence_manifest.py`.
 
@@ -7,7 +32,8 @@
 % Requirements
 - Implement `write_evidence_manifest(...)` writing schema v1 JSON under `.pdd/evidence/`.
 - Hash prompt, outputs, and recursively resolved local includes for `context.includes` and `expanded_sha256`.
-- Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, dry_run=False)` mapping real sync outcomes.
+- Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, skip_policy, dry_run=False)` mapping real sync outcomes.
+- Include `policy` validation status (passed|failed|not_available|not_applicable) in the manifest.
 - Never claim `passed` unless the invoking command established that state.
 - Contract enrichment is optional: lazy-import `coverage_contracts` when present.
 

@@ -333,6 +333,7 @@ def validation_from_sync(
     *,
     skip_tests: bool,
     skip_verify: bool,
+    skip_policy: bool = False,
     dry_run: bool = False,
 ) -> dict[str, str]:
     """Map ``sync_main`` results to manifest validation fields without inventing outcomes."""
@@ -340,6 +341,7 @@ def validation_from_sync(
         "detect_stories": "not_applicable",
         "unit_tests": "not_applicable" if skip_tests else "not_available",
         "verify": "not_applicable" if skip_verify else "not_available",
+        "policy": "not_applicable" if skip_policy else "not_available",
     }
     if dry_run:
         return validation
@@ -374,12 +376,19 @@ def validation_from_sync(
         elif any(operation.startswith("skip:verify") for operation in operations):
             validation["verify"] = "not_applicable"
 
+    if not skip_policy:
+        if "policy" in operations:
+            validation["policy"] = "passed" if overall_success else "failed"
+        elif any(operation.startswith("skip:policy") for operation in operations):
+            validation["policy"] = "not_applicable"
+
     return validation
 
 
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
+    sync_result: Optional[Mapping[str, Any]] = None,
     *,
-    command: str,
+    command: Optional[str] = None,
     prompt_file: Optional[str | Path] = None,
     output_files: Iterable[str | Path] = (),
     model: str = "",
@@ -389,9 +398,34 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     logs: Optional[Mapping[str, Optional[str]]] = None,
     basename: Optional[str] = None,
     project_root: Optional[str | Path] = None,
+    skip_tests: bool = False,
+    skip_verify: bool = False,
+    skip_policy: bool = False,
+    dry_run: bool = False,
+    output_dir: Optional[str | Path] = None,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
+    
+    # If sync_result is provided, use it to populate fields (Alignment with prompt interface)
+    if sync_result is not None:
+        if validation is None:
+            validation = validation_from_sync(
+                sync_result,
+                skip_tests=skip_tests,
+                skip_verify=skip_verify,
+                skip_policy=skip_policy,
+                dry_run=dry_run,
+            )
+        if command is None:
+            command = "pdd sync"
+        if not model:
+            model = sync_result.get("model", "")
+        if cost_usd == 0.0:
+            cost_usd = sync_result.get("total_cost", 0.0)
+
+    if command is None:
+        command = "pdd run"
     if not prompt_file and basename:
         prompts_root = root / "prompts"
         direct = list(prompts_root.glob(f"{basename}_*.prompt"))

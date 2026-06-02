@@ -1,0 +1,49 @@
+<pdd-reason>Core logic for scanning Python code for policy violations using AST-based static analysis.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_policy_check",
+        "signature": "(target_path: Path, prompt_path: Optional[Path] = None, strict: bool = False) -> PolicyResult",
+        "returns": "PolicyResult"
+      }
+    ],
+    "classes": [
+      { "name": "PolicyIssue" },
+      { "name": "PolicyResult" },
+      { "name": "PolicyVisitor" }
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Scan Python source code for violations of side-effect policies defined in prompt capability contracts.
+
+% Role & Scope
+Expert Python security engineer. This module provides deterministic, AST-based checks for network access, shell execution, environment reads, and sensitive data leakage. It is the core engine for `pdd policy check`.
+
+% Requirements
+1. Define `PolicyIssue` dataclass: `category: str`, `message: str`, `line: int`, `col: int`, `severity: str = "error"`.
+2. Define `PolicyResult` dataclass: `target_path: Path`, `issues: List[PolicyIssue]`, `passed: bool`.
+3. Implement `PolicyVisitor` (subclass of `ast.NodeVisitor`) to identify side effects.
+4. Exhaustive `NETWORK_LIBS` and `SHELL_LIBS` sets (include `urllib3`, `paramiko`, `httpx`, `requests`, `aiohttp`, `subprocess`, `os`, `shutil`, `pty`, `socket`, `ftplib`, `telnetlib`, `smtplib`).
+5. Detect forbidden shell execution: `os.system`, `subprocess.*`, `shutil.rmtree`, `os.remove`, `os.unlink`, `os.chmod`, etc.
+6. Detect environment access: `os.getenv`, `os.environ`, `os.environb`.
+7. Detect sensitive data leakage in `print()` and logging calls (variables/keys like `token`, `secret`, `password`, `api_key`, `cvv`, `pan`, `bearer`). Handle f-strings, `%` formatting, and `.format()`.
+8. For requirements 4-7, map natural language `<capabilities>` (e.g., "MAY call API") to the AST checker using simple keyword matching on the `MAY` capability text (from `contract_ir.extract_capabilities`) to selectively suppress side-effect warnings for specific categories.
+9. Support inline waivers using `# pdd-policy-ignore: <reason>` comments.
+10. Support prompt-level waivers via the `<waivers>` IR in `contract_ir`.
+11. Support a `strict` mode that flags all high-risk side effects even if `<capabilities>` are absent from the prompt.
+12. Ensure the visitor handles syntax errors and encoding issues gracefully. `passed` is True if no errors are found (or all are suppressed/waived).
+
+% Dependencies
+<contract_ir></contract_ir>
+
+% Deliverables
+- Code: `pdd/policy_check.py`

@@ -17,6 +17,7 @@ from .checkup_simplify import checkup_simplify
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .drift import drift_cmd
+from .policy import policy_group
 from .prompt import prompt_lint
 
 
@@ -493,6 +494,20 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         exit_code = drift_cmd.main(
             args=drift_args,
             prog_name="pdd checkup drift",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "policy":
+        policy_args = list(ctx.args)
+        if show_help:
+            policy_args.append("--help")
+        exit_code = policy_group.main(
+            args=policy_args,
+            prog_name="pdd checkup policy",
             standalone_mode=False,
             obj=ctx.obj,
         )

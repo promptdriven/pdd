@@ -84,6 +84,16 @@ class CoversRef:
     line: str
 
 
+@dataclass
+class Capability:
+    """One parsed capability from <capabilities>."""
+
+    modal: str
+    text: str
+    line: int
+    is_must_not: bool = False
+
+
 def iter_covers_refs(covers_text: str) -> list["CoversRef"]:
     """Yield every rule reference in a ``## Covers`` block.
 
@@ -380,6 +390,29 @@ def extract_sections(text: str) -> dict[str, str]:
     sections.update(_extract_xml_sections(text))
     sections.update(_extract_markdown_sections(text))
     return sections
+
+
+def extract_capabilities(text: str) -> list[Capability]:
+    """Parse <capabilities> text into Capability objects."""
+    capabilities: list[Capability] = []
+    for idx, line in enumerate(text.splitlines()):
+        stripped = line.strip().lstrip("-* ").strip()
+        if not stripped:
+            continue
+        modal_match = _MODAL_PATTERN.search(stripped)
+        modal = modal_match.group(1) if modal_match else ""
+        is_must_not = bool(
+            re.search(r"\bMUST NOT\b|\bSHALL NOT\b|\bMAY NOT\b", stripped)
+        )
+        capabilities.append(
+            Capability(
+                modal=modal,
+                text=stripped,
+                line=idx + 1,
+                is_must_not=is_must_not,
+            )
+        )
+    return capabilities
 
 
 # ---------------------------------------------------------------------------

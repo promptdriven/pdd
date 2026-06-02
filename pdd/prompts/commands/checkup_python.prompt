@@ -4,6 +4,15 @@
 <pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
 <pdd-dependency>commands/contracts_python.prompt</pdd-dependency>
 
+% Goal
+Registers the `pdd checkup` CLI command, which orchestrates project-wide health checks and fixes.
+
+% Role & Scope
+A CLI command wrapper responsible for parsing user input, validating execution modes (Issue vs. PR), and dispatching to the appropriate agentic orchestrator or local utility.
+
+% Deliverables
+- Code: `pdd/commands/checkup.py`
+
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
 
 <include>context/python_preamble.prompt</include>
@@ -18,6 +27,7 @@
   check command group without breaking issue-mode checkup behavior.
   `pdd checkup contract check --help` must render the `contracts check` subcommand help
   and exit 0 (no doubled `check` token, no missing TARGET error).
+- Dispatch `pdd checkup policy ...` to the policy check command group.
 - Params:
 - `target` arg (positional, optional — required for issue mode; also dispatches local checkup utilities below)
   - `--no-fix` flag
@@ -51,9 +61,10 @@
   - `--gate-allow` (repeatable string, default `()`; forward-compatibility hook for opting extra gate names into discovery beyond the conservative v1 set — discovery remains allowlist-only; this argument is threaded through so the CLI surface and discovery surface can co-evolve)
 - Signature returns `Optional[Tuple[str, float, str]]`.
 - Local utility dispatch before mode validation:
-  - Import `prompt_lint` from `.prompt`, `contracts_group` from `.contracts`, and `coverage_cmd` from `.coverage`.
+  - Import `prompt_lint` from `.prompt`, `contracts_cli` from `.contracts`, `coverage_cmd` from `.coverage`, and `policy_group` from `.policy`.
   - For `target == "lint"`, delegate remaining args to `prompt_lint.main(...)`, enabling `pdd checkup lint`.
-  - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
+  - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_cli.main(...)`, enabling `pdd checkup contract check`.
+  - For `target == "policy"`, delegate remaining args to `policy_group.main(...)`, enabling `pdd checkup policy`.
   - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
   - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:

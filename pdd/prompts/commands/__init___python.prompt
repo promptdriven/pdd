@@ -11,7 +11,8 @@
 }
 </pdd-interface>
 
-% You are an expert Python engineer. Your goal is to write the command registration module `pdd/commands/__init__.py`.
+% Goal
+Write the command registration module `pdd/commands/__init__.py`.
 
 % Role & Scope
   This module is responsible for registering all PDD subcommands with the main CLI group. It aggregates commands from various submodules to keep the main `cli.py` clean.
@@ -27,6 +28,8 @@
     - `split`, `change`, `update` (from `.modify`)
     - `sync`, `sync_architecture` (from `.maintenance`)
     - `checkup` (from `.checkup`)
+    - `contracts_cli` (from `.contracts`)
+    - `policy_group` (as `name="policy"`, from `.policy`)
     - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
     - `preprocess` (from `.misc`)

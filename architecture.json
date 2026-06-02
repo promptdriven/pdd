@@ -4,7 +4,6 @@
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
-      "auth_service_python.prompt",
       "_keyring_timeout_python.prompt",
       "git_porcelain_python.prompt"
     ],
@@ -2486,7 +2485,6 @@
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "agentic_langtest_python.prompt",
-      "auth_service_python.prompt",
       "core/cloud_python.prompt"
     ],
     "priority": 66,
@@ -7021,88 +7019,6 @@
     }
   },
   {
-    "reason": "Manages JWT authentication tokens, refresh tokens, and auth state for PDD Cloud.",
-    "description": "Provides auth status checking, JWT caching, token refresh, and logout functionality. Interfaces with Firebase auth for PDD Cloud authentication.",
-    "dependencies": [
-      "_keyring_timeout_python.prompt"
-    ],
-    "priority": 208,
-    "filename": "auth_service_python.prompt",
-    "filepath": "pdd/auth_service.py",
-    "tags": [
-      "agentic",
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "get_jwt_cache_info",
-            "signature": "() -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "has_refresh_token",
-            "signature": "() -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "clear_jwt_cache",
-            "signature": "() -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Clears cached JWT"
-            ]
-          },
-          {
-            "name": "get_auth_status",
-            "signature": "() -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "logout",
-            "signature": "() -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "Clears tokens and cache"
-            ]
-          },
-          {
-            "name": "verify_auth",
-            "signature": "() -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_cached_jwt",
-            "signature": "() -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
-          }
-        ]
-      }
-    },
-    "position": {
-      "x": 12600,
-      "y": 1720
-    }
-  },
-  {
     "reason": "Generates unit tests from example usage files with pattern-based exception assertions.",
     "description": "Generates tests based on intended behavior from a prompt and an example usage file, appending to existing tests if present. Prefers pattern-based pytest.raises(match=r'...') assertions over exact-string matches.",
     "dependencies": [],
@@ -7212,9 +7128,7 @@
   {
     "reason": "Manages remote PDD Cloud sessions with heartbeat, command polling, and execution.",
     "description": "Provides RemoteSessionManager class for cloud session lifecycle: registration, heartbeat, command polling/execution, and deregistration. Supports token refresh and async operations via httpx.",
-    "dependencies": [
-      "auth_service_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 213,
     "filename": "remote_session_python.prompt",
     "filepath": "pdd/remote_session.py",
@@ -7725,7 +7639,7 @@
     "dependencies": [
       "checkup_review_loop_python.prompt"
     ],
-    "priority": 217.6,
+    "priority": 245,
     "filename": "checkup_gates_python.prompt",
     "filepath": "pdd/checkup_gates.py",
     "tags": [
@@ -7742,59 +7656,23 @@
           {
             "name": "discover_gates",
             "signature": "(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = (), base_ref: Optional[str] = None) -> List[Gate]",
-            "returns": "List[Gate]",
-            "sideEffects": [
-              "Reads package.json, pyproject.toml, tsconfig.json, and .git markers from the loop-owned worktree (read-only)",
-              "Probes PATH for ruff/black/mypy/npx via shutil.which (read-only)",
-              "Stats node_modules/typescript/bin/tsc before emitting the tsc-noemit gate; the argv is `npx --no-install tsc --noEmit --incremental false --composite false --tsBuildInfoFile /dev/null` so the gate runs the local binary (no registry install) AND cannot dirty the worktree with .tsbuildinfo even when tsconfig sets incremental: true, AND cannot trip TS6379 when the tsconfig extends chain sets composite: true. Also skips the gate when the PR diff modified tsconfig*.json (PR-controlled compilerOptions/paths/plugins are RCE-equivalent) OR any path under node_modules/ (iter-30 Finding 1 generalises iter-29 Finding 3 \u2014 every path under node_modules/ is a potential plugin/transformer/binary the gate would execute)",
-              "Skips npm-script gates (format:check / prettier:check / lint:check / typecheck / tsc / tsc:noemit) when the PR diff modified the tool config the script would load (prettier.config.* / .prettierrc* / eslint.config.* / .eslintrc* / tsconfig*.json) OR when the PR diff modified any package.json (root or nested) \u2014 corepack reads the top-level packageManager field and fetches+execs the PR-selected version on first invocation, turning the local gate into a registry download (iter-40 Finding 2). Those config files are loaded as executable JavaScript or interpreted compiler options by the corresponding tool, so a fork PR could otherwise achieve RCE through the gate (iter-27 Finding 3). Prettier/eslint script gates additionally skip on ANY PR-modified .cjs/.mjs/.js file because their configs can require() arbitrary local JS plugins anywhere in the worktree and we cannot statically follow the require chain (iter-29 Finding 2). tsc-style script gates additionally skip when ANY tsconfig in the extends chain sets incremental: true or composite: true \u2014 the script body cannot inject --incremental false like the direct gate, so running it would write tsbuildinfo (iter-29 Finding 1; walked with bounded depth to defend against cyclic configs). The emit-signal walk starts not only from the worktree-root tsconfig.json but from EVERY custom -p/--project target referenced by a recognised script (file or directory shape \u2014 the directory form resolves to <dir>/tsconfig.json). Without that extension a stable `tsc -p config/build.json --noEmit` whose config/build.json (or its extends chain) sets incremental: true would slip past the root-only walk and write .tsbuildinfo (iter-38 Finding 2). The chain walk treats package-name extends (e.g. '@demo/tsconfig') as potentially emit-signalling because the resolved config lives under node_modules where the gate layer cannot read it without parsing the resolver, AND a fork PR can install/modify the package (iter-30 Finding 2). ALL npm script gates (and the direct tsc-noemit gate) additionally skip when the PR diff modified anything under node_modules/ \u2014 every script invokes a binary or transitively loads code from there and a fork PR can land a poisoned shim at e.g. node_modules/.bin/prettier (iter-30 Finding 1; the package-lock.json / yarn.lock files live OUTSIDE node_modules/ so the common 'add a dependency' PR is unaffected). The ENTIRE npm-family gate path (script gates AND direct tsc-noemit) short-circuits when a package-manager config in the worktree can redirect script execution: .npmrc/.pnpmrc declaring script-shell, .yarnrc declaring script-shell or yarn-path, .yarnrc.yml declaring yarnPath, the presence of .yarn/releases/, OR a PR diff touching .npmrc/.pnpmrc/.yarnrc/.yarnrc.yml or anything under .yarn/. Confirmed against npm/pnpm/yarn 1 and npx 10.x: each honours script-shell so a PR-supplied ./evil-sh wraps the validated argv before it runs (iter-38 Finding 1)",
-              "Uses tokenized `--noEmit` detection in script acceptance so `tsc --noEmitOnError` (different flag, still emits) and `tsc --noEmit false` (explicit disable) cannot bypass the substring check (iter-27 Finding 2). Also rejects tsc-flavoured scripts that carry --watch/-w (would hang the gate), --incremental (writes tsbuildinfo regardless of --noEmit), --generateTrace, --generateCpuProfile, --listFiles, --listEmittedFiles, --diagnostics, --extendedDiagnostics, --traceResolution \u2014 the script-based path cannot inject overrides like the direct gate can (iter-33). The custom-config scan uses shlex tokenisation (handles quoted paths with embedded spaces, iter-36 Finding 2) and a single-prefix `./` strip (so hidden-directory paths like `.config/lint.json` survive comparison, iter-36 Finding 1). For tsc the scan also walks the local extends chain of `tsconfig.json` AND of every CUSTOM tsconfig referenced by a script via `-p` / `--project` (file or directory form \u2014 the directory form resolves to `<dir>/tsconfig.json`), bounded by the depth limit, refusing to leave the worktree, and deduped by resolved path. A PR-modified custom-named base (e.g. `base.json`) skips the script gate even when reached only through a non-root tsconfig chain (iter-36 Finding 3 + iter-37 Findings 1 + 2). Path comparison normalises both sides via `os.path.normpath` so non-canonical paths like `--config config/../config/lint.json` still match the PR diff (iter-37 Finding 3)",
-              "_script_is_acceptable rejects npm scripts whose body starts with `npx ` UNLESS `--no-install` is also present; bare `npx <tool>` would otherwise let `npm run <script>` reach the same registry-install fallback the tsconfig path guards against, defeating the issue #1092 non-mutation contract via the package.json discovery surface",
-              "Emits py-compile gates with `python -B -c 'import sys; src = open(sys.argv[1], ...).read(); compile(src, sys.argv[1], \"exec\")' <abs>` argv. The builtin compile() validates syntax without writing ANY bytecode \u2014 neither -B alone nor py_compile(cfile=os.devnull) work (the former because py_compile writes the artifact explicitly, the latter because py_compile uses an atomic rename onto cfile that cannot target /dev/null). Without this guard the loop's downstream commit-and-push helper would stage generated bytecode on repos whose .gitignore does not exclude __pycache__/",
-              "Skips ruff/black/mypy gates when the PR diff modified any Python tool config (pyproject.toml / setup.cfg / ruff.toml / .ruff.toml / tox.ini / mypy.ini / .mypy.ini). A fork PR can otherwise poison [tool.black] force-exclude or [tool.ruff] exclude to silently pass over real failures (iter-32 Findings 2 + 3). Additionally skips mypy when the EXISTING [tool.mypy] config declares any local-path plugin (relative/absolute/.py-suffixed) \u2014 mypy imports and executes plugin code during type-checking, so a PR that modifies just the referenced plugin file still achieves RCE (iter-32 Finding 1). iter-38 Finding 3 extends the skip: even a 'pure package' plugin name (e.g. `my_project.mypy_plugin`) disables the gate when the worktree contains a top-level `my_project/` package (`__init__.py`, namespace-dir, or `my_project.py`) \u2014 under an editable install or PYTHONPATH-points-at-worktree env mypy's plugin import would otherwise resolve to PR-controlled worktree code. iter-39 Finding 2 widens the worktree-match probe to the src/ layout so a matching `worktree/src/<top_level>/` (or namespace-dir, or `worktree/src/<top_level>.py`) also disables the gate \u2014 editable installs of src-layout projects add `src/` to `sys.path`. Third-party pure-package plugins (mypy_django_plugin.main) whose top-level name appears NEITHER at the worktree root NOR under src/ stay supported",
-              "When base_ref resolves in the worktree, emits git-diff-check across <base>...HEAD using a trusted absolute git binary resolved through the sanitized PATH, so a committed whitespace/conflict-marker failure is caught even on a clean worktree without executing a worktree-local ./git shim",
-              "Issue #1433 Bug #2 + codex pass-6 through pass-12 (CI parity for `ruff format --check`): emits a separate `ruff-format` gate with argv `<ruff_abs> format --check -- <ruff_format_py>` INDEPENDENTLY of the ruff lint gate. Format-gate prerequisites: changed_py present + ruff binary on sanitized PATH + python_tool_config_touched False + ONE of: (a) [tool.ruff.format] explicitly declared in pyproject.toml; (b) `_ruff_format_signaled_by_ci` returns a truthy signal from pre-commit or workflow/CloudBuild files. CI-signal detection: `_ruff_format_signaled_by_ci` returns (pre_commit_signaled, workflow_signaled). .pre-commit-config.yaml signal is STAGE-AWARE via `_pre_commit_has_active_ruff_format` (issue #1433 review): an `id: ruff-format` hook counts only when it runs automatically \u2014 a manual-only hook (explicit `stages: [manual]` or inherited top-level `default_stages: [manual]`) does NOT opt in. Pre-commit / workflow / CloudBuild signals are independent. Workflow/CloudBuild files use `_workflow_text_has_ruff_format` which parses the YAML with `yaml.safe_load` and recursively walks it (`_node_has_ruff_format`), matching `ruff format` ONLY in the values of exec-intent keys `_RUFF_FORMAT_EXEC_KEYS = {run, script, command, entrypoint, args}` (pass-13 F2/F3): string values (incl. `run: |` block scalars, with `#`-comments stripped per line) and `args` lists (joined into an argv string) are matched; non-exec keys like `name:` or an `env: NOTE: |` block are never scanned, and an inline `args: [\"-c\", \"ruff format --check .\"]` CloudBuild step is detected. Fail-open on `yaml.YAMLError` (returns False). Gate emission splits by signal source: pyproject or workflow signal \u2192 ruff_format_py = list(changed_py) (no pre-commit scope filter); pre-commit-only signal \u2192 ruff_format_py = _filter_changed_py_for_ruff_format (union of all hook scopes). Per-file pre-vs-post comparison for touched CI configs: `_file_has_unchanged_ruff_format_signal` uses `_parse_ruff_format_hooks_from_text` to compare full hook dicts (including stages/args/always_run AND top-level default_stages propagated into hooks without their own stages) serialised as sorted JSON sets \u2014 scope, stages, and args changes all detected. YAML comments stripped before all regex scans. Pre-commit hook files:/exclude: scope filtering unions across all id:ruff-format hooks (pass-9/10 F3). Kept as a SEPARATE gate so per-tool --gate-allow filtering still works."
-            ]
+            "returns": "List[Gate]"
           },
           {
             "name": "run_gates",
             "signature": "(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]",
-            "returns": "List[GateResult]",
-            "sideEffects": [
-              "Spawns each gate as a list-form subprocess with cwd=worktree, env scrubbed of PDD_*, the Python import-path family (PYTHONPATH/PYTHONHOME/PYTHONSTARTUP/PYTHONUSERBASE/PYTHONNOUSERSITE), AND the npm/Node config + import-path family (NPM_CONFIG_*/npm_config_* \u2014 both case forms are independent env keys \u2014 plus NODE_OPTIONS and NODE_PATH), then PATH is sanitized to drop empty entries, '.', relative entries, and any entry that resolves inside the worktree, and forced CI=1/NO_COLOR=1/FORCE_COLOR=0/COREPACK_ENABLE_AUTO_PIN=0. Stripping the PYTHON* family is iter-38 Finding 3's primary defence. Stripping the NPM_CONFIG/npm_config family is iter-39 Finding 3's primary defence: NPM_CONFIG_SCRIPT_SHELL (confirmed against npm 10.x) redirects `npm run` to a PR-controlled shell even on a clean .npmrc. NODE_OPTIONS=--require=./evil.js injects arbitrary JS into the `npx --no-install tsc` gate; NODE_PATH is Node's PYTHONPATH analogue. Forcing COREPACK_ENABLE_AUTO_PIN=0 (iter-39 Finding 1) keeps Corepack-managed yarn/pnpm from mutating package.json by auto-pinning a `packageManager` field on first run \u2014 the gate's cwd IS the loop-owned PR worktree and the downstream commit/push helper would otherwise stage the mutation. The PATH sanitization (iter-40 Finding 1 + Greg PR #1095 review) prevents an operator's PATH=.:$PATH (or any worktree-resolving entry) from letting a PR-shipped ./git/./mypy/./npm/./npx shim become the gate binary. Gate.cmd ALSO stores absolute tool paths (resolved via shutil.which against the same sanitized PATH at discovery time), including the git-diff-check git binary, so subprocess.run never re-consults PATH for the top-level binary; the env-side sanitization is defence in depth for nested tool spawns by node/npm",
-              "Captures stdout/stderr, scrubs through _scrub_secrets, THEN truncates to ~10KB each side (scrub-before-truncate so secrets crossing the boundary still match the anchored regex)",
-              "Scrubs GateResult.error at the source in _execute_one \u2014 FileNotFoundError's repr embeds the full argv tuple, so an operator-supplied token in gate.cmd would otherwise land verbatim in ReviewFinding.evidence and the per-gate artifact",
-              "Writes per-gate human-readable artifacts and a JSON manifest under artifacts_dir/round-{R}-{mode}-gate-*.txt and round-{R}-{mode}-gates.json; both paths scrub the exception text on persistence failures before logging at WARNING and do not re-emit raw tracebacks with exc_info=True",
-              "Gate.to_dict() scrubs every string field (name/cmd/source/required_fix_hint) so the JSON manifest and final-state.json gates entries are safe to ship to long-term audit storage even when a fork PR poisons package.json scripts with literal tokens; the bare gate.cmd list still flows through _execute_one unchanged for subprocess invocation",
-              "Per-file gates (py-compile/ruff/black/mypy) name themselves as `py-compile:<rel>` and set `source=<rel>` to the changed file path \u2014 both fields are scrubbed at every consumer site (artifact filename via _safe_slug(_scrub(name)), artifact body, _build_evidence/_build_finding_message, ReviewFinding.reviewer/location) so a PR file whose path contains a token-shaped substring (e.g. pkg/ghp_xxx.py) cannot leak into the public PR comment or final-state.json (iter-25 Finding 1)",
-              "ruff/black/mypy argvs emit a POSIX `--` separator before the changed-file list (e.g. `ruff check -- <changed_py>`) so a PR file named like `--config=evil.py` is treated as a positional path, never as a flag (iter-25 Finding 2)",
-              "Persistence-failure logging scrubs gate.name AND the exception text before WARNING, and does NOT re-emit the raw traceback via exc_info=True at DEBUG (traceback.format_exception would otherwise re-render the raw exception message and defeat the WARNING-line scrub) (iter-25 Finding 3)",
-              "Never raises: timeouts, missing binaries, and OSErrors are captured as GateResult rows with exit_code=None and non-empty error"
-            ]
+            "returns": "List[GateResult]"
           },
           {
             "name": "gate_results_to_findings",
             "signature": "(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]",
-            "returns": "List[ReviewFinding]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "List[ReviewFinding]"
           }
         ],
         "dataclasses": [
           "Gate",
           "GateResult"
-        ],
-        "config_knobs": [
-          "DEFAULT_GATE_TIMEOUT_SECONDS"
-        ],
-        "artifacts_layout": {
-          "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
-          "per_round": [
-            "round-{N}-{mode}-gates.json",
-            "round-{N}-{mode}-gate-{slug}.txt"
-          ]
-        }
+        ]
       }
     },
     "position": {
@@ -9132,9 +9010,7 @@
   {
     "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
     "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
-    "dependencies": [
-      "auth_service_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 5,
     "filename": "core/cloud_python.prompt",
     "filepath": "pdd/core/cloud.py",
@@ -9429,24 +9305,19 @@
             "returns": "PromptContractIR"
           },
           {
-            "name": "extract_sections",
-            "signature": "(text: str) -> dict",
-            "returns": "dict"
+            "name": "extract_capabilities",
+            "signature": "(text: str) -> List[Capability]",
+            "returns": "List[Capability]"
+          }
+        ],
+        "classes": [
+          {
+            "name": "Capability",
+            "description": "Structured representation of a MUST/MUST NOT rule."
           },
           {
-            "name": "extract_rules",
-            "signature": "(text: str) -> list[Rule]",
-            "returns": "list[Rule]"
-          },
-          {
-            "name": "extract_waivers",
-            "signature": "(text: str) -> list[Waiver]",
-            "returns": "list[Waiver]"
-          },
-          {
-            "name": "iter_covers_refs",
-            "signature": "(story_text: str) -> \"Iterator[str]\"",
-            "returns": "Iterator[str]"
+            "name": "PromptContractIR",
+            "description": "Aggregates all contract-related sections of a prompt."
           }
         ]
       }
@@ -9516,6 +9387,88 @@
       "type": "module",
       "module": {
         "functions": []
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Core logic for scanning Python code for policy violations using AST-based static analysis.",
+    "description": "Exhaustive side-effect analysis for network access, shell execution, env reads, and sensitive data leakage, supporting inline and prompt-level waivers.",
+    "dependencies": [
+      "contract_ir_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "policy_check_python.prompt",
+    "filepath": "pdd/policy_check.py",
+    "tags": [
+      "module",
+      "python",
+      "security"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_policy_check",
+            "signature": "(source_path, prompt_path=None, *, strict=False) -> PolicyResult",
+            "returns": "PolicyResult"
+          }
+        ],
+        "classes": [
+          {
+            "name": "PolicyIssue",
+            "description": "Represents a single policy violation."
+          },
+          {
+            "name": "PolicyResult",
+            "description": "Aggregates policy issues for a scan."
+          },
+          {
+            "name": "PolicyVisitor",
+            "description": "AST visitor that identifies side effects."
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Registers the pdd policy CLI command group for side-effect enforcement.",
+    "description": "Implements `pdd policy check` for deterministic side-effect validation with JSON and evidence manifest support.",
+    "dependencies": [
+      "policy_check_python.prompt",
+      "contract_ir_python.prompt",
+      "evidence_manifest_python.prompt"
+    ],
+    "priority": 243,
+    "filename": "commands/policy_python.prompt",
+    "filepath": "pdd/commands/policy.py",
+    "tags": [
+      "module",
+      "python",
+      "commands",
+      "security"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "policy",
+            "description": "Side-effect policy enforcement group."
+          },
+          {
+            "name": "check",
+            "description": "Scan files or directories for policy violations."
+          }
+        ]
       }
     },
     "position": {
@@ -9661,7 +9614,7 @@
     "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
     "dependencies": [],
     "priority": 242,
-    "filename": "pdd/evidence_manifest_python.prompt",
+    "filename": "evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [
       "module",
@@ -9674,18 +9627,56 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(**, command: str, ...) -> Path",
-            "returns": "Path"
+            "signature": "(sync_result, *, skip_tests, skip_verify, skip_policy, dry_run=False, output_dir=None)",
+            "returns": "None"
           },
           {
             "name": "validation_from_sync",
-            "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict",
-            "returns": "dict"
+            "signature": "(sync_result, *, skip_tests, skip_verify, skip_policy, dry_run=False) -> Dict",
+            "returns": "Dict"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Regeneration stability checks for PDD dev units.",
+    "description": "Orchestrates multi-run regeneration to ensure deterministic output and behavioral consistency (drift check).",
+    "dependencies": [
+      "code_generator_python.prompt",
+      "policy_check_python.prompt",
+      "evidence_manifest_python.prompt"
+    ],
+    "priority": 244,
+    "filename": "drift_main_python.prompt",
+    "filepath": "pdd/drift_main.py",
+    "tags": [
+      "module",
+      "python",
+      "stability"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_drift",
+            "signature": "(devunit: str, project_root: Path, *, runs: int = 1, model: Optional[str] = None, from_evidence: Optional[Path] = None, code_file: Optional[Path] = None, dry_run: bool = False, max_cost_usd: Optional[float] = None) -> DriftReport",
+            "returns": "DriftReport"
+          }
+        ],
+        "classes": [
+          {
+            "name": "DriftReport",
+            "description": "Aggregates stability metrics across multiple runs."
           },
           {
-            "name": "resolve_generate_output_paths",
-            "signature": "(prompt_file, *, output=None, ...) -> list[str]",
-            "returns": "list[str]"
+            "name": "RunSnapshot",
+            "description": "Outcome of a single regeneration and verification run."
           }
         ]
       }

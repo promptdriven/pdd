@@ -1,0 +1,55 @@
+<pdd-reason>Registers the pdd policy CLI command group for side-effect enforcement.</pdd-reason>
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "policy",
+        "description": "Side-effect policy enforcement group."
+      },
+      {
+        "name": "check",
+        "description": "Scan files or directories for policy violations."
+      }
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>policy_check_python.prompt</pdd-dependency>
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Provide a CLI interface for the deterministic side-effect policy checker.
+
+% Role & Scope
+CLI developer. This module implements the `pdd policy` command group and the `pdd policy check` subcommand.
+
+% Requirements
+1. Define a Click group `policy_group` with `name="policy"`.
+2. Implement `pdd policy check TARGET` command. `TARGET` can be a file or directory.
+3. Options:
+   - `--prompt PATH`: Explicitly specify the prompt file to use for capability rules.
+   - `--json`: Output results in machine-readable JSON format.
+   - `--evidence`: Write findings to an evidence manifest.
+   - `--strict`: Enable strict mode in the policy engine.
+4. Logic:
+   - For each target file, resolve its associated prompt (if not overridden).
+   - Use `pdd.contract_ir.parse_prompt_contracts` to parse capabilities and waivers.
+   - Use `pdd.policy_check.run_policy_check(target_path: Path, prompt_path: Optional[Path] = None, strict: bool = False) -> PolicyResult`.
+   - Report violations to stdout (or JSON).
+5. Exit codes:
+   - `0`: Clean (no violations).
+   - `1`: Policy warnings found.
+   - `2`: Errors (missing files, syntax errors, or violations in strict mode).
+6. Support `pdd checkup policy` as an alias (handled by the group name).
+
+% Dependencies
+<contract_ir><include select="class:PromptContractIR,def:parse_prompt_contracts">pdd/contract_ir.py</include></contract_ir>
+<evidence_manifest><include select="def:write_evidence_manifest">pdd/evidence_manifest.py</include></evidence_manifest>
+
+% Deliverables
+- Code: `pdd/commands/policy.py`

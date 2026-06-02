@@ -58,6 +58,7 @@ on every environment):
 pytest -q tests/commands/test_evidence.py tests/test_evidence_manifest.py
 ```
 
-`pdd sync --evidence` records `unit_tests` / `verify` as `passed` or `failed`
+`pdd sync --evidence` records `unit_tests`, `verify`, and `policy` as `passed` or `failed`
 only when those operations appear in `sync_main` results; otherwise the receipt
-uses `not_available` or `not_applicable`.
+uses `not_available` or `not_applicable`. `policy` status is derived from
+`pdd policy check` (deterministic side-effect analysis).

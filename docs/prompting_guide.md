@@ -285,6 +285,8 @@ Before committing a prompt, review every contract rule and ask:
 
 For modules that touch external systems, add a capabilities section. The capabilities section says what this module may and may not do. This helps prevent accidental behavior expansion during regeneration.
 
+For details on how to enforce these rules using deterministic AST checks, see the [Policy Check Guide](policy_check.md).
+
 Template:
 
 ```xml
