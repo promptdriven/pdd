@@ -3610,6 +3610,17 @@ def _doc_contract_should_scan_added_file(file_path: str) -> bool:
     return True
 
 
+def _doc_contract_should_require_prompt_story(file_path: str, lines: List[str]) -> bool:
+    """Return True when a changed prompt should be covered by a user story."""
+    normalized = file_path.replace("\\", "/")
+    return (
+        bool(lines)
+        and normalized.endswith(".prompt")
+        and not normalized.lower().endswith("_llm.prompt")
+        and _doc_contract_should_scan_added_file(normalized)
+    )
+
+
 def _prompt_story_reference_candidates(prompt_path: str) -> Set[str]:
     """Return story-link spellings that can identify ``prompt_path``."""
     normalized = prompt_path.replace("\\", "/").strip("/")
@@ -3852,11 +3863,7 @@ def run_doc_contract_check(
     # Click options, Skip behaviors, and Env vars
     for file_path, lines in added_lines_by_file.items():
         normalized_file = file_path.replace("\\", "/")
-        if (
-            normalized_file.endswith(".prompt")
-            and not normalized_file.lower().endswith("_llm.prompt")
-            and lines
-        ):
+        if _doc_contract_should_require_prompt_story(normalized_file, lines):
             changed_prompt_files.add(normalized_file)
         if not _doc_contract_should_scan_added_file(file_path):
             continue
