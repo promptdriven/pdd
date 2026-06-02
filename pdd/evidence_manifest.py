@@ -18,9 +18,10 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
+from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
 from .sync_order import extract_includes_from_file
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
@@ -357,14 +358,18 @@ def validation_from_sync(
         for operation in lang_result.get("operations_completed") or []:
             operations.add(str(operation))
 
-    overall_success = sync_result.get("overall_success")
-    if overall_success is None:
-        successes = [
-            bool(lang_result.get("success"))
-            for lang_result in by_language.values()
-            if isinstance(lang_result, dict)
-        ]
-        overall_success = bool(successes) and all(successes)
+    lang_successes = [
+        bool(lang_result.get("success"))
+        for lang_result in by_language.values()
+        if isinstance(lang_result, dict) and "success" in lang_result
+    ]
+    if lang_successes:
+        # Prefer per-language outcomes over a stale top-level overall_success flag.
+        overall_success = all(lang_successes)
+    elif sync_result.get("overall_success") is not None:
+        overall_success = bool(sync_result.get("overall_success"))
+    else:
+        overall_success = False
 
     test_operations = {"test", "crash", "fix", "test_extend"}
     if not skip_tests and operations & test_operations:
@@ -385,6 +390,53 @@ def validation_from_sync(
     return validation
 
 
+def collect_sync_evidence_paths(
+    basename: str,
+    sync_result: Mapping[str, Any],
+    *,
+    project_root: Path | str | None = None,
+) -> tuple[Optional[Path], list[Path]]:
+    """Resolve prompt and generated output paths for a completed ``pdd sync`` run."""
+    from .sync_determine_operation import get_pdd_file_paths  # pylint: disable=import-outside-toplevel
+
+    root = Path(project_root or Path.cwd()).resolve()
+    by_language = sync_result.get("results_by_language")
+    if not isinstance(by_language, dict):
+        by_language = {"python": sync_result}
+
+    languages = [lang for lang in by_language if lang != "_"]
+    language = languages[0] if len(languages) == 1 else "python"
+
+    try:
+        pdd_files = get_pdd_file_paths(basename, language, str(root / "prompts"))
+    except Exception:  # pylint: disable=broad-except
+        return None, []
+
+    prompt = pdd_files.get("prompt")
+    outputs: list[Path] = []
+    for key in ("code", "test", "example"):
+        candidate = pdd_files.get(key)
+        if candidate is not None and candidate.is_file():
+            outputs.append(candidate.resolve())
+    prompt_path = prompt.resolve() if prompt is not None and prompt.is_file() else None
+    return prompt_path, outputs
+
+
+
+def grounding_kwargs_from_ctx(
+    ctx_obj: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build write_evidence_manifest grounding kwargs from a Click ctx.obj mapping."""
+    obj = dict(ctx_obj or {})
+    grounding = obj.get("last_grounding")
+    examples_used = None
+    if isinstance(grounding, Mapping):
+        examples_used = grounding.get("selected_examples")
+    reviewed = grounding_reviewed_for_manifest(obj, examples_used)
+    return {"grounding": grounding, "reviewed": reviewed}
+
+
+
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
     sync_result: Optional[Mapping[str, Any]] = None,
     *,
@@ -403,6 +455,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     skip_policy: bool = False,
     dry_run: bool = False,
     output_dir: Optional[str | Path] = None,
+    grounding: Optional[Mapping[str, Any]] = None,
+    reviewed: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
@@ -456,6 +510,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     if logs:
         log_values.update(logs)
 
+    grounding_block = normalize_grounding(grounding, reviewed=reviewed)
+
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -474,7 +530,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
             "model": model or None,
             "temperature": temperature,
             "cost_usd": float(cost_usd),
-            "grounding_examples": [],
+            "grounding": grounding_block,
+            "grounding_examples": list(grounding_block.get("selected_examples") or []),
         },
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),

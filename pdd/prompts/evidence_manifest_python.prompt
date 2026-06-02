@@ -1,4 +1,4 @@
-<pdd-reason>Writes optional per-run JSON evidence manifests for supported PDD commands.</pdd-reason>
+<pdd-reason>Writes optional per-run JSON evidence manifests, including generation.grounding provenance.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -6,36 +6,39 @@
     "functions": [
       {
         "name": "write_evidence_manifest",
-        "signature": "(sync_result=None, *, command=None, prompt_file=None, output_files=(), model='', cost_usd=0.0, temperature=None, validation=None, logs=None, basename=None, project_root=None, skip_tests=False, skip_verify=False, skip_policy=False, dry_run=False, output_dir=None)",
+        "signature": "(sync_result=None, *, command=None, prompt_file=None, output_files=(), model='', cost_usd=0.0, temperature=None, validation=None, logs=None, basename=None, project_root=None, skip_tests=False, skip_verify=False, skip_policy=False, dry_run=False, output_dir=None, grounding=None, reviewed=False)",
         "returns": "Path"
       },
       {
         "name": "validation_from_sync",
         "signature": "(sync_result, *, skip_tests, skip_verify, skip_policy=False, dry_run=False) -> Dict[str, str]",
         "returns": "Dict[str, str]"
-      }
+      },
+      {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
     ]
   }
 }
 </pdd-interface>
-
-% Goal
-Writes optional per-run JSON evidence manifests for supported PDD commands.
-
-% Role & Scope
-A utility module responsible for capturing and persisting the audit trail (evidence) of a PDD command execution, including hashes of inputs/outputs and validation results.
 
 % Write `pdd/evidence_manifest.py`.
 
 <include>context/python_preamble.prompt</include>
 
 % Requirements
-- Implement `write_evidence_manifest(...)` writing schema v1 JSON under `.pdd/evidence/`.
+- Implement `write_evidence_manifest(...)` writing schema v2 JSON under `.pdd/evidence/` (see schema-version requirement below).
 - Hash prompt, outputs, and recursively resolved local includes for `context.includes` and `expanded_sha256`.
 - Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, skip_policy, dry_run=False)` mapping real sync outcomes.
 - Include `policy` validation status (passed|failed|not_available|not_applicable) in the manifest.
 - Never claim `passed` unless the invoking command established that state.
 - Contract enrichment is optional: lazy-import `coverage_contracts` when present.
+- Accept an optional `grounding` kwarg and always emit a `generation.grounding` object in the manifest. The object MUST contain:
+  - `mode`: one of `"cloud"`, `"local"`, or `"unavailable"`. Default to `"unavailable"` when no grounding info is supplied (local/no-cloud runs MUST record `unavailable` rather than failing).
+  - `selected_examples`: list of `{module, prompt_sha256, code_sha256, similarity, source}` entries (omit fields that are not available; never invent values).
+  - `pinned`: list of module slugs forced via `<pin>`.
+  - `excluded`: list of module slugs blocked via `<exclude>`.
+  - `reviewed`: bool — `True` only when the invoking command observed a `--review-examples` decision for this run.
+- Preserve the existing top-level `grounding_examples` array for backward compatibility; populate it from `grounding.selected_examples` when present.
+- Bump the manifest `schema_version` metadata from `1` to `2` to reflect the additive `generation.grounding` object; update `pdd/schemas/evidence_manifest.schema.json` so the new object is documented and required at schema v2, while still tolerating the legacy `grounding_examples` field. Update `docs/evidence_manifest.md` so the "Contents" section advertises schema v2 and documents `generation.grounding` alongside the existing fields.
 
 % Deliverables
 - Code: `pdd/evidence_manifest.py`
