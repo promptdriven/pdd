@@ -89,8 +89,8 @@ jobs:
             gh release create "$tag" --generate-notes --verify-tag --target main
           fi
 
-      - name: Setup Node for Claude Code / PDS
-        if: env.HAS_CLAUDE_OAUTH == 'true' || env.HAS_PDS == 'true'
+      - name: Setup Node for Claude Code
+        if: env.HAS_CLAUDE_OAUTH == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -226,6 +226,12 @@ jobs:
             echo "vars.PDS_CLI_PACKAGE not set; skipping release video."
             exit 0
           fi
+          # Uses the runner's preinstalled Node (ubuntu-latest ships Node 20+);
+          # if it is ever absent, skip rather than fail the release.
+          if ! command -v npm >/dev/null 2>&1; then
+            echo "::warning::node/npm not available on runner; skipping release video."
+            exit 0
+          fi
           if ! npm install -g "$PDS_CLI_PACKAGE"; then
             echo "::warning::pds CLI install from PDS_CLI_PACKAGE failed; skipping release video."
             exit 0
@@ -251,13 +257,19 @@ jobs:
           echo "Release video: $youtube_url"
           # Prepend to the notes so it shows on the release page AND survives
           # the Discord post's tail-truncation below.
-          body=$(gh release view "$tag" --json body --jq .body)
+          if ! body=$(gh release view "$tag" --json body --jq .body); then
+            echo "::warning::could not read release notes; video link not added."
+            exit 0
+          fi
           case "$body" in
             *"$youtube_url"*) echo "Release notes already reference the video." ;;
             *)
-              printf '🎥 **Release video:** %s\n\n%s\n' "$youtube_url" "$body" \
-                | gh release edit "$tag" --notes-file -
-              echo "Prepended release video link to $tag notes." ;;
+              if printf '🎥 **Release video:** %s\n\n%s\n' "$youtube_url" "$body" \
+                  | gh release edit "$tag" --notes-file -; then
+                echo "Prepended release video link to $tag notes."
+              else
+                echo "::warning::failed to update release notes with video link."
+              fi ;;
           esac
 
       - name: Post release notes to Discord
