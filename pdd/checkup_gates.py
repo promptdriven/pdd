@@ -1563,7 +1563,6 @@ def _discover_policy_gates(
                 name=f"policy:{rel}",
                 cmd=[
                     *cli,
-                    "checkup",
                     "policy",
                     "check",
                     str(code_path.resolve()),
@@ -1572,7 +1571,7 @@ def _discover_policy_gates(
                 ],
                 source=f"{prompt_label}:<capabilities>",
                 required_fix_hint=(
-                    f"Run `pdd checkup policy check {rel} --prompt {prompt_label}` locally and "
+                    f"Run `pdd policy check {rel} --prompt {prompt_label}` locally and "
                     "fix capability violations, or add a justified "
                     "`# pdd-policy-ignore` on the flagged line."
                 ),

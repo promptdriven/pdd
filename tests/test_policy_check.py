@@ -254,13 +254,28 @@ def test_explicit_filesystem_capability_allows_pathlib_write(tmp_path: Path) -> 
     assert result.passed
 
 
+def test_pathlib_path_alias_write_text_blocked(tmp_path: Path) -> None:
+    prompt = tmp_path / "no_file.prompt"
+    prompt.write_text("<capabilities>\n- MAY read configuration.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "alias_path.py"
+    target.write_text(
+        "from pathlib import Path as P\n\n"
+        "def save() -> None:\n"
+        "    P('/tmp/pdd_alias_probe').write_text('x')\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "file" for i in result.issues)
+
+
 def test_policy_check_cli_json_output() -> None:
     """CLI ``--json`` returns structured findings for CI integration."""
     target = FIXTURE_DIR / "forbidden_network.py"
     prompt = FIXTURE_DIR / "forbidden_network_python.prompt"
     result = CliRunner().invoke(
         cli.cli,
-        ["checkup", "policy", "check", str(target), "--prompt", str(prompt), "--json"],
+        ["policy", "check", str(target), "--prompt", str(prompt), "--json"],
         env=_CLI_ENV,
     )
     assert result.exit_code != 0, result.output

@@ -1,8 +1,8 @@
 # Policy Check
 
-`pdd checkup policy check` is a deterministic safety layer that validates generated code against natural-language capability contracts. It uses AST-based static analysis to ensure that modules stay within their allowed side-effect boundaries.
+`pdd policy check` is a deterministic safety layer that validates generated code against natural-language capability contracts. It uses AST-based static analysis to ensure that modules stay within their allowed side-effect boundaries.
 
-This is **not** the same as `pdd checkup gate`, which evaluates evidence-manifest YAML rules under `.pdd/`. Capability policy checks are driven by `<capabilities>` in module prompts.
+The same command is also available as `pdd checkup policy check` for checkup workflows. This is **not** the same as `pdd checkup gate`, which evaluates evidence-manifest YAML rules under `.pdd/`.
 
 ## Capabilities and Side Effects
 
@@ -30,9 +30,11 @@ Capabilities are matched with simple substring checks on each bullet (case-insen
 |----------|-----------------------------|
 | Network / HTTP | `network`, `api`, `http`, `endpoint`, `provider`, `request`, `url` |
 | Shell | `shell`, `command`, `subprocess`, `exec` |
-| Files | `file`, `write`, `delete`, `persist`, `storage` |
+| Filesystem | `file`, `files`, `filesystem`, `disk`, `storage`, `write file`, `on disk` |
 | Environment | `env`, `environment`, `configuration` |
 | Email | `email`, `mail`, `smtp` |
+
+Domain verbs such as “MAY write refund records” authorize business logic only — they do **not** permit `open(..., "w")`, `Path.write_text`, or other filesystem mutations unless the bullet also names files/disk/filesystem explicitly.
 
 `MUST NOT` bullets that mention a family block that category; `MAY` / `SHOULD` bullets that mention a family allow it.
 
@@ -56,20 +58,20 @@ The initial version focuses on high-risk side effects in Python:
 ## Command Usage
 
 ```bash
-# Check a specific file (prompt auto-discovered when possible)
-pdd checkup policy check src/refund_payment.py
+# Top-level command (issue #828)
+pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt
 
-# Explicit prompt
+# Checkup namespace alias
 pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt
 
 # JSON for CI (capabilities + issues)
-pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --json
+pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --json
 
 # Strict: flag side effects even when <capabilities> is missing
-pdd checkup policy check src/refund_payment.py --strict
+pdd policy check src/refund_payment.py --strict
 
 # Evidence manifest with validation.policy
-pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --evidence
+pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --evidence
 ```
 
 Directory targets skip common vendor folders (`.git`, `venv`, `node_modules`, `__pycache__`, `.pdd`, etc.).
@@ -98,6 +100,6 @@ config_path = os.getenv("APP_CONFIG_PATH")
 
 ## Integration
 
-- **`pdd checkup --pr --review-loop`:** When a changed `.py` file has a prompt with `<capabilities>`, a `policy:<path>` gate runs `pdd checkup policy check`.
+- **`pdd checkup --pr --review-loop`:** When a changed `.py` file has a prompt with `<capabilities>`, a `policy:<path>` gate runs `pdd policy check`.
 - **`pdd checkup drift`:** Runs policy check when the prompt defines `<capabilities>` (not when only evidence gate YAML exists).
 - **Evidence:** `--evidence` sets `validation.policy` to `passed` or `failed`. Sync may populate the same field via `validation_from_sync`.

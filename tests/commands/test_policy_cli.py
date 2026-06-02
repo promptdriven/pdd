@@ -1,4 +1,4 @@
-"""CLI wiring tests for ``pdd checkup policy check``."""
+"""CLI wiring tests for ``pdd policy check`` (top-level and ``pdd checkup policy``)."""
 from __future__ import annotations
 
 import json
@@ -19,28 +19,28 @@ def _cli_json_payload(output: str) -> list:
     return json.loads(output[start:end])
 
 
-def test_top_level_pdd_policy_is_not_registered() -> None:
-    """Capability policy is only exposed under ``pdd checkup policy`` (like gate)."""
-    assert "policy" not in cli.cli.commands
-    result = CliRunner().invoke(cli.cli, ["policy"], env=_CLI_ENV)
-    assert result.exit_code != 0
-    assert "No such command" in result.output
+def test_top_level_pdd_policy_check_is_registered() -> None:
+    """Issue #828 acceptance: ``pdd policy check`` is a top-level command."""
+    assert "policy" in cli.cli.commands
+    result = CliRunner().invoke(cli.cli, ["policy", "--help"], env=_CLI_ENV)
+    assert result.exit_code == 0, result.output
+    assert "check" in result.output.lower()
 
 
-def test_checkup_policy_help_shows_check_subcommand() -> None:
-    """``pdd checkup policy --help`` documents the nested command group."""
+def test_checkup_policy_alias_still_works() -> None:
+    """Nested ``pdd checkup policy check`` remains available for checkup workflows."""
     result = CliRunner().invoke(cli.cli, ["checkup", "policy", "--help"], env=_CLI_ENV)
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "check" in result.output.lower()
 
 
 def test_policy_check_passes_for_compliant_module() -> None:
-    """Compliant modules exit zero in human-readable mode."""
+    """Compliant modules exit zero via the top-level command."""
     target = FIXTURE_DIR / "allowed_refund.py"
     prompt = FIXTURE_DIR / "allowed_refund_python.prompt"
     result = CliRunner().invoke(
         cli.cli,
-        ["checkup", "policy", "check", str(target), "--prompt", str(prompt)],
+        ["policy", "check", str(target), "--prompt", str(prompt)],
         env=_CLI_ENV,
     )
     assert result.exit_code == 0, result.output
@@ -53,7 +53,7 @@ def test_policy_check_strict_exits_with_failure_code() -> None:
     prompt = FIXTURE_DIR / "forbidden_network_python.prompt"
     result = CliRunner().invoke(
         cli.cli,
-        ["checkup", "policy", "check", str(target), "--prompt", str(prompt), "--strict"],
+        ["policy", "check", str(target), "--prompt", str(prompt), "--strict"],
         env=_CLI_ENV,
     )
     assert result.exit_code == 2, result.output
@@ -70,7 +70,6 @@ def test_policy_check_evidence_writes_validation_policy(
     result = CliRunner().invoke(
         cli.cli,
         [
-            "checkup",
             "policy",
             "check",
             str(target),
@@ -94,7 +93,7 @@ def test_policy_check_json_lists_targets() -> None:
     prompt = FIXTURE_DIR / "forbidden_network_python.prompt"
     result = CliRunner().invoke(
         cli.cli,
-        ["checkup", "policy", "check", str(target), "--prompt", str(prompt), "--json"],
+        ["policy", "check", str(target), "--prompt", str(prompt), "--json"],
         env=_CLI_ENV,
     )
     records = _cli_json_payload(result.output)
