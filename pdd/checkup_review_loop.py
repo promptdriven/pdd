@@ -5423,25 +5423,19 @@ def _commit_and_push_if_changed(
         return True, "No changes to push."
 
     if changed:
-        from .pr_metadata_finalizer import (
-            finalize_pr_metadata,
-            is_pdd_meta_artifact,
-            stage_paths_scoped,
-        )
-
-        finalization = finalize_pr_metadata(worktree, changed_paths=changed, stage=True)
-        if not finalization.ok:
-            return False, finalization.message
-
-        changed_after_finalization = _git_changed_files(worktree)
-        stageable = [
+        stage_cmds: List[List[str]] = [["git", "add", "-u"]]
+        untracked = [
             path
-            for path in changed_after_finalization
-            if not is_pdd_meta_artifact(path)
+            for path in _git_untracked_files(worktree)
+            if not _is_untracked_pdd_meta_artifact(path)
         ]
-        stage_ok, stage_message = stage_paths_scoped(worktree, stageable)
-        if not stage_ok:
-            return False, stage_message
+        if untracked:
+            stage_cmds.append(["git", "add", "--", *untracked])
+
+        for cmd in stage_cmds:
+            result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
 
         if not _git_has_staged_changes(worktree):
             # Staging produced no eligible content (everything filtered out as

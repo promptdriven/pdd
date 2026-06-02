@@ -379,8 +379,7 @@ def detect_drift(
 
     Returns (prompt_drifts, example_drifts):
       - prompt_drifts: modules with operation == 'update'
-      - example_drifts: everything else (example/auto-deps/verify/generate/test/
-        test_extend/fix/crash)
+      - example_drifts: everything else (example/auto-deps/verify/generate/test/crash)
     """
     parsed = _parse_modules_arg(modules)
 
@@ -1257,10 +1256,6 @@ def _enforce_structural_invariants(drift: Any) -> bool:
 # Heal dispatch
 # ---------------------------------------------------------------------------
 
-_SYNC_BACKED_OPERATIONS = frozenset(
-    ("verify", "generate", "test", "test_extend", "fix", "crash")
-)
-
 
 def _heal_skip_modules() -> Set[str]:
     raw = os.environ.get("PDD_HEAL_SYNC_SKIP_MODULES", "")
@@ -1460,7 +1455,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         return _heal_example(drift, env)
     if op == "auto-deps":
         return _heal_auto_deps(drift, env)
-    if op in _SYNC_BACKED_OPERATIONS:
+    if op in ("verify", "generate", "test", "crash"):
         ok = _run_pdd_command(
             ["pdd", "--force", "--strength", "0.5", "sync", drift.basename],
             env=env,
