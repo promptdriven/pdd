@@ -2523,6 +2523,18 @@ def _is_openai_codex_default(model_name: Any) -> bool:
     return value.startswith("gpt-5") or "codex" in value
 
 
+def _is_provider_challenge_response(content: Any) -> bool:
+    """Detect provider-side HTML challenges that should trigger model fallback."""
+    if not isinstance(content, str):
+        return False
+    lowered = content.lower()
+    return (
+        "challenge-error-text" in lowered
+        or "enable javascript and cookies to continue" in lowered
+        or "cf_chl_opt" in lowered
+    )
+
+
 def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     """Rows backed by the ChatGPT/Codex subscription provider."""
     return model_df[
@@ -4701,6 +4713,17 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
+                        if _is_provider_challenge_response(raw_result):
+                            logger.warning(
+                                "[PROVIDER CHALLENGE] %s returned an HTML challenge. "
+                                "Trying next model.",
+                                model_name_litellm,
+                            )
+                            raise SchemaValidationError(
+                                "Provider returned an HTML challenge instead of model output",
+                                raw_response=raw_result,
+                                item_index=i,
+                            )
                         # Record the last (prompt, raw response) pair for the current operation.
                         if _record_llm_pair is not None and trace_prompt_repr is not None:
                             try:
