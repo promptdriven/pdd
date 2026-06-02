@@ -1,0 +1,12 @@
+% You are an expert Python engineer.
+
+% Module: sync_regression_cloud_smoke
+Small temporary smoke-test module for staging sync routing.
+
+% Requirements
+- Create a Python module with a top-level docstring explaining that it is a temporary staging sync smoke helper.
+- Define `describe_sync_smoke(label: str = "staging2") -> str`.
+- The function returns `f"PDD sync smoke ready: {label}"`.
+- The function must strip surrounding whitespace from `label` before formatting.
+- If the stripped label is empty, use `"staging2"`.
+- Add a concise function docstring.
