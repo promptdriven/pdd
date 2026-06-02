@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="*",
         choices=["A0", "A1", "A2"],
         default=None,
-        help="Benchmark arms to run (default: A0 A1 A2).",
+        help="Benchmark arms to run (default: A0 A1). Pass A2 for reference-code baseline.",
     )
     parser.add_argument(
         "--results-dir",

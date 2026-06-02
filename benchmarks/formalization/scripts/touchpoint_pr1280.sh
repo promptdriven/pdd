@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Human-verifiable smoke after merging main into PR #1280 (issue #1273 / epic #833).
+# Human-verifiable smoke for PR #1280 (issue #1273 — A0 vs A1 formalization benchmark).
 # No API keys; finishes in under ~2 minutes on a typical laptop.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -28,7 +28,23 @@ PYTHON="${PYTHON:-python}"
 "${PYTHON}" -m pdd checkup gate --help >/dev/null
 "${PYTHON}" -m pdd checkup drift --help >/dev/null
 
-echo "==> 5. Corpus M1→M3 CI smoke (no LLM)"
+echo "==> 5. M1 A0 vs A1 (deterministic, single task)"
+export PDD_AUTO_UPDATE=false
+SMOKE_OUT="$(mktemp -d)"
+"${PYTHON}" benchmarks/formalization/pipelines/run_experiment.py \
+  --output-dir "${SMOKE_OUT}" --tasks hello_fn --dry-run
+"${PYTHON}" -c "
+import json, sys
+from pathlib import Path
+p = Path('${SMOKE_OUT}') / 'hello_fn' / 'result.json'
+block = json.loads(p.read_text())['a0_vs_a1']
+assert block['deterministic'] and block['a1_improves_readiness'], block
+print('a0_vs_a1 OK:', block['a1']['implementation_readiness_score'],
+      '>', block['a0']['implementation_readiness_score'])
+"
+rm -rf "${SMOKE_OUT}"
+
+echo "==> 6. Corpus M1→M3 CI smoke (no LLM)"
 bash benchmarks/formalization/scripts/run_eval.sh
 
 echo "OK: touchpoint_pr1280.sh passed"

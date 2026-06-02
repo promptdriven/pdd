@@ -19,7 +19,7 @@ from pdd.coverage_contracts import build_coverage
 from pdd.prompt_lint import scan_prompt
 
 BENCHMARK_VERSION = "0.3.0"
-ARMS = ("A0", "A1", "A2")
+ARMS = ("A0", "A1")
 
 
 @dataclass

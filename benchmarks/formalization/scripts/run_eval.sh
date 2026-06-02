@@ -14,6 +14,10 @@ _run python benchmarks/formalization/pipelines/run_experiment.py \
 echo "==> M1 headline"
 jq -r '.headline' benchmarks/formalization/experiments/ci_smoke/summary.json
 
+echo "==> M1 A0 vs A1 summary"
+jq '.a0_vs_a1_summary' benchmarks/formalization/experiments/ci_smoke/summary.json
+jq '.a0_vs_a1.a1_improves_readiness' benchmarks/formalization/experiments/ci_smoke/hello_fn/result.json
+
 echo "==> M2 generation economics (fixture replay, no LLM)"
 _run python benchmarks/formalization/pipelines/run_generation_benchmark.py \
   --replay-fixtures \

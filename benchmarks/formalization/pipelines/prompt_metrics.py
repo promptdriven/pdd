@@ -39,7 +39,7 @@ def collect_prompt_metrics(
     coverage = build_coverage(prompt_path, stories, tests)
     summary = coverage.summary if coverage.has_contract_rules else {}
 
-    return {
+    metrics = {
         "has_vocabulary": "vocabulary" in sections,
         "has_contract_rules": "contract_rules" in sections,
         "has_formalization": "formalization" in sections,
@@ -52,11 +52,13 @@ def collect_prompt_metrics(
         "unchecked_rule_count": summary.get("unchecked", 0),
         "formalization_records": len(ir.formalizations),
         "formal_candidate_rules": formal_candidates,
+        "coverage_summary": dict(summary) if summary else {},
         "economics": economics_placeholders(
             milestone=1,
             reason="Generation economics measured in M2 (run_generation_benchmark.py)",
         ),
     }
+    return metrics
 
 
 def delta_metrics(a0: dict[str, Any], a1: dict[str, Any]) -> dict[str, Any]:

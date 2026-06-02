@@ -5,7 +5,9 @@ commands. For checkup command detail (purpose, flags, wrappers, exit codes) see
 [CHECKUP_CHEATSHEET.md](CHECKUP_CHEATSHEET.md). For runbooks see [EVALUATION.md](EVALUATION.md);
 for demos see [SHOWCASE.md](SHOWCASE.md).
 
-**Tracking:** [issue #1273](https://github.com/promptdriven/pdd/issues/1273) · epic [#833](https://github.com/promptdriven/pdd/issues/833)
+**Tracking:** [issue #1273](https://github.com/promptdriven/pdd/issues/1273) · [PR #1280](https://github.com/promptdriven/pdd/pull/1280)
+
+**Primary comparison:** [A0_VS_A1.md](A0_VS_A1.md) — ad-hoc **A0** vs PDD formalized **A1** on the same requirement (A2 is optional reference code only).
 
 ---
 

@@ -21,6 +21,7 @@ if str(_REPO_ROOT) not in sys.path:
 if str(_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(_PIPELINE_DIR))
 
+import a0_vs_a1_metrics  # noqa: E402
 import formalize_a1  # noqa: E402
 import prompt_metrics  # noqa: E402
 import story_metrics  # noqa: E402
@@ -182,6 +183,15 @@ def run_experiment(
         )
         story_delta = story_metrics.compare_story_arms(story_from_a0, story_from_a1)
 
+        a0_vs_a1 = a0_vs_a1_metrics.compare_task(
+            task_id=task_id,
+            a0_metrics=a0_metrics,
+            a1_metrics=a1_metrics,
+            a0_path=a0_path,
+            a1_path=a1_path,
+            story_delta=story_delta,
+        )
+
         task_result = {
             "task_id": task_id,
             "tier": entry.get("tier"),
@@ -191,6 +201,7 @@ def run_experiment(
             "a0": a0_metrics,
             "a1": a1_metrics,
             "delta": deltas,
+            "a0_vs_a1": a0_vs_a1,
             "formalize_manifest": formalize_manifest,
             "story_template": {
                 "issue": 820,
@@ -253,14 +264,24 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
             parts.append(f"Δrules={dr:+d}")
         headlines.append(": ".join(parts))
 
+    a0_vs_a1_tasks = [t.get("a0_vs_a1") for t in task_results if t.get("a0_vs_a1")]
+    a1_wins = sum(1 for c in a0_vs_a1_tasks if c.get("a1_improves_readiness"))
+
     return {
         "milestone": 1,
+        "primary_comparison": "A0 (ad-hoc prompt) vs A1 (PDD formalized prompt)",
         "business_hypothesis": business_value_block()["hypothesis"],
         "claim": (
-            "M1 measures the upstream business lever: prompt checkability before "
-            "generation spend. M2 connects to generation rounds, tokens, and cost. "
-            "M3 connects to regeneration drift."
+            "M1 answers whether A1 prompts are more reviewable and implementation-ready "
+            "than A0 on the same task (lint, contracts, coverage, stories). "
+            "M2/M3 connect that lever to generation cost and drift."
         ),
+        "a0_vs_a1_summary": {
+            "tasks_compared": len(a0_vs_a1_tasks),
+            "a1_higher_readiness_count": a1_wins,
+            "deterministic": True,
+            "requires_llm": False,
+        },
         "task_count": n,
         "tasks_gained_vocabulary": gained_vocab,
         "tasks_gained_contract_rules": gained_rules,
@@ -295,8 +316,24 @@ def _build_summary(task_results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _write_report_md(path: Path, summary: dict[str, Any], manifest: dict[str, Any]) -> None:
     """Write human-readable M1 report."""
+    a0_vs_a1 = summary.get("a0_vs_a1_summary") or {}
     lines = [
         "# A0→A1 Prompt Formalization Benchmark — Milestone 1 Report",
+        "",
+        "## Primary comparison (this PR)",
+        "",
+        "**Question:** Does PDD formalization (A1) produce more reviewable, verifiable, "
+        "implementation-ready prompts than ad-hoc A0 on the **same** task requirement?",
+        "",
+        f"- Tasks compared: {a0_vs_a1.get('tasks_compared', summary['task_count'])}",
+        f"- A1 higher `implementation_readiness_score`: "
+        f"{a0_vs_a1.get('a1_higher_readiness_count', '—')} "
+        f"(deterministic; no LLM for M1 scoring)",
+        "",
+        "See [A0_VS_A1.md](../A0_VS_A1.md) for arm definitions, metrics, and how to run.",
+        "",
+        "**A2 (code baseline)** is optional in `run_benchmark.py` for compatibility only — "
+        "not part of the headline comparison.",
         "",
         "## Business value (M1 scope)",
         "",

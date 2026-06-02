@@ -73,6 +73,16 @@ def test_run_experiment_smoke(tmp_path: Path) -> None:
     summary = json.loads(proc.stdout)
     assert summary["task_count"] == 1
     assert summary["tasks"][0]["a1_has_contract_rules"] is True
+    assert summary.get("primary_comparison") == "A0 (ad-hoc prompt) vs A1 (PDD formalized prompt)"
+    assert summary.get("a0_vs_a1_summary", {}).get("tasks_compared") == 1
+    task_result = json.loads((tmp_path / "hello_fn" / "result.json").read_text(encoding="utf-8"))
+    a0_vs_a1 = task_result.get("a0_vs_a1") or {}
+    assert a0_vs_a1.get("deterministic") is True
+    assert a0_vs_a1.get("a1_improves_readiness") is True
+    assert (
+        a0_vs_a1.get("a1", {}).get("implementation_readiness_score", 0)
+        > a0_vs_a1.get("a0", {}).get("implementation_readiness_score", 0)
+    )
     manifest = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["story_template_issue"] == 820
     assert "seeded_from_a0" in manifest["tasks"][0]["story_template"]

@@ -38,6 +38,9 @@ def test_run_benchmark_smoke(tmp_path: Path, results_schema: dict) -> None:
             str(RUNNER),
             "--tasks",
             "email_validator",
+            "--arms",
+            "A0",
+            "A1",
             "--report",
             "--results-dir",
             str(out),
@@ -52,11 +55,11 @@ def test_run_benchmark_smoke(tmp_path: Path, results_schema: dict) -> None:
     aggregate_path = out / "aggregate.json"
     assert aggregate_path.is_file()
     aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
-    assert len(aggregate["runs"]) == 3
+    assert len(aggregate["runs"]) == 2
     assert (out / "summary.json").is_file()
     assert (out / "REPORT.md").is_file()
 
-    for arm in ("A0", "A1", "A2"):
+    for arm in ("A0", "A1"):
         run_path = out / "email_validator" / f"{arm}.json"
         assert run_path.is_file()
         payload = json.loads(run_path.read_text(encoding="utf-8"))

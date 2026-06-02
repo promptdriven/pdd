@@ -3,7 +3,7 @@
 This benchmark makes PDD's business value measurable: better prompts should reduce wasted
 generation loops, lower token spend, and make AI-generated software easier to trust.
 
-**Design:** [EXPERIMENT_DESIGN.md](EXPERIMENT_DESIGN.md)
+**Design:** [EXPERIMENT_DESIGN.md](EXPERIMENT_DESIGN.md) · **A0 vs A1 (this PR):** [A0_VS_A1.md](A0_VS_A1.md)
 
 ## Core hypothesis
 
