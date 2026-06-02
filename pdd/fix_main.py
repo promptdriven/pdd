@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .preprocess import preprocess
 
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop, run_pytest_on_file
@@ -137,14 +138,24 @@ def fix_main(
             confirm_callback=ctx.obj.get('confirm_callback')
         )
 
+        effective_config = resolve_effective_config(
+            ctx,
+            resolved_config,
+            param_overrides={
+                "compress_test_context": compress_test_context,
+                "context_compression": context_compression,
+                "compression_fallback": compression_fallback,
+            },
+        )
+
         # Get parameters from context (prefer passed parameters over ctx.obj)
-        strength = strength if strength is not None else ctx.obj.get('strength', DEFAULT_STRENGTH)
-        temperature = temperature if temperature is not None else ctx.obj.get('temperature', 0)
+        strength = strength if strength is not None else effective_config["strength"]
+        temperature = temperature if temperature is not None else effective_config["temperature"]
         verbose = ctx.obj.get('verbose', False)
-        time = ctx.obj.get('time') # Get time from context
-        compress_test_context = compress_test_context or bool(ctx.obj.get('compress_test_context'))
-        context_compression = context_compression or ctx.obj.get('context_compression')
-        compression_fallback = compression_fallback or ctx.obj.get('compression_fallback')
+        time = effective_config["time"]
+        compress_test_context = bool(effective_config["compress_test_context"])
+        context_compression = effective_config["context_compression"]
+        compression_fallback = effective_config["compression_fallback"]
 
         # Determine cloud vs local execution preference
         is_local_execution_preferred = ctx.obj.get('local', False)

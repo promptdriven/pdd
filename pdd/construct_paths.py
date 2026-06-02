@@ -1200,7 +1200,11 @@ def construct_paths(
         for key, value in resolved_config.items():
             if (key.endswith('_output_path') or key == 'auto_deps_csv_path') and key not in context_config:
                 context_config[key] = value
-                
+
+        from .config_resolution import apply_compression_env
+
+        apply_compression_env(resolved_config)
+
     except Exception as e:
         error_msg = f"Configuration error: {e}"
         console.print(f"[error]{error_msg}[/error]", style="error")

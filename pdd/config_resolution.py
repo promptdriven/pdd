@@ -13,6 +13,42 @@ import os
 
 from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
 
+_COMPRESSION_KEYS = (
+    "context_compression",
+    "compress_examples",
+    "compress_test_context",
+    "compression_fallback",
+)
+
+
+def apply_compression_env(config: Dict[str, Any]) -> None:
+    """Export resolved compression settings to os.environ for preprocess().
+
+    Only keys present in ``config`` are updated so partial updates (e.g. from
+    ``fix_error_loop``) do not clear unrelated compression env vars.
+    """
+    if "context_compression" in config:
+        context_compression = config["context_compression"]
+        if context_compression is not None and str(context_compression).lower() == "off":
+            os.environ.pop("PDD_CONTEXT_COMPRESSION", None)
+        elif context_compression is not None:
+            os.environ["PDD_CONTEXT_COMPRESSION"] = str(context_compression)
+
+    if "compress_examples" in config:
+        if config["compress_examples"]:
+            os.environ["PDD_COMPRESS_EXAMPLES"] = "1"
+        else:
+            os.environ.pop("PDD_COMPRESS_EXAMPLES", None)
+
+    if "compress_test_context" in config:
+        if config["compress_test_context"]:
+            os.environ["PDD_COMPRESS_TEST_CONTEXT"] = "1"
+        else:
+            os.environ.pop("PDD_COMPRESS_TEST_CONTEXT", None)
+
+    if "compression_fallback" in config and config["compression_fallback"] is not None:
+        os.environ["PDD_COMPRESSION_FALLBACK"] = str(config["compression_fallback"])
+
 
 def resolve_effective_config(
     ctx: click.Context,
@@ -62,14 +98,6 @@ def resolve_effective_config(
         "compression_fallback": resolve_value("compression_fallback", "full"),
     }
 
-    # Set environment variables so they propagate to preprocess()
-    if effective_config["context_compression"]:
-        os.environ["PDD_CONTEXT_COMPRESSION"] = str(effective_config["context_compression"])
-    if effective_config["compress_examples"]:
-        os.environ["PDD_COMPRESS_EXAMPLES"] = "1"
-    if effective_config["compress_test_context"]:
-        os.environ["PDD_COMPRESS_TEST_CONTEXT"] = "1"
-    if effective_config["compression_fallback"]:
-        os.environ["PDD_COMPRESSION_FALLBACK"] = str(effective_config["compression_fallback"])
+    apply_compression_env(effective_config)
 
     return effective_config

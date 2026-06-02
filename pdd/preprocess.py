@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import warnings
 import base64
 import subprocess
 from typing import Any, List, Optional, Tuple, Union
@@ -28,6 +29,30 @@ def _is_debug() -> bool:
 
 def _is_quiet_mode() -> bool:
     return os.getenv("PDD_QUIET") == "1"
+
+
+def _warn_selector_fallback(
+    file_path: str,
+    mode: str,
+    error: Exception,
+    *,
+    selectors: str | None = None,
+) -> None:
+    """Emit a UserWarning when compression/selector fails and full content is used."""
+    selector_detail = f" for select={selectors}" if selectors else ""
+    if isinstance(error, ImportError):
+        message = (
+            f"ContentSelector not importable{selector_detail} in {file_path}: {error}. "
+            "Falling back to full content."
+        )
+    else:
+        message = (
+            f"ContentSelector failed{selector_detail} in {file_path} (mode={mode}): {error}. "
+            "Falling back to full content."
+        )
+    warnings.warn(message, UserWarning, stacklevel=4)
+    if not _is_quiet_mode():
+        console.print(f"[yellow]Warning: {message}[/yellow]")
 
 def _dbg(msg: str) -> None:
     if _is_debug():
@@ -706,8 +731,10 @@ def process_include_tags(
                             fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
                             if fallback_strategy == "error":
                                 raise
-                            
-                            console.print(f"[yellow]Warning: Selector failed for {file_path} (mode={mode}): {e}. Falling back to full content.[/yellow]")
+
+                            _warn_selector_fallback(
+                                file_path, mode, e, selectors=selectors_str
+                            )
                             
                             # Fall back to query if originally present
                             fallback_query = attrs.get('query')

@@ -25,6 +25,7 @@ from .failure_classification import (
     format_signature_hint,
 )
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .config_resolution import apply_compression_env
 from .fix_focus import FocusedInputs, is_large, prepare_focused_inputs, reconstruct_code
 from .get_language import get_language
 from .get_test_command import TestCommand, get_test_command_for_file
@@ -357,12 +358,15 @@ def fix_error_loop(
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
     """
+    compression_patch: dict[str, Any] = {}
     if compress_test_context:
-        os.environ["PDD_COMPRESS_TEST_CONTEXT"] = "1"
-    if context_compression:
-        os.environ["PDD_CONTEXT_COMPRESSION"] = context_compression
-    if compression_fallback:
-        os.environ["PDD_COMPRESSION_FALLBACK"] = compression_fallback
+        compression_patch["compress_test_context"] = True
+    if context_compression is not None:
+        compression_patch["context_compression"] = context_compression
+    if compression_fallback is not None:
+        compression_patch["compression_fallback"] = compression_fallback
+    if compression_patch:
+        apply_compression_env(compression_patch)
 
     total_cost = 0.0
     total_attempts = 0
