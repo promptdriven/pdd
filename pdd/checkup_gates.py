@@ -3313,6 +3313,14 @@ _DOC_CONTRACT_CONFIG_PATHS: Tuple[str, ...] = (
     ".pdd/doc_contract.json",
     ".pdd/doc-contract.json",
 )
+_STORY_PROMPTS_METADATA_RE = re.compile(
+    r"<!--\s*pdd-story-prompts:\s*(?P<prompts>.*?)\s*-->",
+    flags=re.IGNORECASE,
+)
+_STORY_PROMPT_REFERENCE_RE = re.compile(
+    r"(?P<ref>[A-Za-z0-9_./-]+\.prompt)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _git_show_doc_contract_text(
@@ -3588,6 +3596,56 @@ def _doc_contract_should_scan_added_file(file_path: str) -> bool:
     return True
 
 
+def _prompt_story_reference_candidates(prompt_path: str) -> Set[str]:
+    """Return story-link spellings that can identify ``prompt_path``."""
+    normalized = prompt_path.replace("\\", "/").strip("/")
+    candidates = {normalized, Path(normalized).name}
+    parts = normalized.split("/")
+    if "prompts" in parts:
+        idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
+        rel_from_prompts = "/".join(parts[idx + 1:])
+        if rel_from_prompts:
+            candidates.add(rel_from_prompts)
+    return {candidate.lower() for candidate in candidates if candidate}
+
+
+def _story_prompt_refs(story_content: str) -> Set[str]:
+    """Extract prompt refs from story metadata and prose."""
+    refs: Set[str] = set()
+    metadata = _STORY_PROMPTS_METADATA_RE.search(story_content)
+    if metadata:
+        for entry in metadata.group("prompts").split(","):
+            entry = entry.strip()
+            if entry:
+                refs.add(entry.replace("\\", "/").lower())
+    for match in _STORY_PROMPT_REFERENCE_RE.finditer(story_content):
+        refs.add(match.group("ref").replace("\\", "/").lower())
+    return refs
+
+
+def _prompt_has_story_coverage(worktree: Path, prompt_path: str) -> bool:
+    """Return True when a user story links to ``prompt_path``.
+
+    This is the deterministic bridge for issue #560: changed prompts must have
+    a story-test artifact. The LLM-backed `pdd detect --stories` command remains
+    the executable prompt test; this gate enforces that the test exists.
+    """
+    story_paths = sorted(worktree.rglob("user_stories/story__*.md"))
+    if not story_paths:
+        return False
+    candidates = _prompt_story_reference_candidates(prompt_path)
+    for story_path in story_paths:
+        if not story_path.is_file():
+            continue
+        try:
+            refs = _story_prompt_refs(story_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if candidates & refs:
+            return True
+    return False
+
+
 def _condition_doc_tokens(cond: str) -> List[str]:
     """Return the documentation spellings that satisfy a skip condition.
 
@@ -3741,6 +3799,7 @@ def run_doc_contract_check(
     # undocumented. The condition is normalized to its snake_case identifier.
     added_skip_contracts: set = set()
     added_env_vars = set()
+    changed_prompt_files = set()
 
     # .pddrc keys
     pddrc_keys_now = set()
@@ -3778,6 +3837,13 @@ def run_doc_contract_check(
 
     # Click options, Skip behaviors, and Env vars
     for file_path, lines in added_lines_by_file.items():
+        normalized_file = file_path.replace("\\", "/")
+        if (
+            normalized_file.endswith(".prompt")
+            and not normalized_file.lower().endswith("_llm.prompt")
+            and lines
+        ):
+            changed_prompt_files.add(normalized_file)
         if not _doc_contract_should_scan_added_file(file_path):
             continue
         if file_path.endswith(".py"):
@@ -3852,7 +3918,7 @@ def run_doc_contract_check(
     )
 
     env_section = get_markdown_section(
-        readme_content, "### Environment Variables", ["## Error Handling", "## "]
+        readme_content, "### Environment Variables", ["\n## Error Handling", "\n## "]
     )
 
     prompt_ops_section = get_markdown_section(
@@ -3917,6 +3983,15 @@ def run_doc_contract_check(
         if f"`{env}`" not in env_section and env not in env_section:
             errors.append(
                 f"Environment variable '{env}' is not documented in README.md under 'Environment Variables' section."
+            )
+
+    for prompt_path in sorted(changed_prompt_files):
+        if not _prompt_has_story_coverage(worktree, prompt_path):
+            errors.append(
+                f"Prompt '{prompt_path}' changed but is not covered by any "
+                "user_stories/story__*.md file. Add or update a user story with "
+                "pdd-story-prompts metadata so `pdd detect --stories` can test "
+                "the prompt."
             )
 
     if errors:

@@ -4650,6 +4650,12 @@ class TestDocContractCheck:
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "prompts" / "sync_orchestration_python.prompt").write_text("## Workflow Operations\n", encoding="utf-8")
+        (tmp_path / "user_stories").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "user_stories" / "story__sync_ops.md").write_text(
+            "<!-- pdd-story-prompts: sync_orchestration_python.prompt -->\n\n"
+            "As an operator, workflow operations stay documented.\n",
+            encoding="utf-8",
+        )
         (tmp_path / "sync.py").write_text("def run():\n    pass\n", encoding="utf-8")
 
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
@@ -4684,7 +4690,10 @@ class TestDocContractCheck:
 
         _git_init(tmp_path)
 
-        (tmp_path / "README.md").write_text("### Environment Variables\n", encoding="utf-8")
+        (tmp_path / "README.md").write_text(
+            "### Environment Variables\n\n#### Core Environment Variables\n",
+            encoding="utf-8",
+        )
         (tmp_path / "helper.py").write_text("def run():\n    pass\n", encoding="utf-8")
 
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
@@ -4697,10 +4706,92 @@ class TestDocContractCheck:
         assert res == 1
 
         # Document it in README
-        (tmp_path / "README.md").write_text("### Environment Variables\n- `PDD_MY_NEW_VAR` is here\n", encoding="utf-8")
+        (tmp_path / "README.md").write_text(
+            "### Environment Variables\n\n#### Core Environment Variables\n- `PDD_MY_NEW_VAR` is here\n",
+            encoding="utf-8",
+        )
 
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
+
+    def test_prompt_change_requires_user_story_coverage(self, tmp_path: Path) -> None:
+        """Issue #560 bridge: changed prompts need story-test coverage."""
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        prompt = prompts_dir / "billing_python.prompt"
+        prompt.write_text("Generate billing code.\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base prompt", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        prompt.write_text(
+            "Generate billing code.\nSupport subscription cancellation.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "change prompt", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        stories = tmp_path / "user_stories"
+        stories.mkdir()
+        (stories / "story__billing_cancel.md").write_text(
+            "<!-- pdd-story-prompts: billing_python.prompt -->\n\n"
+            "# User Story: Billing cancellation\n\n"
+            "## Story\n\nAs a subscriber, I can cancel my plan.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "add story", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~2") == 0
+
+    def test_prompt_story_coverage_accepts_full_prompt_path(self, tmp_path: Path) -> None:
+        """Story links can use full paths as generated/docs may recommend."""
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        prompts_dir = tmp_path / "pdd" / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        prompt = prompts_dir / "checkup_gates_python.prompt"
+        prompt.write_text("Gate prompt.\n", encoding="utf-8")
+        story_dir = tmp_path / "user_stories"
+        story_dir.mkdir()
+        (story_dir / "story__gates.md").write_text(
+            "<!-- pdd-story-prompts: pdd/prompts/checkup_gates_python.prompt -->\n\n"
+            "As an operator, gate behavior is documented.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        prompt.write_text("Gate prompt.\nSupport repo-declared docs.\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "prompt change", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0
 
     def test_repo_declared_doc_contract_supports_non_pdd_repo_surfaces(self, tmp_path: Path) -> None:
         """A non-PDD repository can declare its own user-facing surfaces and docs.
@@ -4984,6 +5075,12 @@ class TestDocContractCheck:
         _git_init(tmp_path)
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "user_stories").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "user_stories" / "story__sync_ops.md").write_text(
+            "<!-- pdd-story-prompts: sync_orchestration_python.prompt -->\n\n"
+            "As an operator, workflow operation skip contracts stay documented.\n",
+            encoding="utf-8",
+        )
         # The operation 'fix' is already fully documented; only the new skip
         # condition is missing — exactly the drift the old name-only check missed.
         (tmp_path / "README.md").write_text(
@@ -5040,6 +5137,12 @@ class TestDocContractCheck:
         _git_init(tmp_path)
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "user_stories").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "user_stories" / "story__sync_ops.md").write_text(
+            "<!-- pdd-story-prompts: sync_orchestration_python.prompt -->\n\n"
+            "As an operator, workflow operation skip contracts stay scoped.\n",
+            encoding="utf-8",
+        )
 
         # --skip-tests is documented globally + for the TEST step, but `fix` is
         # documented as an unconditional "Resolve test failures" (the drift).
