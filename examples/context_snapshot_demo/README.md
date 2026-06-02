@@ -14,7 +14,11 @@ pytest -q tests/test_context_snapshot_replay.py \
          tests/test_issue_826_snapshot_touchpoint.py
 
 ./examples/context_snapshot_demo/run_demo.sh
+./examples/context_snapshot_demo/run_test_plan_manual.sh
 ```
+
+`run_test_plan_manual.sh` runs the full manual test plan end-to-end (step 5 uses a
+stubbed generate test when no LLM API keys are configured).
 
 ## Manual touchpoint (human-verifiable)
 
