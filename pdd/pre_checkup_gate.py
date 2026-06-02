@@ -565,6 +565,78 @@ def _runtime_missing_symbols(
     return set()
 
 
+def _attr_call_chain(func: ast.Attribute) -> Optional[List[str]]:
+    """Flatten a pure ``Name.attr[.attr...]`` access into its dotted parts.
+
+    ``api.build`` -> ``["api", "build"]``; ``pkg.api.build`` ->
+    ``["pkg", "api", "build"]``. Returns ``None`` when the root is not a plain
+    ``Name`` (e.g. ``get_client().build`` or ``self.x``), so only statically
+    resolvable module.attr calls are considered.
+    """
+    parts: List[str] = []
+    cur: ast.expr = func
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+        parts.reverse()
+        return parts
+    return None
+
+
+def _rebound_names(tree: ast.Module) -> Set[str]:
+    """Names bound by NON-import means anywhere in the file (function/lambda
+    params, assignment/for/with/except/comprehension targets, walrus).
+
+    Used as a shadowing guard for alias-style call resolution: ``ast.walk``
+    ignores scope, so ``import pkg.api as api`` plus an unrelated
+    ``def f(api): api.foo()`` would otherwise be misattributed to the module.
+    If an alias root is ever rebound in the file we skip attribute-call
+    resolution for it — favouring a missed catch (checkup still sees it) over a
+    false positive that hard-blocks a good PR.
+    """
+    bound: Set[str] = set()
+
+    def add_target(target: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            bound.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                add_target(elt)
+        elif isinstance(target, ast.Starred):
+            add_target(target.value)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+                bound.add(arg.arg)
+            if args.vararg:
+                bound.add(args.vararg.arg)
+            if args.kwarg:
+                bound.add(args.kwarg.arg)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                add_target(target)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            add_target(node.target)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            add_target(node.target)
+        elif isinstance(node, ast.NamedExpr):
+            add_target(node.target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    add_target(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                bound.add(node.name)
+        elif isinstance(node, ast.comprehension):
+            add_target(node.target)
+    return bound
+
+
 def _check_caller_compatibility(
     worktree: Path,
     code_files: Sequence[str],
@@ -622,27 +694,57 @@ def _check_caller_compatibility(
             continue
         rel_caller = py_file.relative_to(worktree).as_posix()
         imported: Dict[str, Tuple[str, str]] = {}
+        module_aliases: Dict[str, str] = {}
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or not node.module:
-                continue
-            if node.module not in module_to_sigs:
-                continue
-            sigs = module_to_sigs[node.module]
-            for alias in node.names:
-                if alias.name == "*":
-                    continue
-                wanted[node.module].add(alias.name)
-                import_sites.append((rel_caller, node.module, alias.name))
-                if alias.name in sigs:
-                    imported[alias.asname or alias.name] = (node.module, alias.name)
+            if isinstance(node, ast.ImportFrom) and node.module in module_to_sigs:
+                sigs = module_to_sigs[node.module]
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    wanted[node.module].add(alias.name)
+                    import_sites.append((rel_caller, node.module, alias.name))
+                    if alias.name in sigs:
+                        imported[alias.asname or alias.name] = (node.module, alias.name)
+            elif isinstance(node, ast.Import):
+                # `import pkg.api as api` / `import pkg.api` -> map the local
+                # access prefix to the module so `api.build(...)` /
+                # `pkg.api.build(...)` calls can be checked too.
+                for alias in node.names:
+                    if alias.name in module_to_sigs:
+                        module_aliases[alias.asname or alias.name] = alias.name
+        rebound = _rebound_names(tree)
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            if not isinstance(node, ast.Call):
                 continue
-            target = imported.get(node.func.id)
-            if not target:
+            module: Optional[str] = None
+            name: Optional[str] = None
+            if isinstance(node.func, ast.Name):
+                target = imported.get(node.func.id)
+                if target is not None:
+                    module, name = target
+            elif isinstance(node.func, ast.Attribute):
+                chain = _attr_call_chain(node.func)
+                # chain[0] is the access root; skip if it is ever rebound in the
+                # file (shadowing guard — ast.walk crosses scope boundaries).
+                if chain and len(chain) >= 2 and chain[0] not in rebound:
+                    attr = chain[-1]
+                    prefix = ".".join(chain[:-1])
+                    resolved = module_aliases.get(prefix)
+                    if resolved is None and prefix in module_to_sigs:
+                        resolved = prefix
+                    if resolved is not None:
+                        module, name = resolved, attr
+                        # A call to a symbol the module no longer exports is a
+                        # break too — feed the runtime existence probe.
+                        wanted[resolved].add(attr)
+                        import_sites.append((rel_caller, resolved, attr))
+            if module is None or name is None:
                 continue
-            module, name = target
-            sig = module_to_sigs[module][name]
+            sig = module_to_sigs[module].get(name)
+            if sig is None:
+                # Not a known public function (e.g. an imported class/constant);
+                # existence is handled by the runtime probe, no arity check.
+                continue
             pos_count = len(node.args)
             kw_names = {kw.arg for kw in node.keywords if kw.arg is not None}
             if sig.max_positional is not None and pos_count > sig.max_positional:
@@ -780,7 +882,14 @@ def _run_build_smoke(
         / "pre-checkup-gate"
         / (f"issue-{issue_number}" if issue_number is not None else "local")
     )
-    gates = discover_gates(worktree, code_files, base_ref=base_ref)
+    # Pass the FULL changed set (not code_files) to discover_gates: checkup_gates
+    # decides which gates to SKIP from the full diff — e.g. it skips every
+    # npm-family gate when the PR touches package.json / a package-manager config
+    # (corepack-via-packageManager and runner-redirect RCE guards). Stripping
+    # non-code files (package.json, pyproject.toml, tsconfig.json) here would
+    # hide PR-controlled config from those guards and let a fork PR run gates
+    # against poisoned config. R3(a) specifies changed_files for this reason.
+    gates = discover_gates(worktree, changed_files, base_ref=base_ref)
     gate_results = run_gates(
         worktree,
         gates,

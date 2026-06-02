@@ -288,3 +288,73 @@ def test_caller_compat_skips_existence_when_module_unimportable(tmp_path):
     )
 
     assert not any("missing symbol" in f for f in failures), failures
+
+
+def test_caller_compat_flags_alias_import_call(tmp_path):
+    """Issue #1293 (FM3): an alias-style call with an invalid keyword —
+    ``import pkg.api as api; api.build(title='bad')`` — must be flagged, not
+    missed (the sweep previously handled only ``from x import f; f(...)``)."""
+    _write_pkg_module(tmp_path, "api", "def build(name):\n    return name\n")
+    (tmp_path / "consumer.py").write_text(
+        "import pkg.api as api\n\napi.build(title='bad')\n", encoding="utf-8"
+    )
+
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path, ["pkg/api.py"], timeout=30.0
+    )
+
+    assert any("invalid keyword" in f for f in failures), failures
+
+
+def test_caller_compat_alias_call_respects_shadowing(tmp_path):
+    """Shadowing guard: a name that collides with an alias but is locally
+    rebound (here a function parameter ``api``) must NOT be misattributed to the
+    module — ast.walk ignores scope, so without the guard this would be a false
+    positive that hard-blocks a good PR."""
+    _write_pkg_module(tmp_path, "api", "def build(name):\n    return name\n")
+    (tmp_path / "consumer.py").write_text(
+        "def handler(api):\n    return api.build(1, 2, 3)\n", encoding="utf-8"
+    )
+
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path, ["pkg/api.py"], timeout=30.0
+    )
+
+    assert failures == [], failures
+
+
+def test_build_smoke_passes_full_changed_set_to_discover_gates(monkeypatch, tmp_path):
+    """Issue #1293 (security): discover_gates MUST receive the FULL changed set,
+    not the code-only-stripped list. checkup_gates skips npm-family/build gates
+    when the PR touches package.json / package-manager config (corepack +
+    runner-redirect RCE guards); stripping those files here would hide them from
+    the guards and let a fork PR run gates against PR-controlled config."""
+    seen = {}
+
+    def fake_discover(worktree, changed_files, *, base_ref=None):
+        seen["changed_files"] = list(changed_files)
+        return []
+
+    monkeypatch.setattr(pre_checkup_gate, "discover_gates", fake_discover)
+    monkeypatch.setattr(pre_checkup_gate, "run_gates", lambda *a, **k: [])
+    monkeypatch.setattr(pre_checkup_gate, "_check_python_imports", lambda *a, **k: [])
+    monkeypatch.setattr(pre_checkup_gate, "_check_route_probe", lambda *a, **k: [])
+    monkeypatch.setattr(
+        pre_checkup_gate, "_check_caller_compatibility", lambda *a, **k: ([], [])
+    )
+    monkeypatch.setattr(
+        pre_checkup_gate, "_run_targeted_tests", lambda *a, **k: ([], [])
+    )
+
+    outcome = pre_checkup_gate._run_build_smoke(
+        tmp_path,
+        ["package.json", "pyproject.toml", "pdd/foo.py"],
+        base_ref=None,
+        issue_number=1293,
+        timeout_per_check=5.0,
+    )
+
+    assert outcome.ok is True
+    # The config files must reach discover_gates so its RCE-skip guards can fire.
+    assert "package.json" in seen["changed_files"], seen
+    assert "pyproject.toml" in seen["changed_files"], seen
