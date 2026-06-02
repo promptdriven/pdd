@@ -1,65 +1,82 @@
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
 from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
 
 def main() -> None:
     """
-    Example showing how to run the multi-step agentic checkup orchestrator.
+    Example showing how to run the agentic checkup orchestrator.
     
-    The orchestrator runs an 8-step process (discover, deps, build, 
-    interfaces, test, fix, verify, create_pr) in an isolated git worktree.
-    It supports an iterative fix-verify loop to resolve issues automatically.
+    The orchestrator manages an 8-step workflow (discover, deps, build, 
+    interfaces, test, fix, verify, create_pr) and supports both issue-driven 
+    and PR-driven verification modes.
     """
-    # This example requires a GitHub token and an OpenAI key (or similar)
-    # to run the LLM agents and interact with GitHub.
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("OPENAI_API_KEY not set. Set it to run this example.")
-        sys.exit(0)
-        
-    if not os.environ.get("GITHUB_TOKEN"):
+    # We require a GitHub token to proceed (even in this mocked example, 
+    # to show realistic usage).
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if not github_token:
         print("GITHUB_TOKEN not set. Set it to run this example.")
         sys.exit(0)
 
-    print("Starting checkup orchestrator (mock run)...")
+    # Setup a dummy output directory representing our project root
+    cwd = Path("./output/dummy_project")
+    cwd.mkdir(parents=True, exist_ok=True)
     
-    # In a real scenario, these would be parsed from CLI arguments
-    cwd = Path.cwd()
+    # In a real scenario, these would be fetched from GitHub or local config
+    issue_url = "https://github.com/example-owner/example-repo/issues/1"
+    issue_content = "The application crashes when processing null inputs."
+    repo_owner = "example-owner"
+    repo_name = "example-repo"
+    issue_number = 1
+    issue_title = "Crash on null input"
+    architecture_json = "{ 'components': [] }"
+    pddrc_content = ""
     
-    # Run the orchestrator in PR mode (--pr) with no issue specified (--no-issue)
-    # This reviews the PR on its own merits without trying to align it to a specific issue.
-    # Using quiet=False to see progress.
+    print("Starting agentic checkup orchestrator (mocked execution)...")
     
-    try:
-        success, message, cost, model = run_agentic_checkup_orchestrator(
-            issue_url="",              # Empty for PR-only mode
-            issue_content="",          # Empty for PR-only mode
-            repo_owner="test-owner",
-            repo_name="test-repo",
-            issue_number=123,          # This becomes the PR number in this mode
-            issue_title="",            # Empty for PR-only mode
-            architecture_json="{}",
-            pddrc_content="",
+    # We mock out the actual LLM step execution and git worktree creation 
+    # so this example can run without hitting APIs or modifying real git repos.
+    with patch("pdd.agentic_checkup_orchestrator._run_single_step") as mock_step, \
+         patch("pdd.agentic_checkup_orchestrator._setup_worktree") as mock_wt, \
+         patch("pdd.agentic_checkup_orchestrator._get_git_root") as mock_gr:
+        
+        # Mock _run_single_step to simulate success: (success, output, cost, model)
+        # Note: Step 7 output must contain 'All Issues Fixed' to break the loop.
+        def side_effect_step(step_num, *args, **kwargs):
+            if step_num == 7:
+                return (True, "{\n'success': true,\n'issue_aligned': true\n}\nAll Issues Fixed", 0.01, "mock-model")
+            return (True, f"Step {step_num} completed successfully.", 0.01, "mock-model")
+            
+        mock_step.side_effect = side_effect_step
+        
+        # Mock git operations
+        mock_gr.return_value = cwd
+        mock_wt.return_value = (cwd / ".pdd/worktrees/checkup-issue-1", None)
+        
+        success, message, total_cost, model = run_agentic_checkup_orchestrator(
+            issue_url=issue_url,
+            issue_content=issue_content,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            architecture_json=architecture_json,
+            pddrc_content=pddrc_content,
             cwd=cwd,
             verbose=False,
             quiet=False,
-            no_fix=True,               # Run analysis only, skip fixer loop for safety in example
-            pr_url="https://github.com/test-owner/test-repo/pull/123",
-            pr_owner="test-owner",
-            pr_repo="test-repo",
-            pr_number=123,
-            use_github_state=False     # Avoid making actual GitHub API calls for state
+            no_fix=False,
+            use_github_state=False,  # Disable actual GH API calls for state
         )
         
-        print("\n--- Orchestrator Result ---")
-        print(f"Success: {success}")
-        print(f"Message: {message}")
-        print(f"Cost: ${cost:.4f}")
-        print(f"Model: {model}")
-    except Exception as e:
-        print(f"An error occurred while running the orchestrator: {e}")
-        sys.exit(1)
+    print("\n--- Orchestrator Result ---")
+    print(f"Success: {success}")
+    print(f"Message: {message}")
+    print(f"Total Cost: ${total_cost:.4f}")
+    print(f"Final Model: {model}")
 
 
 if __name__ == "__main__":
