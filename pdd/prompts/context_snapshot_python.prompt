@@ -1,0 +1,43 @@
+<pdd-reason>Owns durable snapshot and replay primitives for expanded prompt context.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "start_snapshot_run", "signature": "(prompt_path: str | Path, *, evidence_root: str | Path | None = None, command: str = \"\")", "returns": "ContextSnapshotRecorder"},
+      {"name": "replay_snapshot", "signature": "(run_artifact: str | Path)", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/context_snapshot.py` module.
+
+% Role & Scope
+Own durable snapshot and replay primitives for expanded prompt context, independent from tag resolution, generation orchestration, and CLI command modules.
+
+% Requirements
+1. Provide a `ContextSnapshotRecorder` or equivalent small API for starting a run, recording static includes, dynamic tag outputs, semantic extraction outputs, web snapshots, shell snapshots, selected grounding examples, and final prompt/code/test hashes.
+2. Store the canonical run artifact at `.pdd/evidence/runs/<run_id>.json` and all replayable context artifacts in the sibling directory `.pdd/evidence/runs/<run_id>/` with stable filenames and JSON manifests. Do not introduce any alternate snapshot layout.
+   - Auto-generated run IDs must be unique per invocation so repeated snapshots for the same prompt and command never overwrite earlier run artifacts.
+3. Compute SHA-256 hashes over canonical bytes for every captured input/output and for the final expanded prompt.
+4. Detect and expose whether nondeterministic context was used, including tag type, source path/URL/command, status, artifact path, artifact hash, and redaction status.
+5. Redact sensitive values before hashing or writing any durable shell/web/semantic snapshot artifact. Required redaction patterns include authorization headers, bearer/basic tokens, URL userinfo credentials, GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), OpenAI-style `sk-` keys, Google `AIza` keys, xAI `xai-` keys, Groq `gsk_` keys, AWS access keys, Slack tokens, and `*_TOKEN`, `*_SECRET`, `*_API_KEY`, `PASSWORD`, or `PRIVATE_KEY` assignments. Snapshot metadata must record `redaction_applied`, `redaction_patterns`, and whether content changed. Never persist raw environment dumps, raw unredacted payloads, bearer/API tokens, or pre-redaction hashes unless a future explicit unsafe opt-in is added with separate warnings.
+6. Provide a replay function that loads an evidence run artifact or snapshot manifest, reconstructs the expanded prompt text from recorded artifacts, and verifies the expanded prompt hash.
+7. Fail clearly on missing artifacts, hash mismatches, unsupported manifest versions, artifacts without snapshots, or unsafe paths that escape the snapshot directory. Replay path validation MUST anchor expanded-prompt artifacts to the specific `.pdd/evidence/runs/<run_id>/` directory (or manifest `snapshot_dir`) and reject paths that remain under `.pdd/evidence` but escape that run directory.
+8. Use deterministic JSON serialization and normalized relative paths so snapshot files are stable and safe to inspect.
+9. Record selected grounding/few-shot examples when provided by generation callers. If unavailable, record an explicit `unavailable` reason.
+10. Keep the API producer-agnostic: `preprocess`, `code_generator_main`, and evidence manifest code call recorder methods, but this module does not execute shell, web, semantic extraction, or LLM generation itself.
+11. Expose manifest fields suitable for evidence integration: `enabled`, `manifest_path`, `expanded_prompt_path`, `expanded_sha256`, `uses_nondeterministic_context`, `dynamic_tags`, `redaction_applied`, and per-artifact hashes.
+
+% Extension Analysis
+- Existing modules considered: `pdd/evidence_manifest.py`, `pdd/preprocess.py`, `pdd/include_query_extractor.py`, `pdd/firecrawl_cache.py`, `pdd/core/dump.py`.
+- Why not extend them: `preprocess.py` should continue resolving prompt tags and should only be instrumented, not become the owner of artifact layout, canonical JSON, redaction policy, and replay validation. `evidence_manifest.py` should assemble command receipts and schema output, not execute or reconstruct prompt expansion. `include_query_extractor.py` and `firecrawl_cache.py` only cover specific producers. `core/dump.py` captures debug rerun state, not durable prompt-context replay semantics.
+- Capability gap: a central snapshot/replay capability is needed to provide stable artifact storage, redaction, hashing, dynamic-context detection, and exact expanded-prompt reconstruction across preprocess, generate, and sync flows.
+
+% Deliverables
+- Code: `pdd/context_snapshot.py`

@@ -16,6 +16,7 @@ from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility, echo_model_line
 from ..evidence_manifest import (
     collect_sync_evidence_paths,
+    grounding_kwargs_from_ctx,
     validation_from_sync,
     write_evidence_manifest,
 )
@@ -34,6 +35,9 @@ def _write_sync_evidence_manifest(
     dry_run: bool,
     temperature: float,
     quiet: bool,
+    context_snapshot: Optional[Mapping[str, Any]] = None,
+    grounding: Optional[Mapping[str, Any]] = None,
+    reviewed: bool = False,
 ) -> None:
     """Write or refresh the dev-unit evidence manifest for a sync attempt."""
     project_root = Path.cwd()
@@ -57,6 +61,9 @@ def _write_sync_evidence_manifest(
             dry_run=dry_run,
         ),
         project_root=project_root,
+        context_snapshot=context_snapshot,
+        grounding=grounding,
+        reviewed=reviewed,
     )
     if not quiet:
         click.echo(
@@ -179,6 +186,15 @@ def _write_sync_evidence_manifest(
     help="Write a machine-readable evidence manifest for this run.",
 )
 @click.option(
+    "--snapshot-context",
+    is_flag=True,
+    default=False,
+    help=(
+        "Write replayable expanded prompt context artifacts (single-module sync "
+        "only). Replay via pdd replay on .pdd/evidence/runs/<run_id>.json."
+    ),
+)
+@click.option(
     "--model",
     "model",
     default=None,
@@ -211,6 +227,7 @@ def sync(
     no_resume: bool,
     durable_max_parallel: Optional[int],
     evidence: bool,
+    snapshot_context: bool,
     model: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
@@ -254,6 +271,8 @@ def sync(
 
     # No basename -> global Tier 1 sync
     if basename is None:
+        if snapshot_context:
+            raise click.UsageError("--snapshot-context is only supported for single-module sync.")
         if durable or durable_branch or no_resume or durable_max_parallel is not None:
             raise click.UsageError("Durable sync options require a GitHub issue URL.")
         effective_one_session = one_session if one_session is not None else False
@@ -288,6 +307,8 @@ def sync(
 
     # Detect GitHub issue URL -> dispatch to agentic sync
     if _is_github_issue_url(basename):
+        if snapshot_context:
+            raise click.UsageError("--snapshot-context is only supported for single-module sync.")
         if not durable and (
             durable_branch is not None or no_resume or durable_max_parallel is not None
         ):
@@ -352,6 +373,7 @@ def sync(
             steer_timeout=steer_timeout,
             agentic_mode=agentic,
             one_session=effective_one_session,
+            snapshot_context=snapshot_context,
         )
         if evidence:
             _write_sync_evidence_manifest(
@@ -364,6 +386,8 @@ def sync(
                 dry_run=dry_run,
                 temperature=ctx.obj.get("temperature", 0.0),
                 quiet=ctx.obj.get("quiet", False),
+                context_snapshot=(ctx.obj or {}).get("context_snapshot"),
+                **grounding_kwargs_from_ctx(ctx.obj),
             )
         return str(result), total_cost, model_name
     except click.Abort:

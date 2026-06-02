@@ -13,6 +13,20 @@
 }
 </pdd-interface>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None) -> Path", "returns": "Path"},
+      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
+
 % Write `pdd/evidence_manifest.py`.
 
 <include>context/python_preamble.prompt</include>
@@ -20,6 +34,11 @@
 % Requirements
 - Implement `write_evidence_manifest(...)` writing schema v2 JSON under `.pdd/evidence/` (see schema-version requirement below).
 - Hash prompt, outputs, and recursively resolved local includes for `context.includes` and `expanded_sha256`.
+- Add optional schema fields for `context_snapshot`: `enabled`, `manifest_path`, `expanded_prompt_path`, `expanded_sha256`, `uses_nondeterministic_context`, `dynamic_tags`, `redaction_applied`, and per-artifact hashes.
+- Distinguish deterministic include provenance in `context.includes` from durable dynamic snapshot artifacts in `context_snapshot.artifacts`.
+- When snapshot mode is enabled, link prompt/code/test hashes in the evidence manifest to the snapshot run manifest so replay can audit the exact expanded prompt context that produced those hashes.
+- Static-only prompts must explicitly report `uses_nondeterministic_context: false` and must not require snapshot artifacts.
+- Preserve schema v1 compatibility by making snapshot fields optional unless an intentional schema version bump is implemented with backward-compatible readers.
 - Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, dry_run=False)` mapping real sync outcomes.
 - Never claim `passed` unless the invoking command established that state.
 - Contract enrichment is optional: lazy-import `coverage_contracts` when present.
