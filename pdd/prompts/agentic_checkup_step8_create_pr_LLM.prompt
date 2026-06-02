@@ -31,21 +31,11 @@ You are working on step 8 of 8 (final step) in an agentic checkup workflow. All 
 
 % Your Task
 
-1. **Stage changes (scoped - never `git add -A`)**
-
-   The orchestrator finalized PDD metadata fingerprints at the PR boundary and folded any expected `.pdd/meta/<module>_<lang>.json` fingerprint paths into the authoritative `Files Changed` set (`{files_to_stage}`). Stage exactly that set - nothing more.
-
-   - DO NOT run `git add -A`, `git add .`, or any directory/glob pathspec. A blanket add would sweep in transient `.pdd` state and unrelated fingerprints.
-   - Stage each changed file from `{files_to_stage}` individually by its exact path:
-     ```bash
-     cd {worktree_path}
-     git add -f -- "<exact_file_path>"
-     ```
-   - The `-f` flag is required because target repos commonly gitignore `.pdd/meta`; it is safe for non-ignored prompt/code/doc files.
-   - After staging, confirm the staged set matches expectations:
-     ```bash
-     git diff --cached --name-only
-     ```
+1. **Stage all changes**
+   ```bash
+   cd {worktree_path}
+   git add -A
+   ```
 
 2. **Create commit**
    - Use a clear commit message referencing the issue
@@ -128,6 +118,6 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 
 - Always link the PR to the issue using "Fixes #N"
 - Push to origin before creating PR
-- Stage ONLY the files in `{files_to_stage}` with `git add -f -- <exact_file_path>`; NEVER use `git add -A`/`git add .`, which would pollute the PR with transient `.pdd` state and unrelated fingerprints
+- Use `git add -A` to stage all changes in the worktree
 - Do NOT create a new branch — you are already on `checkup/issue-{issue_number}` in the worktree
 - This is the final step — workflow is complete after this
