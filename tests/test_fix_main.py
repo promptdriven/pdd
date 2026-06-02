@@ -2429,10 +2429,10 @@ sys.exit(result.returncode)
         captured = capsys.readouterr()
 
         # Assertions. cost may legitimately be 0 on a LiteLLM cache hit, so we
-        # require a cloud-success log line instead. fix_error_loop.py:139 prints
-        # "Cloud fix completed" only on the success path; the fallback branch at
-        # fix_error_loop.py:726 prints "Cloud fix failed, falling back to local",
-        # so a generic substring match on "cloud" would be insufficient.
+        # require a cloud-success log line instead. fix_error_loop.fix_error_loop
+        # prints "Cloud fix completed" only when the *successful* attempt used the
+        # cloud path (attempt_used_cloud); a local fallback does not, so a generic
+        # substring match on "cloud" would be insufficient to prove the cloud path.
         assert isinstance(success, bool), f"Expected success to be bool, got {type(success)}"
         assert isinstance(cost, (int, float)) and cost >= 0, f"Expected non-negative cost, got {cost!r}"
         assert attempts >= 1, f"Expected at least 1 attempt, got {attempts}"
