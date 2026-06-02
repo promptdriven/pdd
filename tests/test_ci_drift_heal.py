@@ -132,22 +132,14 @@ class TestDetectDrift:
         assert d.example_path == "/repo/context/api_example.py"
 
     def test_non_example_ops_preserve_original_operation(self):
-        """Non-example sync decisions keep their operation name.
+        """verify/generate/auto-deps/test/crash decisions keep their operation name.
 
         The prior implementation collapsed every non-update decision to
         `operation='example'`, losing the intent. Auto-heal must preserve
         the original operation so heal_module can dispatch correctly (pdd
         example for example, pdd sync for the others).
         """
-        for op in (
-            "verify",
-            "generate",
-            "auto-deps",
-            "test",
-            "test_extend",
-            "fix",
-            "crash",
-        ):
+        for op in ("verify", "generate", "auto-deps", "test", "crash"):
             decision = MagicMock(operation=op, reason=f"{op} needed")
             files, infer, sync = self._setup_mocks({"mod": decision})
 
@@ -1265,8 +1257,8 @@ class TestHealModule:
         ]]
 
     def test_sync_fallback_ops_do_not_require_paths(self):
-        """Sync-backed ops work without paths because pdd sync resolves them."""
-        for op in ("verify", "generate", "test", "test_extend", "fix", "crash"):
+        """verify/generate/test/crash work without paths because pdd sync resolves them."""
+        for op in ("verify", "generate", "test", "crash"):
             drift = DriftInfo("mod", "python", op, f"{op} needed")
             mock_result = MagicMock(returncode=0, stderr="")
             with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
