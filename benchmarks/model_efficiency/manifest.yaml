@@ -1,0 +1,32 @@
+# Model Efficiency Benchmark (M4)
+#
+# Both tiers use PDD Cloud (generateCode / generateTest). The open-source CLI
+# does not send an explicit model id to cloud — only --strength. Cloud maps
+# strength 1.0 → Opus-class, strength 0.0 → cheapest tier (Gemini Flash class).
+
+version: "1.0"
+benchmark_name: "Model Efficiency Benchmark"
+formalization_corpus: "../formalization/corpus/manifest.yaml"
+
+model_tiers:
+  smart:
+    label: "PDD Cloud Code Opus"
+    routing: cloud
+    strength: 1.0
+    expected_model: claude-opus-4-8
+  budget:
+    label: "PDD Cloud Gemini Flash (budget tier)"
+    routing: cloud
+    strength: 0.0
+    expected_model: gemini-2.5-flash
+
+experiment:
+  # Fail instead of silently falling back to local during live runs.
+  cloud_only: true
+  tasks:
+    - email_validator
+    - token_bucket
+    - refund_handler
+  prompt_arms: [A0, A1]
+  runs_per_cell: 3
+  max_rounds: 2

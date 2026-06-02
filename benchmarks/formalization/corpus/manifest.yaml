@@ -1,0 +1,59 @@
+# Formalization benchmark corpus — handwritten A0; A1 via formalize_a1.py
+version: "1.1"
+benchmark_name: "A0→A1 Prompt Formalization Benchmark"
+milestone: 3
+
+tasks:
+  - id: hello_fn
+    tier: A
+    module: hello_fn
+    language: python
+    description: Minimal print function
+    a0: tasks/hello_fn/A0.prompt
+    m2: true
+    m3: false
+
+  - id: pi_digits
+    tier: A
+    module: pi_digits
+    language: python
+    description: Compute pi to n decimal places (intentionally underspecified)
+    a0: tasks/pi_digits/A0.prompt
+    m2: true
+    m3: false
+
+  - id: email_validator
+    tier: B
+    module: email_validator
+    language: python
+    description: Validate email strings and reject invalid input
+    a0: tasks/email_validator/A0.prompt
+    stories_dir: tasks/email_validator/stories
+    m2: true
+    m3: true
+    oracle_tests: corpus/tier_gold/email_validator/oracle_tests
+    baseline_src: corpus/tier_gold/email_validator/baseline_src
+
+  - id: token_bucket
+    tier: B
+    module: token_bucket
+    language: python
+    description: Rate limiter with burst capacity
+    a0: tasks/token_bucket/A0.prompt
+    stories_dir: tasks/token_bucket/stories
+    m2: true
+    m3: true
+    oracle_tests: corpus/tier_gold/token_bucket/oracle_tests
+    baseline_src: corpus/tier_gold/token_bucket/baseline_src
+
+  - id: refund_handler
+    tier: B
+    module: refund_handler
+    language: python
+    description: Idempotent refund API with active-user check
+    a0: tasks/refund_handler/A0.prompt
+    stories_dir: tasks/refund_handler/stories
+    m2: true
+    m3: true
+    oracle_tests: corpus/tier_gold/refund_handler/oracle_tests
+    baseline_src: corpus/tier_gold/refund_handler/baseline_src

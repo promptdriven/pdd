@@ -11,7 +11,14 @@ import warnings
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy, get_language_outputs, _strip_language_suffix_with_subdir
+from pdd.construct_paths import (
+    construct_paths,
+    list_available_contexts,
+    _resolve_config_hierarchy,
+    get_language_outputs,
+    _strip_language_suffix_with_subdir,
+    _determine_language,
+)
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
@@ -4178,3 +4185,17 @@ def test_builtin_ext_map_yml_maps_to_dot_yml():
     assert result == '.yml', (
         f"BUILTIN_EXT_MAP['yml'] should be '.yml' but got {result!r}."
     )
+
+
+def test_determine_language_from_output_path_without_prompt_suffix(tmp_path: Path) -> None:
+    """Benchmark A0.prompt files lack _<language> suffix; --output .py should suffice."""
+    prompt = tmp_path / "A0.prompt"
+    prompt.write_text("<requirements>Do something</requirements>", encoding="utf-8")
+    output_py = tmp_path / "email_validator.py"
+
+    language = _determine_language(
+        {"output": str(output_py)},
+        {"prompt_file": prompt},
+        "generate",
+    )
+    assert language == "python"

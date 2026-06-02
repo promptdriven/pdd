@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PDDFormalizationBenchmarkSummary",
+  "type": "object",
+  "required": ["benchmark_version", "comparisons", "headline"],
+  "properties": {
+    "benchmark_version": { "type": "string" },
+    "collected_at": { "type": "string" },
+    "task_ids": { "type": "array", "items": { "type": "string" } },
+    "tef_weights": { "type": "object" },
+    "headline": { "type": "string" },
+    "comparisons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "tef", "primary_delta_A0_to_A1", "arms"]
+      }
+    }
+  }
+}

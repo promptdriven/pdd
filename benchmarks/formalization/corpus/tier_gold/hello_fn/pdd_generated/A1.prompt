@@ -1,0 +1,37 @@
+% Handwritten A0 — Milestone 1 corpus (hello_fn)
+% Tier A: no stories; uncovered rules use benchmark waivers after formalize.
+
+<requirements>
+Write a Python function named hello that prints the string hello to stdout.
+The function takes no arguments and returns None.
+</requirements>
+
+<contract_rules>
+R1 - Requirement 1
+When Write a Python function named hello that prints the string hello to stdout
+The module MUST satisfy this requirement with an observable outcome.
+R2 - Requirement 2
+When The function takes no arguments and returns None
+The module MUST satisfy this requirement with an observable outcome.
+</contract_rules>
+
+<waivers>
+W1:
+Rule: R1
+Status: temporary
+Reason: Formalization benchmark tier A — story/test linkage deferred to M2
+Approved by: formalization-benchmark
+Expires: 2099-12-31
+
+W2:
+Rule: R2
+Status: temporary
+Reason: Formalization benchmark tier A — story/test linkage deferred to M2
+Approved by: formalization-benchmark
+Expires: 2099-12-31
+</waivers>
+
+<coverage>
+- R1: WAIVED W1
+- R2: WAIVED W2
+</coverage>

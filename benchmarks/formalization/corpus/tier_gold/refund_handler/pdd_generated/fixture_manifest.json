@@ -1,0 +1,8 @@
+{
+  "provenance": "bootstrap_pending_pdd_record",
+  "note": "Run record_pdd_fixtures.py --tasks refund_handler to replace with live pdd output",
+  "arms": {
+    "A0": {"module": "refund_handler"},
+    "A1": {"module": "refund_handler"}
+  }
+}

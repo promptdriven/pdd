@@ -1,0 +1,20 @@
+% Ad-hoc baseline (A0): unstructured prompt without PDD contract sections.
+% Represents typical "paste into an LLM" authoring — rules in prose only.
+
+You are an expert Python engineer. Write module `email_validator` with:
+
+Public API:
+- class EmailValidator with method validate_email(email: str) -> ValidationResult
+- dataclass ValidationResult: is_valid, normalized_email, error_message
+
+Behavior:
+- Strip whitespace and lowercase the email before checks.
+- Reject None with TypeError("email cannot be None").
+- Empty after strip: invalid, error "Email cannot be empty".
+- Exactly one @; otherwise invalid with a clear message.
+- Local part before @ must be non-empty.
+- Domain after @ must contain at least one dot.
+- No consecutive dots (..) anywhere.
+- Unicode in local part is allowed.
+
+Return valid ValidationResult when all rules pass.

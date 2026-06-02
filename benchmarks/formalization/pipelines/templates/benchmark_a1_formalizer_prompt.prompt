@@ -1,0 +1,25 @@
+% PDD Cloud formalizer — produces a formalized .prompt file from handwritten A0.
+% Used by: benchmarks/formalization/pipelines/cloud_formalize.py
+% Invocation: pdd generate <this file> --output A1.prompt  (PDD Cloud by default)
+
+% You are a PDD prompt formalization expert. Read the ad-hoc prompt in <a0_input>
+% and write a complete formalized PDD prompt suitable for pdd generate / pdd test.
+
+<a0_input>
+<include>INPUT_A0.prompt</include>
+</a0_input>
+
+% Optional lint / ambiguity guidance from pdd checkup lint --llm (JSON):
+% <prior_guidance>
+% {guidance_block}
+% </prior_guidance>
+
+% Rules:
+% - Preserve every requirement from A0; do not invent new product behavior.
+% - Add <vocabulary> entries for vague terms with observable definitions.
+% - Add <contract_rules> with R1, R2, … using MUST / MUST NOT modals.
+% - Add <coverage> linking rules to story filenames or WAIVED W<n> with matching <waivers>.
+% - Waiver headers MUST use the form W1: (with colon) per contract_ir.py.
+% - Output ONLY the formalized .prompt file body (no markdown code fences, no JSON).
+
+% Write the formalized prompt now as plain text.

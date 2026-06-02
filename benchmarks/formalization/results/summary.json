@@ -1,0 +1,230 @@
+{
+  "benchmark_version": "0.3.0",
+  "collected_at": "2026-05-29T23:10:06.738610+00:00",
+  "task_ids": [
+    "email_validator",
+    "payment_api_lint",
+    "refund_payment"
+  ],
+  "tef_weights": {
+    "rule_coverage": 0.3,
+    "story_coverage": 0.15,
+    "test_pass": 0.25,
+    "evidence": 0.1,
+    "lint_clean": 0.1,
+    "formalization": 0.1
+  },
+  "comparisons": [
+    {
+      "task_id": "email_validator",
+      "tef": {
+        "A0": 0.1,
+        "A1": 0.4167,
+        "A2": null
+      },
+      "epic833_A1": {
+        "checks_passed": 8,
+        "checks_failed": 0,
+        "checks_warn": 0,
+        "checks_total": 15,
+        "source_set_answers": {
+          "what_does_module_intend": true,
+          "contracts_must_satisfy": true,
+          "stories_cover_contracts": false,
+          "tests_execute_contracts": true,
+          "checks_passed": true,
+          "unchecked_or_waived_visible": true,
+          "replay_auditable": false
+        }
+      },
+      "primary_delta_A0_to_A1": {
+        "total_rules": 6.0,
+        "formal_candidate_rules": 4.0,
+        "z3_test_count": null,
+        "prompt_lint_warnings": 0.0,
+        "checked_rules": 0.0,
+        "unchecked_rules": 0.0,
+        "tef": 0.3167
+      },
+      "arms": {
+        "A0": {
+          "command_success": true,
+          "tef": 0.1,
+          "total_rules": 0,
+          "checked_rules": 0,
+          "unchecked_rules": 0,
+          "prompt_lint_warnings": 0,
+          "formal_candidate_rules": 0,
+          "z3_test_count": null,
+          "test_pass_rate": null,
+          "test_total": null
+        },
+        "A1": {
+          "command_success": true,
+          "tef": 0.4167,
+          "total_rules": 6,
+          "checked_rules": 0,
+          "unchecked_rules": 0,
+          "prompt_lint_warnings": 0,
+          "formal_candidate_rules": 4,
+          "z3_test_count": 3,
+          "test_pass_rate": 1.0,
+          "test_total": 10
+        },
+        "A2": {
+          "command_success": true,
+          "tef": null,
+          "total_rules": null,
+          "checked_rules": null,
+          "unchecked_rules": null,
+          "prompt_lint_warnings": null,
+          "formal_candidate_rules": null,
+          "z3_test_count": null,
+          "test_pass_rate": 1.0,
+          "test_total": 7
+        }
+      }
+    },
+    {
+      "task_id": "payment_api_lint",
+      "tef": {
+        "A0": 0.25,
+        "A1": 0.33,
+        "A2": null
+      },
+      "epic833_A1": {
+        "checks_passed": 6,
+        "checks_failed": 0,
+        "checks_warn": 1,
+        "checks_total": 15,
+        "source_set_answers": {
+          "what_does_module_intend": true,
+          "contracts_must_satisfy": true,
+          "stories_cover_contracts": false,
+          "tests_execute_contracts": false,
+          "checks_passed": true,
+          "unchecked_or_waived_visible": true,
+          "replay_auditable": false
+        }
+      },
+      "primary_delta_A0_to_A1": {
+        "total_rules": 0.0,
+        "formal_candidate_rules": 0.0,
+        "z3_test_count": null,
+        "prompt_lint_warnings": -14.0,
+        "checked_rules": 0.0,
+        "unchecked_rules": 0.0,
+        "tef": 0.08
+      },
+      "arms": {
+        "A0": {
+          "command_success": true,
+          "tef": 0.25,
+          "total_rules": 5,
+          "checked_rules": 0,
+          "unchecked_rules": 0,
+          "prompt_lint_warnings": 16,
+          "formal_candidate_rules": 0,
+          "z3_test_count": null,
+          "test_pass_rate": null,
+          "test_total": null
+        },
+        "A1": {
+          "command_success": true,
+          "tef": 0.33,
+          "total_rules": 5,
+          "checked_rules": 0,
+          "unchecked_rules": 0,
+          "prompt_lint_warnings": 2,
+          "formal_candidate_rules": 0,
+          "z3_test_count": null,
+          "test_pass_rate": null,
+          "test_total": null
+        },
+        "A2": {
+          "command_success": true,
+          "tef": null,
+          "total_rules": null,
+          "checked_rules": null,
+          "unchecked_rules": null,
+          "prompt_lint_warnings": null,
+          "formal_candidate_rules": null,
+          "z3_test_count": null,
+          "test_pass_rate": null,
+          "test_total": null
+        }
+      }
+    },
+    {
+      "task_id": "refund_payment",
+      "tef": {
+        "A0": 0.1,
+        "A1": 0.49,
+        "A2": null
+      },
+      "epic833_A1": {
+        "checks_passed": 12,
+        "checks_failed": 0,
+        "checks_warn": 1,
+        "checks_total": 15,
+        "source_set_answers": {
+          "what_does_module_intend": true,
+          "contracts_must_satisfy": true,
+          "stories_cover_contracts": true,
+          "tests_execute_contracts": true,
+          "checks_passed": true,
+          "unchecked_or_waived_visible": true,
+          "replay_auditable": true
+        }
+      },
+      "primary_delta_A0_to_A1": {
+        "total_rules": 6.0,
+        "formal_candidate_rules": 0.0,
+        "z3_test_count": null,
+        "prompt_lint_warnings": 6.0,
+        "checked_rules": 1.0,
+        "unchecked_rules": 1.0,
+        "tef": 0.39
+      },
+      "arms": {
+        "A0": {
+          "command_success": true,
+          "tef": 0.1,
+          "total_rules": 0,
+          "checked_rules": 0,
+          "unchecked_rules": 0,
+          "prompt_lint_warnings": 0,
+          "formal_candidate_rules": 0,
+          "z3_test_count": null,
+          "test_pass_rate": null,
+          "test_total": null
+        },
+        "A1": {
+          "command_success": true,
+          "tef": 0.49,
+          "total_rules": 6,
+          "checked_rules": 1,
+          "unchecked_rules": 1,
+          "prompt_lint_warnings": 6,
+          "formal_candidate_rules": 0,
+          "z3_test_count": 0,
+          "test_pass_rate": 1.0,
+          "test_total": 4
+        },
+        "A2": {
+          "command_success": true,
+          "tef": null,
+          "total_rules": null,
+          "checked_rules": null,
+          "unchecked_rules": null,
+          "prompt_lint_warnings": null,
+          "formal_candidate_rules": null,
+          "z3_test_count": null,
+          "test_pass_rate": null,
+          "test_total": null
+        }
+      }
+    }
+  ],
+  "headline": "email_validator: +6 contract rules (A0\u2192A1); TEF +0.32; payment_api_lint: -14 fewer lint warnings (A0\u2192A1); TEF +0.08; refund_payment: +6 contract rules (A0\u2192A1); TEF +0.39"
+}

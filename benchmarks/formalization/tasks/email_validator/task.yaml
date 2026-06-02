@@ -1,0 +1,18 @@
+id: email_validator
+description: >
+  Email validation module. Compares ad-hoc prompt prose (A0), PDD contract
+  formalization (A1), and a reference Python implementation (A2).
+
+arms:
+  a0:
+    prompt: prompts/adhoc.prompt
+  a1:
+    prompt: prompts/formalized.prompt
+    tests_dir: baseline/tests
+  a2:
+    test_paths:
+      - baseline/tests/test_email_validator.py
+    pythonpath:
+      - baseline/src
+
+evidence_paths: []

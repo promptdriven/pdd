@@ -16,7 +16,6 @@ from ..core.utils import echo_model_line
 from .checkup_simplify import checkup_simplify
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
-from .gate import gate_cmd
 from .drift import drift_cmd
 from .gate import gate_cmd
 from .prompt import prompt_lint

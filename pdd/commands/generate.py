@@ -105,6 +105,7 @@ class GenerateCommand(click.Command):
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option("--language", help="Specify the programming language.")
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -126,6 +127,7 @@ def generate(
     no_github_state: bool,
     project_root: Optional[str],
     evidence: bool,
+    language: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -338,7 +340,8 @@ def generate(
             force_incremental_flag=incremental,
             env_vars=env_vars if env_vars else None,
             unit_test_file=unit_test,
-            exclude_tests=exclude_tests
+            exclude_tests=exclude_tests,
+            language=language,
         )
 
         if evidence:

@@ -1,0 +1,8 @@
+% Handwritten A0 — Milestone 1 corpus (email_validator)
+
+<requirements>
+Implement an email validator in Python.
+When the email string is valid, return True.
+When the email string is invalid, return False.
+Reject empty input and malformed addresses safely.
+</requirements>

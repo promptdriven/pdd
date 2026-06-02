@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/promptdriven/pdd/benchmarks/formalization/schemas/aggregate.schema.json",
+  "title": "PDDFormalizationBenchmarkAggregate",
+  "type": "object",
+  "required": ["benchmark_version", "collected_at", "task_ids", "runs"],
+  "additionalProperties": false,
+  "properties": {
+    "benchmark_version": { "type": "string" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "task_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "runs": {
+      "type": "array",
+      "items": { "$ref": "results.schema.json" },
+      "minItems": 1
+    }
+  }
+}

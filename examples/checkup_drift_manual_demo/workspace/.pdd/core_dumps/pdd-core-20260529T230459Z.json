@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.255.dev0",
+  "timestamp_utc": "20260529T230459Z",
+  "argv": [
+    "checkup",
+    "drift",
+    "refund_payment",
+    "--code-file",
+    "refund_demo/refund_payment.py",
+    "--dry-run",
+    "--json"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/checkup_drift_manual_demo/workspace",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.12.13 | packaged by Anaconda, Inc. | (main, Mar 19 2026, 20:12:32) [Clang 20.1.8 ]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [
+    "checkup"
+  ],
+  "total_cost": 0.0,
+  "steps": [
+    {
+      "step": 1,
+      "command": "checkup",
+      "cost": null,
+      "model": "unknown"
+    }
+  ],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Applications/Cursor.app/Contents/Resources/app/resources/helpers:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/envs/pdd/bin:/opt/anaconda3/condabin",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd"
+  },
+  "file_contents": {},
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\n{\n  \"devunit\": \"refund_payment\",\n  \"prompt_path\": \"/Users/yifeitao/Desktop/pdd/examples/checkup_drift_manual_demo/workspace/prompts/refund_payment_python.prompt\",\n  \"code_path\": \"/Users/yifeitao/Desktop/pdd/examples/checkup_drift_manual_demo/workspace/refund_demo/refund_payment.py\",\n  \"runs\": 1,\n  \"dry_run\": true,\n  \"status\": \"stable\",\n  \"baseline_public_api\": [\n    \"def refund_payment\"\n  ],\n  \"public_api_unchanged\": true,\n  \"implementation_changed\": false,\n  \"behavior_unchanged\": true,\n  \"total_cost_usd\": 0.0,\n  \"cost_budget_exceeded\": false,\n  \"policy_check_skipped\": true,\n  \"policy_check_unavailable\": false,\n  \"max_cost_usd\": null,\n  \"tests\": \"passed 1/1\",\n  \"stories\": \"passed 1/1\",\n  \"verify\": \"passed 1/1\",\n  \"policy\": \"passed 1/1\",\n  \"snapshots\": [\n    {\n      \"run_index\": 1,\n      \"code_sha256\": \"2ffbc6dfeb9f5b840acdc25f1c59911ad576a5aaf2ffce75c6042a0327106125\",\n      \"public_api\": [\n        \"def refund_payment\"\n      ],\n      \"tests_passed\": true,\n      \"stories_passed\": true,\n      \"verify_passed\": true,\n      \"policy_passed\": true\n    }\n  ]\n}\n\n--- Command Execution Summary ---\n-------------------------------------\n"
+}
