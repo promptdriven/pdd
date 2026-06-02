@@ -3362,7 +3362,13 @@ def _run_interactive_pty_until_reply(
         return False, "Claude Code interactive mode requires POSIX PTY support", 0.0, None
 
     master_fd, slave_fd = pty.openpty()
-    output_chunks: List[str] = []
+    # Bounded rolling output window, updated incrementally. Replaces an unbounded
+    # list of every PTY chunk that was re-joined on each read (for trust-prompt
+    # detection) and again on the error paths: detection is now O(window) per
+    # chunk and the buffer cannot grow with a long session. Sized to cover both
+    # the trust-detection window and the error-snippet length.
+    output_window_chars = max(4000, MAX_ERROR_SNIPPET_LENGTH)
+    output_tail = ""
     proc: Optional[subprocess.Popen] = None
     trust_confirmed = False
     try:
@@ -3398,7 +3404,7 @@ def _run_interactive_pty_until_reply(
             if remaining <= 0:
                 _terminate_process_group(proc, signal.SIGKILL)
                 proc.wait(timeout=5)
-                tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+                tail = output_tail[-MAX_ERROR_SNIPPET_LENGTH:]
                 return False, f"Claude interactive mode timed out. Output tail: {tail}", 0.0, None
 
             readable, _, _ = select.select([master_fd], [], [], min(0.2, remaining))
@@ -3409,17 +3415,17 @@ def _run_interactive_pty_until_reply(
                     chunk = b""
                 if chunk:
                     decoded = chunk.decode("utf-8", errors="replace")
-                    output_chunks.append(decoded)
-                    if not trust_confirmed:
-                        output_tail = "".join(output_chunks)[-4000:]
-                        if _claude_interactive_needs_trust_confirmation(output_tail):
-                            os.write(master_fd, b"\r")
-                            trust_confirmed = True
+                    output_tail = (output_tail + decoded)[-output_window_chars:]
+                    if not trust_confirmed and _claude_interactive_needs_trust_confirmation(
+                        output_tail
+                    ):
+                        os.write(master_fd, b"\r")
+                        trust_confirmed = True
 
         if reply_path.exists():
             return _parse_claude_interactive_reply(reply_path, job_id)
 
-        tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+        tail = output_tail[-MAX_ERROR_SNIPPET_LENGTH:]
         returncode = proc.returncode if proc is not None else None
         return (
             False,
