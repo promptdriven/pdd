@@ -1,137 +1,75 @@
-"""
-Example usage of the agentic_checkup_orchestrator module.
-
-This script demonstrates how to invoke `run_agentic_checkup_orchestrator`.
-Since the orchestrator relies on internal modules like `run_agentic_task` and
-`load_prompt_template`, this example mocks those dependencies to simulate
-a successful 8-step checkup workflow without making actual LLM calls.
-
-Scenario:
-    We simulate a checkup for a CRM app where the orchestrator runs through
-    all 10 steps (1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7, 8), discovers issues,
-    fixes them, writes tests, verifies, and creates a PR.
-"""
-
+import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
-project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+def main() -> None:
+    """
+    Example showing how to run the multi-step agentic checkup orchestrator.
+    
+    This orchestrator coordinates an 8-step process (discover, dependencies, build, 
+    interfaces, test, fix, verify, create PR) to analyze and fix software issues.
+    """
+    # Ensure we have the necessary API key for the underlying agentic tasks
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("OPENAI_API_KEY not set. Set it to run this example.")
+        sys.exit(0)
 
-try:
-    from pdd.agentic_checkup_orchestrator import (
-        run_agentic_checkup_orchestrator,
-        STEP_ORDER,
-        TOTAL_STEPS,
-        MAX_FIX_VERIFY_ITERATIONS,
-        _next_step,
-        _parse_changed_files,
+    # Setup a dummy working directory for the example
+    cwd = Path("./output/dummy_project")
+    cwd.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize a mock git repository so worktree setup doesn't fail immediately
+    # Note: In a real scenario, this would be a valid git repository.
+    import subprocess
+    try:
+        subprocess.run(["git", "init"], cwd=cwd, check=True, capture_output=True)
+        # Need at least one commit to create a branch/worktree
+        (cwd / "README.md").write_text("# Dummy Project")
+        subprocess.run(["git", "add", "README.md"], cwd=cwd, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=cwd, check=True, capture_output=True)
+    except Exception as e:
+        print(f"Git init failed (expected in some CI environments without git): {e}")
+        print("Skipping full execution as it requires a real git repository.")
+        sys.exit(0)
+
+    # Mock inputs for the orchestrator
+    issue_url = "https://github.com/example-owner/example-repo/issues/1"
+    issue_content = "The tests are failing due to a missing import in main.py."
+    repo_owner = "example-owner"
+    repo_name = "example-repo"
+    issue_number = 1
+    issue_title = "Missing import in main.py"
+    architecture_json = "{}"  # Empty JSON for this example
+    pddrc_content = ""         # Empty config
+
+    print("Starting the agentic checkup orchestrator in --no-fix mode...")
+    
+    # Run the orchestrator in --no-fix mode (steps 1-5, skip 6, run 7, skip 8)
+    # We use --no-fix here to avoid actual LLM-driven edits and PR creation in a dummy environment.
+    success, message, cost, model = run_agentic_checkup_orchestrator(
+        issue_url=issue_url,
+        issue_content=issue_content,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        issue_title=issue_title,
+        architecture_json=architecture_json,
+        pddrc_content=pddrc_content,
+        cwd=cwd,
+        verbose=True,
+        quiet=False,
+        no_fix=True,  # Prevent actual code modification and PR creation
+        use_github_state=False,  # Don't try to post to GitHub in this local example
+        test_scope="full"  # Run all tests
     )
-except ImportError:
-    print("Error: Could not import 'pdd.agentic_checkup_orchestrator'.")
-    sys.exit(1)
 
-
-def mock_load_prompt_template(template_name: str) -> str:
-    """Mock implementation returning a dummy prompt."""
-    return f"MOCK PROMPT FOR: {template_name}\nContext: {{issue_content}}"
-
-
-def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, **kwargs):
-    """Mock implementation simulating LLM output for each checkup step."""
-    step_id = label.replace("step", "").split("_iter")[0]
-
-    success = True
-    cost = 0.50
-    provider = "anthropic"
-    output = ""
-
-    if step_id == "1":
-        output = "Project uses Python 3.12 backend + Next.js 15 frontend."
-    elif step_id == "2":
-        output = "All dependencies accounted for. No missing packages."
-    elif step_id == "3":
-        output = "Backend compiles cleanly. Frontend build succeeds."
-    elif step_id == "4":
-        output = "1 orphan page found: /admin/crm/actions missing from sidebar."
-    elif step_id == "5":
-        output = "All 3061 backend tests pass. All 1557 frontend tests pass."
-    elif step_id == "6_1":
-        output = (
-            "Fixed orphan page — added CRM Actions to admin sidebar.\n"
-            "FILES_CREATED: \n"
-            "FILES_MODIFIED: frontend/src/app/admin/layout.tsx"
-        )
-    elif step_id == "6_2":
-        output = (
-            "Wrote 3 regression tests for sidebar fix.\n"
-            "FILES_CREATED: backend/tests/test_checkup_regressions.py\n"
-            "FILES_MODIFIED: frontend/src/app/admin/__test__/layout.test.tsx"
-        )
-    elif step_id == "6_3":
-        output = (
-            "Wrote 10 integration tests.\n"
-            "FILES_CREATED: backend/tests/test_checkup_e2e.py"
-        )
-    elif step_id == "7":
-        output = "All Issues Fixed. All tests pass. Build clean."
-    elif step_id == "8":
-        output = "Created PR #42 with all fixes and tests."
-
-    return success, output, cost, provider
-
-
-def main():
-    """Main function to run the checkup orchestrator simulation."""
-    print("Starting Agentic Checkup Orchestrator Simulation...")
-    print(f"Step order: {STEP_ORDER}")
-    print(f"Total display steps: {TOTAL_STEPS}")
-    print(f"Max iterations: {MAX_FIX_VERIFY_ITERATIONS}")
-    print("-" * 60)
-
-    # Demonstrate helper functions
-    print(f"_next_step(2) = {_next_step(2)}")       # 3
-    print(f"_next_step(5) = {_next_step(5)}")       # 6.1
-    print(f"_next_step(6.1) = {_next_step(6.1)}")   # 6.2
-    print(f"_next_step(6.3) = {_next_step(6.3)}")   # 7
-
-    files = _parse_changed_files(
-        "FILES_CREATED: src/a.py, src/b.py\n"
-        "FILES_MODIFIED: src/c.py"
-    )
-    print(f"Parsed files: {files}")  # ['src/a.py', 'src/b.py', 'src/c.py']
-    print("-" * 60)
-
-    with patch("pdd.agentic_checkup_orchestrator.load_prompt_template", side_effect=mock_load_prompt_template), \
-         patch("pdd.agentic_checkup_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
-         patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)), \
-         patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=12345), \
-         patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"), \
-         patch("pdd.agentic_checkup_orchestrator._setup_worktree", return_value=(Path("/tmp/worktree"), None)):
-
-        success, message, cost, model = run_agentic_checkup_orchestrator(
-            issue_url="https://github.com/example/myproject/issues/42",
-            issue_content="Check the entire CRM app for health issues.",
-            repo_owner="example",
-            repo_name="myproject",
-            issue_number=42,
-            issue_title="CRM Health Check",
-            architecture_json='[{"filename": "crm_models_Python.prompt"}]',
-            pddrc_content="contexts:\n  default:\n    prompts_dir: prompts",
-            cwd=Path("/tmp/myproject"),
-            verbose=True,
-            quiet=False,
-            no_fix=False,
-        )
-
-    print("-" * 60)
-    print("Simulation Complete.")
-    print(f"Success      : {success}")
-    print(f"Message      : {message}")
-    print(f"Total Cost   : ${cost:.2f}")
-    print(f"Model Used   : {model}")
-
+    print("\n--- Orchestrator Result ---")
+    print(f"Success: {success}")
+    print(f"Message: {message}")
+    print(f"Total Cost: ${cost:.4f}")
+    print(f"Model Used: {model}")
 
 if __name__ == "__main__":
     main()
