@@ -196,6 +196,21 @@ def test_recursive(): assert helper_a() == 10
     assert "helper_b" in manifest.included_helpers
 
 
+def test_slice_includes_self_referenced_helper():
+    source = """
+class TestThing:
+    def helper(self):
+        return 1
+
+    def test_uses_helper(self):
+        assert self.helper() == 1
+"""
+    slicer = PytestSlicer(source)
+    sliced_code, manifest = slicer.slice(["TestThing.test_uses_helper"])
+    assert "def helper(self):" in sliced_code
+    assert "TestThing.helper" in manifest.included_helpers
+
+
 def test_slice_preserves_indentation():
     source = """
 def helper(x):

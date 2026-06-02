@@ -91,6 +91,37 @@ def test_seeds_from_test_then_slice():
     assert "def _get_job_secrets" in output
 
 
+TEST_MODULE_ALIAS_SOURCE = '''
+import myapp.worker as worker
+from unittest.mock import patch
+
+@patch.object(worker, "_get_job_secrets")
+def test_run_worker(mock_secrets):
+    mock_secrets.return_value = {"id": "1"}
+    worker.run_worker("1")
+'''
+
+
+def test_seeds_from_test_module_alias_not_seed():
+    seeds = ApiContractSlicer.seeds_from_test(
+        TEST_MODULE_ALIAS_SOURCE, "myapp.worker"
+    )
+    assert "worker" not in seeds
+    assert "_get_job_secrets" in seeds
+    assert "run_worker" in seeds
+
+
+def test_seeds_from_test_module_alias_then_slice():
+    seeds = ApiContractSlicer.seeds_from_test(
+        TEST_MODULE_ALIAS_SOURCE, "myapp.worker"
+    )
+    output, manifest = ApiContractSlicer(MODULE_SOURCE, file_path="worker.py").slice(seeds)
+    assert "_get_job_secrets" in manifest.included_symbols
+    assert "run_worker" in manifest.included_symbols
+    assert "def _get_job_secrets" in output
+    ApiContractSlicer.verify_contract(output, manifest.included_symbols)
+
+
 def test_content_selector_contract_kind():
     out = ContentSelector.select(MODULE_SOURCE, "contract:run_worker", file_path="worker.py")
     assert "def run_worker" in out
