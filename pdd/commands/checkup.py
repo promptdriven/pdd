@@ -359,8 +359,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
-    Contract checks:
-      pdd checkup contract check TARGET [OPTIONS]
     Simplify (Claude Code /simplify, requires --apply):
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
@@ -369,8 +367,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
-    Evidence gate:
-      pdd checkup gate [TARGET] [OPTIONS]
+    Evidence and waiver gate:
+      pdd checkup gate [TARGET] [OPTIONS]  →  evidence manifests and waiver policy.
     Regeneration drift:
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
@@ -381,8 +379,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "contract",
         "contracts",
         "coverage",
-        "gate",
         "drift",
+        "gate",
         "simplify",
     }:
         click.echo(ctx.command.get_help(ctx))

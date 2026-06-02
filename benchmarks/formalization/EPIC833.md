@@ -27,14 +27,14 @@ Each **A1 formalized** run produces `epic833` in result JSON answering:
 | #822 Contract check | CLOSED | Yes | `pdd.contract_check` via runner |
 | #823 Coverage matrix | CLOSED | Yes | `pdd.coverage_contracts` |
 | #824 Evidence manifest | CLOSED | Partial | `evidence_paths` in task.yaml |
-| #825 Gate | OPEN | CLI probe only | `gate_main` import; manual `pdd checkup gate` |
-| #826 Replay snapshot | OPEN | No | Placeholder check (skipped) |
+| #825 Gate | CLOSED (CLI) | **Yes** | M1 checkup replay; `pdd checkup gate` (evidence + waiver policy); `tests/test_gate_main.py` |
+| #826 Replay snapshot | OPEN | Partial | M2/M3 `--replay-fixtures`; tier_gold `pdd_generated/` |
 | #827 Grounding provenance | OPEN | Partial | `<pin>` / `<exclude>` tags; manifest fixture |
 | #828 Capabilities | OPEN | Partial | `<capabilities>` section present |
-| #829 Prompt lint | CLOSED | Yes | `pdd.prompt_lint` |
+| #829 Prompt lint | CLOSED | Yes | `pdd checkup lint` via `scripts/cmd/pdd_checkup_lint.sh` |
 | #830 Architecture metadata | OPEN | No | Placeholder (skipped) |
-| #831 Drift | OPEN | CLI probe only | `drift_main` import; manual drift |
-| #832 Waivers | OPEN | Partial | `waived_rules` from coverage |
+| #831 Drift | CLOSED (CLI) | **Yes** | M3 `run_m3_pipeline.py` + `scripts/cmd/pdd_drift.sh`; `tests/test_drift_main.py` |
+| #832 Waivers | CLOSED (CLI) | **Yes** | `pdd checkup gate` waiver scan; coverage `waived` status |
 
 ## Hero tasks for epic demo
 
@@ -49,3 +49,24 @@ Run the scorecard:
 ```bash
 jq '.epic833' benchmarks/formalization/results/refund_payment/A1.json
 ```
+
+## Post-merge verification (PR #1280)
+
+After merging `main` into `feat/issue-1273-formalization-benchmark`:
+
+```bash
+bash benchmarks/formalization/scripts/touchpoint_pr1280.sh
+```
+
+This runs gate/drift/formalization unit tests, checks `pdd checkup gate` / `drift` CLI wiring, and the
+no-LLM corpus smoke (`scripts/run_eval.sh`).
+
+## Corpus milestone coverage (current)
+
+| Milestone | Corpus tasks | Scripts |
+|-----------|--------------|---------|
+| **M1** checkability | 5 tasks (`corpus/manifest.yaml`) | `run_experiment.py`, `scripts/run_m1.sh`, per-task `EVALUATION_RESULT.md` |
+| **M2** generate/test | tier A+B (`hello_fn`, `pi_digits`, `email_validator`, `token_bucket`, `refund_handler`) | `run_generation_benchmark.py`, `scripts/cmd/pdd_{generate,test}.sh` |
+| **M3** drift | tier B with oracle (`email_validator`, `refund_handler`; `token_bucket` when M2 done) | `run_m3_pipeline.py`, `scripts/cmd/pdd_drift.sh` |
+
+See [README.md](README.md), [COMMANDS.md](COMMANDS.md), and `experiments/latest/EVALUATION_RESULT.md` for recorded runs.

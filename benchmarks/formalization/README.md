@@ -38,6 +38,9 @@ command map.
 ## Quick start
 
 ```bash
+# Post-merge smoke (gate + drift tests + M1/M2/M3 replay, no API keys)
+bash benchmarks/formalization/scripts/touchpoint_pr1280.sh
+
 # CI smoke — M1 + M2 replay + M3 dry-run (~3 min, no API keys)
 bash benchmarks/formalization/scripts/run_eval.sh
 
