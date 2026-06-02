@@ -234,9 +234,22 @@ def append_agentic_progress_steer_note(count: int, preview: str) -> None:
     """Attach pending-steer metadata to the current interrupt/progress context."""
     global _agentic_interrupt_context
     if _agentic_interrupt_context is None:
-        return
+        _agentic_interrupt_context = {}
     _agentic_interrupt_context["pending_steers"] = count
     _agentic_interrupt_context["steer_preview"] = preview
+
+
+def peek_agentic_progress_steer_metadata() -> Dict[str, Any]:
+    """Return pending-steer fields from interrupt context without clearing it."""
+    global _agentic_interrupt_context
+    if not _agentic_interrupt_context:
+        return {}
+    meta: Dict[str, Any] = {}
+    if "pending_steers" in _agentic_interrupt_context:
+        meta["pending_steers"] = _agentic_interrupt_context["pending_steers"]
+    if "steer_preview" in _agentic_interrupt_context:
+        meta["steer_preview"] = _agentic_interrupt_context["steer_preview"]
+    return meta
 
 
 def detect_control_token(
@@ -4639,6 +4652,37 @@ def seed_issue_steer_cursor(
         state["last_steer_at"] = latest_timestamp
     state["steer_cursor_seeded"] = True
     return True
+
+
+def fetch_issue_updated_at(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+) -> str:
+    """Return the GitHub issue ``updated_at`` timestamp, or empty string on failure."""
+    if not _find_cli_binary("gh"):
+        return ""
+    try:
+        res = _subprocess_run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+                "--jq",
+                ".updated_at",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            start_new_session=True,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return ""
 
 
 def ensure_issue_steer_cursor_seeded(

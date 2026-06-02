@@ -28,6 +28,7 @@ from .agentic_common import (
     drain_step_steers,
     apply_clarification_steers_on_resume,
     ensure_issue_steer_cursor_seeded,
+    issue_update_should_clear_workflow_state,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1788,6 +1789,7 @@ def run_agentic_bug_orchestrator(
     issue_number: int,
     issue_author: str,
     issue_title: str,
+    issue_updated_at: str = "",
     *,
     cwd: Path,
     verbose: bool = False,
@@ -1835,8 +1837,42 @@ def run_agentic_bug_orchestrator(
         and persisted_clean_restart.lower() == "true"
     )
 
+    if not clean_restart and state is not None and issue_updated_at:
+        stored_updated_at = state.get("issue_updated_at")
+        if stored_updated_at and stored_updated_at != issue_updated_at:
+            if issue_update_should_clear_workflow_state(
+                state,
+                stored_updated_at,
+                issue_updated_at,
+                repo_owner,
+                repo_name,
+                issue_number,
+                cwd=cwd,
+                clarification_step_numbers=_CLARIFICATION_STEPS,
+            ):
+                if not quiet:
+                    console.print(
+                        "[yellow]Issue was updated since last run - starting fresh[/yellow]"
+                    )
+                clear_workflow_state(
+                    cwd,
+                    issue_number,
+                    "bug",
+                    state_dir,
+                    repo_owner,
+                    repo_name,
+                    use_github_state,
+                )
+                state = None
+                loaded_gh_id = None
+            elif not quiet:
+                console.print(
+                    "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
+                )
+                state["issue_updated_at"] = issue_updated_at
+
     # Initialize variables from state or defaults
-    if state is not None:
+    if state is not None and not effective_clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
@@ -1849,8 +1885,13 @@ def run_agentic_bug_orchestrator(
         # rather than crashing on a corrupted/legacy value (e.g. a list).
         if not isinstance(state.get("step_comments"), dict):
             state["step_comments"] = {}
+        if issue_updated_at:
+            state["issue_updated_at"] = issue_updated_at
     else:
-        state = {"step_outputs": {}}
+        state = {
+            "step_outputs": {},
+            "issue_updated_at": issue_updated_at,
+        }
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0

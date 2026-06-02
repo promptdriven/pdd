@@ -41,8 +41,21 @@ pytest -q tests/test_mid_run_steer_orchestrator_integration.py \
 6. Post `/stop` or remove the job label in **pdd_cloud** — the CLI must **not** treat that as steer input (cancellation is cloud-side).
 7. Optional: set `PDD_STEER_JSON` in the worker to simulate cloud handoff; behavior should match GitHub polling.
 
+## #1324 scope status (§2 / §6 / §7)
+
+| Section | Requirement | Status on `change/issue-1324-steer-wiring` |
+|---------|-------------|---------------------------------------------|
+| **§2** | Steer points in issue orchestrators | **Done** — change, bug, test, e2e_fix, checkup, architecture |
+| **§2** | `agentic_split_orchestrator` | **Deferred** — no issue repo coordinates (documented out of scope) |
+| **§2** | `sync_orchestration.py` comment steer | **Deferred** — local TUI `maybe_steer_operation` only; not GitHub issue comments |
+| **§2** | `agentic_sync` (parallel module sync) | **Partial** — `AsyncSyncRunner` seeds cursor and drains at module boundaries for progress UX; steers are not injected into `pdd sync` subprocess prompts (no `run_agentic_task` on that path) |
+| **§6** | Relax `issue_updated_at` staleness | **Done** — change, test, and bug orchestrators use `issue_update_should_clear_workflow_state` |
+| **§6** | e2e_fix / checkup staleness | **N/A** — those flows do not compare `issue_updated_at` today |
+| **§7** | Progress UX | **Done** — console on drain; `peek_agentic_progress_steer_metadata` + sync runner `github_info` pending-steer line |
+
 ## Out of scope for this validation
 
 - `agentic_split_orchestrator` (no issue repo coordinates)
 - `sync_orchestration` TUI `maybe_steer_operation` (interactive sync only)
 - Mid-token abort inside a single provider subprocess call
+- Injecting mid-run steers into `pdd sync` module subprocesses (requires a separate design)

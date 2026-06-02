@@ -22,8 +22,10 @@ from pdd.agentic_common import (
     GITHUB_STATE_MARKER_END,
     GITHUB_STATE_MARKER_START,
     SteerEntry,
+    append_agentic_progress_steer_note,
     drain_issue_steers,
     ensure_issue_steer_cursor_seeded,
+    peek_agentic_progress_steer_metadata,
     run_agentic_task,
     seed_issue_steer_cursor,
 )
@@ -92,21 +94,32 @@ def test_orch_args(tmp_path):
 
 
 def test_ensure_issue_steer_cursor_seeded_noop_when_resumed(mock_cwd):
-  """Resumed state with a cursor must not re-seed."""
-  state = {
-      "last_steered_comment_id": "50",
-      "steer_cursor_seeded": True,
-  }
-  with patch(
-      "pdd.agentic_common.seed_issue_steer_cursor",
-  ) as mock_seed:
-      assert (
-          ensure_issue_steer_cursor_seeded(
-              "owner", "repo", 1, state, cwd=mock_cwd
-          )
-          is False
-      )
-      mock_seed.assert_not_called()
+    """Resumed state with a cursor must not re-seed."""
+    state = {
+        "last_steered_comment_id": "50",
+        "steer_cursor_seeded": True,
+    }
+    with patch(
+        "pdd.agentic_common.seed_issue_steer_cursor",
+    ) as mock_seed:
+        assert (
+            ensure_issue_steer_cursor_seeded(
+                "owner", "repo", 1, state, cwd=mock_cwd
+            )
+            is False
+        )
+        mock_seed.assert_not_called()
+
+
+def test_peek_agentic_progress_steer_metadata_without_prior_progress():
+    """Steer notes are visible even before set_agentic_progress runs."""
+    from pdd.agentic_common import clear_agentic_progress
+
+    clear_agentic_progress()
+    append_agentic_progress_steer_note(2, "@alice, @bob")
+    meta = peek_agentic_progress_steer_metadata()
+    assert meta["pending_steers"] == 2
+    assert "alice" in meta["steer_preview"]
 
 
 def test_drain_filters_bot_state_and_progress_comments(
