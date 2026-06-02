@@ -5381,6 +5381,25 @@ def _files_changed_since(worktree: Path, base_sha: str) -> List[str]:
     return paths
 
 
+def _git_committed_paths(worktree: Path, base: str, head: str) -> List[str]:
+    """Return non-deleted paths changed in ``base..head`` (issue #1317).
+
+    Used to finalize fingerprints for files a fixer subprocess committed
+    directly inside the worktree, which working-tree diffing never surfaces.
+    """
+    if not base or not head:
+        return []
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=d", f"{base}..{head}"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def _commit_and_push_if_changed(
     worktree: Path,
     pr_metadata: Dict[str, str],
@@ -5423,19 +5442,25 @@ def _commit_and_push_if_changed(
         return True, "No changes to push."
 
     if changed:
-        stage_cmds: List[List[str]] = [["git", "add", "-u"]]
-        untracked = [
-            path
-            for path in _git_untracked_files(worktree)
-            if not _is_untracked_pdd_meta_artifact(path)
-        ]
-        if untracked:
-            stage_cmds.append(["git", "add", "--", *untracked])
+        from .pr_metadata_finalizer import (
+            finalize_pr_metadata,
+            is_pdd_meta_artifact,
+            stage_paths_scoped,
+        )
 
-        for cmd in stage_cmds:
-            result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
-            if result.returncode != 0:
-                return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
+        finalization = finalize_pr_metadata(worktree, changed_paths=changed, stage=True)
+        if not finalization.ok:
+            return False, finalization.message
+
+        changed_after_finalization = _git_changed_files(worktree)
+        stageable = [
+            path
+            for path in changed_after_finalization
+            if not is_pdd_meta_artifact(path)
+        ]
+        stage_ok, stage_message = stage_paths_scoped(worktree, stageable)
+        if not stage_ok:
+            return False, stage_message
 
         if not _git_has_staged_changes(worktree):
             # Staging produced no eligible content (everything filtered out as
@@ -5460,6 +5485,42 @@ def _commit_and_push_if_changed(
             )
             if result.returncode != 0:
                 return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
+
+    # Issue #1317: a fixer subprocess (e.g. codex autoheal) can COMMIT
+    # PDD-owned changes inside the worktree before this function runs. The
+    # working-tree finalize above only saw ``changed``, so those committed
+    # files would push with missing/stale fingerprints — the #1305/#1243 drift
+    # loop. Finalize the fixer's own committed range (pre_fix_sha..current_head,
+    # captured at entry so it excludes any working-tree commit just made above)
+    # and land fresh fingerprints in a scoped follow-up commit before push.
+    if has_unpushed_local_commits:
+        committed_paths = _git_committed_paths(worktree, pre_fix_sha, current_head)
+        if committed_paths:
+            from .pr_metadata_finalizer import finalize_pr_metadata
+
+            committed_finalization = finalize_pr_metadata(
+                worktree, changed_paths=committed_paths, stage=True
+            )
+            if not committed_finalization.ok:
+                return False, committed_finalization.message
+            if _git_has_staged_changes(worktree):
+                commit_cmd = [
+                    "git",
+                    "-c",
+                    "user.name=PDD Bot",
+                    "-c",
+                    "user.email=pdd-bot@users.noreply.github.com",
+                    "commit",
+                    "-m",
+                    "chore(pdd): finalize fingerprints for fixer commits (#1317)",
+                ]
+                result = subprocess.run(
+                    commit_cmd, cwd=worktree, capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    return False, (
+                        f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
+                    )
 
     # Capture the fixer commit's SHA right after committing (or right
     # after detecting an already-committed fixer commit) so every rebase
