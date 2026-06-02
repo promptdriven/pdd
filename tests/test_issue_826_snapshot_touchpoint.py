@@ -14,8 +14,10 @@ from click.testing import CliRunner
 
 from pdd.commands.checkup import checkup
 from pdd.commands.checkup_snapshot import checkup_snapshot
+from pdd.commands.generate import generate
 from pdd.commands.misc import preprocess
 from pdd.commands.replay import replay
+from pdd.preprocess import preprocess as preprocess_text
 from pdd.context_snapshot import replay_snapshot
 from pdd.context_snapshot_policy import check_snapshot_policy
 from pdd.evidence_manifest import write_evidence_manifest
@@ -128,3 +130,155 @@ def test_issue_826_static_prompt_policy_passes_without_snapshot(tmp_path: Path) 
     passed, message = check_snapshot_policy(static, project)
     assert passed is True
     assert "no active nondeterministic" in message.lower()
+
+
+def test_test_plan_preprocess_foo_python_snapshot_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Manual: ``pdd preprocess prompts/foo_python.prompt --snapshot``."""
+    project = _copy_demo(tmp_path)
+    monkeypatch.chdir(project)
+    _mock_web(monkeypatch)
+    foo = project / "prompts" / "foo_python.prompt"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        preprocess,
+        [str(foo.relative_to(project)), "--snapshot"],
+        obj={"quiet": True, "force": True},
+    )
+    assert result.exit_code == 0, result.output
+
+    runs = sorted((project / ".pdd" / "evidence" / "runs").glob("*.json"))
+    assert runs
+    payload = json.loads(runs[-1].read_text(encoding="utf-8"))
+    assert payload["uses_nondeterministic_context"] is True
+    replay = replay_snapshot(runs[-1])
+    assert replay["verified"] is True
+    assert "pdd-snapshot-demo-shell" in replay["expanded_prompt"]
+
+
+def test_test_plan_checkup_with_shell_fails_without_snapshot(tmp_path: Path) -> None:
+    """Manual: ``pdd checkup snapshot prompts/with_shell_python.prompt`` (no prior snapshot)."""
+    project = _copy_demo(tmp_path)
+    shell_prompt = project / "prompts" / "with_shell_python.prompt"
+    runner = CliRunner()
+
+    passed, message = check_snapshot_policy(shell_prompt, project)
+    assert passed is False
+    assert "no replayable snapshot" in message
+
+    result = runner.invoke(
+        checkup_snapshot,
+        [str(shell_prompt), "--project-root", str(project)],
+    )
+    assert result.exit_code == 1, result.output
+    assert "no replayable snapshot" in result.output.lower()
+
+
+def test_test_plan_generate_snapshot_context_evidence_and_replay_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual: ``pdd generate … --snapshot-context --evidence`` then ``pdd replay`` on run manifest."""
+    project = _copy_demo(tmp_path)
+    monkeypatch.chdir(project)
+    _mock_web(monkeypatch)
+    foo = project / "prompts" / "foo_python.prompt"
+    output_py = project / "pdd" / "foo.py"
+    runner = CliRunner()
+
+    def _stub_code_generator_main(
+        ctx,
+        prompt_file,
+        output,
+        original_prompt_file_path=None,
+        force_incremental_flag=False,
+        env_vars=None,
+        unit_test_file=None,
+        exclude_tests=False,
+        snapshot_context=False,
+    ):
+        prompt_path = Path(prompt_file)
+        if not prompt_path.is_absolute():
+            prompt_path = (project / prompt_path).resolve()
+        text = prompt_path.read_text(encoding="utf-8")
+        recorder = None
+        expanded = text
+        if snapshot_context:
+            from pdd.context_snapshot import start_snapshot_run
+
+            recorder = start_snapshot_run(str(prompt_path), command="pdd generate")
+            recorder.record_prompt_source(text)
+            expanded = preprocess_text(
+                text,
+                recursive=False,
+                double_curly_brackets=False,
+                snapshot_recorder=recorder,
+            )
+        output_py.parent.mkdir(parents=True, exist_ok=True)
+        output_py.write_text('"""Generated stub."""\n', encoding="utf-8")
+        if snapshot_context and recorder is not None:
+            manifest = recorder.finalize(
+                expanded_prompt=expanded,
+                prompt_text=text,
+                output_files=[str(output_py)],
+                model="stub-model",
+            )
+            ctx.ensure_object(dict)
+            ctx.obj["context_snapshot"] = {
+                "run_id": manifest.get("run_id"),
+                "manifest_path": manifest.get("manifest_path"),
+                "snapshot_dir": manifest.get("snapshot_dir"),
+                "expanded_prompt": manifest.get("expanded_prompt"),
+                "uses_nondeterministic_context": manifest.get("uses_nondeterministic_context"),
+                "dynamic_tags": manifest.get("dynamic_tags", []),
+                "declared_dynamic_tags": manifest.get("declared_dynamic_tags", []),
+                "redaction_applied": manifest.get("redaction", {}).get("applied", False),
+                "redaction": manifest.get("redaction"),
+                "artifacts": manifest.get("artifacts", []),
+            }
+        return '"""Generated stub."""\n', False, 0.0, "stub-model"
+
+    import pdd.commands.generate as generate_cmd
+
+    monkeypatch.setattr(
+        "pdd.code_generator_main.code_generator_main",
+        _stub_code_generator_main,
+    )
+    generate_cmd.code_generator_main = _stub_code_generator_main
+
+    gen = runner.invoke(
+        generate,
+        [
+            str(foo.relative_to(project)),
+            "--output",
+            str(output_py.relative_to(project)),
+            "--snapshot-context",
+            "--evidence",
+        ],
+        obj={"quiet": True, "force": True},
+    )
+    assert gen.exit_code == 0, gen.output
+
+    run_manifests = sorted((project / ".pdd" / "evidence" / "runs").glob("*.json"))
+    assert run_manifests
+    run_path = run_manifests[-1]
+
+    devunit_manifests = list((project / ".pdd" / "evidence" / "devunits").glob("*.json"))
+    assert devunit_manifests, "expected evidence manifest from --evidence"
+
+    evidence_payload = json.loads(devunit_manifests[-1].read_text(encoding="utf-8"))
+    context_snapshot = evidence_payload.get("context_snapshot") or {}
+    assert context_snapshot.get("enabled") is True
+    linked_run = project / ".pdd" / "evidence" / context_snapshot["manifest_path"]
+    assert linked_run.exists()
+
+    cli_replay = runner.invoke(
+        replay,
+        [str(run_path), "--verify-only", "--json"],
+        obj={"quiet": True},
+    )
+    assert cli_replay.exit_code == 0, cli_replay.output
+    assert json.loads(cli_replay.output)["success"] is True
+
+    replay_snapshot(linked_run)

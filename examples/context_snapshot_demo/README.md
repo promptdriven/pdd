@@ -1,48 +1,63 @@
 # Context snapshot & replay demo (issue #826)
 
 Self-contained mini-project for human QA of snapshot/replay reproducibility
-([promptdriven/pdd#826](https://github.com/promptdriven/pdd/issues/826),
-PR [#1345](https://github.com/promptdriven/pdd/pull/1345)).
+([promptdriven/pdd#826](https://github.com/promptdriven/pdd/issues/826)).
 
-## Quick verify (from repository root)
+Work on branch `change/issue-33` only; this tree is isolated from other feature branches.
+
+## Automated test plan (from repository root)
 
 ```bash
-pytest -vv tests/test_issue_826_snapshot_touchpoint.py
+pytest -q tests/test_context_snapshot_replay.py \
+         tests/test_context_snapshot_policy.py \
+         tests/test_evidence_manifest.py \
+         tests/test_issue_826_snapshot_touchpoint.py
+
 ./examples/context_snapshot_demo/run_demo.sh
 ```
 
-## Branch
-
-Maintained on `demo/issue-826-snapshot-verification` (child of `change/issue-33`) so
-other feature branches are not disturbed.
-
-## Manual walkthrough
+## Manual touchpoint (human-verifiable)
 
 ```bash
 cd examples/context_snapshot_demo
 export PYTHONPATH="$(cd ../.. && pwd)"
 
-# 1) Snapshot preprocess (shell + web mocked in automated test; live shell runs here)
-pdd --quiet preprocess prompts/dynamic_python.prompt --snapshot
+# Snapshot preprocess (records shell/web/include outputs under .pdd/evidence/runs/)
+pdd preprocess prompts/foo_python.prompt --snapshot
 
-# 2) Policy should fail before any snapshot exists for a fresh tree
-pdd checkup snapshot prompts/dynamic_python.prompt --project-root . && echo UNEXPECTED_PASS || echo "expected fail"
+# Policy gate: fails on a fresh tree with no snapshot for this prompt
+pdd checkup snapshot prompts/with_shell_python.prompt --project-root .
+# expect exit code 1
 
-# 3) Replay the snapshot manifest written under .pdd/evidence/
+# Replay the manifest written by preprocess
 RUN=$(ls -1t .pdd/evidence/runs/*.json | head -1)
 pdd replay "$RUN" --verify-only --json
 
-# 4) Policy passes after snapshot
-pdd checkup snapshot prompts/dynamic_python.prompt --project-root .
-
-# 5) Optional: generate with snapshot context (requires configured LLM)
-# pdd generate prompts/static_python.prompt --snapshot-context --evidence --output pdd/static.py
+# After preprocess on foo_python, checkup passes for that prompt
+pdd checkup snapshot prompts/foo_python.prompt --project-root .
 ```
+
+### Optional: generate + evidence + replay (needs LLM credentials)
+
+```bash
+pdd generate prompts/foo_python.prompt \
+  --output pdd/foo.py \
+  --snapshot-context \
+  --evidence \
+  --force
+
+pdd replay "$(ls -1t .pdd/evidence/runs/*.json | head -1)" --verify-only
+```
+
+The touchpoint test `tests/test_issue_826_snapshot_touchpoint.py` stubs `code_generator_main`
+so CI can exercise `--snapshot-context --evidence` without API keys.
 
 ## Fixtures
 
 | File | Purpose |
 |------|---------|
-| `prompts/dynamic_python.prompt` | Active `<shell>` + `<web>` tags |
-| `prompts/static_python.prompt` | Deterministic include only |
-| `context/note.prompt` | Included by static prompt |
+| `prompts/foo_python.prompt` | Test-plan preprocess + generate (`<shell>`, `<web>`, include) |
+| `prompts/with_shell_python.prompt` | Test-plan checkup snapshot fail-before-snapshot |
+| `prompts/dynamic_python.prompt` | Same dynamic tags as `foo_python` (legacy name) |
+| `prompts/static_python.prompt` | Deterministic include only (policy passes without snapshot) |
+| `context/note.prompt` | Included static context |
