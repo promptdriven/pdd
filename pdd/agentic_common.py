@@ -4524,6 +4524,113 @@ def validate_cached_state(
 
 # --- High Level State Wrappers ---
 
+
+def _steer_cursor_initialized(state: Dict[str, Any]) -> bool:
+    """True when GitHub polling may run without treating all history as new steers."""
+    if state.get("steer_cursor_seeded"):
+        return True
+    return state.get("last_steered_comment_id") is not None
+
+
+def _gh_api_list_issue_comments_cmd(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    since: Optional[str] = None,
+) -> List[str]:
+    """Build ``gh api`` argv for listing issue comments.
+
+    ``gh`` treats ``-f`` field parameters as a POST body unless ``--method GET``
+    is set, which would 422 on the comments collection endpoint.
+    """
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+        "--method",
+        "GET",
+        "--paginate",
+        "--slurp",
+    ]
+    if since:
+        cmd.extend(["-f", f"since={since}"])
+    return cmd
+
+
+def _fetch_issue_comments_via_gh(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+    since: Optional[str] = None,
+) -> List[Dict]:
+    """List issue comments via ``gh api``; returns [] on failure."""
+    if not _find_cli_binary("gh"):
+        return []
+    cmd = _gh_api_list_issue_comments_cmd(
+        repo_owner, repo_name, issue_number, since=since
+    )
+    try:
+        res = _subprocess_run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception:
+        return []
+    if res.returncode != 0:
+        return []
+    return _load_gh_paginated_comments(res.stdout)
+
+
+def seed_issue_steer_cursor(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+) -> bool:
+    """Set steer cursor to the current issue comment tail without returning steers.
+
+    Call once at workflow start so ``drain_issue_steers`` only picks up comments
+    posted after the run began. Uses the maximum comment id on the issue (all
+    authors, including bots) so later bot progress comments do not rewind the id
+    cursor.
+    """
+    comments = _fetch_issue_comments_via_gh(
+        repo_owner, repo_name, issue_number, cwd=cwd
+    )
+    max_id_val = -1
+    latest_timestamp: Optional[str] = None
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        try:
+            cid_val = int(cid) if cid is not None else 0
+        except (ValueError, TypeError):
+            cid_val = 0
+        if cid_val > max_id_val:
+            max_id_val = cid_val
+        created_at = comment.get("created_at")
+        if created_at and (
+            latest_timestamp is None or created_at > latest_timestamp
+        ):
+            latest_timestamp = created_at
+
+    if max_id_val >= 0:
+        state["last_steered_comment_id"] = str(max_id_val)
+    if latest_timestamp:
+        state["last_steer_at"] = latest_timestamp
+    state["steer_cursor_seeded"] = True
+    return True
+
+
 def drain_issue_steers(
     repo_owner: str,
     repo_name: str,
@@ -4543,6 +4650,10 @@ def drain_issue_steers(
     - ``last_steered_comment_id`` (str)
     - ``last_steer_at`` (ISO timestamp from GitHub, best-effort)
     - ``steer_generation`` (int, increments when new steers are applied)
+    - ``steer_cursor_seeded`` (bool, set by ``seed_issue_steer_cursor``)
+
+    GitHub polling is skipped until ``seed_issue_steer_cursor`` (or a resumed
+    state with ``last_steered_comment_id``) establishes a baseline cursor.
     """
     steers: List[SteerEntry] = []
 
@@ -4591,34 +4702,21 @@ def drain_issue_steers(
     if not _find_cli_binary("gh"):
         return []
 
+    if not _steer_cursor_initialized(state):
+        # Without a run-start baseline, every historical human comment would be
+        # treated as a mid-run steer. Call seed_issue_steer_cursor() first.
+        return []
+
     since = state.get("last_steer_at")
     last_id = state.get("last_steered_comment_id")
 
-    cmd = [
-        "gh",
-        "api",
-        f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-        "--paginate",
-        "--slurp",
-    ]
-    if since:
-        cmd.extend(["-f", f"since={since}"])
-
-    try:
-        res = _subprocess_run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            start_new_session=True,
-        )
-    except Exception:
-        return []
-
-    if res.returncode != 0:
-        return []
-
-    comments = _load_gh_paginated_comments(res.stdout)
+    comments = _fetch_issue_comments_via_gh(
+        repo_owner,
+        repo_name,
+        issue_number,
+        cwd=cwd,
+        since=since if since else None,
+    )
 
     try:
         last_id_val = int(last_id) if last_id is not None else -1
