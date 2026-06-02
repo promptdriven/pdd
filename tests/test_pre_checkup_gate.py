@@ -483,6 +483,46 @@ def test_norm_preserves_leading_dot():
     assert pre_checkup_gate._norm("./rel/x.py") == "rel/x.py"
 
 
+def test_caller_compat_resolves_relative_imports(tmp_path):
+    """Regression: relative imports (`from .api import x`) are the normal
+    internal-import style here, so the caller-compat sweep MUST resolve them to
+    the absolute dotted module — an absolute-only match silently missed every
+    relative caller of a changed module (removed symbols AND bad call sigs)."""
+    _write_pkg_module(tmp_path, "api", "def build(name):\n    return name\n")
+    (tmp_path / "pkg" / "rel_consumer.py").write_text(
+        "from .api import build, gone_symbol\nbuild(1, 2, 3)\n", encoding="utf-8"
+    )
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path, ["pkg/api.py"], timeout=30.0
+    )
+    assert any("missing symbol gone_symbol" in f for f in failures), failures
+    assert any("positional" in f for f in failures), failures
+    # A relative level that escapes the package must not raise / must no-op.
+    assert pre_checkup_gate._resolve_from_import_module("pkg/api.py", "x", 5) is None
+
+
+def test_route_probe_is_nonblocking_note(tmp_path):
+    """Regression (FM2): the route-probe is a best-effort heuristic that does NOT
+    reliably catch 'router never mounted' yet false-blocks valid non-FastAPI
+    route modules. It MUST be surfaced as a non-blocking note, not a hard block —
+    a route-like module with no introspectable routes must still pass build/smoke."""
+    (tmp_path / "routes.py").write_text(
+        "class _App:\n"
+        "    def route(self, *a, **k):\n"
+        "        def deco(fn):\n            return fn\n"
+        "        return deco\n"
+        "app = _App()\n"
+        "@app.route('/y')\n"
+        "def y():\n    return 'ok'\n",
+        encoding="utf-8",
+    )
+    outcome = pre_checkup_gate._run_build_smoke(
+        tmp_path, ["routes.py"], base_ref=None, issue_number=1, timeout_per_check=60.0
+    )
+    assert outcome.ok is True, outcome.messages
+    assert any("route-probe note" in m for m in outcome.messages), outcome.messages
+
+
 def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path):
     """Issue #1293 (security): the gate executes worktree code, so its subprocess
     env must drop secret-bearing vars (LLM/cloud/VCS keys + tokens) while keeping

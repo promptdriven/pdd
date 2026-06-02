@@ -503,7 +503,19 @@ def _check_route_probe(
     *,
     timeout: float,
 ) -> List[str]:
-    failures: List[str] = []
+    """Best-effort app-wiring smoke check, returned as NON-BLOCKING notes.
+
+    It imports each changed route-like module and counts route/router objects.
+    It is intentionally NOT a hard block: it does not actually catch the
+    "router never mounted" critical (a populated-but-unmounted router imports
+    fine and counts > 0, so it passes), and it false-positives on valid route
+    modules it cannot introspect — Flask apps/blueprints (no ``.routes``),
+    factory-built routers, re-exported routers, custom ``@x.route`` classes.
+    Since the gate hard-blocks arbitrary PRs, a heuristic with that false-
+    positive profile is surfaced to checkup as a note rather than failing the
+    gate. Genuine import errors are still hard-blocked by the import check.
+    """
+    notes: List[str] = []
     env = _python_import_env(worktree)
     probe = (
         "import importlib, sys\n"
@@ -537,12 +549,13 @@ def _check_route_probe(
             env=env,
         )
         if not ok:
-            failures.append(
-                f"route-probe failed for {rel}: module imported but defines no "
-                f"route/router objects (best-effort app-wiring smoke check; "
-                f"full mount verification stays with checkup); {output}"
+            notes.append(
+                f"route-probe note for {rel}: module imported but no route/router "
+                f"object with registered routes was found (non-blocking best-effort "
+                f"app-wiring smoke check; full mount verification stays with "
+                f"checkup); {output}"
             )
-    return failures
+    return notes
 
 
 @dataclass
@@ -724,6 +737,36 @@ def _rebound_names(tree: ast.Module) -> Set[str]:
     return bound
 
 
+def _resolve_from_import_module(
+    rel_caller: str, module: Optional[str], level: int
+) -> Optional[str]:
+    """Resolve the absolute dotted module a ``from ... import`` targets, including
+    RELATIVE imports (``from .api import x`` / ``from ..pkg import y``).
+
+    Relative imports are the normal internal-import style in much of this repo, so
+    an absolute-only match (``node.module in module_to_sigs``) was blind to them
+    and silently missed every relative caller of a changed module. The resolved
+    name is matched against ``module_to_sigs`` keys, which come from
+    ``_module_name_for_python_path`` (path-based dotted names) — so resolving the
+    relative level against the caller's path-derived package mirrors that naming.
+
+    Returns ``None`` when the relative level escapes the caller's package (an
+    invalid import) so the caller falls through to "no finding"; never raises.
+    """
+    if not level:
+        return module
+    try:
+        pkg_parts = list(Path(rel_caller).parent.parts)
+    except (TypeError, ValueError):
+        return None
+    drop = level - 1
+    if drop > len(pkg_parts):
+        return None
+    base = pkg_parts[: len(pkg_parts) - drop] if drop else pkg_parts
+    parts = [*base, module] if module else list(base)
+    return ".".join(parts) if parts else None
+
+
 def _check_caller_compatibility(
     worktree: Path,
     code_files: Sequence[str],
@@ -788,15 +831,22 @@ def _check_caller_compatibility(
         imported: Dict[str, Tuple[str, str]] = {}
         module_aliases: Dict[str, str] = {}
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module in module_to_sigs:
-                sigs = module_to_sigs[node.module]
+            if isinstance(node, ast.ImportFrom):
+                # Resolve relative imports (`from .api import x`) to the absolute
+                # dotted name so relative callers are not silently missed.
+                resolved_mod = _resolve_from_import_module(
+                    rel_caller, node.module, node.level
+                )
+                if resolved_mod not in module_to_sigs:
+                    continue
+                sigs = module_to_sigs[resolved_mod]
                 for alias in node.names:
                     if alias.name == "*":
                         continue
-                    wanted[node.module].add(alias.name)
-                    import_sites.append((rel_caller, node.module, alias.name))
+                    wanted[resolved_mod].add(alias.name)
+                    import_sites.append((rel_caller, resolved_mod, alias.name))
                     if alias.name in sigs:
-                        imported[alias.asname or alias.name] = (node.module, alias.name)
+                        imported[alias.asname or alias.name] = (resolved_mod, alias.name)
             elif isinstance(node, ast.Import):
                 # `import pkg.api as api` / `import pkg.api` -> map the local
                 # access prefix to the module so `api.build(...)` /
@@ -1070,7 +1120,7 @@ def _run_build_smoke(
         notes.append("deterministic-gates skipped: no gates discovered")
 
     failures.extend(_check_python_imports(worktree, code_files, timeout=timeout_per_check))
-    failures.extend(_check_route_probe(worktree, code_files, timeout=timeout_per_check))
+    notes.extend(_check_route_probe(worktree, code_files, timeout=timeout_per_check))
     caller_failures, caller_notes = _check_caller_compatibility(
         worktree, code_files, timeout=timeout_per_check
     )
