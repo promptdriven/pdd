@@ -335,6 +335,45 @@ def test_codex_subscription_maps_gpt55_default_to_chatgpt(monkeypatch):
     assert set(restricted["provider"]) == {"OpenAI ChatGPT"}
 
 
+def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monkeypatch):
+    """Cloud/user CSVs created before chatgpt rows should not block Codex sync."""
+    active = pd.DataFrame(
+        [
+            {
+                "provider": "Anthropic",
+                "model": "claude-sonnet-4-6",
+                "input": 3.0,
+                "output": 15.0,
+                "coding_arena_elo": 1525,
+                "api_key": "ANTHROPIC_API_KEY",
+                "structured_output": True,
+                "reasoning_type": "budget",
+            }
+        ]
+    )
+    packaged = pd.DataFrame(
+        [
+            {
+                "provider": "OpenAI ChatGPT",
+                "model": "chatgpt/gpt-5.5",
+                "input": 0.0,
+                "output": 0.0,
+                "coding_arena_elo": 1450,
+                "api_key": "",
+                "structured_output": True,
+                "reasoning_type": "none",
+            }
+        ]
+    )
+    monkeypatch.setattr(li, "_load_model_data", lambda path: packaged)
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
+    restricted, default_model, used = li._apply_codex_subscription_default(active, "gpt-5.5")
+
+    assert used is True
+    assert default_model == "chatgpt/gpt-5.5"
+    assert restricted["model"].tolist() == ["chatgpt/gpt-5.5"]
+
+
 def test_pdd_model_default_first_pins_configured_default(monkeypatch):
     """PDD_MODEL_DEFAULT_FIRST keeps the configured default ahead of ELO interpolation."""
     df = li._load_model_data(_packaged_csv_path())

@@ -2578,11 +2578,21 @@ def _apply_codex_subscription_default(
 
     family = _chatgpt_family(model_df)
     if family.empty:
-        raise ValueError(
-            "Codex subscription auth is available, but the active model catalog "
-            "has no chatgpt/* rows. Remove or update ~/.pdd/llm_model.csv so PDD "
-            "can use the packaged OpenAI ChatGPT subscription models."
+        try:
+            packaged_family = _chatgpt_family(_load_model_data(None))
+        except Exception:
+            packaged_family = pd.DataFrame()
+        if packaged_family.empty:
+            raise ValueError(
+                "Codex subscription auth is available, but the active model catalog "
+                "has no chatgpt/* rows. Remove or update ~/.pdd/llm_model.csv so PDD "
+                "can use the packaged OpenAI ChatGPT subscription models."
+            )
+        logger.warning(
+            "Active model catalog has no chatgpt/* rows; using packaged OpenAI "
+            "ChatGPT subscription rows for Codex default."
         )
+        family = packaged_family
 
     resolved_default = _chatgpt_default_for_request(family, requested)
     logger.info(
