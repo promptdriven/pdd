@@ -4201,14 +4201,23 @@ def code_generator_main(
                     )
                     ctx.ensure_object(dict)
                     ctx.obj["context_snapshot"] = {
+                        "run_id": snapshot_manifest.get("run_id"),
                         "manifest_path": snapshot_manifest.get("manifest_path"),
                         "snapshot_dir": snapshot_manifest.get("snapshot_dir"),
                         "expanded_prompt": snapshot_manifest.get("expanded_prompt"),
-                        "uses_nondeterministic_context": snapshot_manifest.get("uses_nondeterministic_context"),
+                        "uses_nondeterministic_context": snapshot_manifest.get(
+                            "uses_nondeterministic_context"
+                        ),
                         "dynamic_tags": snapshot_manifest.get("dynamic_tags", []),
                         "declared_dynamic_tags": snapshot_manifest.get("declared_dynamic_tags", []),
-                        "redaction_applied": snapshot_manifest.get("redaction", {}).get("applied", False),
+                        "redaction_applied": snapshot_manifest.get("redaction", {}).get(
+                            "applied", False
+                        ),
+                        "redaction": snapshot_manifest.get("redaction"),
                         "artifacts": snapshot_manifest.get("artifacts", []),
+                        "grounding_examples": snapshot_manifest.get("generation", {}).get(
+                            "grounding_examples", []
+                        ),
                     }
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")

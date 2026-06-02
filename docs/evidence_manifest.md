@@ -72,7 +72,7 @@ For this feature, use the focused pytest gate (not full `pytest -q` collection
 on every environment):
 
 ```bash
-pytest -q tests/commands/test_evidence.py tests/test_evidence_manifest.py
+pytest -q tests/commands/test_evidence.py tests/test_evidence_manifest.py tests/test_context_snapshot_replay.py tests/test_context_snapshot_policy.py
 ```
 
 `pdd sync --evidence` records `unit_tests` / `verify` as `passed` or `failed`

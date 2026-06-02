@@ -342,6 +342,35 @@ def _safe_slug(value: str) -> str:
     return slug or "run"
 
 
+def _dynamic_artifact_records(
+    artifacts: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Summarize captured shell, web, and query-include snapshot artifacts."""
+
+    shell_records: list[dict[str, Any]] = []
+    web_records: list[dict[str, Any]] = []
+    query_records: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_type = str(artifact.get("type") or "")
+        path = artifact.get("path")
+        digest = artifact.get("sha256")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            continue
+        record: dict[str, Any] = {"path": path, "sha256": digest}
+        metadata = artifact.get("metadata")
+        if isinstance(metadata, Mapping):
+            record["metadata"] = dict(metadata)
+        if artifact.get("redaction_applied"):
+            record["redaction_applied"] = True
+        if artifact_type == "shell":
+            shell_records.append(record)
+        elif artifact_type == "web":
+            web_records.append(record)
+        elif artifact_type == "query_include":
+            query_records.append(record)
+    return shell_records, web_records, query_records
+
+
 def validation_from_sync(
     sync_result: Mapping[str, Any],
     *,
@@ -446,6 +475,10 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
             snapshot_context.get("uses_nondeterministic_context")
         )
 
+    artifacts = list(snapshot_context.get("artifacts") or [])
+    shell_snapshots, web_snapshots, query_snapshots = _dynamic_artifact_records(artifacts)
+    grounding_examples = list(snapshot_context.get("grounding_examples") or [])
+
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -457,14 +490,15 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         "prompt": prompt,
         "context": {
             "includes": _prompt_include_records(prompt_path, root) if prompt_path else [],
-            "web_snapshots": [],
-            "shell_snapshots": [],
+            "web_snapshots": web_snapshots,
+            "shell_snapshots": shell_snapshots,
+            "query_snapshots": query_snapshots,
         },
         "generation": {
             "model": model or None,
             "temperature": temperature,
             "cost_usd": float(cost_usd),
-            "grounding_examples": [],
+            "grounding_examples": grounding_examples,
         },
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),
@@ -498,7 +532,9 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
             "dynamic_tags": list(snapshot_context.get("dynamic_tags") or []),
             "declared_dynamic_tags": list(snapshot_context.get("declared_dynamic_tags") or []),
             "redaction_applied": bool(snapshot_context.get("redaction_applied")),
-            "artifacts": list(snapshot_context.get("artifacts") or []),
+            "redaction": snapshot_context.get("redaction"),
+            "artifacts": artifacts,
+            "run_id": snapshot_context.get("run_id"),
         }
 
     runs_dir = root / ".pdd" / "evidence" / "runs"

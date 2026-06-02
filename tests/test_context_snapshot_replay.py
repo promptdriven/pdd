@@ -166,3 +166,61 @@ def test_replay_verify_only_does_not_write_output(tmp_path):
     payload = json.loads(result.output)
     assert payload["success"] is True
     assert payload["output_skipped"] == "verify_only"
+
+
+def test_query_include_snapshot_recorded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "module.py"
+    source.write_text("def helper():\n    return 1\n", encoding="utf-8")
+    recorder = start_snapshot_run("prompt.prompt", evidence_root=tmp_path / ".pdd" / "evidence")
+    raw_prompt = '<include query="return value">module.py</include>\n'
+
+    class _FakeExtractor:
+        def extract(self, *, file_path, query):  # type: ignore[no-untyped-def]
+            return "extracted helper output"
+
+    monkeypatch.setattr(
+        "pdd.include_query_extractor.IncludeQueryExtractor",
+        _FakeExtractor,
+    )
+    expanded = preprocess(raw_prompt, recursive=False, snapshot_recorder=recorder)
+    manifest = recorder.finalize(expanded_prompt=expanded, prompt_text=raw_prompt)
+
+    assert "extracted helper output" in expanded
+    assert any(artifact["type"] == "query_include" for artifact in manifest["artifacts"])
+    assert "query_include" in manifest["declared_dynamic_tags"]
+
+
+def test_replay_from_evidence_manifest_with_context_snapshot(tmp_path):
+    recorder = start_snapshot_run(
+        tmp_path / "prompts" / "demo.prompt",
+        evidence_root=tmp_path / ".pdd" / "evidence",
+    )
+    prompt_path = tmp_path / "prompts" / "demo.prompt"
+    prompt_path.parent.mkdir(parents=True)
+    prompt_path.write_text("<shell>printf x</shell>\n", encoding="utf-8")
+    manifest = recorder.finalize(expanded_prompt="expanded-body", prompt_text=prompt_path.read_text())
+
+    from pdd.evidence_manifest import write_evidence_manifest
+
+    evidence_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt_path,
+        project_root=tmp_path,
+        context_snapshot={
+            "enabled": True,
+            "run_id": manifest["run_id"],
+            "manifest_path": manifest["manifest_path"],
+            "snapshot_dir": manifest["snapshot_dir"],
+            "expanded_prompt": manifest["expanded_prompt"],
+            "uses_nondeterministic_context": manifest["uses_nondeterministic_context"],
+            "dynamic_tags": manifest["dynamic_tags"],
+            "declared_dynamic_tags": manifest["declared_dynamic_tags"],
+            "redaction_applied": manifest["redaction"]["applied"],
+            "artifacts": manifest["artifacts"],
+        },
+    )
+
+    result = replay_snapshot(evidence_path)
+    assert result["expanded_prompt"] == "expanded-body"
+    assert result["verified"] is True

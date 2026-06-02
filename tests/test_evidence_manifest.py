@@ -296,6 +296,31 @@ def test_preprocessed_expanded_hash_matches_preprocess_helper(tmp_path: Path) ->
     ) == _expected_preprocessed_hash(prompt_text, tmp_path)
 
 
+def test_evidence_manifest_records_snapshot_artifacts(tmp_path: Path) -> None:
+    """Evidence receipts should surface shell/web/query snapshot hashes."""
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=tmp_path / "prompts" / "demo.prompt",
+        project_root=tmp_path,
+        context_snapshot={
+            "expanded_prompt": {"path": "expanded_prompt.txt", "sha256": "abc"},
+            "uses_nondeterministic_context": True,
+            "artifacts": [
+                {"type": "shell", "path": "shell-1.txt", "sha256": "s1"},
+                {"type": "web", "path": "web-1.txt", "sha256": "w1"},
+                {"type": "query_include", "path": "query-1.txt", "sha256": "q1"},
+            ],
+            "grounding_examples": [{"status": "unavailable", "reason": "local"}],
+        },
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["context"]["shell_snapshots"][0]["sha256"] == "s1"
+    assert manifest["context"]["web_snapshots"][0]["sha256"] == "w1"
+    assert manifest["context"]["query_snapshots"][0]["sha256"] == "q1"
+    assert manifest["generation"]["grounding_examples"][0]["reason"] == "local"
+    assert manifest["context_snapshot"]["enabled"] is True
+
+
 def test_resolve_generate_output_paths_uses_construct_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
