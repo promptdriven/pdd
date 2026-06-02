@@ -772,7 +772,7 @@ class TestEdgeCases:
             ContentSelector.select(sample_text, ["invalid_selector"])
 
     def test_unknown_selector_kind(self, sample_text):
-        """Unknown selector kind raises SelectorError."""
+        """Unknown selector kind raises SelectorError (caught by regex)."""
         with pytest.raises(SelectorError, match="Malformed"):
             ContentSelector.select(sample_text, ["unknown:value"])
 
@@ -879,30 +879,28 @@ class TestContentPreservation:
 
 
 # ==============================================================================
-# Tests: Pytest Slicer Selector
+# Tests: Pytest / contract slicer selectors
 # ==============================================================================
+
 
 class TestPytestSelector:
     """Tests for pytest: selector."""
 
     def test_pytest_single_test(self, tmp_path):
-        """Extract a single test using pytest: selector."""
         content = textwrap.dedent("""
             def test_one():
                 assert 1 == 1
             def test_two():
                 assert 2 == 2
         """)
-        # We need to write it to a file because PytestSlicer might look for conftests
         test_file = tmp_path / "test_sample.py"
         test_file.write_text(content)
-        
+
         result = ContentSelector.select(content, "pytest:test_one", file_path=str(test_file))
         assert "def test_one():" in result
         assert "test_two" not in result
 
     def test_pytest_multiple_tests(self, tmp_path):
-        """Extract multiple tests using comma-separated pytest: selector."""
         content = textwrap.dedent("""
             def test_one():
                 assert 1 == 1
@@ -913,14 +911,15 @@ class TestPytestSelector:
         """)
         test_file = tmp_path / "test_sample_mult.py"
         test_file.write_text(content)
-        
-        result = ContentSelector.select(content, "pytest:test_one, test_three", file_path=str(test_file))
+
+        result = ContentSelector.select(
+            content, "pytest:test_one,test_three", file_path=str(test_file)
+        )
         assert "def test_one():" in result
         assert "def test_three():" in result
         assert "test_two" not in result
 
     def test_pytest_with_fixtures(self, tmp_path):
-        """Pytest slicer should include fixtures."""
         content = textwrap.dedent("""
             import pytest
             @pytest.fixture
@@ -931,7 +930,26 @@ class TestPytestSelector:
         """)
         test_file = tmp_path / "test_fix.py"
         test_file.write_text(content)
-        
+
         result = ContentSelector.select(content, "pytest:test_use_fix", file_path=str(test_file))
         assert "def test_use_fix(my_fix):" in result
         assert "def my_fix():" in result
+
+
+class TestContractSelector:
+    def test_contract_selector(self, tmp_path):
+        content = textwrap.dedent("""
+            def _helper():
+                return 1
+            def run():
+                return _helper()
+        """)
+        mod = tmp_path / "mod.py"
+        mod.write_text(content)
+        result = ContentSelector.select(content, "contract:run", file_path=str(mod))
+        assert "def run():" in result
+        assert "_helper" in result
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
