@@ -257,6 +257,7 @@ yarn.lock
 !.pdd/meta/prompt_lint_python.json
 !.pdd/meta/core_cloud_python.json
 !.pdd/meta/fix_code_loop_python.json
+!.pdd/meta/fix_error_loop_python.json
 !.pdd/meta/get_comment_python.json
 !.pdd/meta/get_test_command_python.json
 !.pdd/meta/git_update_python.json

@@ -1,0 +1,20 @@
+[
+  {
+    "filename": "refund_python.prompt",
+    "filepath": "src/refund.py",
+    "reason": "Refund handler module",
+    "description": "Caps refunds and logs audit events",
+    "dependencies": [],
+    "priority": 1,
+    "tags": ["python", "payments"]
+  },
+  {
+    "filename": "legacy_python.prompt",
+    "filepath": "src/legacy.py",
+    "reason": "Legacy helper",
+    "description": "No contract sections",
+    "dependencies": [],
+    "priority": 2,
+    "tags": ["python"]
+  }
+]

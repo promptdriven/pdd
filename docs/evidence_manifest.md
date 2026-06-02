@@ -27,6 +27,13 @@ Manifests are written under:
 The versioned run path preserves audit history. The latest path provides a
 stable lookup for downstream automation.
 
+Enforce policy on latest manifests before merge:
+
+```bash
+pdd checkup gate
+pdd checkup gate <devunit> --json
+```
+
 ## Contents
 
 Schema version 2 records:
@@ -95,7 +102,9 @@ few-shot examples (if any) were injected by PDD Cloud grounding, plus any
   present.
 
 See `docs/grounding_policy.md` for the optional CI policy that consumes this
-provenance (`.pdd/grounding_policy.yaml`, future `pdd gate` integration).
+provenance (`.pdd/grounding_policy.yaml`, future grounding `pdd checkup gate`
+integration). Contract waivers appear under `contracts.waivers` when prompts
+include `<waivers>` blocks.
 
 ## Verification
 
