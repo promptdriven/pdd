@@ -17,6 +17,7 @@ export enum CommandType {
   AUTO_DEPS = 'auto-deps',
   CONFLICTS = 'conflicts',
   PREPROCESS = 'preprocess',
+  REPLAY = 'replay',
 }
 
 export interface CommandOption {
@@ -131,6 +132,30 @@ export interface ArchitectureInterface {
   };
 }
 
+/** Per-module contract/evidence summary from architecture sync (issue #830). */
+export interface ArchitectureContractSummary {
+  rules: string[];
+  critical: string[];
+  stories: string[];
+  capabilities: string[];
+  coverage_status: 'none' | 'partial' | 'story-only' | 'full' | 'error';
+  evidence_status: 'missing' | 'fresh' | 'stale' | 'error';
+  waived: string[];
+  unchecked: string[];
+  rules_detail?: Record<
+    string,
+    {
+      rule_id: string;
+      status: string;
+      stories: string[];
+      tests: string[];
+      waiver?: string | null;
+      failures?: string[];
+    }
+  >;
+  error?: string;
+}
+
 export interface ArchitectureModule {
   reason: string;
   description: string;
@@ -139,14 +164,14 @@ export interface ArchitectureModule {
   filename: string;
   filepath: string;
   tags?: string[];
+  group?: string;
   interface?: ArchitectureInterface;
+  contract_summary?: ArchitectureContractSummary;
   // Graph position (optional, saved when user drags nodes)
   position?: {
     x: number;
     y: number;
   };
-  // Optional group name for graph layout hierarchy
-  group?: string;
 }
 
 export interface ProjectArchitecture {

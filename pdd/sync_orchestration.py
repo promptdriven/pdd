@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
 MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #157 fix)
+MAX_CONSECUTIVE_FIXES = 5  # Allow up to 5 consecutive fix attempts (Issue #1203: only fires when not making progress)
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
@@ -2000,6 +2001,7 @@ def sync_orchestration(
     agentic_mode: bool = False,
     compress: bool = False,
     evidence: bool = False,
+    snapshot_context: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -2170,7 +2172,11 @@ def sync_orchestration(
         try:
             with SyncLock(basename, language):
                 log_event(basename, language, "lock_acquired", {"pid": os.getpid()}, invocation_mode="sync", paths=pdd_files)
-                
+
+                # Issue #1203: track failing-test count across consecutive fix
+                # operations so the breaker can stay open while the fix loop is
+                # still making progress (failures strictly decreasing).
+                prev_fix_failures = None
                 while True:
                     budget_remaining = budget - current_cost_ref[0]
                     if current_cost_ref[0] >= budget:
@@ -2294,8 +2300,23 @@ def sync_orchestration(
                                 consecutive_fixes += 1
                             else:
                                 break
-                        if consecutive_fixes >= 5:
-                            msg = f"Detected {consecutive_fixes} consecutive fix operations. Breaking infinite fix loop."
+                        # Issue #1203: a regeneration that mismatches N error
+                        # strings should be able to converge in ~N fix iterations.
+                        # Don't trip the consecutive-fix breaker while the failing
+                        # test count is still strictly decreasing. paths=pdd_files
+                        # (Issue #1211) ensures the correct subproject .pdd/meta
+                        # run report is read in parent-CWD/subproject setups.
+                        current_rr = read_run_report(basename, language, paths=pdd_files)
+                        current_failures = current_rr.tests_failed if current_rr is not None else None
+                        making_progress = (
+                            current_failures is not None
+                            and prev_fix_failures is not None
+                            and current_failures < prev_fix_failures
+                        )
+                        if current_failures is not None:
+                            prev_fix_failures = current_failures
+                        if consecutive_fixes >= MAX_CONSECUTIVE_FIXES and not making_progress:
+                            msg = f"Detected {consecutive_fixes} consecutive fix operations with no progress. Breaking infinite fix loop."
                             errors.append(msg)
                             record_core_dump_error(
                                 command="sync",
@@ -2631,7 +2652,7 @@ def sync_orchestration(
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                         try:
                                             # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress)
+                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress, snapshot_context=snapshot_context)
                                             last_conform_exc = None
                                             break
                                         except (

@@ -135,6 +135,41 @@ These tags are processed by the preprocessor (like `<include>`) and removed befo
 - Re-generations of established modules
 - Modules following common project patterns
 
+### When to Pin, Exclude, or Review for Critical Modules
+
+For high-risk modules — typically `auth`, `payments`, and `compliance` — the
+automatic top-similarity example is not enough evidence on its own. For these,
+explicitly choose **at least one** of:
+
+- **`<pin>module_name</pin>`** — pin a vetted "golden" example so regeneration
+  cannot silently drift to a different prior implementation.
+- **`<exclude>old_module</exclude>`** — block any superseded or known-bad
+  implementation from being retrieved.
+- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
+  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
+  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
+  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
+  pinned and pre-approved are still recorded in the manifest but leave
+  `reviewed` false.
+
+These decisions land in the evidence manifest (`generation.grounding`, see
+`docs/evidence_manifest.md`), so reviewers can audit exactly which examples
+shaped a critical module's generation.
+
+To enforce this in CI, declare a policy in `.pdd/grounding_policy.yaml`:
+
+```yaml
+grounding:
+  require_review_for_critical_modules: true
+  require_pinned_examples_for:
+    - auth
+    - payments
+    - compliance
+```
+
+See `docs/grounding_policy.md` for the full schema and behavior, including how
+local / no-cloud runs are reported (`mode: unavailable`) instead of failing.
+
 ---
 
 ## Anatomy of a Good PDD Prompt
@@ -790,48 +825,31 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
   - Behavior: executes during non‑recursive preprocessing; on failure, inserts a bracketed error note.
   - Example: `<web>https://docs.litellm.ai/docs/completion/json_mode</web>`
 
-> ⚠️ **Warning: Non-Deterministic Tags**
+> **Warning: Non-Deterministic Tags**
 >
 > `<shell>`, `<web>`, and `<include ... query="...">` introduce **non-determinism**:
 > - `<shell>` output varies by environment (different machines, different results)
 > - `<web>` content changes over time (same URL, different content)
 > - `<include ... query="...">` relies on LLM interpretation (may vary by model or seed)
 >
-> **Impact:** Same prompt file → different generations on different machines/times
->
-> **Prefer instead:** Capture output to a static file, then `<include>` that file. This ensures reproducible regeneration.
+> **Impact:** Same prompt file -> different generations on different machines/times.
 
 Use these tags sparingly. When you must use them, prefer stable commands with bounded output (e.g., `head -n 20` in `<shell>`).
 
 ### Determinism for Contract-Critical Context
 
-For contract-critical facts, prefer stable includes over dynamic context.
+For durable or contract-critical dynamic context, use PDD's snapshot workflow instead of relying on live expansion every time:
 
-Good:
-
-```xml
-<include>docs/refund_policy_snapshot.md</include>
+```bash
+pdd preprocess prompts/refund_python.prompt --snapshot
+pdd generate prompts/refund_python.prompt --snapshot-context
+pdd sync refund --snapshot-context
+pdd replay .pdd/evidence/runs/<run_id>.json
 ```
 
-Risky:
+Snapshots capture the fully expanded prompt plus artifacts for nondeterministic context such as `<shell>`, `<web>`, and `<include ... query="...">`. The canonical run artifact is `.pdd/evidence/runs/<run_id>.json`; replayable context files live in `.pdd/evidence/runs/<run_id>/`. Replay reconstructs the same expanded prompt/context and checks its hash. It does not guarantee bit-for-bit identical generated code, because the LLM call itself may still be nondeterministic.
 
-```xml
-<web>https://provider.example.com/refund-policy</web>
-```
-
-Good:
-
-```xml
-<include mode="interface">src/payments/provider.py</include>
-```
-
-Risky:
-
-```xml
-<include query="refund provider behavior">src/payments/provider.py</include>
-```
-
-Use dynamic tags for exploration, but snapshot the result before relying on it for durable contract behavior.
+Snapshot shell and web output may contain sensitive data. Snapshot writers must redact known token, key, authorization header, URL credential, and secret-assignment patterns before hashing or storage, and must not persist raw environment dumps or unredacted bearer/API tokens. Keep commands bounded and avoid secret-bearing output even with redaction enabled.
 
 **`context_urls` in Architecture Entries:**
 
@@ -1020,6 +1038,17 @@ Validation is **lenient**:
 - `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`: Metadata tags (processed by sync tool)
 - `<pdd>...</pdd>`: Human-only comments (removed by preprocessor, never reach LLM)
 - Unlike `<pdd>...</pdd>` comments, `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` are not human-only comments. The standard prompt preprocessor does not remove them, so they may be visible during generation and are also consumed by architecture sync.
+
+### `contract_summary` in architecture.json
+
+When you run `pdd sync-architecture`, each module entry may include a generated
+`contract_summary` object (see `pdd/schemas/architecture_contract_summary.schema.json`).
+It is derived from `<contract_rules>`, linked user stories, test coverage, and the
+latest `.pdd/evidence/devunits/<module-slug>.latest.json` manifest (slug from
+`infer_module_identity`, with path segments normalized like `frontend-page`). Fields include
+`rules`, `critical`, `stories`, `capabilities`, `coverage_status`, `evidence_status`,
+`waived`, `unchecked`, and optional `rules_detail`. Legacy prompts without contract
+sections are left unchanged.
 
 ### Example: Complete Prompt with Metadata Tags
 

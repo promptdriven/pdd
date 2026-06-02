@@ -1,7 +1,38 @@
+<pdd-reason>Enforces deterministic-gate checks (linter, syntax, and doc-contract gates) in checkup review loops.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "discover_gates",
+        "signature": "(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = (), base_ref: Optional[str] = None) -> List[Gate]",
+        "returns": "List[Gate]"
+      },
+      {
+        "name": "run_gates",
+        "signature": "(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]",
+        "returns": "List[GateResult]"
+      },
+      {
+        "name": "gate_results_to_findings",
+        "signature": "(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]",
+        "returns": "List[ReviewFinding]"
+      },
+      {
+        "name": "run_doc_contract_check",
+        "signature": "(worktree_path: Path, base_ref: Optional[str] = None) -> int",
+        "returns": "int"
+      }
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
+
 % Write `pdd/checkup_gates.py`, the deterministic-gate enforcement layer for `pdd checkup --pr --review-loop` (issue promptdriven/pdd#1092).
 
 <include>context/python_preamble.prompt</include>
-<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
 % Goal
 Provide a conservative, allowlisted gate-discovery and gate-execution
@@ -16,6 +47,7 @@ loop refuses to ship and the fixer addresses the failure.
 3. `discover_gates(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = (), base_ref: Optional[str] = None) -> List[Gate]` — read-only inspection of the worktree to emit the allowlist set. When `base_ref` is supplied (the PR's target branch, e.g. `"main"`) and verifiable in the worktree, the `git-diff-check` gate runs across the PR range (`<base>...HEAD`) so a committed whitespace/conflict-marker failure is caught even when the worktree itself is clean. With no `base_ref` discovery still tries `origin/<base>`, `<base>`, `origin/main`/`origin/master`/`main`/`master` before falling back to the plain `git diff --check` against unstaged changes.
 4. `run_gates(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]` — execute every gate as a list-form subprocess. Persist `round-{R}-{mode}-gates.json` and per-gate `round-{R}-{mode}-gate-{slug}.txt`. Never raises.
 5. `gate_results_to_findings(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]` — convert failing gates into synthetic blocker findings tagged `reviewer=f"gate:{gate.name}"`, `area="deterministic-gate"`, with the gate command and output excerpt in `evidence` and `required_fix`. Passed gates are skipped.
+5a. `run_doc_contract_check(worktree_path: Path, base_ref: Optional[str] = None) -> int` — parses the git diff against `base_ref` (or HEAD/parent if `base_ref` is unresolvable) to find newly added user-facing surfaces (including `.pddrc` defaults keys, Click options, skip behaviors, and `PDD_*` environment variables) and verify that they are fully documented in `README.md` and prompts. Returns 0 on success, 1 on failure.
 
 % Conservative v1 discovery set
 6. `git diff --check` — always emitted when the worktree is a real git checkout AND a trusted `git` binary can be resolved outside the PR worktree via the sanitized PATH. The gate command MUST store that absolute `git` path (not bare `"git"`), and every discovery-time git probe (`rev-parse --verify`, `rev-parse --is-inside-work-tree`) MUST use the same absolute path plus the sanitized env. Skip when `.git` is absent so unit-test fixtures that mock `_setup_pr_worktree` to a bare `tmp_path` do not regress.
@@ -95,6 +127,26 @@ loop refuses to ship and the fixer addresses the failure.
     The CI-signal branch exists because pass-5's `[tool.ruff.format]`-only rule produced false negatives for projects that run `ruff format --check` in CI using Ruff's default formatter config without declaring a `[tool.ruff.format]` section. Pass-4's `[tool.black] absent → opt-in` heuristic stays REMOVED — black runs on defaults without a declared section and was producing false positives.
 
     The `--` end-of-options separator and absolute tool path follow the same iter-25 / iter-40 contracts as the lint gate. Keep the format gate as a SEPARATE gate (not folded into the lint gate's argv) so per-tool `--gate-allow` filtering still works. `required_fix_hint`: `"Run `ruff format` locally and commit the formatting changes."`
+
+35. **`doc-contract` gate (Issue #1303).** The doc-contract gate enforces documentation consistency on newly added user-facing surfaces.
+    - **Discovery conditions**: Always emitted when a trusted `git` binary can be resolved and `_is_git_worktree` is True.
+    - **Command argv (trusted execution)**: `[sys.executable, "-I", "-B", "-c", <RUNNER>, <worktree_abs>, <base_ref_or_empty>, <trusted_root>]`. The gate MUST run the TRUSTED installed/base checker, never a PR-controlled copy. Because `run_gates` executes every gate with `cwd=<worktree>`, a plain `-c "from pdd.checkup_gates import ..."` snippet would `import pdd` from the reviewed worktree (the PR's own `pdd/checkup_gates.py`), letting the reviewed code bypass the gate or run arbitrary code. Defend in layers: (a) launch the interpreter in isolated mode (`-I`) so the CWD/script dir is NOT prepended to `sys.path` and `PYTHON*` env vars / user-site are ignored; (b) the `<RUNNER>` snippet, BEFORE importing `pdd`, scrubs `sys.path` of every empty entry, the process CWD, and any path resolving inside the worktree (compare via `os.path.realpath`); and (c) it prepends `<trusted_root>` — the directory containing the running/base `pdd` package, computed by `discover_gates` in the trusted PARENT process via `Path(__file__).resolve().parent.parent` (never derived from the worktree) — so the import pins to the trusted checker AND the gate stays functional when `pdd` is reachable only via a source/editable checkout rather than site-packages. Only after that does it `from pdd.checkup_gates import run_doc_contract_check` and `sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))`.
+    - **Check execution (`run_doc_contract_check(worktree_path, base_ref=None) -> int`)**:
+      - It parses the git diff of the worktree against `base_ref` (or HEAD/parent if `base_ref` is unresolvable) to find newly added user-facing surfaces:
+        0. **Repo-declared generic contracts (holistic path)**: If `.pdd/doc_contract.json` or `.pdd/doc-contract.json` exists, load the BASE-tree version first (`<base_ref>:<path>`) and treat it as authoritative; only fall back to the worktree version when the base has no config. This prevents a reviewed PR from weakening/deleting its own documentation contract. Config shape: `{"version": 1, "rules": [...]}` where each rule has `name`, `source_globs`, `added_regex`, and `docs`/`doc_paths`. `docs` entries are either path strings or objects with `path`, optional `section_start`, and optional `section_end_markers`. Optional fields: `ignore_globs`, `ignore_values`, and `doc_regex`. For each added line in matching source files, `added_regex` captures a user-facing surface (first capture group or full match; named groups are also exposed). The docs must match `doc_regex` with placeholders such as `{value}`, `{value_dashed}`, `{operation}`, `{condition}`, `{condition_dashed}` substituted with escaped captures; when `doc_regex` is omitted, the captured `{value}` must appear literally. This is the repo-agnostic interface for arbitrary projects (e.g. `APP_*` env vars in `src/*.py` documented in `docs/configuration.md`) and MUST run before the legacy PDD-specific defaults below.
+        1. **.pddrc keys**: Any added string literal within `_PDDRC_DEFAULTS_KEYS` in `pdd/construct_paths.py` (e.g., `+    "my_new_key",`).
+        2. **CLI click options**: Any added click options starting with `--` (e.g., `+    @click.option("--my-option")`).
+        3. **Skip behaviors AND skip contracts**: Any added operation name (`+    if operation == 'my_op':`). ADDITIONALLY, when the SAME added line gates an operation on a skip CONDITION (e.g. `+    if operation == 'fix' and skip_tests:`, or a `--skip-tests` flag), record the `(operation, condition)` contract. Recording only the operation name is insufficient — that is the #1303/#1238 drift, where a new skip condition is added to an existing, already-documented operation. Normalize the condition to its snake_case identifier (`--skip-tests` → `skip_tests`).
+        4. **Environment variables**: Any added environment variable starting with `PDD_*` (e.g., `+    os.environ.get("PDD_MY_VAR")`).
+        5. **Prompt story coverage (Issue #560 bridge)**: Any changed non-LLM `.prompt` file MUST be linked from at least one `user_stories/story__*.md` file through `pdd-story-prompts` metadata or an explicit prompt reference (full path, basename, or path relative to a `prompts/` segment). This does not run the LLM-backed story suite inside the deterministic gate; it enforces that the prompt-test artifact exists so `pdd detect --stories` can test prompt-level regression.
+      - It MUST ignore test, fixture, snapshot, documentation, context, and example files when scanning added runtime surfaces so regression-test literals such as `--new-opt`, `new_op`, or `PDD_MY_NEW_VAR` do not make the gate fail its own PR. Environment-variable scanning is limited to runtime `.py` and `.sh` files, not prompt text.
+      - It checks if each added surface is documented:
+        - Added `.pddrc` keys MUST be documented in `README.md` under the "Available Context Settings" section.
+        - Added Click options MUST be documented in `README.md` (e.g., option lists).
+        - Added skip behaviors / sync steps MUST be documented in `README.md` (e.g., "Options" or workflow-steps lists) AND in `pdd/prompts/sync_orchestration_python.prompt` (Workflow Operations).
+        - Added skip CONTRACTS (`operation` + `condition`) MUST document the CONDITION — accepting any spelling (`skip_tests`, `skip-tests`, or `--skip-tests`) — within THAT OPERATION'S OWN documented entry/block in BOTH `README.md` AND `pdd/prompts/sync_orchestration_python.prompt`, NOT merely anywhere in the file. Extract the operation's labeled entry (e.g. the `- fix: …` bullet plus its wrapped continuation lines, bounded by the next bullet/blank line/heading) and require the condition token inside it. A doc that mentions only the operation (e.g. "fix: Resolve test failures") fails; and — the #1303/#1238 round-2 drift — a doc that ties `--skip-tests` only to the `test` step while leaving `fix` documented as unconditional ALSO fails, because the condition is not tied to `fix`'s own contract.
+        - Added `PDD_*` env vars MUST be documented in `README.md` under the "Environment Variables" section.
+      - If any added item is not documented in the expected file/section, print detailed error messages to stdout/stderr and exit with code 1; otherwise exit with code 0.
 
 % Dependencies
 <pdd.checkup_review_loop><include select="class:ReviewFinding,def:_scrub_secrets">../pdd/checkup_review_loop.py</include></pdd.checkup_review_loop>

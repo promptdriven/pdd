@@ -2648,6 +2648,93 @@ def test_sync_orchestration_records_logical_failure_in_core_dump_errors(tmp_path
     assert any(e.get("type") == "SyncFailed" and e.get("details", {}).get("basename") == "demo" for e in errs), errs
 
 
+def test_consecutive_fix_breaker_stays_open_while_failures_decrease(tmp_path, monkeypatch):
+    """PR #1245 / Issue #1203 necessity test, against the REAL sync_orchestration loop.
+
+    Mirror image of the breaker test above: here a real on-disk run report's
+    failing-test count strictly DECREASES across consecutive 'fix' operations
+    (5->4->3->2->1->0). The progress-sensitive OUTER breaker must STAY OPEN past
+    the cap of 5 and let the loop converge to 'all_synced'.
+
+    This is what proves the PR is necessary: on `main` the breaker is
+    `if consecutive_fixes >= 5:` (unconditional), so the SAME setup is aborted at
+    the 5th fix with a "consecutive fix" LogicalFailure and never converges.
+    """
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from pdd.core.errors import clear_core_dump_errors, get_core_dump_errors
+    from pdd.sync_determine_operation import SyncDecision
+    from pdd.sync_orchestration import sync_orchestration
+
+    clear_core_dump_errors()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    code = tmp_path / "src" / "demo.py"
+    example = tmp_path / "context" / "demo_example.py"
+    test_file = tmp_path / "tests" / "test_demo.py"
+    prompt.write_text("Create demo")
+    code.write_text("print('x')\n")
+    example.write_text("print('example')\n")
+    test_file.write_text("def test_ok(): assert True\n")
+    fake_paths = {"prompt": prompt, "code": code, "example": example,
+                  "test": test_file, "test_files": [test_file]}
+    run_report = meta / "demo_python_run.json"
+
+    # Strictly-decreasing failing-test counts written to the REAL run report just
+    # before each iteration's breaker check. sync_determine_operation runs at the
+    # top of the loop, immediately before the breaker reads the report — so this
+    # faithfully reproduces a fix loop that is converging one failure at a time.
+    series = [5, 4, 3, 2, 1, 0]
+    state = {"i": 0}
+
+    def determine(*_a, **_k):
+        idx = state["i"]
+        state["i"] += 1
+        if idx < len(series):
+            run_report.write_text(json.dumps({
+                "timestamp": "t", "exit_code": 1 if series[idx] else 0,
+                "tests_passed": 10, "tests_failed": series[idx], "coverage": 92.0,
+            }))
+            return SyncDecision(operation="fix", reason=f"{series[idx]} failing")
+        return SyncDecision(operation="all_synced", reason="done")
+
+    passing_cp = subprocess.CompletedProcess(args=["t"], returncode=0, stdout="", stderr="")
+
+    with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+         patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+         patch("pdd.sync_orchestration.sync_determine_operation", side_effect=determine), \
+         patch("pdd.sync_orchestration.extract_failing_files_from_output", return_value=[]), \
+         patch("pdd.get_test_command.get_test_command_for_file", return_value=""), \
+         patch("pdd.sync_orchestration._run_fix_operation_test_subprocess", return_value=passing_cp), \
+         patch("pdd.sync_orchestration.fix_main",
+               return_value=(True, None, None, 1, 0.01, "mock-model")) as mock_fix, \
+         patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+         patch("pdd.sync_orchestration.append_log_entry"), \
+         patch("pdd.sync_orchestration.log_event"):
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+        sync_orchestration(basename="demo", language="python", quiet=True, prompts_dir="prompts")
+
+    errs = get_core_dump_errors()
+    tripped = [e for e in errs
+               if e.get("type") == "LogicalFailure" and "consecutive fix" in (e.get("message") or "")]
+    # The breaker must NOT trip while failures are strictly decreasing.
+    assert not tripped, f"breaker tripped despite strictly-decreasing failures: {tripped}"
+    # It ran PAST the old hard cap of 5 consecutive fixes (would have broken at 5 on main).
+    assert mock_fix.call_count >= 5, f"only {mock_fix.call_count} fixes ran; loop aborted early"
+    # And it reached the terminal decision instead of being killed mid-convergence.
+    assert state["i"] >= 7, f"loop exited after only {state['i']} decisions"
+
+
 def test_sync_orchestration_fix_captures_truncated_test_output_excerpt(tmp_path, monkeypatch):
     """Failing test run during fix should be captured (truncated ~5KB) into sync log entry details."""
     from unittest.mock import patch

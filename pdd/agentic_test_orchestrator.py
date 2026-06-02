@@ -27,6 +27,10 @@ from .agentic_common import (
     extract_step_report,
     normalize_step_comments_state,
     post_step_comment_once,
+    drain_step_steers,
+    apply_clarification_steers_on_resume,
+    ensure_issue_steer_cursor_seeded,
+    issue_update_should_clear_workflow_state,
 )
 from .pytest_output import _find_project_root
 from .load_prompt_template import load_prompt_template
@@ -339,6 +343,7 @@ def run_agentic_test_orchestrator(
     issue_number: int,
     issue_author: str,
     issue_title: str,
+    issue_updated_at: str = "",
     *,
     cwd: Path,
     verbose: bool = False,
@@ -384,7 +389,41 @@ def run_agentic_test_orchestrator(
         and persisted_clean_restart.lower() == "true"
     )
 
-    if state is not None:
+    if not clean_restart and state is not None and issue_updated_at:
+        stored_updated_at = state.get("issue_updated_at")
+        if stored_updated_at and stored_updated_at != issue_updated_at:
+            if issue_update_should_clear_workflow_state(
+                state,
+                stored_updated_at,
+                issue_updated_at,
+                repo_owner,
+                repo_name,
+                issue_number,
+                cwd=cwd,
+                clarification_step_numbers=_CLARIFICATION_STEPS,
+            ):
+                if not quiet:
+                    console.print(
+                        "[yellow]Issue was updated since last run - starting fresh[/yellow]"
+                    )
+                clear_workflow_state(
+                    cwd,
+                    issue_number,
+                    "test",
+                    state_dir,
+                    repo_owner,
+                    repo_name,
+                    use_github_state,
+                )
+                state = None
+                loaded_gh_id = None
+            elif not quiet:
+                console.print(
+                    "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
+                )
+                state["issue_updated_at"] = issue_updated_at
+
+    if state is not None and not effective_clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
@@ -393,8 +432,14 @@ def run_agentic_test_orchestrator(
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
         last_completed_step = validate_cached_state(last_completed_step, step_outputs, quiet=quiet)
+        if issue_updated_at:
+            state["issue_updated_at"] = issue_updated_at
     else:
-        state = {"step_outputs": {}, "last_completed_step": 0}
+        state = {
+            "step_outputs": {},
+            "last_completed_step": 0,
+            "issue_updated_at": issue_updated_at,
+        }
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
@@ -407,6 +452,51 @@ def run_agentic_test_orchestrator(
 
     step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "test",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if seed_save:
+            github_comment_id = seed_save
+            state["github_comment_id"] = github_comment_id
+
+    steer_generation_before = state.get("steer_generation", 0)
+    issue_content = apply_clarification_steers_on_resume(
+        issue_content,
+        state,
+        repo_owner,
+        repo_name,
+        issue_number,
+        _CLARIFICATION_STEPS,
+        cwd=cwd,
+        quiet=quiet,
+    )
+    if state.get("steer_generation", 0) != steer_generation_before:
+        save_result = save_workflow_state(
+            cwd,
+            issue_number,
+            "test",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
 
     context: Dict[str, Any] = {
         "issue_url": issue_url,
@@ -429,7 +519,6 @@ def run_agentic_test_orchestrator(
                 body=(
                     "## Step 0/18: Workflow Startup\n\n"
                     "- **Mode**: Clean restart\n"
-                    f"- **Model**: {model_used}\n"
                     "- **Command**: pdd test"
                 ),
                 posted_steps=step_comments_set,
@@ -507,6 +596,33 @@ def run_agentic_test_orchestrator(
 
     current_work_dir = cwd
 
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            save_result = save_workflow_state(
+                cwd,
+                issue_number,
+                "test",
+                state,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        return step_steers
+
     def run_step(
         step_num: Union[int, float],
         template_name: str,
@@ -548,6 +664,7 @@ def run_agentic_test_orchestrator(
             label=f"step{step_num}",
             max_retries=DEFAULT_MAX_RETRIES,
             use_playwright=use_playwright,
+            steers=_issue_step_steers() or None,
         )
         return step_success, step_output, step_cost, step_model
 

@@ -25,6 +25,10 @@ from .agentic_common import (
     _extract_step_report,
     _sanitize_comment_body,
     DEFAULT_MAX_RETRIES,
+    drain_step_steers,
+    apply_clarification_steers_on_resume,
+    ensure_issue_steer_cursor_seeded,
+    issue_update_should_clear_workflow_state,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1180,6 +1184,10 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     return None
 
 
+# Step 3 clarification hard-stop: resume must re-run triage with new user comments.
+_CLARIFICATION_STEPS = {3}
+
+
 def _state_safe_step_output(output: str) -> str:
     """Redact secrets before persisting step output to resumable/GitHub state."""
     if not isinstance(output, str):
@@ -1781,6 +1789,7 @@ def run_agentic_bug_orchestrator(
     issue_number: int,
     issue_author: str,
     issue_title: str,
+    issue_updated_at: str = "",
     *,
     cwd: Path,
     verbose: bool = False,
@@ -1828,8 +1837,42 @@ def run_agentic_bug_orchestrator(
         and persisted_clean_restart.lower() == "true"
     )
 
+    if not clean_restart and state is not None and issue_updated_at:
+        stored_updated_at = state.get("issue_updated_at")
+        if stored_updated_at and stored_updated_at != issue_updated_at:
+            if issue_update_should_clear_workflow_state(
+                state,
+                stored_updated_at,
+                issue_updated_at,
+                repo_owner,
+                repo_name,
+                issue_number,
+                cwd=cwd,
+                clarification_step_numbers=_CLARIFICATION_STEPS,
+            ):
+                if not quiet:
+                    console.print(
+                        "[yellow]Issue was updated since last run - starting fresh[/yellow]"
+                    )
+                clear_workflow_state(
+                    cwd,
+                    issue_number,
+                    "bug",
+                    state_dir,
+                    repo_owner,
+                    repo_name,
+                    use_github_state,
+                )
+                state = None
+                loaded_gh_id = None
+            elif not quiet:
+                console.print(
+                    "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
+                )
+                state["issue_updated_at"] = issue_updated_at
+
     # Initialize variables from state or defaults
-    if state is not None:
+    if state is not None and not effective_clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
@@ -1842,8 +1885,13 @@ def run_agentic_bug_orchestrator(
         # rather than crashing on a corrupted/legacy value (e.g. a list).
         if not isinstance(state.get("step_comments"), dict):
             state["step_comments"] = {}
+        if issue_updated_at:
+            state["issue_updated_at"] = issue_updated_at
     else:
-        state = {"step_outputs": {}}
+        state = {
+            "step_outputs": {},
+            "issue_updated_at": issue_updated_at,
+        }
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
@@ -1853,6 +1901,49 @@ def run_agentic_bug_orchestrator(
 
     if effective_clean_restart:
         state["clean_restart"] = True
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "bug",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if seed_save:
+            github_comment_id = seed_save
+
+    steer_generation_before = state.get("steer_generation", 0)
+    issue_content = apply_clarification_steers_on_resume(
+        issue_content,
+        state,
+        repo_owner,
+        repo_name,
+        issue_number,
+        _CLARIFICATION_STEPS,
+        cwd=cwd,
+        quiet=quiet,
+    )
+    if state.get("steer_generation", 0) != steer_generation_before:
+        save_result = save_workflow_state(
+            cwd,
+            issue_number,
+            "bug",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
 
     context = {
         "issue_url": issue_url,
@@ -1874,7 +1965,6 @@ def run_agentic_bug_orchestrator(
     if clean_restart:
         startup_body = (
             "- **Mode**: Clean restart\n"
-            f"- **Model**: {model_used}\n"
             "- **Command**: pdd bug\n"
         )
         try:
@@ -2102,6 +2192,33 @@ def run_agentic_bug_orchestrator(
     if isinstance(cached_step10, str) and _parse_e2e_needed_marker(cached_step10) == "no":
         skip_e2e = True
 
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            save_result = save_workflow_state(
+                cwd,
+                issue_number,
+                "bug",
+                state,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        return step_steers
+
     # Worktree restoration for resume
     if start_step >= 5 and start_step <= 12:
         if worktree_path and worktree_path.exists():
@@ -2326,6 +2443,7 @@ def run_agentic_bug_orchestrator(
             label=step_label,
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
 
         total_cost += step_cost
@@ -2559,6 +2677,7 @@ def run_agentic_bug_orchestrator(
                         label="step6",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     total_cost += retry_cost
                     model_used = retry_model
@@ -2879,6 +2998,7 @@ def run_agentic_bug_orchestrator(
                     label="step9",
                     max_retries=DEFAULT_MAX_RETRIES,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
                 total_cost += retry_cost
                 model_used = retry_model
@@ -2967,6 +3087,7 @@ def run_agentic_bug_orchestrator(
                         label="step9",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     total_cost += cv_cost
                     model_used = cv_model
@@ -3033,6 +3154,7 @@ def run_agentic_bug_orchestrator(
                         label="step9",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     total_cost += cov_cost
                     model_used = cov_model
@@ -3128,7 +3250,10 @@ def run_agentic_bug_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            state["last_completed_step"] = step_num
+            # Clarification stops save step_num - 1 so triage re-runs on resume.
+            state["last_completed_step"] = (
+                step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
+            )
             state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
             save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result:

@@ -10,7 +10,10 @@ import jsonschema
 import pytest
 
 from pdd.evidence_manifest import (
+    SCHEMA_VERSION,
     _preprocessed_expanded_sha256,
+    devunit_slug_for_prompt,
+    grounding_kwargs_from_ctx,
     validation_from_sync,
     write_evidence_manifest,
 )
@@ -70,8 +73,82 @@ def test_writes_schema_valid_run_and_latest_manifest(tmp_path: Path) -> None:
     )
     assert manifest["outputs"] == [{"path": "src/refund.py", "sha256": _hash(output)}]
     assert manifest["contracts"]["status"] == "not_applicable"
+    assert manifest["schema_version"] == SCHEMA_VERSION == 2
+    grounding = manifest["generation"]["grounding"]
+    assert grounding["mode"] == "unavailable"
+    assert grounding["selected_examples"] == []
+    assert grounding["reviewed"] is False
+    assert manifest["generation"]["grounding_examples"] == []
     latest = tmp_path / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
     assert json.loads(latest.read_text(encoding="utf-8")) == manifest
+
+
+def test_devunit_slug_for_nested_prompt_path(tmp_path: Path) -> None:
+    """Path-qualified module identity is slugged the same way as write_evidence_manifest."""
+    prompt = tmp_path / "prompts" / "frontend" / "page_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("prompt body\n", encoding="utf-8")
+
+    assert devunit_slug_for_prompt(prompt) == "frontend-page"
+
+    write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    latest = tmp_path / ".pdd" / "evidence" / "devunits" / "frontend-page.latest.json"
+    assert latest.is_file()
+
+
+def test_write_evidence_manifest_serializes_cloud_grounding(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompts" / "payments_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("Generate payments.\n", encoding="utf-8")
+
+    grounding = {
+        "mode": "cloud",
+        "selected_examples": [
+            {
+                "module": "payments",
+                "prompt_sha256": "abc123",
+                "similarity": 0.9,
+                "source": "cloud-history",
+            }
+        ],
+        "pinned": ["payments"],
+        "excluded": ["legacy_payments"],
+        "reviewed": True,
+    }
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+        grounding=grounding,
+        reviewed=True,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=manifest, schema=_schema())
+    assert manifest["generation"]["grounding"] == grounding
+    assert manifest["generation"]["grounding_examples"] == grounding["selected_examples"]
+
+
+def test_grounding_kwargs_from_ctx_merges_review_decisions() -> None:
+    kwargs = grounding_kwargs_from_ctx(
+        {
+            "review_examples": True,
+            "last_grounding": {
+                "mode": "cloud",
+                "selected_examples": [{"module": "auth"}],
+                "pinned": ["auth"],
+                "excluded": [],
+            },
+            "grounding_review_decisions": [
+                {"module": "auth", "decision": "accept", "phase": "pre"}
+            ],
+        }
+    )
+    assert kwargs["reviewed"] is True
+    assert kwargs["grounding"]["mode"] == "cloud"
 
 
 def test_output_hash_changes_with_output_content(tmp_path: Path) -> None:
@@ -243,6 +320,45 @@ def test_dynamic_prompt_records_expansion_as_unavailable(tmp_path: Path) -> None
     assert manifest["prompt"]["expanded_sha256"] is None
 
 
+def test_select_include_is_not_nondeterministic(tmp_path: Path) -> None:
+    """select= is deterministic line selection; it must not trigger uses_nondeterministic_tags."""
+    include = tmp_path / "context" / "doc.txt"
+    prompt = tmp_path / "prompts" / "select_python.prompt"
+    include.parent.mkdir(parents=True)
+    prompt.parent.mkdir()
+    include.write_text("line one\nline two\n", encoding="utf-8")
+    prompt.write_text('<include path="context/doc.txt" select="lines:1" />\n', encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["prompt"]["uses_nondeterministic_tags"] is False
+
+
+def test_shell_tag_inside_code_fence_is_not_nondeterministic(tmp_path: Path) -> None:
+    """A <shell> tag documented inside a fenced code block must not be flagged."""
+    prompt = tmp_path / "prompts" / "fenced_shell_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text(
+        "Example usage:\n```xml\n<shell>date</shell>\n```\n",
+        encoding="utf-8",
+    )
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["prompt"]["uses_nondeterministic_tags"] is False
+    assert manifest["prompt"]["expanded_sha256"] is not None
+
+
 def test_preprocessed_expanded_hash_matches_preprocess_helper(tmp_path: Path) -> None:
     prompt = tmp_path / "prompts" / "hash_python.prompt"
     include = tmp_path / "context" / "body.prompt"
@@ -255,6 +371,31 @@ def test_preprocessed_expanded_hash_matches_preprocess_helper(tmp_path: Path) ->
     assert _preprocessed_expanded_sha256(
         prompt_text, tmp_path
     ) == _expected_preprocessed_hash(prompt_text, tmp_path)
+
+
+def test_evidence_manifest_records_snapshot_artifacts(tmp_path: Path) -> None:
+    """Evidence receipts should surface shell/web/query snapshot hashes."""
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=tmp_path / "prompts" / "demo.prompt",
+        project_root=tmp_path,
+        context_snapshot={
+            "expanded_prompt": {"path": "expanded_prompt.txt", "sha256": "abc"},
+            "uses_nondeterministic_context": True,
+            "artifacts": [
+                {"type": "shell", "path": "shell-1.txt", "sha256": "s1"},
+                {"type": "web", "path": "web-1.txt", "sha256": "w1"},
+                {"type": "query_include", "path": "query-1.txt", "sha256": "q1"},
+            ],
+            "grounding_examples": [{"status": "unavailable", "reason": "local"}],
+        },
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["context"]["shell_snapshots"][0]["sha256"] == "s1"
+    assert manifest["context"]["web_snapshots"][0]["sha256"] == "w1"
+    assert manifest["context"]["query_snapshots"][0]["sha256"] == "q1"
+    assert manifest["generation"]["grounding_examples"][0]["reason"] == "local"
+    assert manifest["context_snapshot"]["enabled"] is True
 
 
 def test_resolve_generate_output_paths_uses_construct_paths(
@@ -272,3 +413,32 @@ def test_resolve_generate_output_paths_uses_construct_paths(
 
     resolved = resolve_generate_output_paths(prompt, quiet=True)
     assert resolved == [str(tmp_path / "pdd" / "widget.py")]
+
+
+def test_contract_waivers_validate_against_schema(tmp_path: Path) -> None:
+    """Manifests with contract waivers must validate against the JSON schema."""
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "contract_check"
+        / "waiver_valid_python.prompt"
+    )
+    prompt = tmp_path / "prompts" / "waiver_python.prompt"
+    output = tmp_path / "src" / "waiver.py"
+    prompt.parent.mkdir()
+    output.parent.mkdir()
+    prompt.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    output.write_text("def upload():\n    return True\n", encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        output_files=[output],
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=manifest, schema=_schema())
+    contracts = manifest["contracts"]
+    assert contracts["status"] == "available"
+    assert contracts["waivers"][0]["id"] == "W1"
+    assert contracts["rules"]["R3"]["waiver_status"] == "active"

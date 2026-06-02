@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "sync_orchestration", "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", max_attempts: int = 3, budget: float = 20.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False)", "returns": "Dict[str, Any]"}
+      {"name": "sync_orchestration", "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
     ]
   }
 }
@@ -73,6 +73,7 @@ def sync_orchestration(
     agentic_mode: bool = False,
     compress: bool = False,
     evidence: bool = False,
+    snapshot_context: bool = False,
 ) -> Dict[str, Any]:
 ```
 
@@ -96,6 +97,7 @@ Returns a dictionary containing:
 - `error`: Semicolon-joined error string or None
 - `model_name`: Name of the last model used
 - `log_entries`: List of log entries (only when `dry_run=True`)
+- `snapshot_manifest_path` / `context_snapshot`: Optional replayable context snapshot metadata when generation ran with `snapshot_context=True`
 
 ## Dependencies
 
@@ -230,6 +232,8 @@ Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `erro
 
 When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
 
+Dry-run must not write snapshot artifacts. If nondeterministic context can be detected without executing dynamic tags, report that a snapshot would be required, but do not execute shell/web/query tags solely for dry-run detection.
+
 ### Interactive Steering
 
 After each `sync_determine_operation` call, allow the user to override the recommended operation via `maybe_steer_operation()`:
@@ -277,8 +281,7 @@ When `skip_verify` or `skip_tests` is set:
 ### Operation Dispatch
 
 - For the **auto-deps** operation, invoke `auto_deps_main()` with the resolved prompt path, directory path, CSV path, and `_skip_finalization=True`. Pass `compress=compress`.
-- For the **generate** operation, invoke `code_generator_main()`
- with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. The one-session sync path in `sync_main` follows the same convention.
+- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. Forward `compress` and `snapshot_context` during normal generation and during conformance retry attempts. The one-session sync path in `sync_main` follows the same convention.
 - **Architecture-conformance / public-surface / test-churn retry (#866, #1012)**: Wrap the **generate** invocation of `code_generator_main()` in a repair loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). The loop catches three typed exceptions from `code_generator_main` — `ArchitectureConformanceError`, `PublicSurfaceRegressionError`, and `TestChurnError` — and routes each through the same `PDD_REPAIR_DIRECTIVE` plumbing:
     - On `ArchitectureConformanceError`: accumulate `exc.total_cost`/`exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only while budget remains; abort early (without further attempts) when the next failure carries the **identical** sorted missing-symbol set as the previous one (no progress is being made). On exhaustion call `build_conformance_hard_failure_from_error(last_exc, basename)` and `print()` the structured block to **stderr** (it contains `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint) before re-raising `last_exc`.
     - On `PublicSurfaceRegressionError` (#1012): accumulate cost/model, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, retry while budget remains, and abort early when the next failure carries the **identical** sorted `removed_symbols` set as the previous one. On exhaustion call `build_public_surface_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner` and `print()` the structured `=== public surface regression ===` block to stderr before re-raising. The block names the removed symbols and the `BREAKING-CHANGE:` opt-in path so the operator can either restore the symbols or annotate the prompt.
@@ -286,6 +289,7 @@ When `skip_verify` or `skip_tests` is set:
     - **`.pddrc` / `strength` stability across retries (#1012)**: in-process retries operate on the `sync_orchestration` function's already-resolved `strength`, `temperature`, `context_override`, and `context_config` parameters (resolved by `sync_main` / `construct_paths` before this function was called), so retries cannot silently switch model or context. Do NOT re-resolve `.pddrc` mid-loop. (Cross-subprocess pinning needed when `agentic_sync_runner` retries a child process is handled separately in `agentic_sync_runner_python.prompt` Req 9b.)
     - **Pre-generation snapshot (#1012)**: The public-surface gate's pre-generation snapshot is taken inside `code_generator_main` itself — it reads the existing code file from disk before overwriting it (see `code_generator_main` Req 5b). `sync_orchestration` does NOT need to pre-read or hand off those bytes; keeping the resolved output path stable across retries (the `.pddrc` / strength pinning above) is sufficient. First-time generation is silently exempt because the on-disk file does not yet exist.
     - Always restore the previous value of `PDD_REPAIR_DIRECTIVE` in a `finally` block (pop it if it was unset originally) so the env does not leak across operations. If a later retry succeeds, add the accumulated failed-attempt cost to the successful generate result so operation logs, fingerprints, UI totals, and returned `total_cost` include every charged attempt. The generic `except` around the operation must add exception-carried cost/model into `current_cost_ref` and the log entry before marking the operation failed. This loop is the source-of-truth contract for #865/#866/#1012 and **must not** be dropped or simplified during regeneration; the `sync_main.py` and `agentic_sync_runner.py` paths must stay in parity with it.
+    - Snapshot retries should either reuse a single run with explicit attempt IDs or create clearly linked per-attempt snapshots. Returned result metadata must identify the final successful attempt's snapshot and any linked failed-attempt snapshots when available.
 
 - **Test-op `TestChurnError` retry (#1012)**: The **test** and **test_extend** operations call `cmd_test_main`, which itself raises `TestChurnError` from `_verify_test_churn` when an overwrite would replace too much of the existing test file. Each `cmd_test_main` invocation in `sync_orchestration` (for `test`, for `test_extend`'s `existing-file` branch, AND for `test_extend`'s fallback "no existing file" branch) MUST be wrapped in a small helper — `_run_test_op_with_churn_retry(call, *, basename, budget_remaining)` — that mirrors the generate-op `TestChurnError` arm exactly: capture the prior `PDD_REPAIR_DIRECTIVE`, retry up to `MAX_CONFORMANCE_ATTEMPTS` times but break early after one extra attempt (test-churn rewrites rarely converge), accumulate `exc.total_cost`/`exc.model_name` onto the exception, set `PDD_REPAIR_DIRECTIVE = exc.repair_directive` before each retry, break early when the next failure carries the same `(churn_ratio, pre_line_count)` signature as the previous one, and on exhaustion call `build_test_churn_hard_failure_from_error(last_exc, basename)` to `print()` the `=== test churn threshold exceeded ===` block to stderr exactly once before re-raising. The previous `PDD_REPAIR_DIRECTIVE` value MUST be restored in a `finally` block (or `os.environ.pop` if it was unset). The generic operation `except` MUST NOT separately print the test-churn hard block — the helper owns that emission so the diagnostic does not appear twice in stderr. The helper folds prior-attempt cost into the successful retry's `TestResult` so the sync budget accounts for all attempts (and falls back to the last failed attempt's model name when the success response leaves `model` blank).
 
@@ -382,7 +386,7 @@ Detect and break infinite loops with these limits:
 - Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
-- Consecutive fix operations: Break after 5
+- Consecutive fix operations: Break after `MAX_CONSECUTIVE_FIXES` (5) only when the outer fix loop is no longer making progress. Before applying the breaker, read the latest run report with `read_run_report(basename, language, paths=pdd_files)` so subproject `.pdd/meta` state is honored (issue #1211), compare its `tests_failed` count with the previous consecutive fix operation, and treat the loop as making progress only when the count strictly decreases. Reset/update the previous fix failure count from path-aware run-report reads; if the count is unavailable or does not decrease at the threshold, break with a distinct no-progress consecutive-fix error.
 - Consecutive no-op fix operations: Track consecutive fix operations where no LLM is invoked (cost is 0.0 and model name is empty/none/unknown), and fail fast with LogicalFailure if it reaches 2
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
 - Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)

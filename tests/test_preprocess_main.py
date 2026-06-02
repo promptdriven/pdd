@@ -38,7 +38,8 @@ def test_preprocess_main_no_xml(basic_click_context):
     with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
          patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
          patch("pdd.preprocess_main.xml_tagger") as mock_xml_tagger, \
-         patch("builtins.open", mock_open()) as m_file:
+         patch.object(Path, "write_text") as mock_write_text, \
+         patch.object(Path, "mkdir"):
 
         # Mock the return values
         mock_construct_paths.return_value = (
@@ -81,12 +82,12 @@ def test_preprocess_main_no_xml(basic_click_context):
             False,  # double
             exclude=[],
             _seen={str(Path("input.prompt").resolve())},
+            snapshot_recorder=None,
         )
         # xml_tagger should NOT be called in this scenario
         mock_xml_tagger.assert_not_called()
 
-        # Ensure a file write occurred
-        m_file.assert_called_once_with("/tmp/output.prompt", "w")
+        mock_write_text.assert_called_once_with("processed prompt text", encoding="utf-8")
 
 def test_preprocess_main_with_xml(basic_click_context):
     """
@@ -102,7 +103,8 @@ def test_preprocess_main_with_xml(basic_click_context):
     with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
          patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
          patch("pdd.preprocess_main.xml_tagger") as mock_xml_tagger, \
-         patch("builtins.open", mock_open()) as m_file:
+         patch.object(Path, "write_text") as mock_write_text, \
+         patch.object(Path, "mkdir"):
 
         # Mock the return values
         mock_construct_paths.return_value = (
@@ -152,8 +154,9 @@ def test_preprocess_main_with_xml(basic_click_context):
             time=DEFAULT_TIME
         )
 
-        # Ensure a file write occurred
-        m_file.assert_called_once_with("/tmp/xml_output.prompt", "w")
+        mock_write_text.assert_called_once_with(
+            "<xml>some tagged content</xml>", encoding="utf-8"
+        )
 
 def test_preprocess_main_recursive_and_double(basic_click_context):
     """
@@ -166,7 +169,8 @@ def test_preprocess_main_recursive_and_double(basic_click_context):
     with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
          patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
          patch("pdd.preprocess_main.xml_tagger") as mock_xml_tagger, \
-         patch("builtins.open", mock_open()) as m_file:
+         patch.object(Path, "write_text") as mock_write_text, \
+         patch.object(Path, "mkdir"):
 
         mock_construct_paths.return_value = (
             {},  # resolved_config
@@ -199,9 +203,12 @@ def test_preprocess_main_recursive_and_double(basic_click_context):
             True,   # double
             exclude=["do_not_double_this"],
             _seen={str(Path("recursive.prompt").resolve())},
+            snapshot_recorder=None,
         )
         mock_xml_tagger.assert_not_called()
-        m_file.assert_called_once_with("/tmp/output_recursive.prompt", "w")
+        mock_write_text.assert_called_once_with(
+            "recursively processed prompt", encoding="utf-8"
+        )
 
 def test_preprocess_main_quiet_mode(basic_click_context, capsys):
     """
@@ -211,7 +218,8 @@ def test_preprocess_main_quiet_mode(basic_click_context, capsys):
 
     with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
          patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
-         patch("builtins.open", mock_open()) as m_file:
+         patch.object(Path, "write_text") as mock_write_text, \
+         patch.object(Path, "mkdir"):
 
         mock_construct_paths.return_value = (
             {},  # resolved_config
@@ -234,8 +242,7 @@ def test_preprocess_main_quiet_mode(basic_click_context, capsys):
         captured = capsys.readouterr()
         # Because quiet=True, there's expected to be no Rich output.
         assert captured.out.strip() == ""
-        # We can still check that the function wrote the file
-        m_file.assert_called_once_with("/tmp/quiet_output.prompt", "w")
+        mock_write_text.assert_called_once_with("quiet processed", encoding="utf-8")
 
 def test_preprocess_main_error_handling(basic_click_context, capsys):
     """

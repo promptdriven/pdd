@@ -126,8 +126,7 @@
         "source_sha256": {"type": "string"},
         "compressed_sha256": {"type": "string"},
         "estimated_tokens": {"type": "integer", "minimum": 0}
-      },
-      "additionalProperties": false
+      }
     },
     "grounding": {
       "type": "object",

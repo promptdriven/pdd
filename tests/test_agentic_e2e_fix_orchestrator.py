@@ -7500,6 +7500,12 @@ class TestNotABugSuppressedOnResume:
             c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
             for c in mock_post_once.call_args_list
         )
+        # Issue #1306: the Step 0 banner must not advertise a model.
+        assert all(
+            "**Model**" not in c.kwargs.get("body", "")
+            for c in mock_post_once.call_args_list
+            if c.kwargs.get("step_num") == 0
+        )
 
     def test_resume_inherits_clean_restart_for_sibling_bug_state(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
@@ -9816,7 +9822,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (
                     True,
@@ -9830,7 +9836,10 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
-        ) as mock_post_once:
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert mock_post_once.call_count >= 1
@@ -9846,7 +9855,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (True, "NOT_A_BUG", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
@@ -9856,7 +9865,10 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
-        ) as mock_post_once:
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert mock_post_once.call_count >= 1
@@ -9873,7 +9885,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (
                     True,
@@ -9887,6 +9899,9 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             side_effect=RuntimeError("simulated gh failure"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
         ):
             # The run completes (success may be False due to NOT_A_BUG), but
             # the helper exception must not propagate.
@@ -10724,3 +10739,162 @@ class TestFinalCheckupHeadSafetyChecks:
         # Only the pre-checkup SHA is fetched; the post-checkup fetch must
         # not happen because the checkup failed before any push.
         assert sha_mock.call_count == 1
+
+
+# Additional tests appended below
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestPushWithRetryNewSignature:
+    """Tests for the new push_with_retry public API with keyword args."""
+
+    def test_push_with_retry_no_force_when_disabled(self, tmp_path):
+        """force_with_lease_on_non_fast_forward=False must NOT retry with force."""
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if "push" in cmd:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected] HEAD -> branch (non-fast-forward)\n"
+                    "hint: tip of your current branch is behind"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            success, err = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                force_with_lease_on_non_fast_forward=False,
+            )
+
+        assert success is False
+        assert "non-fast-forward" in err
+        force_calls = [c for c in calls if "--force-with-lease" in c]
+        assert len(force_calls) == 0, (
+            f"Should not retry with force when disabled. Calls: {calls}"
+        )
+
+    def test_push_with_retry_accepts_remote_url_directly(self, tmp_path, monkeypatch):
+        """remote= can be a clone URL, not just a configured remote name."""
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        monkeypatch.setenv("GH_TOKEN", "ghs_xyz")
+        monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+
+        push_cmds = []
+
+        def mock_run(cmd, **kwargs):
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[0] == "git" and cmd[1] == "push":
+                push_cmds.append(cmd)
+                if len(push_cmds) == 1:
+                    result.returncode = 1
+                    result.stderr = "fatal: Authentication failed"
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            success, _ = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                remote="https://github.com/o/r.git",
+                refspec="refs/heads/feature:refs/heads/feature",
+                set_upstream=False,
+            )
+
+        assert success is True
+        # Second push should contain inlined token URL
+        assert len(push_cmds) == 2
+        assert any("x-access-token:ghs_xyz" in arg for arg in push_cmds[1])
+
+
+class TestFetchPrHeadShaHelper:
+    """Tests for _fetch_pr_head_sha best-effort helper."""
+
+    def test_returns_empty_string_on_exception(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            side_effect=RuntimeError("gh unavailable"),
+        ):
+            result = _fetch_pr_head_sha("owner", "repo", 42)
+        assert result == ""
+
+    def test_returns_head_sha_on_success(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            return_value={"head_sha": "abc123def"},
+        ):
+            result = _fetch_pr_head_sha("owner", "repo", 42)
+        assert result == "abc123def"
+
+    def test_returns_empty_when_metadata_missing_sha(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            return_value={},
+        ):
+            result = _fetch_pr_head_sha("owner", "repo", 42)
+        assert result == ""
+
+
+class TestReadCheckupWorktreeHeadSha:
+    """Tests for _read_checkup_worktree_head_sha best-effort helper."""
+
+    def test_returns_empty_when_worktree_missing(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        def mock_run(cmd, **kwargs):
+            r = type("R", (), {"returncode": 0, "stdout": str(tmp_path) + "\n", "stderr": ""})()
+            return r
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            result = _read_checkup_worktree_head_sha(tmp_path, 42)
+        assert result == ""
+
+    def test_returns_sha_when_worktree_exists(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        worktree = tmp_path / ".pdd" / "worktrees" / "checkup-pr-42"
+        worktree.mkdir(parents=True)
+
+        def mock_run(cmd, **kwargs):
+            if "rev-parse" in cmd and "--show-toplevel" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": str(tmp_path) + "\n", "stderr": ""})()
+            if "rev-parse" in cmd and "HEAD" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "deadbeef\n", "stderr": ""})()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            result = _read_checkup_worktree_head_sha(tmp_path, 42)
+        assert result == "deadbeef"
+
+    def test_returns_empty_on_oserror(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=OSError("boom"),
+        ):
+            result = _read_checkup_worktree_head_sha(tmp_path, 42)
+        assert result == ""

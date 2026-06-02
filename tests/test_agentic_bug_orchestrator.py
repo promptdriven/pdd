@@ -831,10 +831,83 @@ def test_state_save_after_each_step(mock_dependencies, default_args, tmp_path):
     # State should have been saved - find the state saved at step 3 hard stop
     assert len(saved_states) > 0, "State should have been saved"
     final_state = saved_states[-1]
-    # Hard stop at step 3 saves the step 3 output and sets last_completed_step to 3
-    assert final_state["last_completed_step"] == 3
+    # Clarification hard-stop at step 3 saves last_completed_step=2 for resume.
+    assert final_state["last_completed_step"] == 2
+    assert "3" in final_state["step_outputs"]
     assert "1" in final_state["step_outputs"]
     assert "2" in final_state["step_outputs"]
+
+
+def test_step3_clarification_saves_step_minus_one(mock_dependencies, default_args):
+    """Step 3 needs-info stop should resume at triage (step 3), not step 4."""
+    mock_run, _, _ = mock_dependencies
+
+    mock_run.side_effect = [
+        (True, "Step 1 ok", 0.1, "model"),
+        (True, "Step 2 ok", 0.1, "model"),
+        (True, "**Status:** Needs More Info", 0.1, "model"),
+    ]
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None
+    ) as mock_save:
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 3" in msg
+    final_state = mock_save.call_args[0][3]
+    assert final_state["last_completed_step"] == 2
+
+
+def test_bug_clarification_resume_merges_steers(mock_dependencies, default_args, tmp_path):
+    """Resume after step-3 pause merges new issue comments into issue_content."""
+    import json
+    import os
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    resumed_state = {
+        "last_completed_step": 2,
+        "step_outputs": {
+            "1": "dup ok",
+            "2": "docs ok",
+            "3": "**Status:** Needs More Info\nNeed logs.",
+        },
+        "total_cost": 0.2,
+        "model_used": "gpt-4",
+        "last_steered_comment_id": "100",
+    }
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "101", "author": "reporter", "body": "See attached logs"}]
+    )
+    captured_prompts = []
+
+    def capture_run(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            captured_prompts.append(kwargs.get("instruction", ""))
+            return (True, "**Status:** Needs More Info", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = capture_run
+    mock_load.return_value = "Issue: {issue_content}"
+
+    try:
+        with patch(
+            "pdd.agentic_bug_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ):
+            success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+    assert success is False
+    assert "Stopped at step 3" in msg
+    assert len(captured_prompts) == 1
+    assert "attached logs" in captured_prompts[0]
+    assert mock_run.call_count == 1
 
 
 def test_resume_skips_completed_steps(mock_dependencies, default_args, tmp_path):
@@ -923,6 +996,12 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
     mock_load.assert_not_called()
     assert "step1" in [call.kwargs["label"] for call in mock_run.call_args_list]
     assert any(c.kwargs.get("step_num") == 0 for c in mock_post.call_args_list)
+    # Issue #1306: the Step 0 banner must not advertise a model.
+    assert all(
+        "**Model**" not in c.kwargs.get("body", "")
+        for c in mock_post.call_args_list
+        if c.kwargs.get("step_num") == 0
+    )
     assert any(state.get("clean_restart") is True for state in saved_states)
 
 

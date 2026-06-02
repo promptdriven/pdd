@@ -3278,6 +3278,664 @@ def test_pdd_user_feedback_not_injected_when_absent(mock_cwd, mock_env, mock_loa
 
 
 # ---------------------------------------------------------------------------
+# Mid-run Steering (SteerEntry) Injection Tests
+# ---------------------------------------------------------------------------
+
+
+def test_steer_injection_into_prompt(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that steers list is included in the agentic prompt."""
+    from pdd.agentic_common import SteerEntry
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    steers = [
+        SteerEntry(comment_id="123", author="alice", body="Try approach A"),
+        SteerEntry(comment_id="456", author="bob", body="Use library X"),
+    ]
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd, steers=steers)
+
+    assert success
+
+    args, kwargs = mock_subprocess.call_args
+    prompt_input = kwargs.get("input", "")
+    assert "## Steered user input (mid-run)" in prompt_input
+    assert "- @alice (123): Try approach A" in prompt_input
+    assert "- @bob (456): Use library X" in prompt_input
+
+
+def test_steer_injection_strips_pdd_human_comments(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Human-only <pdd> blocks in steer bodies must not reach the LLM prompt."""
+    from pdd.agentic_common import SteerEntry
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    steers = [
+        SteerEntry(
+            comment_id="123",
+            author="alice",
+            body="Try approach A <pdd>internal note for humans</pdd> please",
+        ),
+    ]
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, _, _, _ = run_agentic_task("Fix the bug", mock_cwd, steers=steers)
+    assert success
+
+    prompt_input = mock_subprocess.call_args.kwargs.get("input", "")
+    assert "internal note for humans" not in prompt_input
+    assert "<pdd>" not in prompt_input
+    assert "Try approach A" in prompt_input
+    assert "please" in prompt_input
+
+
+def test_drain_issue_steers_strips_pdd_tags(mock_cwd):
+    """PDD_STEER_JSON bodies have human-only <pdd> blocks removed at drain time."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "101",
+            "author": "charlie",
+            "body": "Ship it <pdd>do not tell the model this</pdd> now",
+        }
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert "do not tell the model this" not in steers[0].body
+        assert "<pdd>" not in steers[0].body
+        assert "Ship it" in steers[0].body
+        assert "now" in steers[0].body
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_no_steer_injection_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test that prompt is unchanged when steers list is absent."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd, steers=None)
+
+    assert success
+
+    args, kwargs = mock_subprocess.call_args
+    prompt_input = kwargs.get("input", "")
+    assert "## Steered user input (mid-run)" not in prompt_input
+
+
+def test_drain_issue_steers_from_env(mock_cwd):
+    """Test fetching steers from PDD_STEER_JSON env var."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [{"comment_id": "101", "author": "charlie", "body": "Hello"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert steers[0].author == "charlie"
+        assert steers[0].body == "Hello"
+        assert state["steer_generation"] == 1
+        assert state["last_steered_comment_id"] == "101"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_env_idempotent(mock_cwd):
+    """Same PDD_STEER_JSON comment_id is not returned twice after state update."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [{"comment_id": "101", "author": "charlie", "body": "Hello"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state = {}
+        first = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        second = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(first) == 1
+        assert len(second) == 0
+        assert state["last_steered_comment_id"] == "101"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_step_steers_noop_without_issue(mock_cwd):
+    """Orchestrator helper is a no-op when issue_number is missing."""
+    from pdd.agentic_common import drain_step_steers
+
+    state: dict = {}
+    assert drain_step_steers("owner", "repo", 0, state, cwd=mock_cwd) == []
+    assert state == {}
+
+
+def test_drain_step_steers_noop_without_repo(mock_cwd):
+    from pdd.agentic_common import drain_step_steers
+
+    state: dict = {}
+    assert drain_step_steers("", "repo", 55, state, cwd=mock_cwd) == []
+    assert drain_step_steers("owner", "", 55, state, cwd=mock_cwd) == []
+
+
+def test_drain_step_steers_delegates_to_issue_drain(mock_cwd):
+    from pdd.agentic_common import drain_step_steers
+
+    steer_data = [{"comment_id": "201", "author": "dana", "body": "Ship it"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state: dict = {}
+        steers = drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert steers[0].author == "dana"
+        assert state["last_steered_comment_id"] == "201"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_env_sets_last_steer_at(mock_cwd):
+    from pdd.agentic_common import drain_issue_steers
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "42", "author": "user", "body": "note"}]
+    )
+    try:
+        state: dict = {}
+        steers = drain_issue_steers("owner", "repo", 1, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert state.get("last_steer_at")
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_issue_update_should_not_clear_when_pending_steers(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "99", "author": "alice", "body": "please adjust"}]
+    )
+    try:
+        state = {
+            "step_outputs": {},
+            "last_steered_comment_id": "1",
+            "issue_updated_at": "2026-01-01T00:00:00Z",
+        }
+        assert issue_update_should_clear_workflow_state(
+            state,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "owner",
+            "repo",
+            55,
+            cwd=mock_cwd,
+        ) is False
+        assert state["last_steered_comment_id"] == "99"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_issue_update_should_clear_when_no_pending_steers(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    state = {"step_outputs": {}, "issue_updated_at": "2026-01-01T00:00:00Z"}
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is True
+
+
+def test_issue_update_should_not_clear_during_clarification_pause(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    state = {
+        "step_outputs": {
+            "4": "STOP_CONDITION: needs clarification from author\n",
+        },
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+        clarification_step_numbers={4, 7},
+    ) is False
+
+
+def test_workflow_awaiting_clarification_needs_more_info_without_stop_tag():
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    state = {
+        "step_outputs": {
+            "3": "**Status:** Needs More Info\nPlease provide repro steps.",
+        },
+    }
+    assert workflow_awaiting_clarification(state, {3}) is True
+    assert workflow_awaiting_clarification(state, {4}) is False
+
+
+def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
+    from pdd.agentic_common import apply_clarification_steers_on_resume
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "7", "author": "bob", "body": "Use pytest markers"}]
+    )
+    try:
+        state = {
+            "step_outputs": {"3": "STOP_CONDITION: needs more info from author\n"},
+        }
+        merged = apply_clarification_steers_on_resume(
+            "Original issue body",
+            state,
+            "owner",
+            "repo",
+            1,
+            {3},
+            cwd=mock_cwd,
+            quiet=True,
+        )
+        assert "Use pytest markers" in merged
+        assert "Original issue body" in merged
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_apply_clarification_steers_bug_step3_needs_more_info(mock_cwd):
+    """Bug orchestrator stores Needs More Info without a STOP_CONDITION tag."""
+    from pdd.agentic_common import apply_clarification_steers_on_resume
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "8", "author": "alice", "body": "Here is the stack trace"}]
+    )
+    try:
+        state = {
+            "step_outputs": {
+                "3": "**Status:** Needs More Info\nMissing repro command.",
+            },
+            "last_steered_comment_id": "1",
+        }
+        merged = apply_clarification_steers_on_resume(
+            "Bug report body",
+            state,
+            "owner",
+            "repo",
+            42,
+            {3},
+            cwd=mock_cwd,
+            quiet=True,
+        )
+        assert "stack trace" in merged
+        assert "Bug report body" in merged
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shutil_which):
+    """Test fetching steers from GitHub comments."""
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+
+    mock_comments = [
+        {
+            "id": 1001,
+            "user": {"login": "user1", "type": "User"},
+            "body": "User feedback",
+            "created_at": "2026-06-01T12:00:00Z",
+        },
+        {
+            "id": 1002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "Bot message",
+            "created_at": "2026-06-01T12:01:00Z",
+        },
+        {
+            "id": 1003,
+            "user": {"login": "user2", "type": "User"},
+            "body": "## Step 1/13: ...",
+            "created_at": "2026-06-01T12:02:00Z",
+        },
+    ]
+
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(mock_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {"last_steered_comment_id": "1000"}
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert len(steers) == 1
+    assert steers[0].author == "user1"
+    assert steers[0].comment_id == "1001"
+    assert state["last_steered_comment_id"] == "1001"
+    assert state["steer_generation"] == 1
+
+    cmd = mock_subprocess_run.call_args[0][0]
+    assert "--method" in cmd
+    assert "GET" in cmd
+
+
+def test_gh_api_list_issue_comments_cmd_uses_get_with_since():
+    """``-f since=`` must not downgrade the comments list request to POST."""
+    from pdd.agentic_common import _gh_api_list_issue_comments_cmd
+
+    cmd = _gh_api_list_issue_comments_cmd(
+        "owner", "repo", 55, since="2026-06-01T12:00:00Z"
+    )
+    assert cmd == [
+        "gh",
+        "api",
+        "repos/owner/repo/issues/55/comments",
+        "--method",
+        "GET",
+        "--paginate",
+        "--slurp",
+        "-f",
+        "since=2026-06-01T12:00:00Z",
+    ]
+
+
+def test_drain_issue_steers_github_since_uses_get(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Regression: ``last_steer_at`` must keep the GitHub request as GET."""
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = "[]"
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "last_steered_comment_id": "1000",
+        "last_steer_at": "2026-06-01T11:00:00Z",
+        "steer_cursor_seeded": True,
+    }
+    drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    cmd = mock_subprocess_run.call_args[0][0]
+    assert cmd[cmd.index("--method") + 1] == "GET"
+    assert "-f" in cmd
+    assert "since=2026-06-01T11:00:00Z" in cmd
+
+
+def test_drain_issue_steers_without_cursor_skips_github_poll(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Empty state must not treat all historical issue comments as steers."""
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+
+    state = {}
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert steers == []
+    mock_subprocess_run.assert_not_called()
+
+
+def test_seed_issue_steer_cursor_sets_baseline(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Run-start seed advances the cursor without returning steers."""
+    from pdd.agentic_common import (
+        drain_issue_steers,
+        seed_issue_steer_cursor,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_comments = [
+        {
+            "id": 2001,
+            "user": {"login": "old-user", "type": "User"},
+            "body": "Historical discussion",
+            "created_at": "2026-05-01T10:00:00Z",
+        },
+        {
+            "id": 2002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "Bot noise",
+            "created_at": "2026-05-01T11:00:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(mock_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {}
+    assert seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd) is True
+    assert state["last_steered_comment_id"] == "2002"
+    assert state["last_steer_at"] == "2026-05-01T11:00:00Z"
+    assert state["steer_cursor_seeded"] is True
+
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        mock_comments
+        + [
+            {
+                "id": 2003,
+                "user": {"login": "new-user", "type": "User"},
+                "body": "Steer me",
+                "created_at": "2026-06-01T12:00:00Z",
+            },
+        ]
+    )
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert len(steers) == 1
+    assert steers[0].comment_id == "2003"
+    assert steers[0].body == "Steer me"
+
+
+def test_seed_issue_steer_cursor_empty_issue_persists_seed_on_resume(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Seeding an empty issue must survive save/resume and drain first later comment."""
+    from pdd.agentic_common import (
+        STEER_STATE_KEYS,
+        drain_issue_steers,
+        ensure_issue_steer_cursor_seeded,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    first_payload = []
+    later_payload = [
+        {
+            "id": 3001,
+            "user": {"login": "human", "type": "User"},
+            "body": "First mid-run steer",
+            "created_at": "2026-06-02T10:00:00Z",
+        }
+    ]
+    call_count = {"n": 0}
+
+    def _side_effect(*_args, **_kwargs):
+        call_count["n"] += 1
+        payload = first_payload if call_count["n"] == 1 else later_payload
+        result = MagicMock(returncode=0, stderr="")
+        result.stdout = json.dumps(payload)
+        return result
+
+    mock_subprocess_run.side_effect = _side_effect
+
+    initial_state = {}
+    assert ensure_issue_steer_cursor_seeded(
+        "owner", "repo", 55, initial_state, cwd=mock_cwd
+    )
+    assert initial_state.get("steer_cursor_seeded") is True
+    assert "last_steered_comment_id" not in initial_state
+
+    # Simulate save/resume copy path used by orchestrators.
+    resumed_state = {
+        key: initial_state[key] for key in STEER_STATE_KEYS if key in initial_state
+    }
+    assert resumed_state == {"steer_cursor_seeded": True}
+    assert not ensure_issue_steer_cursor_seeded(
+        "owner", "repo", 55, resumed_state, cwd=mock_cwd
+    )
+
+    steers = drain_issue_steers("owner", "repo", 55, resumed_state, cwd=mock_cwd)
+    assert [s.comment_id for s in steers] == ["3001"]
+    assert resumed_state["last_steered_comment_id"] == "3001"
+
+
+def test_seed_issue_steer_cursor_does_not_mark_seeded_on_fetch_failure(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Failed baseline fetch must not set steer_cursor_seeded."""
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="network/auth failure"
+    )
+
+    state = {}
+    assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert "steer_cursor_seeded" not in state
+    assert "last_steered_comment_id" not in state
+
+
+def test_seed_issue_steer_cursor_warns_on_fetch_failure(
+    mock_cwd, mock_subprocess_run, mock_shutil_which, caplog
+):
+    """Failed baseline fetch must warn that steering is disabled until next seed."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="network/auth failure"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert not seed_issue_steer_cursor(
+            "owner", "repo", 55, {}, cwd=mock_cwd, quiet=False
+        )
+
+    assert any(
+        "skipped steer cursor seed" in record.message
+        and "until a successful seed" in record.message
+        for record in caplog.records
+    )
+
+
+def test_seed_issue_steer_cursor_fetch_failure_quiet_suppresses_console(
+    mock_cwd, mock_subprocess_run, mock_shutil_which, capsys, caplog
+):
+    """quiet=True still logs to the steer logger but does not print to console."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="auth failure"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        seed_issue_steer_cursor("owner", "repo", 55, {}, cwd=mock_cwd, quiet=True)
+
+    assert any("skipped steer cursor seed" in r.message for r in caplog.records)
+    captured = capsys.readouterr()
+    assert "skipped steer cursor seed" not in captured.out
+
+
+def test_seed_issue_steer_cursor_missing_gh_does_not_mark_seeded(
+    mock_cwd, mock_shutil_which, caplog
+):
+    """Missing gh must not set steer_cursor_seeded or enable historical drains."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = None
+    state = {}
+
+    with caplog.at_level(logging.WARNING):
+        assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert "steer_cursor_seeded" not in state
+    assert "last_steered_comment_id" not in state
+    assert any("gh CLI not found" in record.message for record in caplog.records)
+
+
+def test_failed_seed_then_drain_skips_historical_comments(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Failed baseline seed must not let a later drain treat history as steers."""
+    from pdd.agentic_common import drain_issue_steers, seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="auth failure"
+    )
+
+    state = {}
+    assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert mock_subprocess_run.call_count == 1
+
+    historical = [
+        {
+            "id": 500,
+            "user": {"login": "human", "type": "User"},
+            "body": "Pre-run discussion",
+            "created_at": "2026-05-01T10:00:00Z",
+        }
+    ]
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps(historical),
+        stderr="",
+    )
+
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert steers == []
+    assert "steer_cursor_seeded" not in state
+    assert mock_subprocess_run.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # GitHub State Persistence Tests — Issue #481
 # _find_state_comment() missing --paginate causes workflow state loss
 # on issues with 30+ comments
