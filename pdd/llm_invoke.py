@@ -2605,7 +2605,17 @@ def _raise_if_provider_challenge_response(
     model_name: Any,
     item_index: int,
 ) -> None:
-    """Raise fallback-triggering error for provider-side HTML challenges."""
+    """Raise fallback-triggering error for provider-side HTML challenges.
+
+    Scoped to ChatGPT/Codex subscription responses: only that backend
+    (chatgpt.com via Cloudflare) ever serves these challenge pages. For any other
+    provider, output that merely contains strings like ``cf_chl_opt`` or
+    ``challenge-error-text`` is legitimate model content (e.g. generated
+    Cloudflare-handling code, web-scraping logic, or docs), so scanning it would
+    be a false positive that wrongly triggers fallback/failure (issue #1318 review).
+    """
+    if not str(model_name or "").lower().startswith("chatgpt/"):
+        return
     if not _is_provider_challenge_response(content):
         return
     logger.warning(
@@ -4800,14 +4810,13 @@ def llm_invoke(
                     # override is needed here.
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
-                    original_cache = litellm.cache
                     if is_chatgpt_subscription:
-                        litellm.cache = None
-                    try:
-                        response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
-                    finally:
-                        if is_chatgpt_subscription:
-                            litellm.cache = original_cache
+                        # Disable cache per-request (litellm honors cache={"no-cache": True})
+                        # rather than mutating the process-global litellm.cache, which races
+                        # with concurrent calls and can leave cache disabled for unrelated
+                        # traffic (issue #1318 review FM3).
+                        litellm_kwargs = {**litellm_kwargs, "cache": {"no-cache": True}}
+                    response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
 
                 end_time = time_module.time()
                 _emit_llm_attribution(
@@ -4883,37 +4892,33 @@ def llm_invoke(
                                 modified_prompt = prompt + " "
                                 try:
                                     retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
-                                    # Disable cache for retry
-                                    original_cache = litellm.cache
-                                    litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    try:
-                                        retry_kwargs = {
-                                            "model": model_name_litellm,
-                                            "messages": retry_messages,
-                                            "temperature": current_temperature,
-                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
-                                            "timeout": LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                        }
-                                        if _model_disallows_temperature(model_name_litellm):
-                                            retry_kwargs.pop("temperature", None)
-                                        retry_response = _completion_with_attribution(
-                                            context=attribution_context,
-                                            attempt_id=attempt_id,
-                                            call_type="completion_retry_cache_bypass",
-                                            model=str(model_name_litellm),
-                                            provider=str(provider),
-                                            api_key_name=api_key_name,
-                                            kwargs=retry_kwargs,
-                                        )
-                                    finally:
-                                        # Always restore cache, even if retry raises
-                                        litellm.cache = original_cache
+                                    # Bypass cache per-request (issue #1318 review FM3): litellm honors
+                                    # cache={"no-cache": True}; avoids racy global litellm.cache mutation.
+                                    retry_kwargs = {
+                                        "model": model_name_litellm,
+                                        "messages": retry_messages,
+                                        "temperature": current_temperature,
+                                        **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                        "timeout": LLM_CALL_TIMEOUT,
+                                        "cache": {"no-cache": True},
+                                        **time_kwargs,
+                                        **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                    }
+                                    if _model_disallows_temperature(model_name_litellm):
+                                        retry_kwargs.pop("temperature", None)
+                                    retry_response = _completion_with_attribution(
+                                        context=attribution_context,
+                                        attempt_id=attempt_id,
+                                        call_type="completion_retry_cache_bypass",
+                                        model=str(model_name_litellm),
+                                        provider=str(provider),
+                                        api_key_name=api_key_name,
+                                        kwargs=retry_kwargs,
+                                    )
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
@@ -4958,37 +4963,33 @@ def llm_invoke(
                                 modified_prompt = prompt + " "
                                 try:
                                     retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
-                                    # Disable cache for retry
-                                    original_cache = litellm.cache
-                                    litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    try:
-                                        retry_kwargs = {
-                                            "model": model_name_litellm,
-                                            "messages": retry_messages,
-                                            "temperature": current_temperature,
-                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
-                                            "timeout": LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                        }
-                                        if _model_disallows_temperature(model_name_litellm):
-                                            retry_kwargs.pop("temperature", None)
-                                        retry_response = _completion_with_attribution(
-                                            context=attribution_context,
-                                            attempt_id=attempt_id,
-                                            call_type="completion_retry_malformed_json",
-                                            model=str(model_name_litellm),
-                                            provider=str(provider),
-                                            api_key_name=api_key_name,
-                                            kwargs=retry_kwargs,
-                                        )
-                                    finally:
-                                        # Always restore cache, even if retry raises
-                                        litellm.cache = original_cache
+                                    # Bypass cache per-request (issue #1318 review FM3): litellm honors
+                                    # cache={"no-cache": True}; avoids racy global litellm.cache mutation.
+                                    retry_kwargs = {
+                                        "model": model_name_litellm,
+                                        "messages": retry_messages,
+                                        "temperature": current_temperature,
+                                        **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                        "timeout": LLM_CALL_TIMEOUT,
+                                        "cache": {"no-cache": True},
+                                        **time_kwargs,
+                                        **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                    }
+                                    if _model_disallows_temperature(model_name_litellm):
+                                        retry_kwargs.pop("temperature", None)
+                                    retry_response = _completion_with_attribution(
+                                        context=attribution_context,
+                                        attempt_id=attempt_id,
+                                        call_type="completion_retry_malformed_json",
+                                        model=str(model_name_litellm),
+                                        provider=str(provider),
+                                        api_key_name=api_key_name,
+                                        kwargs=retry_kwargs,
+                                    )
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
@@ -5232,37 +5233,33 @@ def llm_invoke(
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
                                         retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
-                                        # Disable cache for retry
-                                        original_cache = litellm.cache
-                                        litellm.cache = None
                                         # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                         _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                         _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                         _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                        try:
-                                            retry_kwargs = {
-                                                "model": model_name_litellm,
-                                                "messages": retry_messages,
-                                                "temperature": current_temperature,
-                                                **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
-                                                "timeout": LLM_CALL_TIMEOUT,
-                                                **time_kwargs,
-                                                **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                            }
-                                            if _model_disallows_temperature(model_name_litellm):
-                                                retry_kwargs.pop("temperature", None)
-                                            retry_response = _completion_with_attribution(
-                                                context=attribution_context,
-                                                attempt_id=attempt_id,
-                                                call_type="completion_retry_invalid_python",
-                                                model=str(model_name_litellm),
-                                                provider=str(provider),
-                                                api_key_name=api_key_name,
-                                                kwargs=retry_kwargs,
-                                            )
-                                        finally:
-                                            # Always restore cache, even if retry raises
-                                            litellm.cache = original_cache
+                                        # Bypass cache per-request (issue #1318 review FM3): litellm honors
+                                        # cache={"no-cache": True}; avoids racy global litellm.cache mutation.
+                                        retry_kwargs = {
+                                            "model": model_name_litellm,
+                                            "messages": retry_messages,
+                                            "temperature": current_temperature,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                            "timeout": LLM_CALL_TIMEOUT,
+                                            "cache": {"no-cache": True},
+                                            **time_kwargs,
+                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                        }
+                                        if _model_disallows_temperature(model_name_litellm):
+                                            retry_kwargs.pop("temperature", None)
+                                        retry_response = _completion_with_attribution(
+                                            context=attribution_context,
+                                            attempt_id=attempt_id,
+                                            call_type="completion_retry_invalid_python",
+                                            model=str(model_name_litellm),
+                                            provider=str(provider),
+                                            api_key_name=api_key_name,
+                                            kwargs=retry_kwargs,
+                                        )
                                         # Issue #509: Accumulate cost/tokens from original call + retry
                                         _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                         _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens

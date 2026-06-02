@@ -386,6 +386,53 @@ def test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present(monkeyp
     assert captured.get("model") == "chatgpt/gpt-5.5"
 
 
+def test_chatgpt_default_disables_cache_per_request_not_globally(monkeypatch):
+    """Issue #1318 review FM3: a chatgpt/ call disables cache via a per-request
+    cache={"no-cache": True} kwarg, NOT by mutating the process-global
+    litellm.cache (which races with concurrent llm_invoke calls)."""
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+
+    sentinel = object()
+    monkeypatch.setattr(li.litellm, "cache", sentinel, raising=False)
+    captured = {}
+
+    def fake_completion(**kwargs):
+        captured["model"] = kwargs.get("model")
+        captured["cache_kwarg"] = kwargs.get("cache")
+        captured["global_cache_during_call"] = li.litellm.cache
+        raise RuntimeError("STOP_AFTER_CAPTURE")
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        try:
+            li.llm_invoke(prompt="hi {x}", input_json={"x": "there"}, strength=1.0, verbose=False)
+        except Exception:
+            pass
+
+    assert captured.get("model") == "chatgpt/gpt-5.5"
+    assert captured.get("cache_kwarg") == {"no-cache": True}  # disabled per-request
+    assert captured.get("global_cache_during_call") is sentinel  # never nulled globally
+    assert li.litellm.cache is sentinel  # global untouched after the call
+
+
+def test_provider_challenge_detection_scoped_to_chatgpt():
+    """Issue #1318 review FM2: provider-challenge detection only fires for chatgpt/
+    responses. Benign output from other providers that merely contains Cloudflare
+    strings (e.g. generated Cloudflare-handling code/docs) must not be rejected."""
+    benign = ('<div class="challenge-error-text">x</div> cf_chl_opt '
+              '"Enable JavaScript and cookies to continue"')
+    # Non-chatgpt providers: legitimate content, must NOT raise.
+    for model in ("claude-sonnet-4-6", "gpt-5.5", "openai/gpt-5.4", "gemini/gemini-3-pro"):
+        li._raise_if_provider_challenge_response(benign, model, 0)
+    # chatgpt/: a real Cloudflare challenge still triggers fallback.
+    with pytest.raises(li.SchemaValidationError):
+        li._raise_if_provider_challenge_response(benign, "chatgpt/gpt-5.5", 0)
+
+
 # --------------------------------------------------------------------------- #
 # Codex subscription FAMILY (first-class provider, like Anthropic) — issue #1269
 # --------------------------------------------------------------------------- #
@@ -938,7 +985,9 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
         seen.append({
             "rf": "response_format" in kwargs,
             "schema": has_schema,
-            "cache_disabled": li.litellm.cache is None,
+            # FM3: cache is disabled per-request via cache={"no-cache": True},
+            # NOT by mutating the process-global litellm.cache.
+            "cache_disabled": kwargs.get("cache") == {"no-cache": True},
         })
         # Return None content to force the cache-bypass retry path (one of the
         # three retry sites), so we verify the retry call re-injects the schema.
@@ -964,6 +1013,7 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
         f"a chatgpt/ structured attempt lacked the schema instruction (retry regressed): {seen}"
     )
     assert all(s["cache_disabled"] for s in seen), f"chatgpt/ call(s) used LiteLLM cache: {seen}"
+    # FM3: the process-global litellm.cache must never be mutated (no concurrency race).
     assert li.litellm.cache is cache_marker
 
 

@@ -318,7 +318,7 @@
     - Prefer S3-compatible cache targeting GCS using HMAC keys (GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY, GCS_BUCKET_NAME).
     - Fall back to disk-based SQLite cache at <PROJECT_ROOT>/litellm_cache.sqlite.
     - Respect LITELLM_CACHE_DISABLE=1 to disable caching entirely.
-    - Restore cache state after retries.
+    - For ChatGPT-subscription (`chatgpt/`) completions and cache-bypass retries, disable cache **per-request** via `cache={"no-cache": True}` (litellm honors this) instead of mutating the process-global `litellm.cache`; the global toggle races with concurrent `llm_invoke` calls and can leave cache disabled for unrelated traffic (issue #1318 review).
 
 % LiteLLM Callback:
     - Register a success callback with litellm.success_callback.
