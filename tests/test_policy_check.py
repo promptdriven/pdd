@@ -152,6 +152,108 @@ def test_percent_format_logging_detected(tmp_path: Path) -> None:
     assert any(i.category == "leakage" for i in result.issues)
 
 
+def test_domain_write_capability_does_not_allow_filesystem_open(tmp_path: Path) -> None:
+    """Issue #828 style: domain 'write records' must not permit open(..., 'w')."""
+    prompt = tmp_path / "domain_write.prompt"
+    prompt.write_text(
+        "<capabilities>\n"
+        "- MAY write refund records.\n"
+        "- MUST NOT send emails.\n"
+        "</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "refund.py"
+    target.write_text(
+        "def refund() -> None:\n"
+        "    open('/tmp/pdd_policy_probe', 'w').write('x')\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "file" for i in result.issues)
+
+
+def test_pathlib_write_text_requires_filesystem_capability(tmp_path: Path) -> None:
+    prompt = tmp_path / "no_file.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY read configuration.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "path_write.py"
+    target.write_text(
+        "from pathlib import Path\n\n"
+        "def save() -> None:\n"
+        "    Path('/tmp/pdd_policy_path_probe').write_text('x')\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "file" and "write_text" in i.message for i in result.issues)
+
+
+def test_pathlib_write_bytes_and_open_write_mode(tmp_path: Path) -> None:
+    prompt = tmp_path / "no_file.prompt"
+    prompt.write_text("<capabilities>\n- MAY call provider API.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "path_ops.py"
+    target.write_text(
+        "from pathlib import Path\n\n"
+        "def save() -> None:\n"
+        "    Path('/tmp/a').write_bytes(b'x')\n"
+        "    Path('/tmp/b').open('w').write('y')\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert sum(1 for i in result.issues if i.category == "file") >= 2
+
+
+def test_import_os_environ_subscript_blocked(tmp_path: Path) -> None:
+    prompt = tmp_path / "no_env.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "env_read.py"
+    target.write_text(
+        "from os import environ\n\n"
+        "def token() -> str:\n"
+        "    return environ['SECRET_TOKEN']\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "env" for i in result.issues)
+
+
+def test_import_os_as_alias_environ_blocked(tmp_path: Path) -> None:
+    prompt = tmp_path / "no_env.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "env_alias.py"
+    target.write_text(
+        "import os as o\n\n"
+        "def token() -> str:\n"
+        "    return o.environ['SECRET_TOKEN']\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "env" and "environ" in i.message for i in result.issues)
+
+
+def test_explicit_filesystem_capability_allows_pathlib_write(tmp_path: Path) -> None:
+    prompt = tmp_path / "file_ok.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY write audit files to disk.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "allowed_path.py"
+    target.write_text(
+        "from pathlib import Path\n\n"
+        "def audit(line: str) -> None:\n"
+        "    Path('/tmp/audit.log').write_text(line)\n",
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert result.passed
+
+
 def test_policy_check_cli_json_output() -> None:
     """CLI ``--json`` returns structured findings for CI integration."""
     target = FIXTURE_DIR / "forbidden_network.py"

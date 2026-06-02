@@ -23,7 +23,25 @@ _NETWORK_KEYWORDS = (
     "socket",
 )
 _SHELL_KEYWORDS = ("shell", "command", "subprocess", "exec", "spawn", "system")
-_FILE_KEYWORDS = ("file", "write", "delete", "filesystem", "disk", "persist", "storage")
+# Filesystem allowance requires explicit storage wording — not bare "write" in domain
+# bullets such as "MAY write refund records".
+_FILESYSTEM_CAPABILITY_KEYWORDS = (
+    "file",
+    "files",
+    "filesystem",
+    "disk",
+    "storage",
+    "directory",
+    "pathlib",
+)
+_FILESYSTEM_WRITE_PHRASES = (
+    "write file",
+    "write files",
+    "write to disk",
+    "write to the filesystem",
+    "files to disk",
+    "on disk",
+)
 _ENV_KEYWORDS = ("env", "environment", "environ", "configuration", "config")
 _EMAIL_KEYWORDS = ("email", "mail", "smtp")
 
@@ -52,7 +70,32 @@ _SENSITIVE_WORD_RE = re.compile(
 
 SHELL_METHODS = frozenset({"system", "popen", "spawnl", "spawnv", "spawnlp", "spawnvp"})
 FILE_WRITE_METHODS = frozenset(
-    {"remove", "unlink", "chmod", "rmtree", "mkdir", "rename", "replace", "write", "write_text"}
+    {
+        "remove",
+        "unlink",
+        "chmod",
+        "rmtree",
+        "mkdir",
+        "rename",
+        "replace",
+        "write",
+        "write_text",
+        "write_bytes",
+        "touch",
+    }
+)
+PATHLIB_WRITE_METHODS = frozenset(
+    {
+        "write_text",
+        "write_bytes",
+        "unlink",
+        "rmdir",
+        "chmod",
+        "touch",
+        "mkdir",
+        "rename",
+        "replace",
+    }
 )
 ENV_METHODS = frozenset({"getenv", "putenv"})
 _WRITE_OPEN_MODES = frozenset({"w", "a", "x", "+"})
@@ -90,6 +133,29 @@ def _capability_allows(capabilities: list[Capability], keywords: tuple[str, ...]
     return False
 
 
+def _capability_allows_filesystem(capabilities: list[Capability]) -> bool:
+    """Return True only for capabilities that explicitly authorize filesystem I/O."""
+    for cap in capabilities:
+        text = cap.text.lower()
+        if cap.is_must_not and (
+            any(kw in text for kw in _FILESYSTEM_CAPABILITY_KEYWORDS)
+            or any(phrase in text for phrase in _FILESYSTEM_WRITE_PHRASES)
+            or ("write" in text and any(fs in text for fs in ("file", "files", "disk", "filesystem")))
+        ):
+            return False
+    for cap in capabilities:
+        if cap.is_must_not:
+            continue
+        text = cap.text.lower()
+        if any(kw in text for kw in _FILESYSTEM_CAPABILITY_KEYWORDS):
+            return True
+        if any(phrase in text for phrase in _FILESYSTEM_WRITE_PHRASES):
+            return True
+        if "write" in text and any(fs in text for fs in ("file", "files", "disk", "filesystem", "storage")):
+            return True
+    return False
+
+
 class PolicyVisitor(ast.NodeVisitor):
     def __init__(
         self,
@@ -111,7 +177,7 @@ class PolicyVisitor(ast.NodeVisitor):
 
         self.allowed_network = _capability_allows(capabilities, _NETWORK_KEYWORDS)
         self.allowed_shell = _capability_allows(capabilities, _SHELL_KEYWORDS)
-        self.allowed_file = _capability_allows(capabilities, _FILE_KEYWORDS)
+        self.allowed_file = _capability_allows_filesystem(capabilities)
         self.allowed_env = _capability_allows(capabilities, _ENV_KEYWORDS)
         self.allowed_email = _capability_allows(capabilities, _EMAIL_KEYWORDS)
 
@@ -147,7 +213,13 @@ class PolicyVisitor(ast.NodeVisitor):
         if node.module:
             self._check_import(node.module, node)
             for alias in node.names:
-                self.imported_names[alias.asname or alias.name] = node.module
+                local = alias.asname or alias.name
+                if node.module == "os" and alias.name in {"environ", "environb"}:
+                    self.imported_names[local] = f"os.{alias.name}"
+                elif node.module == "pathlib" and alias.name == "Path":
+                    self.imported_names[local] = "pathlib"
+                else:
+                    self.imported_names[local] = node.module
         self.generic_visit(node)
 
     def _check_import(self, module: str, node: ast.AST) -> None:
@@ -174,6 +246,45 @@ class PolicyVisitor(ast.NodeVisitor):
             return False
         return any(flag in mode for flag in _WRITE_OPEN_MODES)
 
+    def _pathlib_open_single_arg_is_write_mode(self, node: ast.Call) -> bool:
+        if len(node.args) != 1 or not isinstance(node.args[0], ast.Constant):
+            return False
+        value = node.args[0].value
+        if not isinstance(value, str):
+            return False
+        return any(flag in value for flag in _WRITE_OPEN_MODES)
+
+    def _resolve_bound_module(self, name: str) -> str:
+        """Map a local name to its imported module root (e.g. ``Path`` -> ``pathlib``)."""
+        bound = self.imported_names.get(name, name)
+        if bound in {"pathlib", "os"}:
+            return bound
+        if bound.startswith("os."):
+            return "os"
+        return bound.split(".")[0]
+
+    def _pathlib_constructor_call(self, call_node: ast.Call) -> bool:
+        func = call_node.func
+        if isinstance(func, ast.Name):
+            return self._resolve_bound_module(func.id) == "pathlib"
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and self._resolve_bound_module(func.value.id) == "pathlib"
+            and func.attr == "Path"
+        ):
+            return True
+        return False
+
+    def _check_file_operation(
+        self,
+        node: ast.Call,
+        *,
+        label: str,
+    ) -> None:
+        if not self.allowed_file:
+            self._add_issue(node, "file", f"Unauthorized file operation: {label}")
+
     def visit_Call(self, node: ast.Call) -> None:
         func_name = ""
         module_name = ""
@@ -181,6 +292,8 @@ class PolicyVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute):
             if isinstance(node.func.value, ast.Name):
                 module_name = node.func.value.id
+                func_name = node.func.attr
+            elif isinstance(node.func.value, ast.Call):
                 func_name = node.func.attr
             elif isinstance(node.func.value, ast.Attribute) and isinstance(
                 node.func.value.value, ast.Name
@@ -200,13 +313,46 @@ class PolicyVisitor(ast.NodeVisitor):
 
         if (module_name == "os" and func_name in FILE_WRITE_METHODS) or (
             module_name == "shutil" and func_name in FILE_WRITE_METHODS
-        ) or (module_name == "pathlib" and func_name in {"write_text", "write_bytes"}):
-            if not self.allowed_file:
-                label = f"{module_name}.{func_name}" if module_name else func_name
-                self._add_issue(node, "file", f"Unauthorized file operation: {label}")
-        elif func_name == "open" and not module_name and self._open_looks_like_write(node):
-            if not self.allowed_file:
-                self._add_issue(node, "file", "Unauthorized file write via open()")
+        ):
+            label = f"{module_name}.{func_name}" if module_name else func_name
+            self._check_file_operation(node, label=label)
+        elif func_name == "open":
+            is_pathlib_open = (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Call)
+                and self._pathlib_constructor_call(node.func.value)
+            )
+            if is_pathlib_open and (
+                self._open_looks_like_write(node)
+                or self._pathlib_open_single_arg_is_write_mode(node)
+            ):
+                self._check_file_operation(node, label="Path(...).open()")
+            elif isinstance(node.func, ast.Name) and self._open_looks_like_write(node):
+                self._check_file_operation(node, label="open() write mode")
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Call)
+            and self._pathlib_constructor_call(node.func.value)
+            and (
+                func_name in PATHLIB_WRITE_METHODS
+                or (
+                    func_name == "open"
+                    and (
+                        self._open_looks_like_write(node)
+                        or self._pathlib_open_single_arg_is_write_mode(node)
+                    )
+                )
+            )
+        ):
+            self._check_file_operation(node, label=f"Path(...).{func_name}")
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and self._resolve_bound_module(node.func.value.id) == "pathlib"
+            and func_name in PATHLIB_WRITE_METHODS
+        ):
+            label = f"{node.func.value.id}.{func_name}"
+            self._check_file_operation(node, label=label)
 
         if (module_name == "os" and func_name in ENV_METHODS) or (
             func_name in ENV_METHODS
@@ -230,13 +376,38 @@ class PolicyVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
+    def _env_access_label(self, node: ast.Attribute) -> Optional[str]:
+        if node.attr not in {"environ", "environb"}:
+            return None
+        if isinstance(node.value, ast.Name):
+            root = self._resolve_bound_module(node.value.id)
+            if root == "os":
+                return f"{node.value.id}.{node.attr}"
+        return None
+
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if isinstance(node.value, ast.Name) and node.value.id == "os" and node.attr in {
-            "environ",
-            "environb",
-        }:
-            if not self.allowed_env:
-                self._add_issue(node, "env", f"Unauthorized environment access: os.{node.attr}")
+        env_label = self._env_access_label(node)
+        if env_label and not self.allowed_env:
+            self._add_issue(node, "env", f"Unauthorized environment access: {env_label}")
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if isinstance(node.value, ast.Name):
+            bound = self.imported_names.get(node.value.id, "")
+            if bound in {"os.environ", "os.environb"} and not self.allowed_env:
+                self._add_issue(
+                    node,
+                    "env",
+                    f"Unauthorized environment access: {bound}[...]",
+                )
+        elif isinstance(node.value, ast.Attribute):
+            env_label = self._env_access_label(node.value)
+            if env_label and not self.allowed_env:
+                self._add_issue(
+                    node,
+                    "env",
+                    f"Unauthorized environment access: {env_label}[...]",
+                )
         self.generic_visit(node)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:

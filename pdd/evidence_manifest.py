@@ -492,7 +492,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
-    
+
     # If sync_result is provided, use it to populate fields (Alignment with prompt interface)
     if sync_result is not None:
         if validation is None:

@@ -45,7 +45,7 @@ The initial version focuses on high-risk side effects in Python:
 - **Shell execution:** `os.system`, `subprocess.*`, etc.
 - **Environment reads:** `os.getenv`, `os.environ`, unless allowed.
 - **Sensitive data leaks:** Logging/printing names or string literals suggesting `token`, `secret`, `password`, `cvv`, `pan`, etc. (word-boundary match).
-- **File writes:** `open(..., "w")`, `Path.write_text`, `os.remove`, etc. Read-only `open()` is not flagged.
+- **File writes:** `open(..., "w")`, `Path(...).write_text` / `write_bytes`, `Path(...).open(..., "w")`, `os.remove`, etc. Domain bullets such as “MAY write refund records” do **not** authorize filesystem writes. Read-only `open()` is not flagged.
 
 ### Deferred in v1
 
