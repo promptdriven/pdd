@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.257",
-  "timestamp": "2026-06-01T21:54:58.052013+00:00",
+  "pdd_version": "0.0.260.dev0",
+  "timestamp": "2026-06-02T00:37:00.644303+00:00",
   "command": "test",
   "prompt_hash": "2ec697deea9ebedb15c033c4e77587bc9d2f87ae9ba9d5c1a1b3005f35248ed4",
-  "code_hash": "3eff36b45a98ff865a177ffe404eacf28e08b0d91c3c33a454ffb6831b854a1c",
+  "code_hash": "c9e5245eb2470a56aa19bc48a2f14101deb1ec9b2481c460def53b67d64ded6b",
   "example_hash": "8cc5f11b0430113ad52c918cdbabafe254cf01667eb66e1ac8837f5cea965024",
-  "test_hash": "43744ec3d8b6ffb3e0e99b574bf0fb137d15712c338d10877108bb8ba0c86896",
+  "test_hash": "cf9d89313511f6a1614f675760f83b3748dc51d39f7eac728fed185488d58c01",
   "test_files": {
-    "test_agentic_e2e_fix_orchestrator.py": "43744ec3d8b6ffb3e0e99b574bf0fb137d15712c338d10877108bb8ba0c86896",
+    "test_agentic_e2e_fix_orchestrator.py": "cf9d89313511f6a1614f675760f83b3748dc51d39f7eac728fed185488d58c01",
     "test_agentic_e2e_fix_orchestrator_resume_prompt.py": "8e29ea7eb6330f75fa53b2699663f417b43cb063b8ac5613f34cbf0a6ceaa917"
   },
   "include_deps": {
