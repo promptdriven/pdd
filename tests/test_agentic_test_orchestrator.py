@@ -490,6 +490,100 @@ def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
     assert adds[-1][-1] != "HEAD"
 
 
+def _git_issue1338_test(repo: Path, *args: str) -> str:
+    """Run git in an isolated test repo and return stdout."""
+    import os
+    import subprocess
+
+    env = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        env.pop(key, None)
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    return result.stdout
+
+
+def _init_issue1338_test_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    _git_issue1338_test(repo, "init", "-q")
+    _git_issue1338_test(repo, "config", "user.email", "test@example.com")
+    _git_issue1338_test(repo, "config", "user.name", "Test User")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    _git_issue1338_test(repo, "add", ".")
+    _git_issue1338_test(repo, "commit", "-q", "-m", "init")
+
+
+def test_test_orchestrator_stale_registered_branch_is_pruned_and_recreated(
+    tmp_path: Path,
+) -> None:
+    """A removed worktree registered to test/issue-N should not block setup."""
+    import shutil
+
+    repo = tmp_path / "repo"
+    _init_issue1338_test_repo(repo)
+    stale = repo / "old-test-wt"
+    _git_issue1338_test(repo, "worktree", "add", "-q", "-b", "test/issue-7", str(stale), "HEAD")
+    shutil.rmtree(stale)
+
+    wt_path, err = _setup_worktree(repo, 7, quiet=True, console=MagicMock())
+
+    assert err is None
+    assert wt_path == repo / ".pdd" / "worktrees" / "test-issue-7"
+    assert wt_path is not None and wt_path.exists()
+    current = _git_issue1338_test(wt_path, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    assert current == "test/issue-7"
+    assert (wt_path / "f.txt").read_text(encoding="utf-8") == "x\n"
+
+
+def test_test_orchestrator_live_registered_branch_keeps_clear_failure(
+    tmp_path: Path,
+) -> None:
+    """A live test worktree conflict should remain a delete/setup failure."""
+    repo = tmp_path / "repo"
+    _init_issue1338_test_repo(repo)
+    live = repo / "live-test-wt"
+    _git_issue1338_test(repo, "worktree", "add", "-q", "-b", "test/issue-7", str(live), "HEAD")
+
+    wt_path, err = _setup_worktree(repo, 7, quiet=True, console=MagicMock())
+
+    assert wt_path is None
+    assert err is not None
+    assert "test/issue-7" in err
+    assert str(live) in err
+    assert "worktree" in err.lower()
+    assert "remove" in err.lower() or "prune" in err.lower() or "delete" in err.lower()
+    assert "Git worktree creation failed" not in err
+
+
+def test_test_orchestrator_surfaces_actionable_setup_error(
+    mock_deps,
+    default_args,
+    tmp_path: Path,
+) -> None:
+    """Caller should preserve the setup helper's branch/worktree error text."""
+    live = tmp_path / "live-test-wt"
+    setup_error = (
+        f"Cannot reset branch test/issue-7 because it is checked out at {live}. "
+        "Remove that worktree and retry."
+    )
+    mock_deps["wt"].return_value = (None, setup_error)
+    default_args["issue_number"] = 7
+
+    success, msg, _cost, _model, _files = run_agentic_test_orchestrator(**default_args)
+
+    mock_deps["wt"].assert_called()
+    assert success is False
+    assert "test/issue-7" in msg
+    assert str(live) in msg
+    assert setup_error in msg
+
+
 def test_submit_pr_prompt_uses_clean_restart_push_and_pr_update():
     """Step 17 must handle old remote test branches during clean restart."""
     prompt = Path("pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt").read_text(

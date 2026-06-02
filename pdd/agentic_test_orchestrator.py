@@ -155,6 +155,59 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def _prune_worktrees(cwd: Path) -> Tuple[bool, str]:
+    """Prune stale git worktree registrations."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False, "Not a git repository"
+    try:
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+        return False, err_msg
+
+
+def _worktree_path_for_branch(cwd: Path, branch: str) -> Optional[str]:
+    """Return the registered worktree path currently using a local branch."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return None
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=git_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+
+    current_path: Optional[str] = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = line.split(" ", 1)[1]
+        elif line == f"branch refs/heads/{branch}":
+            return current_path
+    return None
+
+
+def _format_branch_worktree_error(cwd: Path, branch: str, delete_error: str) -> str:
+    """Build a direct branch cleanup error with the conflicting worktree path."""
+    worktree_path = _worktree_path_for_branch(cwd, branch)
+    if worktree_path:
+        return (
+            f"Cannot reset branch {branch} because it is checked out in worktree "
+            f"{worktree_path}. Remove that worktree or run 'git worktree prune' and retry."
+        )
+    return f"Failed to delete existing branch {branch}: {delete_error}"
+
+
 def _resolve_main_ref(git_root: Path) -> str:
     """Resolve a default branch ref for clean-restart worktree bases."""
     for ref in ("origin/main", "origin/master", "main", "master"):
@@ -200,10 +253,14 @@ def _setup_worktree(
         else:
             shutil.rmtree(worktree_path)
 
+    prune_ok, prune_err = _prune_worktrees(git_root)
+    if not prune_ok:
+        return None, f"Failed to prune stale worktrees: {prune_err}"
+
     if _branch_exists(cwd, branch_name):
         del_ok, del_err = _delete_branch(cwd, branch_name)
         if not del_ok:
-            return None, f"Failed to delete existing branch {branch_name}: {del_err}"
+            return None, _format_branch_worktree_error(git_root, branch_name, del_err)
 
     base_ref = "HEAD"
     if clean_restart:
