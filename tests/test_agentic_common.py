@@ -635,6 +635,71 @@ def test_interactive_pty_runner_waits_for_reply_file(tmp_path):
     assert model is None
 
 
+def test_interactive_pty_runner_detects_trust_prompt_across_chunks(tmp_path):
+    """The workspace-trust prompt can arrive split across several PTY reads; the
+    bounded rolling output_tail must accumulate it so the detector still fires and
+    the runner sends Enter. Verified end-to-end: the fake reports back whether it
+    received that Enter, so text=='TRUSTED' proves multi-chunk detection worked."""
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-trust-chunks"
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import sys, time, json, pathlib, select\n"
+        "reply = pathlib.Path(sys.argv[1])\n"
+        "job_id = sys.argv[2]\n"
+        # the trust prompt (all detector tokens) emitted in separate flushed chunks
+        "for part in ['Quick safety ', 'check\\n', 'I trust ', 'this folder\\n', "
+        "'Press Enter to ', 'confirm\\n']:\n"
+        "    sys.stdout.write(part); sys.stdout.flush(); time.sleep(0.05)\n"
+        # wait (bounded) for the runner's Enter on trust detection, then report it
+        "r, _, _ = select.select([sys.stdin], [], [], 4)\n"
+        "got = 'TRUSTED' if r else 'NO_ENTER'\n"
+        "reply.write_text(json.dumps({'job_id': job_id, 'success': True, 'text': got}), encoding='utf-8')\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(reply_path), job_id],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout=10,
+        reply_path=reply_path,
+        job_id=job_id,
+    )
+
+    assert success is True, f"trust prompt split across chunks must still be detected; got {text!r}"
+    assert text == "TRUSTED"
+
+
+def test_interactive_pty_runner_timeout_tail_from_bounded_buffer(tmp_path):
+    """On timeout the error tail is sourced from the bounded rolling buffer (the
+    unbounded per-chunk output_chunks list is gone) and still carries recent
+    output."""
+    reply_path = tmp_path / "reply.json"
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import sys, time\n"
+        "print('NEEDLE_OUTPUT_MARKER')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout=2,
+        reply_path=reply_path,
+        job_id="job-timeout",
+    )
+
+    assert success is False
+    assert "timed out" in text.lower()
+    assert "NEEDLE_OUTPUT_MARKER" in text
+
+
 def test_estimate_claude_interactive_session_cost_dedupes_request_ids(tmp_path):
     home = tmp_path / "home"
     session_id = "11111111-2222-4333-8444-555555555555"
