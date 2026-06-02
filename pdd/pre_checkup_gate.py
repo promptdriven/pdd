@@ -202,6 +202,26 @@ def _touched_architecture_json_error(
             f"{type(data).__name__} — the gate would silently treat the module "
             "graph as empty"
         )
+    # The container is recognized, but each entry must be a usable module mapping
+    # — a dict with at least a `filename` or `filepath`. A recognized container
+    # full of malformed entries ([{}] / {"modules": [{}]}) parses but maps
+    # nothing, so drift-sync no-ops and the gate passes vacuously; a non-dict
+    # member (["oops"]) makes the downstream entry.get(...) raise, crashing the
+    # gate fail-closed with an opaque error instead of a deterministic verdict.
+    # Block both. (All real entries satisfy this — verified 270/270; an empty
+    # list / {"modules": []} has no entries and is a legitimate empty state.)
+    entries = data if isinstance(data, list) else data.get("modules", [])
+    bad = sum(
+        1
+        for e in entries
+        if not (isinstance(e, dict) and (e.get("filename") or e.get("filepath")))
+    )
+    if bad:
+        return (
+            "architecture.json (changed by this PR) has malformed module "
+            f"entries ({bad} of {len(entries)} are not dicts with a "
+            "filename/filepath) — the gate cannot derive a module graph from it"
+        )
     return None
 
 
@@ -224,6 +244,11 @@ def _prompt_filename_from_changed(rel: str) -> Optional[str]:
 
 
 def _architecture_entry_maps_file(entry: Dict[str, Any], rel: str) -> bool:
+    if not isinstance(entry, dict):
+        # Defensive: a non-touched but malformed architecture.json may carry
+        # non-dict members; skip them rather than letting entry.get(...) raise
+        # and fail the gate closed for every PR.
+        return False
     filepath = _norm(entry.get("filepath", ""))
     filename = _norm(entry.get("filename", ""))
     return rel in {filepath, f"pdd/prompts/{filename}", f"prompts/{filename}"}
@@ -243,6 +268,8 @@ def _touched_prompt_files(
             if prompt_path is not None:
                 code_path: Optional[Path] = None
                 for entry in architecture:
+                    if not isinstance(entry, dict):
+                        continue
                     if _norm(entry.get("filename", "")) == prompt_filename:
                         filepath = entry.get("filepath")
                         if isinstance(filepath, str) and filepath:

@@ -567,6 +567,41 @@ def test_touched_wrong_shape_architecture_json_blocks(tmp_path):
         ) is None, ok
 
 
+def test_touched_malformed_architecture_entries_block_not_crash(tmp_path):
+    """Regression: a recognized container with malformed ENTRIES must cleanly
+    block, never crash. Empty-dict entries ([{}]) map nothing -> the gate would
+    pass vacuously; a non-dict member (["oops"]) makes downstream entry.get(...)
+    raise -> the gate crashes fail-closed with an opaque error. Both must become
+    a deterministic 'malformed module entries' block."""
+    arch = tmp_path / "architecture.json"
+    for bad in ['[{}]', '{"modules": [{}]}', '["oops"]', '{"modules": ["oops"]}']:
+        arch.write_text(bad, encoding="utf-8")
+        err = pre_checkup_gate._touched_architecture_json_error(
+            tmp_path, ["architecture.json"]
+        )
+        assert err and "malformed module entries" in err, (bad, err)
+        passed, message, _cost = pre_checkup_gate.run_pre_checkup_gate(
+            tmp_path, ["architecture.json"], quiet=True, timeout_per_check=20.0
+        )
+        assert passed is False and "infrastructure error" not in message, (bad, message)
+
+
+def test_nondict_arch_entry_does_not_crash_untouched_path(tmp_path):
+    """Defensive: a malformed architecture.json the PR did NOT touch must not
+    crash the drift-sync entry walk (entry.get on a non-dict) and fail the gate
+    closed for every PR — non-dict entries are skipped."""
+    (tmp_path / "architecture.json").write_text(
+        '["oops", {"filename": "y_python.prompt", "filepath": "pdd/y.py"}]',
+        encoding="utf-8",
+    )
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "pdd" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path, ["pdd/foo.py"], base_ref=None, strict=False
+    )
+    assert outcome.ok is True, outcome.messages
+
+
 def test_caller_compat_resolves_from_dot_import_submodule(tmp_path):
     """Regression: `from . import api; api.build(...)` (and `from . import api as a`)
     binds the SUBMODULE, so the call is a module.attr call. The sweep must resolve
