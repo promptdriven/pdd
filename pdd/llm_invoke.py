@@ -2535,6 +2535,25 @@ def _is_provider_challenge_response(content: Any) -> bool:
     )
 
 
+def _raise_if_provider_challenge_response(
+    content: Any,
+    model_name: Any,
+    item_index: int,
+) -> None:
+    """Raise fallback-triggering error for provider-side HTML challenges."""
+    if not _is_provider_challenge_response(content):
+        return
+    logger.warning(
+        "[PROVIDER CHALLENGE] %s returned an HTML challenge. Trying next model.",
+        model_name,
+    )
+    raise SchemaValidationError(
+        "Provider returned an HTML challenge instead of model output",
+        raw_response=content,
+        item_index=item_index,
+    )
+
+
 def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     """Rows backed by the ChatGPT/Codex subscription provider."""
     return model_df[
@@ -4713,17 +4732,7 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
-                        if _is_provider_challenge_response(raw_result):
-                            logger.warning(
-                                "[PROVIDER CHALLENGE] %s returned an HTML challenge. "
-                                "Trying next model.",
-                                model_name_litellm,
-                            )
-                            raise SchemaValidationError(
-                                "Provider returned an HTML challenge instead of model output",
-                                raw_response=raw_result,
-                                item_index=i,
-                            )
+                        _raise_if_provider_challenge_response(raw_result, model_name_litellm, i)
                         # Record the last (prompt, raw response) pair for the current operation.
                         if _record_llm_pair is not None and trace_prompt_repr is not None:
                             try:
@@ -4781,6 +4790,7 @@ def llm_invoke(
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    _raise_if_provider_challenge_response(retry_raw_result, model_name_litellm, i)
                                     if _record_llm_pair is not None and trace_prompt_repr is not None:
                                         try:
                                             _record_llm_pair(
@@ -4797,6 +4807,8 @@ def llm_invoke(
                                         logger.error(f"[ERROR] Cache bypass retry also returned None for item {i}")
                                         results.append("ERROR: LLM returned None content even after cache bypass")
                                         continue
+                                except SchemaValidationError:
+                                    raise
                                 except Exception as retry_e:
                                     logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
                                     results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
@@ -4852,12 +4864,15 @@ def llm_invoke(
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    _raise_if_provider_challenge_response(retry_raw_result, model_name_litellm, i)
                                     if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
                                         logger.info(f"[SUCCESS] Cache bypass retry for malformed JSON succeeded for item {i}")
                                         raw_result = retry_raw_result
                                     else:
                                         # Retry also failed, but we'll continue with repair logic below
                                         logger.warning(f"[WARNING] Cache bypass retry also returned malformed JSON for item {i}, attempting repair...")
+                                except SchemaValidationError:
+                                    raise
                                 except Exception as retry_e:
                                     logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                             else:
@@ -5122,6 +5137,7 @@ def llm_invoke(
                                         _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                         # Extract and re-parse the retry result
                                         retry_raw_result = retry_response.choices[0].message.content
+                                        _raise_if_provider_challenge_response(retry_raw_result, model_name_litellm, i)
                                         if retry_raw_result is not None:
                                             # Re-parse the retry result
                                             retry_parsed = None
@@ -5144,6 +5160,8 @@ def llm_invoke(
                                                 logger.warning(f"[WARNING] Cache bypass retry returned unparseable result for item {i}")
                                         else:
                                             logger.warning(f"[WARNING] Cache bypass retry returned None for item {i}")
+                                    except SchemaValidationError:
+                                        raise
                                     except Exception as retry_e:
                                         logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
                                 else:
