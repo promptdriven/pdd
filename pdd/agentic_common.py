@@ -4641,6 +4641,27 @@ def seed_issue_steer_cursor(
     return True
 
 
+def ensure_issue_steer_cursor_seeded(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+) -> bool:
+    """Seed the steer cursor at workflow start when not yet established.
+
+    Returns True when ``state`` was updated (caller should persist workflow state).
+    """
+    if not repo_owner or not repo_name or not issue_number:
+        return False
+    if _steer_cursor_initialized(state):
+        return False
+    return seed_issue_steer_cursor(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    )
+
+
 def drain_issue_steers(
     repo_owner: str,
     repo_name: str,

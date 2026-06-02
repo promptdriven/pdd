@@ -38,6 +38,7 @@ from .agentic_common import (
     save_workflow_state,
     substitute_template_variables,
     drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
@@ -2298,6 +2299,11 @@ def _run_agentic_checkup_orchestrator_inner(
         if step_steers:
             _save_state()
         return step_steers
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd
+    ):
+        _save_state()
 
     def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
         """Project (step_num, iteration) -> deterministic non-negative int.

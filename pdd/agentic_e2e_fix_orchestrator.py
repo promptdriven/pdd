@@ -34,6 +34,7 @@ from .agentic_common import (
     normalize_step_comments_state,
     post_step_comment_once,
     drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -2361,6 +2362,10 @@ def run_agentic_e2e_fix_orchestrator(
             for key in ("last_steered_comment_id", "last_steer_at", "steer_generation")
             if key in steer_state
         }
+
+    ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd
+    )
 
     def _issue_step_steers():
         nonlocal github_comment_id

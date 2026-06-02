@@ -27,6 +27,7 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES,
     drain_step_steers,
     apply_clarification_steers_on_resume,
+    ensure_issue_steer_cursor_seeded,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1859,6 +1860,23 @@ def run_agentic_bug_orchestrator(
 
     if effective_clean_restart:
         state["clean_restart"] = True
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "bug",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if seed_save:
+            github_comment_id = seed_save
 
     steer_generation_before = state.get("steer_generation", 0)
     issue_content = apply_clarification_steers_on_resume(

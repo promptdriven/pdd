@@ -35,6 +35,7 @@ from pdd.agentic_common import (
     drain_step_steers,
     issue_update_should_clear_workflow_state,
     apply_clarification_steers_on_resume,
+    ensure_issue_steer_cursor_seeded,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -1561,6 +1562,25 @@ def run_agentic_change_orchestrator(
     # Normalize step comments tracking (Set[int] of step indices already posted)
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "change",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+            dedupe=effective_clean_restart,
+        )
+        if seed_save:
+            github_comment_id = seed_save
+            state["github_comment_id"] = github_comment_id
 
     pddrc_context = _load_pddrc_context(cwd)
 

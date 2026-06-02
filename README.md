@@ -3356,7 +3356,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_STEER_JSON`**: JSON list of mid-run user steers (`comment_id`, `author`, `body`). Cloud runners pass pending issue comments; orchestrators drain at step boundaries and inject `## Steered user input (mid-run)` into the next agentic step.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 
-**Mid-run issue comment steering** (issue-driven orchestrators): humans comment on the GitHub issue to steer a run in progress. The CLI drains comments at step boundaries (separate from `PDD_USER_FEEDBACK`, which is only for between-run retries). `/stop` and label removal cancel jobs in **pdd_cloud**, not via organic comments. Clarification pauses (`STOP_CONDITION`) resume when new comments arrive; workflow state uses `last_steered_comment_id` for idempotency.
+**Mid-run issue comment steering** (issue-driven orchestrators): humans comment on the GitHub issue to steer a run in progress. The CLI drains comments at step boundaries (separate from `PDD_USER_FEEDBACK`, which is only for between-run retries). `/stop` and label removal cancel jobs in **pdd_cloud**, not via organic comments. Clarification pauses (`STOP_CONDITION`) resume when new comments arrive; workflow state uses `last_steered_comment_id` for idempotency. Automated orchestrator wiring checks live in `tests/test_mid_run_steer_orchestrator_integration.py`; see `docs/mid_run_steering_validation.md`.
 
 #### Output Path Variables
 

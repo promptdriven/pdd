@@ -29,6 +29,7 @@ from .agentic_common import (
     post_step_comment_once,
     drain_step_steers,
     apply_clarification_steers_on_resume,
+    ensure_issue_steer_cursor_seeded,
 )
 from .pytest_output import _find_project_root
 from .load_prompt_template import load_prompt_template
@@ -409,6 +410,24 @@ def run_agentic_test_orchestrator(
 
     step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "test",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if seed_save:
+            github_comment_id = seed_save
+            state["github_comment_id"] = github_comment_id
 
     steer_generation_before = state.get("steer_generation", 0)
     issue_content = apply_clarification_steers_on_resume(

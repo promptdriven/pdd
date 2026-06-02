@@ -40,6 +40,7 @@ from pdd.agentic_common import (
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
     drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
 )
 from pdd.architecture_registry import extract_modules, merge_architecture, record_generation
 from pdd.architecture_sync import normalize_architecture_filenames
@@ -531,6 +532,23 @@ def run_agentic_architecture_orchestrator(
         total_cost = 0.0
         model_used = "unknown"
         github_comment_id = None
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "architecture",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if seed_save:
+            github_comment_id = seed_save
 
     context = {
         "issue_url": issue_url,
