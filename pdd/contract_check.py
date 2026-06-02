@@ -34,7 +34,11 @@ from .contract_ir import (
     iter_covers_refs,
     parse_prompt_contracts,
 )
-from .waiver_policy import classify_waiver_status
+from .waiver_policy import (
+    classify_waiver_status,
+    has_unparseable_expires,
+    waiver_id_to_rule_map,
+)
 
 __all__ = [
     "ContractIssue",
@@ -303,6 +307,7 @@ def _check_coverage_entries(
     coverage_text: str,
     known_ids: set[str],
     known_waiver_ids: set[str],
+    waiver_id_to_rule: Optional[dict[str, str]] = None,
 ) -> list[ContractIssue]:
     """
     Validate <coverage> entries. Three entry types are recognised:
@@ -385,6 +390,24 @@ def _check_coverage_entries(
                         f"or remove the WAIVED reference."
                     ),
                 ))
+            elif waiver_id_to_rule:
+                waived_rule = waiver_id_to_rule.get(waiver_id)
+                if waived_rule and waived_rule != ref_id:
+                    issues.append(ContractIssue(
+                        level="error",
+                        code="WAIVER_RULE_MISMATCH",
+                        rule_id=ref_id,
+                        section="coverage",
+                        line=stripped,
+                        message=(
+                            f'Coverage for rule [{ref_id}] cites waiver "{waiver_id}" '
+                            f"which waives rule [{waived_rule}], not [{ref_id}]."
+                        ),
+                        suggestion=(
+                            f"Change the coverage entry to [{waived_rule}]: WAIVED {waiver_id}, "
+                            f"or update W{waiver_id.lstrip('W').lstrip('-')} Rule: to {ref_id}."
+                        ),
+                    ))
 
     return issues
 
@@ -448,20 +471,34 @@ def _check_waivers(waivers: list[Waiver], known_ids: set[str]) -> list[ContractI
     for waiver in waivers:
         waiver_status = classify_waiver_status(waiver, known_ids)
         if waiver_status == "malformed":
-            issues.append(ContractIssue(
-                level="warn",
-                code="MISSING_WAIVER_FIELDS",
-                rule_id=waiver.raw_id,
-                section="waivers",
-                line=f"{waiver.raw_id}:",
-                message=(
-                    f"Waiver [{waiver.raw_id}] is missing required fields: "
-                    "Rule, Reason, Approved by, or Expires."
-                ),
-                suggestion=(
-                    "Add all required fields: Rule, Reason, Approved by, Expires."
-                ),
-            ))
+            if has_unparseable_expires(waiver):
+                issues.append(ContractIssue(
+                    level="error",
+                    code="MALFORMED_WAIVER_EXPIRES",
+                    rule_id=waiver.raw_id,
+                    section="waivers",
+                    line=f"{waiver.raw_id}:",
+                    message=(
+                        f"Waiver [{waiver.raw_id}] has an Expires value that is not "
+                        f"a parseable ISO date (YYYY-MM-DD)."
+                    ),
+                    suggestion="Use a parseable ISO date, e.g. Expires: 2026-06-01.",
+                ))
+            else:
+                issues.append(ContractIssue(
+                    level="warn",
+                    code="MISSING_WAIVER_FIELDS",
+                    rule_id=waiver.raw_id,
+                    section="waivers",
+                    line=f"{waiver.raw_id}:",
+                    message=(
+                        f"Waiver [{waiver.raw_id}] is missing required fields: "
+                        "Rule, Reason, Approved by, or Expires."
+                    ),
+                    suggestion=(
+                        "Add all required fields: Rule, Reason, Approved by, Expires."
+                    ),
+                ))
         elif waiver_status == "unknown-rule":
             issues.append(ContractIssue(
                 level="error",
@@ -729,8 +766,14 @@ def check_prompt_from_ir(  # pylint: disable=too-many-locals,invalid-name
         result.issues.extend(_check_vague_terms(rules_text, ir.vocabulary_terms))
 
     if coverage_text:
+        waiver_rules = waiver_id_to_rule_map(ir.waivers)
         result.issues.extend(
-            _check_coverage_entries(coverage_text, known_ids, known_waiver_ids)
+            _check_coverage_entries(
+                coverage_text,
+                known_ids,
+                known_waiver_ids,
+                waiver_rules,
+            )
         )
         result.issues.extend(_check_must_not_coverage(rules, coverage_text))
         result.issues.extend(

@@ -563,7 +563,8 @@ def test_directory_mode_requires_prompt_qualified_test_refs(tmp_path: Path) -> N
 
 class TestClassifyRule:
     def _call(self, rule_id, coverage_entries=None, waiver_map=None,
-              story_evidence=None, test_evidence=None, validation_failures=None):
+              story_evidence=None, test_evidence=None, validation_failures=None,
+              waiver_id_to_rule=None):
         return _classify_rule(
             rule_id,
             coverage_entries or {},
@@ -572,6 +573,7 @@ class TestClassifyRule:
             story_evidence or {},
             test_evidence or {},
             validation_failures or {},
+            waiver_id_to_rule=waiver_id_to_rule or {},
         )
 
     def test_unchecked_no_evidence(self):
@@ -603,8 +605,10 @@ class TestClassifyRule:
         assert rc.status == STATUS_TEST_ONLY
 
     def test_waived_via_coverage_block(self):
-        rc = self._call("R6",
+        rc = self._call(
+            "R6",
             coverage_entries={"R6": "WAIVED W1"},
+            waiver_id_to_rule={"W1": "R6"},
         )
         assert rc.status == STATUS_WAIVED
         assert rc.waiver == "W1"
@@ -617,12 +621,24 @@ class TestClassifyRule:
         assert rc.waiver == "W2"
 
     def test_waived_takes_priority_over_evidence(self):
-        rc = self._call("R6",
+        rc = self._call(
+            "R6",
             coverage_entries={"R6": "WAIVED W1"},
             story_evidence={"R6": ["story__s.md"]},
             test_evidence={"R6": ["test_R6_foo"]},
+            waiver_id_to_rule={"W1": "R6"},
         )
         assert rc.status == STATUS_WAIVED
+
+    def test_mismatched_waiver_reference_is_not_waived(self):
+        rc = self._call(
+            "R1",
+            coverage_entries={"R1": "WAIVED W2"},
+            waiver_id_to_rule={"W2": "R2"},
+        )
+        assert rc.status == STATUS_UNCHECKED
+        assert rc.waiver is None
+        assert any("W2" in failure for failure in rc.failures)
 
     def test_failed_takes_priority_over_non_waived_evidence(self):
         rc = self._call("R4",
@@ -714,10 +730,42 @@ class TestBuildCoverage:
             <coverage>
             R1: WAIVED W2
             </coverage>
+            <waivers>
+            W2:
+              Rule: R1
+              Reason: Temporary gap.
+              Approved by: security-review
+              Expires: 2099-06-01
+            </waivers>
         """)
         result = build_coverage(prompt)
         assert result.rules[0].status == STATUS_WAIVED
         assert result.rules[0].waiver == "W2"
+
+    def test_mismatched_waiver_reference_not_waived(self, tmp_path):
+        prompt = _make_prompt(tmp_path, """\
+            <contract_rules>
+            R1 - Credentials
+            The system MUST NOT expose API keys.
+            R2 - Logging
+            The system MUST log errors.
+            </contract_rules>
+            <coverage>
+            R1: WAIVED W2
+            </coverage>
+            <waivers>
+            W2:
+              Rule: R2
+              Reason: Temporary gap.
+              Approved by: security-review
+              Expires: 2099-06-01
+            </waivers>
+        """)
+        result = build_coverage(prompt)
+        r1 = next(r for r in result.rules if r.rule_id == "R1")
+        assert r1.status == STATUS_UNCHECKED
+        assert r1.waiver is None
+        assert any("W2" in failure for failure in r1.failures)
 
     def test_summary_counts_correct(self, tmp_path):
         prompt = _make_prompt(tmp_path, """\

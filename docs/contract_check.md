@@ -74,7 +74,9 @@ Legacy prompts **without** these sections are skipped (zero issues).
 | `UNKNOWN_COVERAGE_REF` | error | `<coverage>` cites a rule ID not in `<contract_rules>` |
 | `UNCHECKED_RULE` | warn | Coverage line is `TODO` |
 | `WAIVER_REF_MISSING` | error | `WAIVED W<n>` in coverage with no matching `<waivers>` block |
+| `WAIVER_RULE_MISMATCH` | error | `WAIVED W<n>` in coverage cites a waiver whose `Rule:` does not match the coverage rule ID |
 | `WAIVER_UNKNOWN_RULE` | error | Waiver `Rule:` references an ID not present in `<contract_rules>` |
+| `MALFORMED_WAIVER_EXPIRES` | error | Waiver `Expires:` is present but not a parseable ISO date |
 | `UNCOVERED_MUST_NOT` | warn | `MUST NOT` rule with no `<coverage>` entry |
 | `MISSING_WAIVER_FIELDS` | warn | Waiver block missing Rule / Reason / Approved by / Expires |
 | `EXPIRED_WAIVER` | warn | Waiver past its expiry date |

@@ -134,6 +134,57 @@ def test_checkup_gate_fails_malformed_waiver(tmp_path: Path) -> None:
     assert "malformed" in result.output
 
 
+def test_checkup_gate_enforce_expiration_fails_unparseable_expires(tmp_path: Path) -> None:
+    prompt = _write_prompt(
+        tmp_path,
+        "unparseable_expires_python.prompt",
+        """
+        <contract_rules>
+        R1: The system MUST validate input.
+        </contract_rules>
+        <coverage>
+        - R1: WAIVED W1
+        </coverage>
+        <waivers>
+        W1:
+          Rule: R1
+          Reason: Temporary gap.
+          Approved by: security-review
+          Expires: not-a-date
+        </waivers>
+        """,
+    )
+    result = _invoke_checkup_gate(str(prompt), "--enforce-expiration")
+    assert result.exit_code == 1, result.output
+    assert "malformed" in result.output
+
+
+def test_checkup_gate_fails_waiver_rule_mismatch(tmp_path: Path) -> None:
+    prompt = _write_prompt(
+        tmp_path,
+        "waiver_rule_mismatch_python.prompt",
+        """
+        <contract_rules>
+        R1: The system MUST validate input.
+        R2: The system MUST log errors.
+        </contract_rules>
+        <coverage>
+        - R1: WAIVED W2
+        </coverage>
+        <waivers>
+        W2:
+          Rule: R2
+          Reason: Temporary gap.
+          Approved by: security-review
+          Expires: 2099-06-01
+        </waivers>
+        """,
+    )
+    result = _invoke_checkup_gate(str(prompt))
+    assert result.exit_code == 1, result.output
+    assert "WAIVER_RULE_MISMATCH" in result.output
+
+
 def test_explicit_policy_file_missing_fails_closed(tmp_path: Path) -> None:
     missing = tmp_path / "missing-policy.yaml"
     result = CliRunner().invoke(

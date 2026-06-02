@@ -27,7 +27,8 @@ def classify_waiver_status(
         "rule": bool(waiver.rule_id),
         "reason": bool(waiver.reason),
         "approved_by": bool(waiver.approved_by),
-        "expires": bool(waiver.expires is not None or _has_expires_field(waiver)),
+        # Expires must be present and parseable; raw text alone is not enough.
+        "expires": waiver.expires is not None,
     }
     if not all(required.values()):
         return "malformed"
@@ -36,6 +37,20 @@ def classify_waiver_status(
     if waiver.expires is not None and waiver.expires < current_day:
         return "expired"
     return "active"
+
+
+def has_unparseable_expires(waiver: Waiver) -> bool:
+    """True when a waiver block declares Expires but the date did not parse."""
+    return _has_expires_field(waiver) and waiver.expires is None
+
+
+def waiver_id_to_rule_map(waivers: list[Waiver]) -> dict[str, str]:
+    """Map waiver IDs (``W1``) to the rule IDs declared in each waiver block."""
+    mapping: dict[str, str] = {}
+    for waiver in waivers:
+        if waiver.raw_id and waiver.rule_id:
+            mapping[waiver.raw_id.upper()] = waiver.rule_id.upper()
+    return mapping
 
 
 def summarize_waivers(

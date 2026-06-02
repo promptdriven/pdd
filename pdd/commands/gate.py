@@ -8,8 +8,9 @@ from typing import Any
 import click
 import yaml
 
+from ..contract_check import _check_coverage_entries
 from ..contract_ir import parse_prompt_contracts
-from ..waiver_policy import summarize_waivers
+from ..waiver_policy import summarize_waivers, waiver_id_to_rule_map
 
 
 def _discover_prompts(target: Path) -> list[Path]:
@@ -104,6 +105,17 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
     violations: list[str] = []
     for prompt_path in _discover_prompts(target_path):
         ir = parse_prompt_contracts(prompt_path)
+        coverage_text = ir.sections.get("coverage", "")
+        if coverage_text:
+            for issue in _check_coverage_entries(
+                coverage_text,
+                ir.known_rule_ids,
+                ir.known_waiver_ids,
+                waiver_id_to_rule_map(ir.waivers),
+            ):
+                if issue.level == "error":
+                    violations.append(f"{prompt_path}: {issue.code} ({issue.message})")
+
         for waiver in summarize_waivers(ir.waivers, ir.known_rule_ids):
             waiver_row = {"prompt": str(prompt_path), **waiver}
             outcome = "pass"

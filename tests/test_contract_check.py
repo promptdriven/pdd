@@ -399,8 +399,21 @@ class TestCheckCoverageEntries:
             "- R2: WAIVED W1\n",
             known_ids={"R1", "R2"},
             known_waiver_ids={"W1"},
+            waiver_id_to_rule={"W1": "R2"},
         )
         assert issues == []
+
+    def test_waived_waiver_rule_mismatch_produces_error(self):
+        issues = _check_coverage_entries(
+            "- R1: WAIVED W2\n",
+            known_ids={"R1", "R2"},
+            known_waiver_ids={"W2"},
+            waiver_id_to_rule={"W2": "R2"},
+        )
+        assert len(issues) == 1
+        assert issues[0].code == "WAIVER_RULE_MISMATCH"
+        assert issues[0].level == "error"
+        assert issues[0].rule_id == "R1"
 
     def test_waived_unknown_waiver_produces_error(self):
         issues = _check_coverage_entries(
@@ -570,6 +583,46 @@ class TestCheckWaivers:
         issues = _check_waivers(_extract_waivers(text), {"R1", "R2"})
         unknown = [i for i in issues if i.code == "WAIVER_UNKNOWN_RULE"]
         assert len(unknown) == 1
+
+    def test_unparseable_expires_is_malformed_error(self):
+        text = (
+            "W1:\n"
+            "  Rule: R1\n"
+            "  Status: temporary\n"
+            "  Reason: Test fixture not available.\n"
+            "  Approved by: security-review\n"
+            "  Expires: not-a-date\n"
+        )
+        issues = _check_waivers(_extract_waivers(text), {"R1"})
+        malformed = [i for i in issues if i.code == "MALFORMED_WAIVER_EXPIRES"]
+        assert len(malformed) == 1
+        assert malformed[0].level == "error"
+
+    def test_fixture_waiver_rule_mismatch(self, tmp_path: Path) -> None:
+        prompt = tmp_path / "waiver_rule_mismatch_python.prompt"
+        prompt.write_text(
+            """
+            <contract_rules>
+            R1: The system MUST validate input.
+            R2: The system MUST log errors.
+            </contract_rules>
+            <coverage>
+            - R1: WAIVED W2
+            </coverage>
+            <waivers>
+            W2:
+              Rule: R2
+              Reason: Temporary gap.
+              Approved by: security-review
+              Expires: 2099-06-01
+            </waivers>
+            """,
+            encoding="utf-8",
+        )
+        result = check_prompt(prompt)
+        mismatches = _issues_for_code(result, "WAIVER_RULE_MISMATCH")
+        assert len(mismatches) == 1
+        assert mismatches[0].rule_id == "R1"
 
 
 # ---------------------------------------------------------------------------
