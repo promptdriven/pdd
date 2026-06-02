@@ -1,0 +1,8 @@
+<pdd-reason>Refund helper that must not perform network I/O.</pdd-reason>
+
+<capabilities>
+- MAY write refund records.
+- MUST NOT call external network APIs.
+</capabilities>
+
+Implement refund persistence without network access.

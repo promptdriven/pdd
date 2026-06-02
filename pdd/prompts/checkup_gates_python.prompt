@@ -27,11 +27,11 @@
   }
 }
 </pdd-interface>
+<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
 % Write `pdd/checkup_gates.py`, the deterministic-gate enforcement layer for `pdd checkup --pr --review-loop` (issue promptdriven/pdd#1092).
 
 <include>context/python_preamble.prompt</include>
-<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
 % Goal
 Provide a conservative, allowlisted gate-discovery and gate-execution

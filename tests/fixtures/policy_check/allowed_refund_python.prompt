@@ -1,0 +1,8 @@
+<pdd-reason>Refund helper with explicit network and env allowances.</pdd-reason>
+
+<capabilities>
+- MAY call the payment provider refund endpoint.
+- MAY read environment configuration.
+</capabilities>
+
+Implement a minimal refund helper that reads configuration and calls the provider.

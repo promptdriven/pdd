@@ -24,6 +24,9 @@
   }
 }
 </pdd-interface>
+<pdd-dependency>code_generator_python.prompt</pdd-dependency>
+<pdd-dependency>policy_check_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
 
 % Requirements
 1. Support multi-run regeneration (default 1 run if just checking current state).
@@ -31,11 +34,6 @@
 3. Integrate with `pdd policy check` to ensure side-effect enforcement during drift.
 4. Calculate and report cost metrics across all runs.
 5. Support sandbox isolation for verification steps.
-
-% Dependencies
-<code_generator><include select="def:generate_code">pdd/code_generator.py</include></code_generator>
-<policy_check><include select="def:run_policy_check">pdd/policy_check.py</include></policy_check>
-<evidence_manifest><include select="def:write_evidence_manifest">pdd/evidence_manifest.py</include></evidence_manifest>
 
 % Deliverables
 - Code: `pdd/drift_main.py`

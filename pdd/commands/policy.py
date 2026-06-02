@@ -56,10 +56,19 @@ def check(target: Path, prompt_path: Optional[Path], as_json: bool, strict: bool
             {
                 "target": str(r.target_path),
                 "passed": r.passed,
+                "capabilities": [
+                    {
+                        "modal": cap.modal,
+                        "text": cap.text,
+                        "line": cap.line,
+                        "is_must_not": cap.is_must_not,
+                    }
+                    for cap in r.capabilities
+                ],
                 "issues": [
                     {"category": i.category, "message": i.message, "line": i.line, "col": i.col}
                     for i in r.issues
-                ]
+                ],
             }
             for r in results
         ]

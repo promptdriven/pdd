@@ -22,6 +22,7 @@ class PolicyResult:
     target_path: Path
     issues: List[PolicyIssue] = field(default_factory=list)
     passed: bool = True
+    capabilities: List[Capability] = field(default_factory=list)
 
 NETWORK_LIBS = {
     "urllib3", "paramiko", "httpx", "requests", "aiohttp", "socket", "ftplib",
@@ -216,7 +217,11 @@ def run_policy_check(target_path: Path, prompt_path: Optional[Path] = None, stri
         source_lines = content.splitlines()
         tree = ast.parse(content)
     except Exception as e:
-        return PolicyResult(target_path, [PolicyIssue("system", f"Failed to parse or read file: {e}", 0, 0)], passed=False)
+        return PolicyResult(
+            target_path,
+            [PolicyIssue("system", f"Failed to parse or read file: {e}", 0, 0)],
+            passed=False,
+        )
 
     capabilities = []
     prompt_ir = None
@@ -229,4 +234,4 @@ def run_policy_check(target_path: Path, prompt_path: Optional[Path] = None, stri
     visitor.visit(tree)
     
     passed = len(visitor.issues) == 0
-    return PolicyResult(target_path, visitor.issues, passed=passed)
+    return PolicyResult(target_path, visitor.issues, passed=passed, capabilities=capabilities)

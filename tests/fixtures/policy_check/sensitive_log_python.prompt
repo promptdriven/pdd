@@ -1,0 +1,8 @@
+<pdd-reason>Audit helper that must not leak secrets in logs.</pdd-reason>
+
+<capabilities>
+- MAY write audit events.
+- MUST NOT log provider secrets, bearer tokens, or card PAN.
+</capabilities>
+
+Record audit events without logging sensitive fields.
