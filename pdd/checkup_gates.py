@@ -50,6 +50,7 @@ Trust-boundary invariants:
 from __future__ import annotations
 
 import datetime as _dt
+import fnmatch
 import json
 import logging
 import os
@@ -61,7 +62,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -2087,6 +2088,40 @@ def _is_git_worktree(worktree: Path, *, git_cmd: Optional[str] = None) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
+# Trusted runner for the doc-contract gate. Executed as ``python -I -B -c
+# <this>`` with argv = [worktree, base_ref, trusted_root].
+#
+# Two things make this run the TRUSTED checker, never a PR-controlled copy
+# living in the reviewed worktree (``run_gates`` executes every gate with
+# ``cwd=<worktree>``):
+#   * BEFORE importing ``pdd``, scrub ``sys.path`` of every empty entry, the
+#     process CWD, and anything resolving inside the worktree (defense in depth
+#     on top of ``-I``, which already keeps the CWD/script dir off the path).
+#   * Prepend ``trusted_root`` — the directory that contains the installed/base
+#     ``pdd`` package, computed by ``discover_gates`` in the trusted PARENT
+#     process from its own ``__file__`` (never from the worktree). This pins the
+#     import to the trusted checker AND keeps the gate functional when ``pdd`` is
+#     reachable only via a source/editable checkout rather than site-packages
+#     (issue #1303 review).
+_DOC_CONTRACT_RUNNER = (
+    "import sys, os\n"
+    "_wt = os.path.realpath(sys.argv[1])\n"
+    "_cwd = os.path.realpath(os.getcwd())\n"
+    "_trusted = sys.argv[3] if len(sys.argv) > 3 else ''\n"
+    "sys.path[:] = [\n"
+    "    _p for _p in sys.path\n"
+    "    if _p\n"
+    "    and os.path.realpath(_p) != _wt\n"
+    "    and not os.path.realpath(_p).startswith(_wt + os.sep)\n"
+    "    and os.path.realpath(_p) != _cwd\n"
+    "]\n"
+    "if _trusted and os.path.isdir(_trusted):\n"
+    "    sys.path.insert(0, _trusted)\n"
+    "from pdd.checkup_gates import run_doc_contract_check\n"
+    "sys.exit(run_doc_contract_check(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None))"
+)
+
+
 def discover_gates(
     worktree: Path,
     changed_files: Sequence[str],
@@ -2119,6 +2154,40 @@ def discover_gates(
     if trusted_git and _is_git_worktree(worktree, git_cmd=trusted_git):
         base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
         gates.append(_git_diff_check_gate(trusted_git, base_spec))
+        # doc-contract gate (Issue #1303)
+        gates.append(
+            Gate(
+                name="doc-contract",
+                cmd=[
+                    sys.executable,
+                    # ``-I`` (isolated) ignores PYTHON* env vars, the user
+                    # site, and — critically — does NOT prepend the CWD/script
+                    # dir to ``sys.path``. ``run_gates`` runs every gate with
+                    # ``cwd=worktree``; without isolation a ``-c`` snippet's
+                    # ``import pdd`` would resolve to the PR-controlled
+                    # ``pdd/checkup_gates.py`` inside the reviewed worktree,
+                    # letting the reviewed code bypass the gate or execute
+                    # arbitrary code (issue #1303 review). The snippet below
+                    # also defensively scrubs any worktree-resolving entry from
+                    # ``sys.path`` and prepends ``trusted_root`` (this process's
+                    # own package dir) so the TRUSTED checker always runs.
+                    "-I",
+                    "-B",
+                    "-c",
+                    _DOC_CONTRACT_RUNNER,
+                    str(worktree.absolute()),
+                    base_ref or "",
+                    # Directory containing THIS (trusted/base) ``pdd`` package,
+                    # resolved in the parent process — never from the worktree.
+                    str(Path(__file__).resolve().parent.parent),
+                ],
+                source="README.md",
+                required_fix_hint=(
+                    "Verify that all added user-facing surfaces (CLI options, skip behaviors, "
+                    "environment variables, and .pddrc keys) are fully documented."
+                ),
+            )
+        )
     gates.extend(_discover_npm_gates(worktree, changed_files=changed_files))
     gates.extend(_discover_python_gates(worktree, changed_files, base_ref=base_ref))
     gates.extend(_discover_policy_gates(worktree, changed_files))
@@ -3265,11 +3334,750 @@ def gate_results_to_findings(
     return findings
 
 
+def extract_pddrc_defaults_keys(content: str) -> Set[str]:
+    """Helper to extract .pddrc keys from construct_paths.py content."""
+    match = re.search(r"_PDDRC_DEFAULTS_KEYS\s*=\s*\{([^}]+)\}", content)
+    if not match:
+        return set()
+    block = match.group(1)
+    keys = re.findall(r'["\']([^"\']+)["\']', block)
+    return {k.strip() for k in keys if k.strip()}
+
+
+def get_markdown_section(text: str, start_marker: str, end_markers: List[str]) -> str:
+    """Helper to extract a specific section from markdown text."""
+    start_idx = text.find(start_marker)
+    if start_idx == -1:
+        return ""
+    end_idx = len(text)
+    for marker in end_markers:
+        idx = text.find(marker, start_idx + len(start_marker))
+        if idx != -1 and idx < end_idx:
+            end_idx = idx
+    return text[start_idx:end_idx]
+
+
+_DOC_CONTRACT_CONFIG_PATHS: Tuple[str, ...] = (
+    ".pdd/doc_contract.json",
+    ".pdd/doc-contract.json",
+)
+_STORY_PROMPTS_METADATA_RE = re.compile(
+    r"<!--\s*pdd-story-prompts:\s*(?P<prompts>.*?)\s*-->",
+    flags=re.IGNORECASE,
+)
+_STORY_PROMPT_REFERENCE_RE = re.compile(
+    r"(?P<ref>[A-Za-z0-9_./-]+\.prompt)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _git_show_doc_contract_text(
+    worktree: Path,
+    base_spec: Optional[str],
+    rel_path: str,
+    trusted_git: Optional[str] = None,
+    git_env: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Return ``rel_path`` content from ``base_spec`` when available."""
+    if not base_spec:
+        return None
+    if not trusted_git:
+        trusted_git = _resolve_trusted_git(worktree)
+    if not trusted_git:
+        return None
+    if git_env is None:
+        git_env = _build_subprocess_env(worktree)
+    try:
+        result = subprocess.run(
+            [trusted_git, "-C", str(worktree), "show", f"{base_spec}:{rel_path}"],
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _as_str_list(value: Any) -> List[str]:
+    """Normalize a JSON string-or-list field to a list of strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _load_doc_contract_config(
+    worktree: Path,
+    base_spec: Optional[str],
+    trusted_git: str,
+    git_env: Dict[str, str],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Load repo-declared doc-contract rules.
+
+    The base-tree config is authoritative when it exists. A reviewed PR must
+    not be able to weaken the gate by editing or deleting its own contract
+    config in the worktree. If the base has no config, the current worktree
+    config is accepted so repositories can introduce the interface.
+    """
+    errors: List[str] = []
+    config_text: Optional[str] = None
+    config_source = ""
+    for rel_path in _DOC_CONTRACT_CONFIG_PATHS:
+        config_text = _git_show_doc_contract_text(
+            worktree, base_spec, rel_path, trusted_git, git_env
+        )
+        if config_text is not None:
+            config_source = f"{base_spec}:{rel_path}" if base_spec else rel_path
+            break
+    if config_text is None:
+        for rel_path in _DOC_CONTRACT_CONFIG_PATHS:
+            path = worktree / rel_path
+            if path.is_file():
+                try:
+                    config_text = path.read_text(encoding="utf-8")
+                    config_source = rel_path
+                except (OSError, UnicodeDecodeError) as exc:
+                    errors.append(f"Could not read {rel_path}: {exc}")
+                break
+    if config_text is None:
+        return [], errors
+    try:
+        parsed = json.loads(config_text)
+    except json.JSONDecodeError as exc:
+        return [], [f"Invalid doc-contract config {config_source}: {exc}"]
+    rules = parsed.get("rules") if isinstance(parsed, dict) else None
+    if not isinstance(rules, list):
+        return [], [f"Doc-contract config {config_source} must contain a 'rules' list."]
+    valid_rules: List[Dict[str, Any]] = []
+    for index, raw_rule in enumerate(rules, start=1):
+        if not isinstance(raw_rule, dict):
+            errors.append(f"Doc-contract rule #{index} in {config_source} is not an object.")
+            continue
+        name = str(raw_rule.get("name") or f"rule-{index}")
+        source_globs = _as_str_list(raw_rule.get("source_globs"))
+        added_regex = raw_rule.get("added_regex")
+        doc_specs_raw = raw_rule.get("docs", raw_rule.get("doc_paths"))
+        if isinstance(doc_specs_raw, (str, dict)):
+            doc_specs_raw = [doc_specs_raw]
+        if not source_globs:
+            errors.append(f"Doc-contract rule '{name}' is missing source_globs.")
+            continue
+        if not isinstance(added_regex, str) or not added_regex:
+            errors.append(f"Doc-contract rule '{name}' is missing added_regex.")
+            continue
+        if not isinstance(doc_specs_raw, list) or not doc_specs_raw:
+            errors.append(f"Doc-contract rule '{name}' is missing docs/doc_paths.")
+            continue
+        try:
+            re.compile(added_regex)
+        except re.error as exc:
+            errors.append(f"Doc-contract rule '{name}' has invalid added_regex: {exc}")
+            continue
+        docs: List[Dict[str, Any]] = []
+        for doc_index, item in enumerate(doc_specs_raw, start=1):
+            if isinstance(item, str):
+                docs.append({"path": item})
+                continue
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                errors.append(
+                    f"Doc-contract rule '{name}' doc #{doc_index} must be a path string or object with path."
+                )
+                continue
+            doc = dict(item)
+            if "section_end_markers" in doc:
+                doc["section_end_markers"] = _as_str_list(doc["section_end_markers"])
+            docs.append(doc)
+        if not docs:
+            continue
+        valid_rules.append(
+            {
+                "name": name,
+                "source_globs": source_globs,
+                "ignore_globs": _as_str_list(raw_rule.get("ignore_globs")),
+                "ignore_values": set(_as_str_list(raw_rule.get("ignore_values"))),
+                "added_regex": added_regex,
+                "doc_regex": raw_rule.get("doc_regex"),
+                "docs": docs,
+            }
+        )
+    return valid_rules, errors
+
+
+def _path_matches_any_glob(path: str, patterns: Sequence[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def _capture_doc_context(match: re.Match[str]) -> Dict[str, str]:
+    """Build escaped placeholder values for a generic doc-contract match."""
+    raw_values: Dict[str, str] = {}
+    raw_values.update({k: v for k, v in match.groupdict().items() if v is not None})
+    if match.lastindex:
+        raw_values.setdefault("value", match.group(1))
+    else:
+        raw_values.setdefault("value", match.group(0))
+    context: Dict[str, str] = {}
+    for key, value in raw_values.items():
+        context[key] = re.escape(value)
+        context[f"{key}_dashed"] = re.escape(value.replace("_", "-"))
+    context["__raw_value"] = raw_values["value"]
+    return context
+
+
+def _render_doc_regex(template: Optional[str], context: Dict[str, str]) -> str:
+    """Render a configured doc regex with escaped capture placeholders."""
+    if not isinstance(template, str) or not template:
+        return context["value"]
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return context.get(key, match.group(0))
+
+    return re.sub(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", replace, template)
+
+
+def _doc_spec_text(worktree: Path, spec: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    """Return the current documentation text selected by a doc spec."""
+    rel_path = spec.get("path")
+    if not isinstance(rel_path, str):
+        return "", "invalid doc path"
+    path = worktree / rel_path
+    if not path.is_file():
+        return "", f"{rel_path} is missing"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return "", f"could not read {rel_path}: {exc}"
+    section_start = spec.get("section_start")
+    if isinstance(section_start, str) and section_start:
+        section = get_markdown_section(
+            text,
+            section_start,
+            _as_str_list(spec.get("section_end_markers")) or ["## ", "### "],
+        )
+        if not section:
+            return "", f"{rel_path} does not contain section {section_start!r}"
+        text = section
+    return text, None
+
+
+def _run_configured_doc_contract_rules(
+    worktree: Path,
+    base_spec: Optional[str],
+    trusted_git: str,
+    git_env: Dict[str, str],
+    added_lines_by_file: Dict[str, List[str]],
+) -> List[str]:
+    """Evaluate repo-declared, non-PDD-specific doc-contract rules."""
+    rules, errors = _load_doc_contract_config(worktree, base_spec, trusted_git, git_env)
+    if not rules:
+        return errors
+    # Key obligations by the full capture context, not just the first capture
+    # group. A rule with multiple captures (e.g. ``category`` and ``name``) can
+    # emit distinct surfaces that share the first capture; keying on that capture
+    # alone collapses them and lets a later obligation overwrite an earlier one,
+    # so an undocumented surface fails open (#1309 review).
+    obligations: Dict[
+        Tuple[str, str, Tuple[Tuple[str, str], ...]],
+        Tuple[Dict[str, Any], Dict[str, str], str],
+    ] = {}
+    for file_path, lines in added_lines_by_file.items():
+        normalized_path = file_path.replace("\\", "/")
+        for rule in rules:
+            if not _path_matches_any_glob(normalized_path, rule["source_globs"]):
+                continue
+            if _path_matches_any_glob(normalized_path, rule["ignore_globs"]):
+                continue
+            regex = re.compile(rule["added_regex"])
+            for line in lines:
+                for match in regex.finditer(line):
+                    context = _capture_doc_context(match)
+                    value = context["__raw_value"]
+                    if value in rule["ignore_values"]:
+                        continue
+                    context_key = tuple(sorted(context.items()))
+                    obligations[(rule["name"], normalized_path, context_key)] = (
+                        rule,
+                        context,
+                        value,
+                    )
+    doc_cache: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {}
+    for (_name, source_path, _context_key), (
+        rule,
+        context,
+        value,
+    ) in obligations.items():
+        doc_pattern = _render_doc_regex(rule.get("doc_regex"), context)
+        for doc in rule["docs"]:
+            doc_path = doc["path"]
+            section_start = str(doc.get("section_start") or "")
+            cache_key = (doc_path, section_start)
+            if cache_key not in doc_cache:
+                doc_cache[cache_key] = _doc_spec_text(worktree, doc)
+            doc_text, doc_error = doc_cache[cache_key]
+            if doc_error:
+                errors.append(
+                    f"Doc-contract rule '{rule['name']}' captured '{value}' from "
+                    f"{source_path}, but {doc_error}."
+                )
+                continue
+            try:
+                documented = re.search(doc_pattern, doc_text, re.MULTILINE) is not None
+            except re.error as exc:
+                errors.append(
+                    f"Doc-contract rule '{rule['name']}' rendered invalid doc_regex "
+                    f"for '{value}': {exc}"
+                )
+                continue
+            if not documented:
+                errors.append(
+                    f"Doc-contract rule '{rule['name']}' captured '{value}' from "
+                    f"{source_path}, but {doc_path} does not document it."
+                )
+    return errors
+
+
+def _doc_contract_should_scan_added_file(file_path: str) -> bool:
+    """Return True when ``file_path`` can define user-facing runtime surfaces."""
+    path = file_path.replace("\\", "/")
+    parts = path.split("/")
+    name = parts[-1] if parts else path
+    if "tests" in parts or "__tests__" in parts:
+        return False
+    if "fixtures" in parts or "testdata" in parts or "snapshots" in parts:
+        return False
+    if path.startswith(("context/", "examples/", "docs/")):
+        return False
+    if name.startswith("test_") or name.endswith("_test.py"):
+        return False
+    return True
+
+
+def _doc_contract_should_require_prompt_story(file_path: str, lines: List[str]) -> bool:
+    """Return True when a changed prompt should be covered by a user story."""
+    normalized = file_path.replace("\\", "/")
+    return (
+        bool(lines)
+        and normalized.endswith(".prompt")
+        and not normalized.lower().endswith("_llm.prompt")
+        and _doc_contract_should_scan_added_file(normalized)
+    )
+
+
+def _prompt_story_reference_candidates(prompt_path: str) -> Set[str]:
+    """Return story-link spellings that can identify ``prompt_path``."""
+    normalized = prompt_path.replace("\\", "/").strip("/")
+    candidates = {normalized, Path(normalized).name}
+    parts = normalized.split("/")
+    if "prompts" in parts:
+        idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
+        rel_from_prompts = "/".join(parts[idx + 1:])
+        if rel_from_prompts:
+            candidates.add(rel_from_prompts)
+    return {candidate.lower() for candidate in candidates if candidate}
+
+
+def _story_prompt_refs(story_content: str) -> Set[str]:
+    """Extract prompt refs from story metadata and prose."""
+    refs: Set[str] = set()
+    metadata = _STORY_PROMPTS_METADATA_RE.search(story_content)
+    if metadata:
+        for entry in metadata.group("prompts").split(","):
+            entry = entry.strip()
+            if entry:
+                refs.add(entry.replace("\\", "/").lower())
+    for match in _STORY_PROMPT_REFERENCE_RE.finditer(story_content):
+        refs.add(match.group("ref").replace("\\", "/").lower())
+    return refs
+
+
+def _prompt_has_story_coverage(worktree: Path, prompt_path: str) -> bool:
+    """Return True when a user story links to ``prompt_path``.
+
+    This is the deterministic bridge for issue #560: changed prompts must have
+    a story-test artifact. The LLM-backed `pdd detect --stories` command remains
+    the executable prompt test; this gate enforces that the test exists.
+    """
+    story_paths = sorted(worktree.rglob("user_stories/story__*.md"))
+    if not story_paths:
+        return False
+    candidates = _prompt_story_reference_candidates(prompt_path)
+    for story_path in story_paths:
+        if not story_path.is_file():
+            continue
+        try:
+            refs = _story_prompt_refs(story_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if candidates & refs:
+            return True
+    return False
+
+
+def _condition_doc_tokens(cond: str) -> List[str]:
+    """Return the documentation spellings that satisfy a skip condition.
+
+    A code identifier like ``skip_tests`` may be documented as ``skip_tests``,
+    ``skip-tests``, or the CLI flag ``--skip-tests``; any one is accepted.
+    """
+    dashed = cond.replace("_", "-")
+    return [cond, dashed, f"--{dashed}"]
+
+
+def _doc_mentions_condition(text: str, cond: str) -> bool:
+    """True when ``text`` documents skip condition ``cond`` in any spelling."""
+    return any(token in text for token in _condition_doc_tokens(cond))
+
+
+def _operation_doc_block(text: str, op: str) -> str:
+    """Return the documentation block that introduces workflow operation ``op``
+    as its own labeled entry, including wrapped/continuation lines.
+
+    Recognizes the common ``label: description`` shapes — ``- fix: ...``,
+    ``fix:``, ``**fix**:``, ``` `fix` — ... ``` — optionally prefixed by a list
+    marker, and gathers following lines until a blank line, a heading, or the
+    next same-or-lower-indent list entry. Returns ``""`` when ``op`` is not
+    documented as its own entry.
+
+    This is what lets the gate check a skip condition against the operation's
+    OWN contract instead of anywhere in the file: docs that mention
+    ``--skip-tests`` only for the ``test`` step must NOT satisfy a new
+    ``fix``+``skip_tests`` contract (#1303/#1238 review round 2).
+    """
+    # The operation token, optionally wrapped in emphasis/backticks and a list
+    # marker, immediately followed by a ':' or dash separator.
+    intro = re.compile(
+        r"^\s*(?:[-*+]\s+|\d+\.\s+)?[`*_]*"
+        + re.escape(op)
+        + r"[`*_]*\s*[:\-–—]"
+    )
+    any_bullet = re.compile(r"^\s*(?:[-*+]\s+|\d+\.\s+)")
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if intro.search(ln)), None)
+    if start is None:
+        return ""
+    block = [lines[start]]
+    base_indent = len(lines[start]) - len(lines[start].lstrip())
+    for ln in lines[start + 1:]:
+        if not ln.strip():
+            break
+        if ln.lstrip().startswith("#"):
+            break
+        indent = len(ln) - len(ln.lstrip())
+        # A new list entry at the same or shallower indent is a different op.
+        if any_bullet.match(ln) and indent <= base_indent:
+            break
+        block.append(ln)
+    return "\n".join(block)
+
+
+def _operation_documents_condition(text: str, op: str, cond: str) -> bool:
+    """True when ``op``'s OWN documented contract block in ``text`` mentions the
+    skip condition ``cond`` (any spelling). File-wide mentions do not count."""
+    block = _operation_doc_block(text, op)
+    return bool(block) and _doc_mentions_condition(block, cond)
+
+
+def run_doc_contract_check(
+    worktree_path: Path | str, base_ref: Optional[str] = None
+) -> int:
+    """Enforces documentation consistency on newly added user-facing surfaces.
+
+    Issue #1303 product requirement.
+    """
+    worktree = Path(worktree_path)
+
+    # 1. Run git diff to get the added lines
+    trusted_git = _resolve_trusted_git(worktree)
+    if not trusted_git:
+        print("Error: Could not resolve git binary.", file=sys.stderr)
+        return 1
+
+    git_env = _build_subprocess_env(worktree)
+    base_spec = None
+    if base_ref:
+        base_spec = _resolve_pr_base_spec(worktree, base_ref, git_cmd=trusted_git)
+    if not base_spec:
+        # Fall back to trying HEAD~1 if git repo
+        try:
+            res = subprocess.run(
+                [trusted_git, "-C", str(worktree), "rev-parse", "--verify", "HEAD~1"],
+                capture_output=True,
+                env=git_env,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                base_spec = "HEAD~1"
+        except Exception:
+            pass
+
+    diff_args = [trusted_git, "-C", str(worktree), "diff"]
+    if base_spec:
+        if base_spec == "HEAD~1":
+            diff_args.append("HEAD~1")
+        else:
+            diff_args.append(f"{base_spec}...")
+
+    try:
+        res = subprocess.run(
+            diff_args,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if res.returncode != 0:
+            print(
+                f"Error: git diff failed with code {res.returncode}: {res.stderr}",
+                file=sys.stderr,
+            )
+            return 1
+        diff_text = res.stdout
+    except Exception as exc:
+        print(f"Error executing git diff: {exc}", file=sys.stderr)
+        return 1
+
+    # 2. Parse diff into files and added lines
+    added_lines_by_file: Dict[str, List[str]] = {}
+    current_file = None
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            match = re.search(r" b/(\S+)", line)
+            if match:
+                current_file = match.group(1)
+                added_lines_by_file[current_file] = []
+        elif line.startswith("+++ "):
+            pass
+        elif line.startswith("+") and not line.startswith("+++"):
+            if current_file:
+                added_lines_by_file[current_file].append(line[1:])
+
+    # 3. Detect added user-facing surfaces
+    added_pddrc_keys = set()
+    added_click_options = set()
+    added_skip_behaviors = set()
+    # (operation, condition) pairs where a NEW skip condition gates an existing
+    # operation, e.g. `operation == 'fix' and skip_tests`. This is the
+    # #1303/#1238 drift class: recording only the operation name is not enough
+    # because docs that merely mention the operation (e.g. "fix: Resolve test
+    # failures") would still pass while the new skip condition stays
+    # undocumented. The condition is normalized to its snake_case identifier.
+    added_skip_contracts: set = set()
+    added_env_vars = set()
+    changed_prompt_files = set()
+
+    # .pddrc keys
+    pddrc_keys_now = set()
+    pddrc_keys_then = set()
+    construct_paths_path = worktree / "pdd/construct_paths.py"
+    if construct_paths_path.is_file():
+        try:
+            content_now = construct_paths_path.read_text(encoding="utf-8")
+            pddrc_keys_now = extract_pddrc_defaults_keys(content_now)
+        except Exception:
+            pass
+
+    if base_spec:
+        try:
+            res_show = subprocess.run(
+                [
+                    trusted_git,
+                    "-C",
+                    str(worktree),
+                    "show",
+                    f"{base_spec}:pdd/construct_paths.py",
+                ],
+                capture_output=True,
+                env=git_env,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if res_show.returncode == 0:
+                pddrc_keys_then = extract_pddrc_defaults_keys(res_show.stdout)
+        except Exception:
+            pass
+
+    added_pddrc_keys = pddrc_keys_now - pddrc_keys_then
+
+    # Click options, Skip behaviors, and Env vars
+    for file_path, lines in added_lines_by_file.items():
+        normalized_file = file_path.replace("\\", "/")
+        if _doc_contract_should_require_prompt_story(normalized_file, lines):
+            changed_prompt_files.add(normalized_file)
+        if not _doc_contract_should_scan_added_file(file_path):
+            continue
+        if file_path.endswith(".py"):
+            has_click = False
+            full_path = worktree / file_path
+            if full_path.is_file():
+                try:
+                    content = full_path.read_text(encoding="utf-8")
+                    if "import click" in content or "click." in content:
+                        has_click = True
+                except Exception:
+                    pass
+
+            for line in lines:
+                # 1. Click options
+                if has_click:
+                    if "click.option" in line:
+                        opts = re.findall(r'["\'](--[a-zA-Z0-9-]+)["\']', line)
+                        added_click_options.update(opts)
+                    else:
+                        opt_match = re.match(r'^\s*["\'](--[a-zA-Z0-9-]+)["\']', line)
+                        if opt_match:
+                            added_click_options.add(opt_match.group(1))
+
+                # 2. Skip behaviors / operation names
+                match = re.search(r"operation\s*==\s*['\"]([a-zA-Z0-9_-]+)['\"]", line)
+                if match:
+                    op_name = match.group(1)
+                    added_skip_behaviors.add(op_name)
+                    # Capture any skip CONDITION gating this operation on the
+                    # same line (e.g. `operation == 'fix' and skip_tests` or
+                    # `... and not skip_verify`). Both the snake_case
+                    # identifier (`skip_tests`) and the CLI flag spelling
+                    # (`--skip-tests`) are normalized to the identifier so the
+                    # downstream doc check accepts either spelling.
+                    for cond in re.findall(r"\bskip_[a-z][a-z0-9_]*\b", line):
+                        added_skip_contracts.add((op_name, cond))
+                    for flag in re.findall(r"--skip-[a-z][a-z0-9-]*\b", line):
+                        added_skip_contracts.add(
+                            (op_name, flag.lstrip("-").replace("-", "_"))
+                        )
+                match_skip = re.search(r"['\"]skip:([a-zA-Z0-9_-]+)['\"]", line)
+                if match_skip:
+                    added_skip_behaviors.add(match_skip.group(1))
+
+        # 3. Environment variables
+        if (
+            file_path.endswith(".py")
+            or file_path.endswith(".sh")
+        ):
+            for line in lines:
+                env_matches = re.findall(r"\b(PDD_[A-Z0-9_]+)\b", line)
+                for env in env_matches:
+                    added_env_vars.add(env)
+
+    # 4. Read documentation files
+    readme_path = worktree / "README.md"
+    readme_content = ""
+    if readme_path.is_file():
+        readme_content = readme_path.read_text(encoding="utf-8")
+
+    prompt_path = worktree / "pdd/prompts/sync_orchestration_python.prompt"
+    prompt_content = ""
+    if prompt_path.is_file():
+        prompt_content = prompt_path.read_text(encoding="utf-8")
+
+    # Extract markdown sections for verification
+    pddrc_section = get_markdown_section(
+        readme_content,
+        "**Available Context Settings**:",
+        ["**Path Behavior**:", "###", "##"],
+    )
+
+    env_section = get_markdown_section(
+        readme_content, "### Environment Variables", ["\n## Error Handling", "\n## "]
+    )
+
+    prompt_ops_section = get_markdown_section(
+        prompt_content, "## Workflow Operations", ["## "]
+    )
+
+    # 5. Perform the contract checks. Repo-declared rules are evaluated first:
+    # they are the repo-agnostic interface for non-PDD projects. The legacy PDD
+    # checks below remain as PDD's built-in default contract.
+    errors = _run_configured_doc_contract_rules(
+        worktree,
+        base_spec,
+        trusted_git,
+        git_env,
+        added_lines_by_file,
+    )
+
+    for key in added_pddrc_keys:
+        if f"`{key}`" not in pddrc_section and key not in pddrc_section:
+            errors.append(
+                f".pddrc key '{key}' is not documented in README.md under 'Available Context Settings' section."
+            )
+
+    for opt in added_click_options:
+        if opt not in readme_content:
+            errors.append(f"Click option '{opt}' is not documented in README.md.")
+
+    for op in added_skip_behaviors:
+        if op not in readme_content:
+            errors.append(
+                f"Skip behavior / sync step '{op}' is not documented in README.md."
+            )
+        if op not in prompt_ops_section:
+            errors.append(
+                f"Sync step '{op}' is not documented in pdd/prompts/sync_orchestration_python.prompt under 'Workflow Operations' section."
+            )
+
+    # A new skip CONDITION on an existing operation must be documented as part
+    # of THAT operation's own contract (not merely anywhere in the file) in BOTH
+    # README and the sync orchestration prompt. This is the #1303/#1238 drift
+    # (review round 2): adding `operation == 'fix' and skip_tests` while the docs
+    # only tie `--skip-tests` to the `test` step — leaving `fix` documented as an
+    # unconditional "Resolve test failures" — must fail the gate.
+    for op, cond in added_skip_contracts:
+        tokens = ", ".join(_condition_doc_tokens(cond))
+        if not _operation_documents_condition(readme_content, op, cond):
+            errors.append(
+                f"Skip condition '{cond}' gating operation '{op}' is not documented in "
+                f"README.md within the '{op}' operation's own entry "
+                f"(tie '{op}' to one of: {tokens})."
+            )
+        if not _operation_documents_condition(prompt_content, op, cond):
+            errors.append(
+                f"Skip condition '{cond}' gating operation '{op}' is not documented in "
+                f"pdd/prompts/sync_orchestration_python.prompt within the '{op}' "
+                f"operation's own entry (tie '{op}' to one of: {tokens})."
+            )
+
+    for env in added_env_vars:
+        if env in {"PDD_DIR", "PDD_PHASE"}:
+            continue
+        if f"`{env}`" not in env_section and env not in env_section:
+            errors.append(
+                f"Environment variable '{env}' is not documented in README.md under 'Environment Variables' section."
+            )
+
+    for prompt_path in sorted(changed_prompt_files):
+        if not _prompt_has_story_coverage(worktree, prompt_path):
+            errors.append(
+                f"Prompt '{prompt_path}' changed but is not covered by any "
+                "user_stories/story__*.md file. Add or update a user story with "
+                "pdd-story-prompts metadata so `pdd detect --stories` can test "
+                "the prompt."
+            )
+
+    if errors:
+        for err in errors:
+            print(f"Doc Contract Failure: {err}", file=sys.stderr)
+        return 1
+
+    print("Doc Contract Check: Passed.", file=sys.stdout)
+    return 0
+
+
 __all__ = [
     "DEFAULT_GATE_TIMEOUT_SECONDS",
     "Gate",
     "GateResult",
     "discover_gates",
     "gate_results_to_findings",
+    "run_doc_contract_check",
     "run_gates",
 ]
