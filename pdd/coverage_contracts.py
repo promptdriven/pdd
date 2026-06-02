@@ -601,6 +601,7 @@ def build_coverage(
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
     *,
+    prompt_text: Optional[str] = None,
     require_prompt_qualified_tests: bool = False,
 ) -> CoverageResult:
     """
@@ -629,14 +630,17 @@ def build_coverage(
 
     result = CoverageResult(path=path)
 
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        result.error = f'File not found: "{path}"'
-        return result
-    except OSError as exc:
-        result.error = str(exc)
-        return result
+    if prompt_text is not None:
+        text = prompt_text
+    else:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            result.error = f'File not found: "{path}"'
+            return result
+        except OSError as exc:
+            result.error = str(exc)
+            return result
 
     sections = _extract_sections(text)
 

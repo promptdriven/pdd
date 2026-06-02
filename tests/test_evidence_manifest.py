@@ -12,6 +12,7 @@ import pytest
 from pdd.evidence_manifest import (
     SCHEMA_VERSION,
     _preprocessed_expanded_sha256,
+    devunit_slug_for_prompt,
     grounding_kwargs_from_ctx,
     validation_from_sync,
     write_evidence_manifest,
@@ -80,6 +81,23 @@ def test_writes_schema_valid_run_and_latest_manifest(tmp_path: Path) -> None:
     assert manifest["generation"]["grounding_examples"] == []
     latest = tmp_path / ".pdd" / "evidence" / "devunits" / "refund.latest.json"
     assert json.loads(latest.read_text(encoding="utf-8")) == manifest
+
+
+def test_devunit_slug_for_nested_prompt_path(tmp_path: Path) -> None:
+    """Path-qualified module identity is slugged the same way as write_evidence_manifest."""
+    prompt = tmp_path / "prompts" / "frontend" / "page_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("prompt body\n", encoding="utf-8")
+
+    assert devunit_slug_for_prompt(prompt) == "frontend-page"
+
+    write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    latest = tmp_path / ".pdd" / "evidence" / "devunits" / "frontend-page.latest.json"
+    assert latest.is_file()
 
 
 def test_write_evidence_manifest_serializes_cloud_grounding(tmp_path: Path) -> None:
