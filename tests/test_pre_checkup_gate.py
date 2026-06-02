@@ -833,6 +833,12 @@ def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path)
     # these); the scrub is precise, not a broad KEY/SECRET substring match.
     monkeypatch.setenv("DJANGO_SECRET_KEY", "keep-me")
     monkeypatch.setenv("DATABASE_URL", "keep-me-too")
+    # _python_import_env uses setdefault("CI", "1"), so it preserves an ambient
+    # CI value when one is already set. CI runners (GitHub Actions) export
+    # CI=true, which would otherwise make the default-set assertion below see
+    # "true" instead of "1". Clear it so the test deterministically exercises the
+    # default-setting contract regardless of where it runs.
+    monkeypatch.delenv("CI", raising=False)
 
     env = pre_checkup_gate._python_import_env(tmp_path)
 
