@@ -1,6 +1,7 @@
 """pdd/split_validation.py — Post-extraction validation for the agentic split orchestrator."""
 from __future__ import annotations
 
+import ast
 import errno
 import re
 import subprocess
@@ -181,11 +182,115 @@ def symbols_from_patch_object_target(
     return set()
 
 
+def _symbols_from_qualified_import(qualified: str, attr: str, module_stem: str) -> set[str]:
+    """Map a test import alias to a symbol name under *module_stem*."""
+    if qualified == module_stem:
+        return {attr}
+    prefix = f"{module_stem}."
+    if qualified.startswith(prefix):
+        owner = qualified[len(prefix) :]
+        return {f"{owner}.{attr}"} if owner else {attr}
+    return set()
+
+
+def _module_import_map(tree: ast.Module, module_stem: str) -> dict[str, str]:
+    """Map local test names to dotted paths rooted at *module_stem*."""
+    mapping: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                mod = alias.name
+                if mod != module_stem and not mod.endswith(f".{module_stem}"):
+                    continue
+                local = alias.asname or mod.split(".")[-1]
+                mapping[local] = module_stem
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None:
+                continue
+            mod = node.module
+            if mod != module_stem and not mod.endswith(f".{module_stem}"):
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local = alias.asname or alias.name
+                mapping[local] = f"{module_stem}.{alias.name}"
+    return mapping
+
+
+def _patch_object_attr_name(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _patch_object_target_ref(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parts: list[str] = []
+        current: ast.AST = node
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+            return ".".join(reversed(parts))
+    return None
+
+
+def _is_patch_object_callee(func: ast.AST) -> bool:
+    if not isinstance(func, ast.Attribute) or func.attr != "object":
+        return False
+    if isinstance(func.value, ast.Name) and func.value.id == "patch":
+        return True
+    return (
+        isinstance(func.value, ast.Attribute)
+        and func.value.attr == "patch"
+        and isinstance(func.value.value, ast.Name)
+    )
+
+
+def _symbols_for_patch_object_target(
+    target_ref: str,
+    attr: str,
+    import_map: dict[str, str],
+    module_stem: str,
+) -> set[str]:
+    symbols: set[str] = set()
+    if target_ref in import_map:
+        symbols.update(_symbols_from_qualified_import(import_map[target_ref], attr, module_stem))
+    symbols.update(symbols_from_patch_object_target(target_ref, attr, module_stem))
+    return symbols
+
+
+def _collect_patch_object_symbols_ast(test_file_content: str, module_stem: str) -> set[str]:
+    """Resolve ``patch.object(ImportedClass, \"method\")`` via test import aliases."""
+    try:
+        tree = ast.parse(test_file_content)
+    except SyntaxError:
+        return set()
+    import_map = _module_import_map(tree, module_stem)
+    symbols: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_patch_object_callee(node.func):
+            continue
+        if len(node.args) < 2:
+            continue
+        attr = _patch_object_attr_name(node.args[1])
+        target_ref = _patch_object_target_ref(node.args[0])
+        if attr is None or target_ref is None:
+            continue
+        symbols.update(_symbols_for_patch_object_target(target_ref, attr, import_map, module_stem))
+    return symbols
+
+
 def _collect_patch_object_symbols(test_file_content: str, module_stem: str) -> set[str]:
     symbols: set[str] = set()
     for pattern in _PATCH_OBJECT_PATTERNS:
         for module_ref, attr in pattern.findall(test_file_content):
             symbols.update(symbols_from_patch_object_target(module_ref, attr, module_stem))
+    symbols.update(_collect_patch_object_symbols_ast(test_file_content, module_stem))
     return symbols
 
 

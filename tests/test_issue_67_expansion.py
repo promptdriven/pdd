@@ -226,6 +226,62 @@ def test_patch_object_target_expands_and_collects(tmp_path):
     assert "def _internal():" in selected
 
 
+def test_patch_object_imported_class_target_collects_and_protects(tmp_path):
+    """patch.object(Service, \"_private\") must preserve the patched class method."""
+    from pdd.split_validation import collect_patch_symbols_for_module
+
+    module_path = tmp_path / "service.py"
+    test_path = tmp_path / "test_service.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            class Service:
+                def _private(self):
+                    return "secret"
+
+                def public_api(self):
+                    return self._private()
+            """
+        ),
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        textwrap.dedent(
+            """
+            from unittest.mock import patch
+            from service import Service
+
+            @patch.object(Service, "_private")
+            def test_service(mock_private):
+                pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    symbols = collect_patch_symbols_for_module(module_path)
+    assert "Service._private" in symbols
+
+    existing_code = module_path.read_text(encoding="utf-8")
+    generated_code = textwrap.dedent(
+        """
+        class Service:
+            def public_api(self):
+                return "ok"
+        """
+    )
+
+    with pytest.raises(PublicSurfaceRegressionError, match="Service._private"):
+        _verify_public_surface_regression(
+            existing_code=existing_code,
+            generated_code=generated_code,
+            prompt_name="service_python",
+            output_path=str(module_path),
+            language="python",
+            prompt_content="% Goal: Refactor service.py",
+        )
+
+
 def test_patch_target_protection(tmp_path):
     """Verify _verify_public_surface_regression protects symbols referenced in tests."""
     project_dir = tmp_path / "my_project"

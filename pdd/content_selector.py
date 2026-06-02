@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import json
-import pathlib
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -850,7 +849,6 @@ def _expand_dependency_spans(
             (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign),
         ):
             continue
-        node_span = _Span(_node_start_line(node), _node_end_line(node))
         if any(_span_overlaps_node(span, node) for span in spans):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 seed_names.add(node.name)
