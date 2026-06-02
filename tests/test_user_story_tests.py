@@ -747,6 +747,7 @@ def test_user_story_fix_happy_path(tmp_path):
 
     with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
          patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
          patch("pdd.change_main.change_main") as mock_change, \
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
@@ -792,6 +793,7 @@ def test_user_story_fix_uses_pdd_src_dir_override(tmp_path, monkeypatch):
 
     with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
          patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
          patch("pdd.change_main.change_main") as mock_change, \
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
@@ -830,6 +832,7 @@ def test_user_story_fix_treats_plain_error_message_as_failure(tmp_path):
 
     with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
          patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
          patch("pdd.change_main.change_main") as mock_change, \
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
