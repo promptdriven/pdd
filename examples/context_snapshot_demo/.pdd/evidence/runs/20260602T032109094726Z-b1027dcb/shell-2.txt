@@ -1,3 +1,0 @@
-STDOUT:
-pdd-snapshot-demo-shell
-STDERR:
