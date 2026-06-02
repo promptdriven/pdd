@@ -2524,6 +2524,9 @@ def test_startup_comment_shows_ref_name_not_sha(mock_dependencies, temp_cwd):
 
     assert captured_bodies, "Step 0 startup comment was never posted"
     body = captured_bodies[0]
+    # Issue #1306: the Step 0 banner must NOT advertise a model — it cannot be
+    # known truthfully before any step's provider has responded.
+    assert "**Model**" not in body, f"Step 0 banner must omit the Model field; got {body!r}"
     assert "origin/main" in body, (
         f"Startup comment 'Base branch' must show ref name ('origin/main'), not a SHA; "
         f"got body={body!r}"

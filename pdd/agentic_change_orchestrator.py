@@ -1620,7 +1620,6 @@ def run_agentic_change_orchestrator(
         startup_body = (
             f"## Step 0/13: Workflow Startup\n\n"
             f"- **Mode**: {mode_label}\n"
-            f"- **Model**: {model_used}\n"
             f"- **Base branch**: {base_ref_label}\n"
             f"- **Command**: pdd-issue (full change → sync flow)\n"
         )
