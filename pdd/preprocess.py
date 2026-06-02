@@ -613,12 +613,29 @@ def process_include_tags(text: str, recursive: bool, compress: bool = False, _se
                                     f"estimated at {est_tokens} tokens; falling back to "
                                     f"interface mode[/yellow]"
                                 )
+                                from pdd.content_selector import (  # pylint: disable=import-outside-toplevel
+                                    augment_interface_with_patch_targets,
+                                    discover_sibling_patch_targets,
+                                )
                                 content = selector.select(
                                     content=raw_include_content,
                                     selectors=selectors,
                                     file_path=full_path,
                                     mode="interface",
                                 )
+                                patch_targets = discover_sibling_patch_targets(full_path)
+                                content = augment_interface_with_patch_targets(
+                                    content,
+                                    raw_include_content,
+                                    patch_targets,
+                                )
+                                if len(content) > _COMPRESSED_MAX_CHARS:
+                                    console.print(
+                                        f"[yellow]Warning: interface include for {full_path} "
+                                        f"still exceeds budget; falling back to truncated full "
+                                        f"content[/yellow]"
+                                    )
+                                    content = raw_include_content[:_COMPRESSED_MAX_CHARS]
                         except ImportError:
                             # Fall back to query if originally present, otherwise full file
                             fallback_query = attrs.get('query')

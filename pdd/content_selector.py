@@ -375,6 +375,7 @@ def _full_interface(content: str, source_lines: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 _COMPRESSED_MAX_CHARS = 120_000  # ~30k tokens at 4 chars/token
+_PATCH_TARGET_RE = re.compile(r"""patch\s*\(\s*['"]([^'"]+)['"]""")
 
 
 def _is_test_file_path(file_path: str | None) -> bool:
@@ -452,6 +453,72 @@ def _compressed_from_spans(
     """Apply compression to span-selected Python source."""
     raw = _extract_spans(source_lines, spans)
     return _full_compressed(raw, file_path=file_path)
+
+
+def _sibling_test_paths(module_path: Path) -> list[Path]:
+    """Candidate sibling test files for a Python module (issue #876)."""
+    stem = module_path.stem
+    candidates = [
+        module_path.parent / f"test_{stem}.py",
+        module_path.parent / f"{stem}_test.py",
+        module_path.parent / "tests" / f"test_{stem}.py",
+    ]
+    if module_path.parent.name != "tests":
+        candidates.append(module_path.parent.parent / "tests" / f"test_{stem}.py")
+    return [path for path in candidates if path.is_file()]
+
+
+def discover_sibling_patch_targets(file_path: str | Path) -> set[str]:
+    """Names patched on this module in sibling tests (e.g. ``fetch_data``)."""
+    path = Path(file_path)
+    if _is_test_file_path(str(path)):
+        return set()
+    module_name = path.stem
+    targets: set[str] = set()
+    for test_path in _sibling_test_paths(path):
+        try:
+            text = test_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in _PATCH_TARGET_RE.finditer(text):
+            target = match.group(1)
+            if "." in target:
+                mod, attr = target.split(".", 1)
+                if mod == module_name:
+                    targets.add(attr.split(".")[0])
+            elif target == module_name:
+                continue
+    return targets
+
+
+def _extract_named_definitions(content: str, names: set[str]) -> list[str]:
+    """Return full source spans for top-level functions named in *names*."""
+    if not names:
+        return []
+    tree = ast.parse(content)
+    lines = _splitlines(content)
+    chunks: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+            chunks.append("\n".join(lines[node.lineno - 1 : node.end_lineno]))
+    return chunks
+
+
+def augment_interface_with_patch_targets(
+    interface_text: str,
+    full_content: str,
+    targets: set[str],
+) -> str:
+    """Re-append full definitions for sibling ``patch()`` targets missing from interface."""
+    if not targets:
+        return interface_text
+    extras: list[str] = []
+    for chunk in _extract_named_definitions(full_content, targets):
+        if chunk and chunk not in interface_text:
+            extras.append(chunk)
+    if not extras:
+        return interface_text
+    return interface_text.rstrip() + "\n\n" + "\n\n".join(extras) + "\n"
 
 
 # ---------------------------------------------------------------------------

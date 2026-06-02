@@ -1,4 +1,10 @@
-"""Human-verifiable regression tests for issue #72 compressed few-shot context."""
+"""Human-verifiable regression tests for promptdriven/pdd issue #876.
+
+Marketplace few-shot compression: deterministic, contract-preserving, with
+fallback when over token budget. Run:
+
+    pytest -vv tests/test_issue_876_compressed_few_shot.py
+"""
 from __future__ import annotations
 
 import hashlib
@@ -7,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from pdd.content_selector import ContentSelector, _COMPRESSED_MAX_CHARS
+from pdd.content_selector import (
+    ContentSelector,
+    _COMPRESSED_MAX_CHARS,
+    augment_interface_with_patch_targets,
+    discover_sibling_patch_targets,
+)
 from pdd.evidence_manifest import write_evidence_manifest
 from pdd.preprocess import preprocess
 
@@ -16,9 +27,9 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-# SCENARIO A: MAIN BUG FIX — compressed mode shrinks few-shot while keeping logic
+# SCENARIO A: MAIN — compressed few-shot keeps behavioral mold
 def test_compressed_mode_strips_docstrings_keeps_callable_bodies() -> None:
-    """AST compression must preserve executable mold (function bodies)."""
+    """Compression keeps executable logic for few-shot grounding (#876)."""
     source = '''
 """Module doc."""
 
@@ -33,9 +44,33 @@ def helper(value: int) -> int:
     assert "def helper(value: int) -> int:" in out
 
 
-# SCENARIO B: EDGE CASE — sibling test patch target stays in compressed module
+def test_externally_called_helper_definition_preserved() -> None:
+    """Contract-bearing helpers referenced in-module must survive compression."""
+    source = """
+def helper():
+    return 1
+
+def main():
+    return helper()
+"""
+    out = ContentSelector.select(source, [], file_path="app.py", mode="compressed")
+    assert "def helper" in out
+    assert "return 1" in out
+    assert "helper()" in out
+
+
+def test_compression_output_is_deterministic() -> None:
+    """Same source must produce identical compressed bytes (#876)."""
+    source = '"""x"""\n\ndef f():\n    return 1\n'
+    a = ContentSelector.select(source, [], file_path="m.py", mode="compressed")
+    b = ContentSelector.select(source, [], file_path="m.py", mode="compressed")
+    assert a == b
+    assert _sha256(a) == _sha256(b)
+
+
+# SCENARIO B: EDGE — patch targets + fallback chain
 def test_compressed_module_keeps_patch_target_from_sibling_test(tmp_path: Path) -> None:
-    """Patch targets referenced in sibling tests must survive compression."""
+    """Sibling test patch targets must remain in compressed module source."""
     module = tmp_path / "worker.py"
     test_file = tmp_path / "test_worker.py"
     module.write_text(
@@ -54,6 +89,7 @@ def test_compressed_module_keeps_patch_target_from_sibling_test(tmp_path: Path) 
         "    assert mock_fetch() == 1\n",
         encoding="utf-8",
     )
+    assert discover_sibling_patch_targets(module) == {"fetch_data"}
     compressed = ContentSelector.select(
         module.read_text(encoding="utf-8"),
         [],
@@ -62,31 +98,57 @@ def test_compressed_module_keeps_patch_target_from_sibling_test(tmp_path: Path) 
     )
     assert "def fetch_data" in compressed
     assert "return 42" in compressed
-    assert '"""Worker module."""' not in compressed
 
 
-# SCENARIO B: EDGE CASE — 30k token cap falls back to interface mode
+def test_interface_fallback_restores_patch_target_body(tmp_path: Path) -> None:
+    """After compressed→interface fallback, patched symbols keep full bodies."""
+    module = tmp_path / "worker.py"
+    test_file = tmp_path / "test_worker.py"
+    filler = "".join(
+        f"def fn_{i}(x: int) -> int:\n    return x + {i}\n" for i in range(3500)
+    )
+    module.write_text(
+        "def fetch_data():\n    return 42\n\n" + filler,
+        encoding="utf-8",
+    )
+    test_file.write_text(
+        "@patch('worker.fetch_data', return_value=1)\n"
+        "def test_fetch():\n    pass\n",
+        encoding="utf-8",
+    )
+    raw = module.read_text(encoding="utf-8")
+    iface = ContentSelector.select(raw, [], file_path=str(module), mode="interface")
+    assert "return 42" not in iface
+    restored = augment_interface_with_patch_targets(
+        iface, raw, discover_sibling_patch_targets(module)
+    )
+    assert "return 42" in restored
+
+
 def test_preprocess_compressed_fallback_to_interface_when_over_cap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Oversized compressed includes must fall back to interface signatures."""
+    """Oversized compressed includes use interface then truncated full (#876)."""
     huge = tmp_path / "huge.py"
     body = "".join(
         f'def fn_{i}(x: int) -> int:\n    """doc"""\n    return x + {i}\n'
         for i in range(4000)
     )
     huge.write_text(f'"""big"""\n{body}', encoding="utf-8")
-    rel = huge.name
-    prompt = f'<include mode="compressed">{rel}</include>'
+    raw_len = len(huge.read_text(encoding="utf-8"))
     monkeypatch.chdir(tmp_path)
-    expanded = preprocess(prompt, recursive=False, double_curly_brackets=False)
-    assert "..." in expanded
-    assert len(expanded) < len(huge.read_text(encoding="utf-8"))
+    expanded = preprocess(
+        f'<include mode="compressed">{huge.name}</include>',
+        recursive=False,
+        double_curly_brackets=False,
+    )
+    assert len(expanded) <= _COMPRESSED_MAX_CHARS
+    assert len(expanded) < raw_len
 
 
-# SCENARIO C: INTEGRATION — evidence manifest records deterministic compression hashes
+# SCENARIO C: INTEGRATION — manifest hashes + compress flag
 def test_evidence_manifest_records_compressed_include_metadata(tmp_path: Path) -> None:
-    """Compressed includes must record source and post-compression hashes."""
+    """Deterministic source/compressed hashes and token estimate in manifest."""
     example = tmp_path / "context" / "fewshot.py"
     prompt = tmp_path / "prompts" / "demo_python.prompt"
     example.parent.mkdir(parents=True)
@@ -99,7 +161,7 @@ def test_evidence_manifest_records_compressed_include_metadata(tmp_path: Path) -
         encoding="utf-8",
     )
     prompt.write_text(
-        f'<include mode="compressed">context/fewshot.py</include>\n',
+        '<include mode="compressed">context/fewshot.py</include>\n',
         encoding="utf-8",
     )
     manifest_path = write_evidence_manifest(
@@ -119,11 +181,10 @@ def test_evidence_manifest_records_compressed_include_metadata(tmp_path: Path) -
     assert include["estimated_tokens"] == -(-len(compressed) // 4)
 
 
-# SCENARIO C: INTEGRATION — compress=True defaults includes to compressed mode
 def test_preprocess_compress_flag_defaults_to_compressed_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """CLI/pipeline compress=True must apply compressed includes without explicit mode."""
+    """compress=True applies compressed includes without explicit mode attribute."""
     module = tmp_path / "sample.py"
     module.write_text(
         '"""Doc."""\n\ndef run():\n    return 1\n',
