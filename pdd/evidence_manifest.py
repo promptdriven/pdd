@@ -18,6 +18,7 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
+from .contract_ir import parse_prompt_contracts
 from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
 from .sync_order import extract_includes_from_file
 
@@ -259,9 +260,22 @@ def _contract_statuses(  # pylint: disable=too-many-return-statements
                 "status": rule.status,
                 "stories": rule.stories,
                 "tests": rule.tests,
+                "waiver": rule.waiver,
+                "waiver_status": getattr(rule, "waiver_status", None),
+                "waiver_expires": getattr(rule, "waiver_expires", None),
             }
             for rule in result.rules
         },
+        "waivers": [
+            {
+                "id": waiver.raw_id,
+                "rule_id": waiver.rule_id,
+                "reason": waiver.reason,
+                "approved_by": waiver.approved_by,
+                "expires": waiver.expires.isoformat() if waiver.expires else None,
+            }
+            for waiver in parse_prompt_contracts(path).waivers
+        ],
     }
 
 
