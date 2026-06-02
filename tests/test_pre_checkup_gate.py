@@ -547,6 +547,26 @@ def test_touched_invalid_architecture_json_blocks(tmp_path):
     ) is None
 
 
+def test_touched_wrong_shape_architecture_json_blocks(tmp_path):
+    """Regression: valid JSON is not enough — a scalar (`"oops"`) or a dict
+    without a `modules` list parses fine but yields an EMPTY module graph
+    silently, so drift-sync runs against nothing and the gate passes vacuously.
+    A touched arch.json of an unrecognized shape MUST block; legitimate empty
+    shapes (`[]`, `{"modules": []}`) MUST NOT."""
+    arch = tmp_path / "architecture.json"
+    for bad in ['"oops"', "{}", "42", "true"]:
+        arch.write_text(bad, encoding="utf-8")
+        err = pre_checkup_gate._touched_architecture_json_error(
+            tmp_path, ["architecture.json"]
+        )
+        assert err and "not a recognized architecture shape" in err, (bad, err)
+    for ok in ["[]", '{"modules": []}', '[{"filename": "x"}]']:
+        arch.write_text(ok, encoding="utf-8")
+        assert pre_checkup_gate._touched_architecture_json_error(
+            tmp_path, ["architecture.json"]
+        ) is None, ok
+
+
 def test_caller_compat_resolves_from_dot_import_submodule(tmp_path):
     """Regression: `from . import api; api.build(...)` (and `from . import api as a`)
     binds the SUBMODULE, so the call is a module.attr call. The sweep must resolve

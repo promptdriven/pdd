@@ -179,11 +179,28 @@ def _touched_architecture_json_error(
     if not path.exists():
         return None
     try:
-        json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         return (
             "architecture.json (changed by this PR) is not valid JSON: "
             f"{_scrub(exc)}"
+        )
+    # Valid JSON is not enough: the shape must be one _load_architecture can
+    # extract a module graph from — a top-level list, or a dict with a "modules"
+    # list. A scalar ("oops") or a dict without a modules list parses fine but
+    # yields an EMPTY graph silently, so drift-sync and downstream checks run
+    # against no modules at all and the gate passes vacuously. An empty list /
+    # `{"modules": []}` is a legitimate "no modules" state and does NOT block.
+    if not (
+        isinstance(data, list)
+        or (isinstance(data, dict) and isinstance(data.get("modules"), list))
+    ):
+        return (
+            "architecture.json (changed by this PR) is valid JSON but not a "
+            "recognized architecture shape (expected a list of modules, or a "
+            'dict with a "modules" list); got '
+            f"{type(data).__name__} — the gate would silently treat the module "
+            "graph as empty"
         )
     return None
 
@@ -376,6 +393,16 @@ def _module_name_for_python_path(path: Path, worktree: Path) -> Optional[str]:
         rel = path.resolve().relative_to(worktree.resolve())
     except ValueError:
         return None
+    # NOTE: __init__.py is intentionally NOT resolved to its package name. Doing
+    # so was tried (to caller-compat-sweep package re-exports, `from pkg import
+    # X`) but empirically false-blocked: `from pkg import <submodule>` and
+    # `try: from pkg import OPTIONAL except ImportError: ...` guarded imports both
+    # produce spurious "missing symbol" findings on the real repo (7+ on
+    # pdd/__init__.py alone, e.g. logo_animation.py's guarded color constants).
+    # Suppressing those needs submodule + try/except-guard detection — a
+    # false-positive treadmill on a check that HARD-BLOCKS arbitrary PRs. The
+    # package-re-export gap is a harmless missed-catch that the cross-model
+    # checkup backstops; a wrongful block is strictly worse. So skip __init__.py.
     if rel.suffix != ".py" or rel.name == "__init__.py":
         return None
     parts = list(rel.with_suffix("").parts)
