@@ -1426,6 +1426,7 @@ class AsyncSyncRunner:
             int(issue_number),
             self._steer_state,
             cwd=self._steer_sync_cwd(),
+            quiet=self.quiet,
         )
 
     def _drain_sync_steers_for_progress(self) -> None:

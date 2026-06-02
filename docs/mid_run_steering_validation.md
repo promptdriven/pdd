@@ -30,11 +30,16 @@ pytest -q tests/test_mid_run_steer_orchestrator_integration.py \
 | Same `comment_id` not injected twice | `test_env_steer_injected_once_on_resume`, idempotent tail of E2E test |
 | Bot / state marker / progress comments filtered | `test_drain_filters_bot_state_and_progress_comments` |
 | Prompt contains `## Steered user input (mid-run)` | `test_run_agentic_task_injects_steered_section` |
+| Empty-issue seed survives save/resume (`steer_cursor_seeded`) | `test_seed_issue_steer_cursor_empty_issue_persists_seed_on_resume` |
+| Baseline fetch failure does not set `steer_cursor_seeded` | `test_seed_issue_steer_cursor_does_not_mark_seeded_on_fetch_failure` |
+| Baseline fetch failure logs a warning | `test_seed_issue_steer_cursor_warns_on_fetch_failure` |
+| Missing `gh` does not set `steer_cursor_seeded` | `test_seed_issue_steer_cursor_missing_gh_does_not_mark_seeded` |
+| Failed seed → drain does not ingest historical comments | `test_failed_seed_then_drain_skips_historical_comments` |
 
 ## Manual / cloud checklist (before closing #1324)
 
 1. Start an issue-driven workflow (`pdd change`, `pdd bug`, or `pdd test`) with `gh` authenticated.
-2. Confirm workflow state gains `steer_cursor_seeded` / `last_steered_comment_id` after start (no historical comments in the first step prompt).
+2. Confirm workflow state gains `steer_cursor_seeded` / `last_steered_comment_id` after start (no historical comments in the first step prompt). If the worker cannot fetch issue comments (missing `gh`, auth/network error, nonzero `gh api`), `steer_cursor_seeded` is **not** set, a warning is logged, and GitHub comment steering stays disabled until a later successful seed.
 3. Post a normal human issue comment mid-run (not a bot progress comment).
 4. After the current step finishes, confirm the next step’s agent prompt includes **Steered user input (mid-run)** with that comment.
 5. Re-run or resume the same workflow; the same comment must **not** appear again.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import signal
 import sys
@@ -18,6 +19,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
 from rich.console import Console
+
+_steer_logger = logging.getLogger(__name__ + ".steer")
+
 
 def _load_model_data(*args, **kwargs):
     """Lazily load model data from ``pdd.llm_invoke``.
@@ -108,7 +112,12 @@ class SteerEntry:
     body: str
 
 
-STEER_STATE_KEYS = ("last_steered_comment_id", "last_steer_at", "steer_generation")
+STEER_STATE_KEYS = (
+    "last_steered_comment_id",
+    "last_steer_at",
+    "steer_generation",
+    "steer_cursor_seeded",
+)
 
 
 def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) -> None:
@@ -4588,10 +4597,13 @@ def _fetch_issue_comments_via_gh(
     *,
     cwd: Path,
     since: Optional[str] = None,
-) -> List[Dict]:
-    """List issue comments via ``gh api``; returns [] on failure."""
+) -> Tuple[Optional[List[Dict]], Optional[str]]:
+    """List issue comments via ``gh api``.
+
+    Returns ``(comments, None)`` on success and ``(None, reason)`` on failure.
+    """
     if not _find_cli_binary("gh"):
-        return []
+        return None, "gh CLI not found on PATH"
     cmd = _gh_api_list_issue_comments_cmd(
         repo_owner, repo_name, issue_number, since=since
     )
@@ -4603,11 +4615,27 @@ def _fetch_issue_comments_via_gh(
             text=True,
             start_new_session=True,
         )
-    except Exception:
-        return []
+    except Exception as exc:
+        return None, f"gh api error: {exc}"
     if res.returncode != 0:
-        return []
-    return _load_gh_paginated_comments(res.stdout)
+        detail = (res.stderr or res.stdout or "").strip()
+        if len(detail) > 200:
+            detail = detail[:200] + "…"
+        suffix = f": {detail}" if detail else ""
+        return None, f"gh api failed (exit {res.returncode}){suffix}"
+    return _load_gh_paginated_comments(res.stdout), None
+
+
+def _log_steer_seed_skipped(reason: Optional[str], *, quiet: bool) -> None:
+    """Warn when baseline steer cursor seed could not run."""
+    detail = reason or "could not fetch issue comments"
+    msg = (
+        f"Mid-run steering: skipped steer cursor seed ({detail}). "
+        "GitHub issue comments will not be drained until a successful seed."
+    )
+    _steer_logger.warning(msg)
+    if not quiet:
+        console.print(f"[yellow]Warning: {msg}[/yellow]")
 
 
 def seed_issue_steer_cursor(
@@ -4617,6 +4645,7 @@ def seed_issue_steer_cursor(
     state: Dict[str, Any],
     *,
     cwd: Path,
+    quiet: bool = False,
 ) -> bool:
     """Set steer cursor to the current issue comment tail without returning steers.
 
@@ -4625,9 +4654,12 @@ def seed_issue_steer_cursor(
     authors, including bots) so later bot progress comments do not rewind the id
     cursor.
     """
-    comments = _fetch_issue_comments_via_gh(
+    comments, fetch_err = _fetch_issue_comments_via_gh(
         repo_owner, repo_name, issue_number, cwd=cwd
     )
+    if comments is None:
+        _log_steer_seed_skipped(fetch_err, quiet=quiet)
+        return False
     max_id_val = -1
     latest_timestamp: Optional[str] = None
     for comment in comments:
@@ -4692,6 +4724,7 @@ def ensure_issue_steer_cursor_seeded(
     state: Dict[str, Any],
     *,
     cwd: Path,
+    quiet: bool = False,
 ) -> bool:
     """Seed the steer cursor at workflow start when not yet established.
 
@@ -4702,7 +4735,7 @@ def ensure_issue_steer_cursor_seeded(
     if _steer_cursor_initialized(state):
         return False
     return seed_issue_steer_cursor(
-        repo_owner, repo_name, issue_number, state, cwd=cwd
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
     )
 
 
@@ -4785,13 +4818,15 @@ def drain_issue_steers(
     since = state.get("last_steer_at")
     last_id = state.get("last_steered_comment_id")
 
-    comments = _fetch_issue_comments_via_gh(
+    comments, _fetch_err = _fetch_issue_comments_via_gh(
         repo_owner,
         repo_name,
         issue_number,
         cwd=cwd,
         since=since if since else None,
     )
+    if comments is None:
+        return []
 
     try:
         last_id_val = int(last_id) if last_id is not None else -1

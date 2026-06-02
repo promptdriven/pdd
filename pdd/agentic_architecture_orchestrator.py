@@ -534,7 +534,7 @@ def run_agentic_architecture_orchestrator(
         github_comment_id = None
 
     if ensure_issue_steer_cursor_seeded(
-        repo_owner, repo_name, issue_number, state, cwd=cwd
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
     ):
         seed_save = save_workflow_state(
             cwd,

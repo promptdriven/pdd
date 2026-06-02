@@ -454,7 +454,7 @@ def run_agentic_test_orchestrator(
     state["step_comments"] = sorted(step_comments_set)
 
     if ensure_issue_steer_cursor_seeded(
-        repo_owner, repo_name, issue_number, state, cwd=cwd
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
     ):
         seed_save = save_workflow_state(
             cwd,

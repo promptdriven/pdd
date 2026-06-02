@@ -3705,6 +3705,175 @@ def test_seed_issue_steer_cursor_sets_baseline(
     assert steers[0].body == "Steer me"
 
 
+def test_seed_issue_steer_cursor_empty_issue_persists_seed_on_resume(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Seeding an empty issue must survive save/resume and drain first later comment."""
+    from pdd.agentic_common import (
+        STEER_STATE_KEYS,
+        drain_issue_steers,
+        ensure_issue_steer_cursor_seeded,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    first_payload = []
+    later_payload = [
+        {
+            "id": 3001,
+            "user": {"login": "human", "type": "User"},
+            "body": "First mid-run steer",
+            "created_at": "2026-06-02T10:00:00Z",
+        }
+    ]
+    call_count = {"n": 0}
+
+    def _side_effect(*_args, **_kwargs):
+        call_count["n"] += 1
+        payload = first_payload if call_count["n"] == 1 else later_payload
+        result = MagicMock(returncode=0, stderr="")
+        result.stdout = json.dumps(payload)
+        return result
+
+    mock_subprocess_run.side_effect = _side_effect
+
+    initial_state = {}
+    assert ensure_issue_steer_cursor_seeded(
+        "owner", "repo", 55, initial_state, cwd=mock_cwd
+    )
+    assert initial_state.get("steer_cursor_seeded") is True
+    assert "last_steered_comment_id" not in initial_state
+
+    # Simulate save/resume copy path used by orchestrators.
+    resumed_state = {
+        key: initial_state[key] for key in STEER_STATE_KEYS if key in initial_state
+    }
+    assert resumed_state == {"steer_cursor_seeded": True}
+    assert not ensure_issue_steer_cursor_seeded(
+        "owner", "repo", 55, resumed_state, cwd=mock_cwd
+    )
+
+    steers = drain_issue_steers("owner", "repo", 55, resumed_state, cwd=mock_cwd)
+    assert [s.comment_id for s in steers] == ["3001"]
+    assert resumed_state["last_steered_comment_id"] == "3001"
+
+
+def test_seed_issue_steer_cursor_does_not_mark_seeded_on_fetch_failure(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Failed baseline fetch must not set steer_cursor_seeded."""
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="network/auth failure"
+    )
+
+    state = {}
+    assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert "steer_cursor_seeded" not in state
+    assert "last_steered_comment_id" not in state
+
+
+def test_seed_issue_steer_cursor_warns_on_fetch_failure(
+    mock_cwd, mock_subprocess_run, mock_shutil_which, caplog
+):
+    """Failed baseline fetch must warn that steering is disabled until next seed."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="network/auth failure"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert not seed_issue_steer_cursor(
+            "owner", "repo", 55, {}, cwd=mock_cwd, quiet=False
+        )
+
+    assert any(
+        "skipped steer cursor seed" in record.message
+        and "until a successful seed" in record.message
+        for record in caplog.records
+    )
+
+
+def test_seed_issue_steer_cursor_fetch_failure_quiet_suppresses_console(
+    mock_cwd, mock_subprocess_run, mock_shutil_which, capsys, caplog
+):
+    """quiet=True still logs to the steer logger but does not print to console."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="auth failure"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        seed_issue_steer_cursor("owner", "repo", 55, {}, cwd=mock_cwd, quiet=True)
+
+    assert any("skipped steer cursor seed" in r.message for r in caplog.records)
+    captured = capsys.readouterr()
+    assert "skipped steer cursor seed" not in captured.out
+
+
+def test_seed_issue_steer_cursor_missing_gh_does_not_mark_seeded(
+    mock_cwd, mock_shutil_which, caplog
+):
+    """Missing gh must not set steer_cursor_seeded or enable historical drains."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = None
+    state = {}
+
+    with caplog.at_level(logging.WARNING):
+        assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert "steer_cursor_seeded" not in state
+    assert "last_steered_comment_id" not in state
+    assert any("gh CLI not found" in record.message for record in caplog.records)
+
+
+def test_failed_seed_then_drain_skips_historical_comments(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Failed baseline seed must not let a later drain treat history as steers."""
+    from pdd.agentic_common import drain_issue_steers, seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="auth failure"
+    )
+
+    state = {}
+    assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert mock_subprocess_run.call_count == 1
+
+    historical = [
+        {
+            "id": 500,
+            "user": {"login": "human", "type": "User"},
+            "body": "Pre-run discussion",
+            "created_at": "2026-05-01T10:00:00Z",
+        }
+    ]
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps(historical),
+        stderr="",
+    )
+
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert steers == []
+    assert "steer_cursor_seeded" not in state
+    assert mock_subprocess_run.call_count == 1
+
+
 # ---------------------------------------------------------------------------
 # GitHub State Persistence Tests — Issue #481
 # _find_state_comment() missing --paginate causes workflow state loss

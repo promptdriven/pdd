@@ -35,6 +35,7 @@ from .agentic_common import (
     post_step_comment_once,
     drain_step_steers,
     ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -2146,7 +2147,7 @@ def run_agentic_e2e_fix_orchestrator(
             step_comments_set = normalize_step_comments_state(
                 loaded_state.get("step_comments")
             )
-            for _steer_key in ("last_steered_comment_id", "last_steer_at", "steer_generation"):
+            for _steer_key in STEER_STATE_KEYS:
                 if _steer_key in loaded_state:
                     steer_state[_steer_key] = loaded_state[_steer_key]
 
@@ -2359,12 +2360,12 @@ def run_agentic_e2e_fix_orchestrator(
     def _steer_state_fields() -> Dict[str, Any]:
         return {
             key: steer_state[key]
-            for key in ("last_steered_comment_id", "last_steer_at", "steer_generation")
+            for key in STEER_STATE_KEYS
             if key in steer_state
         }
 
     ensure_issue_steer_cursor_seeded(
-        repo_owner, repo_name, issue_number, steer_state, cwd=cwd
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
     )
 
     def _issue_step_steers():

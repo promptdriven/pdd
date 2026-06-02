@@ -39,6 +39,7 @@ from .agentic_common import (
     substitute_template_variables,
     drain_step_steers,
     ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
@@ -2254,7 +2255,7 @@ def _run_agentic_checkup_orchestrator_inner(
 
     steer_state: Dict[str, Any] = {}
     if state is not None:
-        for _steer_key in ("last_steered_comment_id", "last_steer_at", "steer_generation"):
+        for _steer_key in STEER_STATE_KEYS:
             if _steer_key in state:
                 steer_state[_steer_key] = state[_steer_key]
 
@@ -2276,7 +2277,7 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_head_sha=current_pr_head_sha if pr_mode else None,
             step_comments=sorted(step_comments_set),
         )
-        for _steer_key in ("last_steered_comment_id", "last_steer_at", "steer_generation"):
+        for _steer_key in STEER_STATE_KEYS:
             if _steer_key in steer_state:
                 new_state[_steer_key] = steer_state[_steer_key]
         github_comment_id = save_workflow_state(
@@ -2301,7 +2302,7 @@ def _run_agentic_checkup_orchestrator_inner(
         return step_steers
 
     if ensure_issue_steer_cursor_seeded(
-        repo_owner, repo_name, issue_number, steer_state, cwd=cwd
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
     ):
         _save_state()
 
