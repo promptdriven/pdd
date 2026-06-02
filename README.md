@@ -664,6 +664,7 @@ graph TB
 
 ### Prompt Management
 - **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
+- **[`replay`](#5a-replay)**: Reconstructs and audits expanded prompt context from a snapshot-enabled run artifact
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
@@ -907,6 +908,13 @@ Important: Sync frequently overwrites generated files to keep outputs up to date
 pdd --force sync BASENAME
 ```
 
+```bash
+# Single-module sync with replayable context snapshots
+pdd --force sync --snapshot-context factorial_calculator
+```
+
+Snapshot-enabled runs write the canonical run manifest to `.pdd/evidence/runs/<run_id>.json` and replayable context artifacts to the sibling directory `.pdd/evidence/runs/<run_id>/`. Snapshot redaction runs before hashing and storage for known token, key, authorization header, URL credential, and secret-assignment patterns; raw environment dumps and bearer/API tokens must not be persisted. Commit only policy-approved snapshot files.
+
 Arguments:
 - No argument: Scan `architecture.json` and sync all modules that need deterministic Tier 1 prompt-to-code updates.
 - `architecture.json` as a positional value is not a global-sync alias in v1; use no-argument `pdd sync` for project-wide Tier 1 sync.
@@ -921,6 +929,7 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis instead of running sync operations. For no-argument project-wide sync, this prints the dependency-ordered module list and estimated cost without executing any module syncs, plus a single compact roll-up of modules outside the Tier 1 (`generate` / `auto-deps`) scope — bucketed by reason (e.g. `Out of Tier 1 scope: 42 example, 31 test, 18 verify, 12 update, 74 no-prompt fixture`) instead of one warning line per skipped entry. When zero modules are stale, the `0 stale module(s)` fragment is rendered in green so the success signal is visually unambiguous. Actionable architecture-graph warnings (ambiguous or unresolved cross-arch dependencies) are still printed individually in yellow. For single-module sync, it performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing operations. Passing the top-level `pdd --verbose` flag (see above) restores the legacy per-module enumeration after the compact roll-up — one yellow warning line per module outside the Tier 1 scope — for debugging.
+- `--snapshot-context`: Capture the fully expanded prompt context used for generation, including nondeterministic `<shell>`, `<web>`, and `<include ... query="...">` outputs. The run manifest is `.pdd/evidence/runs/<run_id>.json`; snapshot artifacts are in `.pdd/evidence/runs/<run_id>/`. Replay can later reconstruct the same prompt/context from the recorded run artifact.
 - `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
@@ -1168,6 +1177,7 @@ Options:
 - `--experimental-prd`: Explicitly opt in to experimental Incremental PRD Mode for PRD-like files (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) or GitHub issue URLs. Requires `--incremental`.
 - `--unit-test FILENAME`: Path to a unit test file. If provided, automatic test discovery is disabled and only the content of this file is included in the prompt, instructing the model to generate code that passes the specified tests.
 - `--exclude-tests`: Do not automatically include test files found in the default tests directory.
+- `--snapshot-context`: Capture the expanded prompt and dynamic context outputs used for this generation. The run manifest is `.pdd/evidence/runs/<run_id>.json`; snapshot artifacts are in `.pdd/evidence/runs/<run_id>/`. This is recommended when a prompt uses `<shell>`, `<web>`, or `<include ... query="...">` for contract-relevant context.
 
 **Parameter Variables (-e/--env)**:
 Pass key=value pairs to parameterize a prompt so one prompt can generate multiple variants (e.g., multiple files) by invoking `generate` repeatedly with different values.
@@ -1200,6 +1210,10 @@ pdd generate -e MODULE=orders -e PACKAGE=core --output 'src/${PACKAGE}/${MODULE}
 # Docker-style env fallback (reads MODULE from your shell env)
 export MODULE=orders
 pdd generate -e MODULE --output 'src/${MODULE}.py' prompts/module_python.prompt
+```
+
+```bash
+pdd generate prompts/refund_python.prompt --output src/refund.py --snapshot-context
 ```
 
 Shell quoting options:
@@ -1994,6 +2008,13 @@ Options:
 - `--recursive`: Recursively preprocess all prompt files in the prompt file.
 - `--double`: Curly brackets will be doubled.
 - `--exclude`: List of keys to exclude from curly bracket doubling.
+- `--snapshot`: Write the expanded prompt plus a snapshot manifest for any dynamic context resolved during preprocessing. The manifest records hashes and artifact paths for captured `<shell>`, `<web>`, and semantic `query=` include outputs so a later replay can reconstruct the same prompt context.
+
+```bash
+pdd preprocess prompts/refund_python.prompt --snapshot
+```
+
+Use snapshots when dynamic tags are needed for durable behavior. Static prompts with only deterministic includes report that no nondeterministic context was captured. Do not pass `--recursive` with `--snapshot` when the prompt uses `<shell>`, `<web>`, or `query=` includes (recursive mode defers those tags). Enforce captured snapshots in CI with `pdd checkup snapshot prompts/refund_python.prompt` (see [docs/ci.md](docs/ci.md)).
 
 #### XML-like Tags
 
@@ -2064,6 +2085,16 @@ Example command usage:
 ```
 pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --recursive --double --exclude model,temperature factorial_calculator_python.prompt
 ```
+
+### 5a. replay
+
+Reconstruct and audit the expanded prompt context recorded by a snapshot-enabled run.
+
+```bash
+pdd replay .pdd/evidence/runs/<run_id>.json
+```
+
+Replay verifies that the expanded prompt hash can be reconstructed from the run artifact and its captured context snapshots. It does not promise identical generated code, because model execution may remain nondeterministic; the replay contract is identical prompt/context reconstruction.
 
 ### 6. fix
 
@@ -2825,7 +2856,7 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request. With `--pr <PR_URL>` alone it reviews the PR diff on its own merits (correctness / quality), using full project context (architecture, `.pddrc`); the issue-alignment gate is skipped. Add `--issue <ISSUE_URL>` to also verify the PR resolves that issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop (which still requires `--issue`).
 
-**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` command.
+**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
 
 `pdd checkup gate` accepts `--policy-file` to load waiver policy keys from a YAML file instead of `.pddrc`; `--skip-evidence` to run only waiver-policy checks; and `--skip-waivers` to run only evidence-manifest checks.
 
@@ -3358,9 +3389,11 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_CLAUDE_CODE_MODE`**: Set to `interactive` to make the Anthropic agentic provider use interactive Claude Code through a temporary MCP reply tool instead of `claude -p`. This is an opt-in workaround for environments where `claude -p` uses a separate Agent SDK credit pool; when unset, PDD keeps the existing `claude -p - --output-format json` behavior.
 - **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
-- **`PDD_STEER_JSON`**: Supplies mid-run steering comments as JSON for agentic workflows before GitHub comment polling. Primarily used by hosted executors and tests to inject user feedback deterministically.
+- **`PDD_STEER_JSON`**: JSON list of mid-run user steers (`comment_id`, `author`, `body`). Cloud runners pass pending issue comments before GitHub comment polling; orchestrators drain at step boundaries and inject `## Steered user input (mid-run)` into the next agentic step.
 - **`PDD_WORKFLOW_STATE`**: Hidden GitHub comment marker used to persist and resume agentic workflow state across machines. Users normally do not set this directly; delete the state comment only when intentionally forcing a clean restart.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
+
+**Mid-run issue comment steering** (issue-driven orchestrators): humans comment on the GitHub issue to steer a run in progress. The CLI drains comments at step boundaries (separate from `PDD_USER_FEEDBACK`, which is only for between-run retries). `/stop` and label removal cancel jobs in **pdd_cloud**, not via organic comments. Clarification pauses (`STOP_CONDITION`) resume when new comments arrive; workflow state uses `last_steered_comment_id` for idempotency. Automated orchestrator wiring checks live in `tests/test_mid_run_steer_orchestrator_integration.py`; see `docs/mid_run_steering_validation.md`.
 
 #### Output Path Variables
 

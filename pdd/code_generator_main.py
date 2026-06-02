@@ -3186,6 +3186,7 @@ def code_generator_main(
     exclude_tests: bool = False,
     language: Optional[str] = None,
     output_from_config: bool = False,
+    snapshot_context: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -3209,6 +3210,8 @@ def code_generator_main(
             When ``False`` (CLI flag), the explicit path always wins. This
             preserves the documented precedence: CLI > front-matter > .pddrc.
             Defaults to ``False`` so existing callers stay backward compatible.
+        snapshot_context: When True, persist a replayable context snapshot for
+            the expanded prompt used by this generation.
 
     Returns:
         Tuple of (generated_code, was_incremental, total_cost, model_name).
@@ -3226,6 +3229,9 @@ def code_generator_main(
     was_incremental_operation = False
     total_cost = 0.0
     model_name = "unknown"
+    snapshot_recorder = None
+    snapshot_expanded_prompt: Optional[str] = None
+    current_execution_is_local = is_local_execution_preferred
 
     input_file_paths_dict: Dict[str, str] = {"prompt_file": prompt_file}
     if original_prompt_file_path:
@@ -3249,6 +3255,12 @@ def code_generator_main(
 
         if isinstance(ctx.obj, dict):
             stash_grounding_overrides_on_ctx(ctx.obj, prompt_content)
+
+        if snapshot_context:
+            from .context_snapshot import start_snapshot_run
+
+            snapshot_recorder = start_snapshot_run(prompt_file, command="pdd generate")
+            snapshot_recorder.record_prompt_source(prompt_content)
 
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
@@ -3754,14 +3766,23 @@ def code_generator_main(
             # source file's docstring from a real failed include (#1354 codex pass-3).
             from .preprocess import compute_user_intent_paths as _cuip
             orig_intent = _cuip(original_prompt_content_for_incremental) | _cuip(_expand_vars(original_prompt_content_for_incremental, env_vars))
-            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False)
+            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False, snapshot_recorder=snapshot_recorder)
             orig_proc = _expand_vars(orig_proc, env_vars)
-            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=orig_intent)
+            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=orig_intent, snapshot_recorder=snapshot_recorder)
 
             new_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False)
+            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, snapshot_recorder=snapshot_recorder)
             new_proc = _expand_vars(new_proc, env_vars)
-            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=new_intent)
+            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=new_intent, snapshot_recorder=snapshot_recorder)
+            snapshot_expanded_prompt = json.dumps(
+                {
+                    "mode": "incremental",
+                    "original_prompt": orig_proc,
+                    "new_prompt": new_proc,
+                },
+                indent=2,
+                sort_keys=True,
+            )
 
             generated_code_content, was_incremental_operation, total_cost, model_name = incremental_code_generator_func(
                 original_prompt=orig_proc,
@@ -3814,9 +3835,10 @@ def code_generator_main(
                 # include warning against real intent (see #1354 codex pass-3).
                 from .preprocess import compute_user_intent_paths as _cuip
                 _cloud_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], snapshot_recorder=snapshot_recorder)
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
-                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_cloud_intent)
+                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_cloud_intent, snapshot_recorder=snapshot_recorder)
+                snapshot_expanded_prompt = processed_prompt_for_cloud
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
 
                 # Extract and display pinned example ID if present in prompt
@@ -3892,9 +3914,13 @@ def code_generator_main(
                         if examples_used:
                             selected_example_id = examples_used[0].get("id")
                             selected_example_title = examples_used[0].get("title")
+                            if snapshot_recorder:
+                                snapshot_recorder.record_grounding_examples(examples_used)
                         else:
                             selected_example_id = None
                             selected_example_title = None
+                            if snapshot_recorder:
+                                snapshot_recorder.record_grounding_unavailable("cloud_returned_no_examples")
 
                         # Strip markdown code fences if present (cloud API returns fenced JSON)
                         if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
@@ -3983,9 +4009,12 @@ def code_generator_main(
                 # against real intent (see #1354 codex pass-3).
                 from .preprocess import compute_user_intent_paths as _cuip
                 _local_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], snapshot_recorder=snapshot_recorder)
                 local_prompt = _expand_vars(local_prompt, env_vars)
-                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_local_intent)
+                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_local_intent, snapshot_recorder=snapshot_recorder)
+                snapshot_expanded_prompt = local_prompt
+                if snapshot_recorder:
+                    snapshot_recorder.record_grounding_unavailable("local_generation")
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
                 
@@ -4354,6 +4383,34 @@ def code_generator_main(
                             console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
 
                 p_output.write_text(final_content, encoding="utf-8")
+                if snapshot_recorder:
+                    snapshot_manifest = snapshot_recorder.finalize(
+                        expanded_prompt=snapshot_expanded_prompt or prompt_content,
+                        prompt_text=prompt_content,
+                        output_files=[p_output],
+                        model=model_name,
+                        provider="local" if current_execution_is_local else "cloud",
+                    )
+                    ctx.ensure_object(dict)
+                    ctx.obj["context_snapshot"] = {
+                        "run_id": snapshot_manifest.get("run_id"),
+                        "manifest_path": snapshot_manifest.get("manifest_path"),
+                        "snapshot_dir": snapshot_manifest.get("snapshot_dir"),
+                        "expanded_prompt": snapshot_manifest.get("expanded_prompt"),
+                        "uses_nondeterministic_context": snapshot_manifest.get(
+                            "uses_nondeterministic_context"
+                        ),
+                        "dynamic_tags": snapshot_manifest.get("dynamic_tags", []),
+                        "declared_dynamic_tags": snapshot_manifest.get("declared_dynamic_tags", []),
+                        "redaction_applied": snapshot_manifest.get("redaction", {}).get(
+                            "applied", False
+                        ),
+                        "redaction": snapshot_manifest.get("redaction"),
+                        "artifacts": snapshot_manifest.get("artifacts", []),
+                        "grounding_examples": snapshot_manifest.get("generation", {}).get(
+                            "grounding_examples", []
+                        ),
+                    }
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
                 # Post-write: optionally wire exports to parent __init__.py.

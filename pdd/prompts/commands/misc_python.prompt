@@ -1,3 +1,18 @@
+<pdd-reason>Defines miscellaneous CLI commands, including preprocess with snapshot forwarding.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "preprocess", "description": "Preprocess prompt files with optional XML tagging, PDD tag injection, and context snapshots"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>preprocess_main_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/misc.py`.
 
 % Role & Scope
@@ -12,13 +27,15 @@
 
 % Requirements
   - **preprocess**:
-    - Interface: Match the `preprocess` command specification in `README.md`.
-    - Logic: Call `preprocess_main`.
+    - Interface: Match the `preprocess` command specification in `README.md`, including `--snapshot` for replayable dynamic-context capture.
+    - Logic: Call `preprocess_main` and forward `snapshot`.
     - Return: Pass through the cost tuple from `preprocess_main`:
       - Without `--xml`: returns `(prompt, 0.0, "N/A")` (local operation)
       - With `--xml`: returns actual LLM cost data from `xml_tagger`
+    - Preserve current `--xml`, `--recursive`, `--double`, `--exclude`, and `--pdd-tags` behavior when `--snapshot` is absent.
     - Error handling:
       - Re-raise `click.Abort` for user cancellation
+      - Re-raise `click.UsageError` and `click.exceptions.Exit` so incompatible snapshot/XML usage is surfaced as a CLI usage error
       - Use `handle_error` for other exceptions
 
 % Dependencies
