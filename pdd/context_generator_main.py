@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from .construct_paths import construct_paths, BUILTIN_EXT_MAP
+from .get_extension import get_extension
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
 # get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
@@ -130,14 +131,27 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     if output_path.suffix:
                         resolved_output = output
                     else:
-                        lang_key = language.lower() if language else ''
-                        lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
-                        resolved_output = str(output_path.with_suffix(lang_ext))
-                        # Some languages map to an empty extension (e.g. Makefile → ""), in
-                        # which case with_suffix is a no-op and the path is unchanged. Only
-                        # flag as a wrapper rewrite when the resulting path actually differs
-                        # — otherwise the re-confirmation step below would prompt twice for
-                        # the same target that construct_paths already confirmed.
+                        # Issue #1315: synthesize the extension for a bare --output name using
+                        # the same CSV-first, BUILTIN_EXT_MAP-fallback pattern as construct_paths.
+                        # get_extension returns "" both for true no-extension languages
+                        # (Makefile) and for aliases absent from the CSV (cpp, csharp, yml), so
+                        # an empty CSV result must still fall through to the built-in map.
+                        if language:
+                            try:
+                                lang_ext = get_extension(language)
+                                if not lang_ext:
+                                    raise ValueError('empty extension')
+                            except Exception:
+                                lang_key = language.lower()
+                                lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}")
+                        else:
+                            lang_ext = '.py'
+                        # A final empty extension (e.g. Makefile from BUILTIN_EXT_MAP) means
+                        # "no suffix" — leave the bare name unchanged. Only flag a wrapper
+                        # rewrite when the path actually changed, otherwise the re-confirmation
+                        # step below would prompt twice for the same target that construct_paths
+                        # already confirmed.
+                        resolved_output = str(output_path.with_suffix(lang_ext)) if lang_ext else output
                         if resolved_output != output:
                             wrapper_rewrote_path = True
                 else:
@@ -155,6 +169,22 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         # Directory outputs and no-output cases are already covered by construct_paths.
         force = ctx.obj.get('force', False)
         quiet_flag = ctx.obj.get('quiet', False)
+        # Issue #1315 (suggested fix #2): warn ONLY when the wrapper overrode an extension
+        # the user EXPLICITLY supplied (e.g. --format md turning the requested foo.yml into
+        # foo.md) — that is the only case where the artifact lands at a path the caller did
+        # not ask for, and the only one suggested fix #2 is about. Completing a bare --output
+        # name with the language extension (myexample → myexample.py) is the documented
+        # default, not a surprising rewrite, and was silent before this change; warning on it
+        # would be noise on the most ordinary invocation. Names BOTH paths and fires EVEN
+        # WHEN there is no overwrite collision, independently of the re-confirmation below.
+        # Respect --quiet; the no-rewrite and directory/omitted --output cases (already
+        # resolved by construct_paths) never reach here.
+        user_suffix_overridden = wrapper_rewrote_path and bool(Path(output).suffix)
+        if user_suffix_overridden and resolved_output and not quiet_flag:
+            console.print(
+                f"[yellow]Warning: output path rewritten from '{output}' to "
+                f"'{resolved_output}'.[/yellow]"
+            )
         if (
             wrapper_rewrote_path
             and resolved_output

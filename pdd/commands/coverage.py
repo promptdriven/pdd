@@ -98,7 +98,12 @@ def _render_result_table(result: CoverageResult) -> None:
 
         stories_cell = _format_list(rule.stories)
         if rule.waiver:
-            tests_cell = f"waiver: {rule.waiver}"
+            suffix = ""
+            if rule.waiver_status:
+                suffix += f" [{rule.waiver_status}]"
+            if rule.waiver_expires:
+                suffix += f" expires={rule.waiver_expires}"
+            tests_cell = f"waiver: {rule.waiver}{suffix}"
         elif rule.failures:
             tests_cell = _format_list(rule.failures)
         else:
