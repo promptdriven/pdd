@@ -23,6 +23,7 @@ from .ci_drift_heal import (
 )
 from .metadata_sync import run_metadata_sync
 from .operation_log import infer_module_identity
+from .sync_determine_operation import get_pdd_file_paths
 
 
 _CODE_EXTENSIONS = {
@@ -357,21 +358,24 @@ def _run_drift_sync(
     # is empty on a clean tree), so this stays empty except architecture.json.
     synced_paths: List[str] = []
 
-    # basename -> repo-relative code path, for attributing heal output to a file.
+    # basename -> repo-relative code path, and basename -> (language, prompts_dir),
+    # for attributing heal output to files (including a heal-CREATED example,
+    # whose path is not on the pre-heal drift object — see the heal loop).
     basename_to_code: Dict[str, str] = {}
+    basename_to_resolver: Dict[str, Tuple[Optional[str], str]] = {}
     for _fn, (prompt_path, code_path) in prompt_pairs.items():
-        if code_path is None:
-            continue
         try:
-            basename, _lang = infer_module_identity(str(prompt_path))
+            basename, language = infer_module_identity(str(prompt_path))
         except Exception:
-            basename = None
-        try:
-            rel_code = code_path.resolve().relative_to(worktree.resolve()).as_posix()
-        except ValueError:
-            rel_code = None
-        if basename and rel_code:
-            basename_to_code[basename] = rel_code
+            basename, language = None, None
+        if not basename:
+            continue
+        prompts_dir_rel = _rel_within(prompt_path.parent, worktree) or "prompts"
+        basename_to_resolver[basename] = (language, prompts_dir_rel)
+        if code_path is not None:
+            rel_code = _rel_within(code_path, worktree)
+            if rel_code:
+                basename_to_code[basename] = rel_code
 
     arch_path = worktree / "architecture.json"
     if only_files:
@@ -437,13 +441,33 @@ def _run_drift_sync(
                     # a pre-existing-broken file heal left untouched does not
                     # false-block.
                     candidate_paths: List[Path] = []
-                    bn_code = basename_to_code.get(getattr(drift, "basename", None))
+                    bn = getattr(drift, "basename", None)
+                    bn_code = basename_to_code.get(bn)
                     if bn_code:
                         candidate_paths.append(worktree / bn_code)
                     for attr in ("code_path", "example_path"):
                         dp = getattr(drift, attr, None)
                         if dp:
                             candidate_paths.append(Path(dp))
+                    # An update-heal runs a follow-up `pdd example`, which may
+                    # CREATE the example when it did not exist — so its path is
+                    # absent from the pre-heal drift object. Resolve the canonical
+                    # code+example paths from PDD's own resolver so a heal-created
+                    # broken example is validated, not missed (guarded; cwd is the
+                    # worktree here via _pushd, which the resolver needs).
+                    resolver = basename_to_resolver.get(bn)
+                    if resolver and bn:
+                        lang, prompts_dir_rel = resolver
+                        try:
+                            resolved = get_pdd_file_paths(
+                                bn, lang or "python", prompts_dir=prompts_dir_rel
+                            )
+                            for key in ("example", "code"):
+                                rp = resolved.get(key)
+                                if rp:
+                                    candidate_paths.append(Path(rp))
+                        except Exception:
+                            pass
                     before_sigs = {
                         str(tp): _file_content_sig(tp) for tp in candidate_paths
                     }

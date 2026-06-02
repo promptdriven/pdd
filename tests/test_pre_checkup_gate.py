@@ -744,6 +744,52 @@ def test_gate_validates_heal_regenerated_example(monkeypatch, tmp_path):
     assert "foo_example.py" in message, message
 
 
+def test_gate_validates_heal_CREATED_example_when_example_path_unset(monkeypatch, tmp_path):
+    """Regression (round-8): an update-heal runs a follow-up `pdd example` that may
+    CREATE the example when example_path started None — so its path is absent from
+    the pre-heal drift. The gate must derive the canonical example path (PDD's own
+    resolver) and validate it, or a broken created example slips through. Heal here
+    writes the broken example to exactly where the resolver points (as real heal
+    does), so the gate's derived path matches."""
+    import os
+    from pdd.sync_determine_operation import get_pdd_file_paths
+
+    _foo_prompt_repo(tmp_path)
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        ex_path = get_pdd_file_paths("foo", "python", prompts_dir="pdd/prompts").get("example")
+    finally:
+        os.chdir(cwd)
+    assert ex_path, "resolver returned no example path"
+    drift = SimpleNamespace(
+        basename="foo", operation="update", reason="r", language="python",
+        code_path=str(tmp_path / "pdd" / "foo.py"), example_path=None,  # unset pre-heal
+    )
+
+    def heal_creates_broken_example(_d, _e):
+        exp = pathlib.Path(ex_path)
+        exp.parent.mkdir(parents=True, exist_ok=True)
+        exp.write_text("def broken(:\n", encoding="utf-8")
+        return True
+
+    calls = {"n": 0}
+
+    def fake_detect(**_k):
+        calls["n"] += 1
+        return ([drift], []) if calls["n"] == 1 else ([], [])
+
+    monkeypatch.setattr(pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True})
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None))
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", fake_detect)
+    monkeypatch.setattr(pre_checkup_gate, "heal_module", heal_creates_broken_example)
+    passed, message, _ = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["pdd/prompts/foo_python.prompt"], quiet=True, timeout_per_check=30.0
+    )
+    assert passed is False, message
+    assert "infrastructure error" not in message, message
+
+
 def test_touched_nonstring_entry_metadata_blocks(tmp_path):
     """Regression (round-7): a touched architecture.json whose entry filename/
     filepath is a truthy NON-string ([{"filename": 1}]) must block — `1` is
