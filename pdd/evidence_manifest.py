@@ -439,9 +439,16 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         prompt_path = Path(prompt_file)
         if not prompt_path.is_absolute():
             prompt_path = root / prompt_path
-    if basename is None and prompt_path:
-        basename = devunit_slug_for_prompt(prompt_path)
-    basename = _safe_slug(basename or command.replace("pdd ", "", 1))
+    resolved_from_prompt = False
+    if basename is None and prompt_path is not None:
+        slug = devunit_slug_for_prompt(prompt_path)
+        if slug:
+            basename = slug
+            resolved_from_prompt = True
+    if basename is None:
+        basename = _safe_slug(command.replace("pdd ", "", 1))
+    elif not resolved_from_prompt:
+        basename = _safe_slug(basename)
 
     timestamp = datetime.now(timezone.utc)
     run_id = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{basename}"

@@ -115,3 +115,27 @@ def test_touchpoint_failed_story_coverage_is_partial(tmp_path: Path) -> None:
 def test_validate_contract_summary_rejects_invalid() -> None:
     errors = validate_contract_summary({"rules": "not-a-list"})
     assert errors
+
+
+def test_touchpoint_nested_prompt_evidence_status_fresh(tmp_path: Path) -> None:
+    """Nested modules slug evidence like production (frontend-page.latest.json)."""
+    from pdd.architecture_sync import _extract_contract_summary
+
+    root = tmp_path
+    (root / ".pdd").mkdir()
+    (root / "prompts" / "frontend").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "user_stories").mkdir()
+    prompt = root / "prompts" / "frontend" / "page_python.prompt"
+    prompt.write_text(
+        "<contract_rules>\nR1 - Page\nThe system MUST render page.\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+    write_evidence_manifest(command="pdd generate", prompt_file=prompt, project_root=root)
+
+    nested_wrong = root / ".pdd" / "evidence" / "devunits" / "frontend" / "page.latest.json"
+    assert not nested_wrong.is_file()
+    assert (root / ".pdd" / "evidence" / "devunits" / "frontend-page.latest.json").is_file()
+
+    summary, _ = _extract_contract_summary(prompt, root)
+    assert summary["evidence_status"] == "fresh"
