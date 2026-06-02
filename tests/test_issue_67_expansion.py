@@ -17,6 +17,7 @@ def test_content_selector_dependency_expansion():
             return x + BASE
 
         def entry(y):
+            os.getcwd()
             return helper(y)
 
         def unrelated():
@@ -30,7 +31,7 @@ def test_content_selector_dependency_expansion():
     assert "def entry(y):" in result
     assert "def helper(x):" in result
     assert "BASE = 10" in result
-    assert "import os" in result
+    assert "import os" in result  # referenced by entry(), not unrelated imports
     assert "def unrelated():" not in result
 
 
@@ -52,6 +53,97 @@ def test_preprocess_expand_attribute():
     finally:
         if os.path.exists("dep_test.py"):
             os.remove("dep_test.py")
+
+
+def test_import_drift_prevention_excludes_unused_imports():
+    """Expanded slices include only imports referenced by preserved symbols."""
+    code = textwrap.dedent("""
+        import os
+        import json
+
+        def entry():
+            return os.getcwd()
+
+        def other():
+            return json.loads("{}")
+    """)
+
+    result = ContentSelector.select(
+        code, ["def:entry"], file_path="module.py", expand_dependencies=True
+    )
+
+    assert "import os" in result
+    assert "import json" not in result
+    assert "def other():" not in result
+
+
+def test_patch_target_no_false_positive_when_private_symbol_remains(tmp_path):
+    """Patched private helpers still present in generated code must not trip the gate."""
+    project_dir = tmp_path / "pkg"
+    project_dir.mkdir()
+    (project_dir / "__init__.py").touch()
+
+    code_file = project_dir / "logic.py"
+    code_file.write_text(textwrap.dedent("""
+        def _private_but_patched():
+            return "secret"
+
+        def public_func():
+            return _private_but_patched()
+    """), encoding="utf-8")
+
+    test_dir = project_dir / "tests"
+    test_dir.mkdir()
+    (test_dir / "test_logic.py").write_text(textwrap.dedent("""
+        from unittest.mock import patch
+        @patch("pkg.logic._private_but_patched")
+        def test_logic(mock_private):
+            pass
+    """), encoding="utf-8")
+
+    existing_code = code_file.read_text(encoding="utf-8")
+    generated_code = textwrap.dedent("""
+        def _private_but_patched():
+            return "still here"
+
+        def public_func():
+            return _private_but_patched()
+    """)
+
+    _verify_public_surface_regression(
+        existing_code=existing_code,
+        generated_code=generated_code,
+        prompt_name="logic_python",
+        output_path=str(code_file),
+        language="python",
+        prompt_content="% Goal: Refactor logic.py",
+    )
+
+
+def test_monkeypatch_setattr_expands_patch_target(tmp_path):
+    """monkeypatch.setattr targets are preserved during dependency expansion."""
+    module_path = tmp_path / "service.py"
+    test_path = tmp_path / "tests" / "test_service.py"
+    test_path.parent.mkdir()
+    module_path.write_text(textwrap.dedent("""
+        def public_api():
+            return _internal()
+
+        def _internal():
+            return 1
+    """), encoding="utf-8")
+    test_path.write_text(textwrap.dedent("""
+        def test_api(monkeypatch):
+            monkeypatch.setattr("service._internal", lambda: 99)
+    """), encoding="utf-8")
+
+    selected = ContentSelector.select(
+        module_path.read_text(encoding="utf-8"),
+        "def:public_api",
+        file_path=str(module_path),
+        expand_dependencies=True,
+    )
+    assert "def _internal():" in selected
 
 
 def test_patch_target_protection(tmp_path):

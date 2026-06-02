@@ -773,65 +773,13 @@ def _referenced_local_names(node: ast.AST, top_level: set[str]) -> set[str]:
     return found
 
 
-def _symbols_from_patch_path(patch_path: str, module_stem: str) -> set[str]:
-    symbols: set[str] = set()
-    prefix = f"{module_stem}."
-    if patch_path.startswith(prefix):
-        symbols.add(patch_path[len(prefix) :])
-    parts = patch_path.split(".")
-    for index, part in enumerate(parts):
-        if part == module_stem and index < len(parts) - 1:
-            symbols.add(".".join(parts[index + 1 :]))
-    return symbols
-
-
-def _iter_sibling_test_files(file_path: str) -> list[pathlib.Path]:
-    path = pathlib.Path(file_path)
-    candidates: list[pathlib.Path] = []
-    candidates.extend(path.parent.glob("test_*.py"))
-    tests_dir = path.parent / "tests"
-    if tests_dir.is_dir():
-        candidates.extend(tests_dir.glob("test_*.py"))
-    parent_tests = path.parent.parent / "tests"
-    if parent_tests.is_dir():
-        candidates.extend(parent_tests.glob("test_*.py"))
-    seen: set[str] = set()
-    unique: list[pathlib.Path] = []
-    for candidate in candidates:
-        key = str(candidate.resolve())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
-
-
-def _patch_symbols_for_file(file_path: str | None) -> set[str]:
-    if not file_path:
-        return set()
-    path = pathlib.Path(file_path)
-    if path.suffix.lower() != ".py":
-        return set()
-    from pdd.split_validation import _collect_patch_paths  # pylint: disable=import-outside-toplevel
-
-    module_stem = path.stem
-    symbols: set[str] = set()
-    for test_file in _iter_sibling_test_files(file_path):
-        try:
-            test_content = test_file.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for patch_path in _collect_patch_paths(test_content):
-            symbols.update(_symbols_from_patch_path(patch_path, module_stem))
-    return symbols
-
-
-def _span_for_symbol(tree: ast.Module, symbol: str, top_map: dict[str, ast.AST]) -> _Span | None:
+def _ast_node_for_symbol(
+    tree: ast.Module,
+    symbol: str,
+    top_map: dict[str, ast.AST],
+) -> ast.AST | None:
     if "." not in symbol:
-        node = top_map.get(symbol)
-        if node is not None:
-            return _Span(_node_start_line(node), _node_end_line(node))
-        return None
+        return top_map.get(symbol)
     cls_name, remainder = symbol.split(".", 1)
     cls_node = top_map.get(cls_name)
     if not isinstance(cls_node, ast.ClassDef):
@@ -839,15 +787,52 @@ def _span_for_symbol(tree: ast.Module, symbol: str, top_map: dict[str, ast.AST])
     if "." not in remainder:
         for child in cls_node.body:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder:
-                return _Span(_node_start_line(child), _node_end_line(child))
+                return child
         return None
     inner_cls, method_name = remainder.split(".", 1)
     for child in cls_node.body:
         if isinstance(child, ast.ClassDef) and child.name == inner_cls:
             for method in child.body:
                 if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name == method_name:
-                    return _Span(_node_start_line(method), _node_end_line(method))
+                    return method
     return None
+
+
+def _used_names_for_needed(
+    tree: ast.Module,
+    needed: set[str],
+    top_map: dict[str, ast.AST],
+) -> set[str]:
+    used: set[str] = set()
+    for name in needed:
+        node = _ast_node_for_symbol(tree, name, top_map)
+        if node is None:
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                used.add(child.id)
+    return used
+
+
+def _import_spans_for_used_names(tree: ast.Module, used_names: set[str]) -> list[_Span]:
+    if not used_names:
+        return []
+    spans: list[_Span] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            if any((alias.asname or alias.name.split(".")[0]) in used_names for alias in node.names):
+                spans.append(_Span(_node_start_line(node), _node_end_line(node)))
+        elif isinstance(node, ast.ImportFrom):
+            if any((alias.asname or alias.name) in used_names for alias in node.names):
+                spans.append(_Span(_node_start_line(node), _node_end_line(node)))
+    return spans
+
+
+def _span_for_symbol(tree: ast.Module, symbol: str, top_map: dict[str, ast.AST]) -> _Span | None:
+    node = _ast_node_for_symbol(tree, symbol, top_map)
+    if node is None:
+        return None
+    return _Span(_node_start_line(node), _node_end_line(node))
 
 
 def _expand_dependency_spans(
@@ -876,7 +861,10 @@ def _expand_dependency_spans(
             elif isinstance(node.target, ast.Name):
                 seed_names.add(node.target.id)
 
-    seed_names.update(_patch_symbols_for_file(file_path))
+    from pdd.split_validation import collect_patch_symbols_for_module  # pylint: disable=import-outside-toplevel
+
+    if file_path:
+        seed_names.update(collect_patch_symbols_for_module(file_path))
 
     needed: set[str] = set()
     pending = list(seed_names)
@@ -898,10 +886,7 @@ def _expand_dependency_spans(
         symbol_span = _span_for_symbol(tree, name, top_map)
         if symbol_span is not None:
             expanded.append(symbol_span)
-    if needed:
-        for node in tree.body:
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                expanded.append(_Span(_node_start_line(node), _node_end_line(node)))
+    expanded.extend(_import_spans_for_used_names(tree, _used_names_for_needed(tree, needed, top_map)))
     return expanded
 
 

@@ -700,18 +700,6 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     return state
 
 
-def _symbols_from_patch_path(patch_path: str, module_stem: str) -> Set[str]:
-    symbols: Set[str] = set()
-    prefix = f"{module_stem}."
-    if patch_path.startswith(prefix):
-        symbols.add(patch_path[len(prefix) :])
-    parts = patch_path.split(".")
-    for index, part in enumerate(parts):
-        if part == module_stem and index < len(parts) - 1:
-            symbols.add(".".join(parts[index + 1 :]))
-    return symbols
-
-
 def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
     """Return True when *symbol* is defined in *tree* (supports dotted class paths)."""
     if "." not in symbol:
@@ -765,36 +753,9 @@ def _effective_patch_targets(
 
 def _collect_patch_targets(file_path: Optional[str]) -> Set[str]:
     """Return dotted symbol names patched by sibling tests for *file_path*."""
-    if not file_path:
-        return set()
-    path = pathlib.Path(file_path)
-    if not path.is_file() or path.suffix.lower() != ".py":
-        return set()
-    from .split_validation import _collect_patch_paths  # pylint: disable=import-outside-toplevel
+    from .split_validation import collect_patch_symbols_for_module  # pylint: disable=import-outside-toplevel
 
-    module_stem = path.stem
-    targets: Set[str] = set()
-    candidates: list[pathlib.Path] = []
-    candidates.extend(path.parent.glob("test_*.py"))
-    tests_dir = path.parent / "tests"
-    if tests_dir.is_dir():
-        candidates.extend(tests_dir.glob("test_*.py"))
-    parent_tests = path.parent.parent / "tests"
-    if parent_tests.is_dir():
-        candidates.extend(parent_tests.glob("test_*.py"))
-    seen_files: Set[str] = set()
-    for test_file in candidates:
-        resolved = str(test_file.resolve())
-        if resolved in seen_files:
-            continue
-        seen_files.add(resolved)
-        try:
-            test_content = test_file.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for patch_path in _collect_patch_paths(test_content):
-            targets.update(_symbols_from_patch_path(patch_path, module_stem))
-    return targets
+    return set(collect_patch_symbols_for_module(file_path))
 
 
 def _snapshot_public_surface(
@@ -1967,7 +1928,14 @@ def _verify_public_surface_regression(
         language or "python",
         patch_targets=patch_targets,
     )
-    after = _snapshot_public_surface(generated_code, language or "python")
+    after_patch_targets = _effective_patch_targets(
+        generated_code, language or "python", output_path
+    )
+    after = _snapshot_public_surface(
+        generated_code,
+        language or "python",
+        patch_targets=after_patch_targets,
+    )
     if not before:
         return
     allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)

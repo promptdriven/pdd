@@ -118,6 +118,8 @@ _PATCH_STRING_PATTERNS = [
     re.compile(r'''patch(?:\.object)?\s*\(\s*["']([^"']+)["']'''),
     # Python: mocker.patch("mod.X") AND mocker.patch.object("mod.X", ...)
     re.compile(r'''mocker\.patch(?:\.object)?\s*\(\s*["']([^"']+)["']'''),
+    # pytest: monkeypatch.setattr("mod.X", ...)
+    re.compile(r'''monkeypatch\.setattr\s*\(\s*["']([^"']+)["']'''),
     # JS/TS: jest.mock('mod'), jest.doMock('mod')
     re.compile(r'''jest\.(?:do)?[mM]ock\s*\(\s*["']([^"']+)["']'''),
     # Go: reflect-based lookups that reference module paths as strings
@@ -139,6 +141,61 @@ def _collect_patch_paths(test_file_content: str) -> list[str]:
             if "." in match and not match.startswith(".") and not match.endswith("."):
                 paths.add(match)
     return sorted(paths)
+
+
+
+def symbols_from_patch_path(patch_path: str, module_stem: str) -> set[str]:
+    """Map a dotted patch path to symbol names defined in *module_stem*."""
+    symbols: set[str] = set()
+    prefix = f"{module_stem}."
+    if patch_path.startswith(prefix):
+        symbols.add(patch_path[len(prefix) :])
+    parts = patch_path.split(".")
+    for index, part in enumerate(parts):
+        if part == module_stem and index < len(parts) - 1:
+            symbols.add(".".join(parts[index + 1 :]))
+    return symbols
+
+
+def iter_sibling_test_files(file_path: Path | str) -> list[Path]:
+    """Return deduplicated ``test_*.py`` files adjacent to *file_path*."""
+    path = Path(file_path)
+    candidates: list[Path] = []
+    candidates.extend(path.parent.glob("test_*.py"))
+    tests_dir = path.parent / "tests"
+    if tests_dir.is_dir():
+        candidates.extend(tests_dir.glob("test_*.py"))
+    parent_tests = path.parent.parent / "tests"
+    if parent_tests.is_dir():
+        candidates.extend(parent_tests.glob("test_*.py"))
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def collect_patch_symbols_for_module(file_path: Path | str | None) -> set[str]:
+    """Collect dotted symbol names patched by sibling tests for a Python module."""
+    if not file_path:
+        return set()
+    path = Path(file_path)
+    if not path.is_file() or path.suffix.lower() != ".py":
+        return set()
+    module_stem = path.stem
+    symbols: set[str] = set()
+    for test_file in iter_sibling_test_files(path):
+        try:
+            test_content = test_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for patch_path in _collect_patch_paths(test_content):
+            symbols.update(symbols_from_patch_path(patch_path, module_stem))
+    return symbols
 
 
 _STDLIB_MODULES_COMMON: set[str] = {
