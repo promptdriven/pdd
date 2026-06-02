@@ -412,16 +412,22 @@ def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path)
     """Issue #1293 (security): the gate executes worktree code, so its subprocess
     env must drop secret-bearing vars (LLM/cloud/VCS keys + tokens) while keeping
     the controlled PYTHONPATH=worktree the import/existence probes need."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-be-dropped")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_should_be_dropped")
-    monkeypatch.setenv("SOME_SECRET", "nope")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-be-dropped")  # prefix
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_should_be_dropped")  # prefix
+    monkeypatch.setenv("MYPROVIDER_API_KEY", "drop-me")  # canonical suffix
     monkeypatch.setenv("PDD_PATH", str(tmp_path))  # non-secret -> preserved
+    # Must NOT be over-stripped (a target repo's unit test may legitimately read
+    # these); the scrub is precise, not a broad KEY/SECRET substring match.
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "keep-me")
+    monkeypatch.setenv("DATABASE_URL", "keep-me-too")
 
     env = pre_checkup_gate._python_import_env(tmp_path)
 
     assert "ANTHROPIC_API_KEY" not in env
     assert "GITHUB_TOKEN" not in env
-    assert "SOME_SECRET" not in env
+    assert "MYPROVIDER_API_KEY" not in env
+    assert env.get("DJANGO_SECRET_KEY") == "keep-me"  # not over-stripped
+    assert env.get("DATABASE_URL") == "keep-me-too"
     assert env.get("PYTHONPATH") == str(tmp_path)
     assert env.get("PDD_PATH") == str(tmp_path)  # non-secret vars survive
     assert env.get("CI") == "1"

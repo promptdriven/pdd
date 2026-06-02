@@ -387,14 +387,23 @@ def _run_command(
     return result.returncode in success_codes, _excerpt(output)
 
 
-_SECRET_ENV_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API)", re.IGNORECASE)
+# Precise provider/cloud/VCS prefixes + the canonical secret-key SUFFIXES —
+# NOT a broad ``KEY|TOKEN|SECRET`` substring match. This gate hard-blocks, so an
+# over-broad scrub that strips a var a target repo's unit test legitimately
+# reads (e.g. ``DJANGO_SECRET_KEY``) would false-block it — the exact
+# false-positive class the caller-compat sweep was hardened against. Since the
+# env scrub is defence-in-depth on the workflow's own worktree (not untrusted
+# fork code), precision matters more than catching every conceivable secret.
 _SECRET_ENV_PREFIXES = (
-    "AWS_", "GOOGLE_", "GCP_", "AZURE_", "ANTHROPIC", "OPENAI", "GEMINI", "GH_", "GITHUB_",
+    "AWS_", "GOOGLE_", "GCP_", "AZURE_", "ANTHROPIC", "OPENAI", "GEMINI",
+    "MISTRAL", "COHERE", "GROQ", "DEEPSEEK", "OPENROUTER", "HUGGINGFACE", "HF_",
+    "GH_", "GITHUB_",
 )
+_SECRET_ENV_SUFFIX_RE = re.compile(r"_(API_KEY|ACCESS_KEY|SECRET_ACCESS_KEY)$", re.IGNORECASE)
 
 
 def _is_secret_env_key(key: str) -> bool:
-    return key.startswith(_SECRET_ENV_PREFIXES) or bool(_SECRET_ENV_RE.search(key))
+    return key.startswith(_SECRET_ENV_PREFIXES) or bool(_SECRET_ENV_SUFFIX_RE.search(key))
 
 
 def _python_import_env(worktree: Path) -> Dict[str, str]:
