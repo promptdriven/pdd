@@ -248,3 +248,149 @@ def test_cli_pr_flows_are_wired_to_metadata_finalizer() -> None:
     assert "- Use `git add -A`" not in checkup_pr_prompt
     assert "\ngit add -A\n" not in checkup_pr_prompt
     assert "stage_paths_scoped(current_work_dir, changed_files)" in change
+
+
+def test_finalize_restores_prompt_and_arch_side_effects_issue_1317(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """FM2: run_metadata_sync rewrites the prompt (tag block) and architecture.json
+    as a side effect, but finalization stages ONLY fingerprints. Those rewrites
+    must be rolled back so a code-only PR never leaves an unstaged prompt/arch
+    change (a fingerprint for content not in the PR).
+
+    On the unfixed finalizer the sync's writes persist: the prompt and
+    architecture.json are left modified in the working tree.
+    """
+    import pdd.pr_metadata_finalizer as mod
+
+    repo = _make_repo(tmp_path)
+    prompt = repo / "prompts" / "foo_python.prompt"
+    arch = repo / "architecture.json"
+    prompt_before = prompt.read_text(encoding="utf-8")
+    arch_before = arch.read_text(encoding="utf-8")
+
+    (repo / "foo.py").write_text("VALUE = 2\n", encoding="utf-8")  # code-only change
+
+    def fake_sync(prompt_path, code_path=None, *, repo_root=None, architecture_path=None, **kw):
+        # Simulate run_metadata_sync's real side effects (tag-block prepend +
+        # architecture entry rewrite) so the restore is exercised.
+        Path(prompt_path).write_text("% REWRITTEN BY SYNC\n", encoding="utf-8")
+        if architecture_path is not None:
+            Path(architecture_path).write_text('[{"rewritten": true}]\n', encoding="utf-8")
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(mod, "run_metadata_sync", fake_sync)
+
+    result = mod.finalize_pr_metadata(repo, changed_paths=["foo.py"])
+
+    assert result.ok, result.message
+    # The sync's prompt/arch rewrites must be restored to the as-committed state.
+    assert prompt.read_text(encoding="utf-8") == prompt_before, "prompt rewrite leaked"
+    assert arch.read_text(encoding="utf-8") == arch_before, "architecture.json rewrite leaked"
+    # Only the fingerprint is staged; no prompt/arch left dirty in the tree.
+    cached = _git(repo, "diff", "--cached", "--name-only").splitlines()
+    assert cached == [".pdd/meta/foo_python.json"]
+    dirty = _git(repo, "status", "--short").splitlines()
+    assert not any("prompts/foo_python.prompt" in line for line in dirty), dirty
+    assert not any("architecture.json" in line for line in dirty), dirty
+
+
+def test_finalize_uses_nearest_architecture_for_nested_module_issue_1317(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """FM3: a nested subproject must finalize against its OWN architecture.json,
+    not the root's. find_architecture_for_project returns the root first, so the
+    finalizer must pick the nearest-ancestor architecture per module.
+
+    On the unfixed finalizer the root architecture.json is passed for every
+    module, so a nested same-named prompt inherits the parent's entry.
+    """
+    import pdd.pr_metadata_finalizer as mod
+
+    repo = _make_repo(tmp_path)
+    sub = repo / "pkg"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths:\n      - \"**\"\n"
+        "    defaults:\n      prompts_dir: prompts\n      generate_output_path: \"\"\n"
+        "      test_output_path: tests/\n      example_output_path: examples/\n"
+        "      default_language: python\n",
+        encoding="utf-8",
+    )
+    (sub / "prompts" / "bar_python.prompt").write_text(
+        "<pdd-reason>Bar.</pdd-reason>\n% Generate bar.\n", encoding="utf-8"
+    )
+    (sub / "bar.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "bar_python.prompt", "filepath": "bar.py",
+                     "reason": "Bar.", "dependencies": []}], indent=2),
+        encoding="utf-8",
+    )
+    _git(repo, "add", "pkg/.pddrc", "pkg/prompts/bar_python.prompt", "pkg/bar.py",
+         "pkg/architecture.json")
+    _git(repo, "commit", "-m", "add subproject")
+    (sub / "bar.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    seen: dict = {}
+
+    def spy_sync(prompt_path, code_path=None, *, repo_root=None, architecture_path=None, **kw):
+        seen[Path(prompt_path).name] = architecture_path
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(mod, "run_metadata_sync", spy_sync)
+
+    result = mod.finalize_pr_metadata(repo, changed_paths=["pkg/bar.py"])
+
+    assert result.ok, result.message
+    arch_used = seen.get("bar_python.prompt")
+    assert arch_used is not None, seen
+    assert Path(arch_used).resolve() == (sub / "architecture.json").resolve(), (
+        f"nested module finalized against {arch_used}, not its own architecture.json"
+    )
+
+
+def test_commit_and_push_finalizes_fixer_committed_changes_issue_1317(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """FM1: a fixer subprocess can COMMIT a PDD-owned change inside the worktree
+    and leave the tree clean. _commit_and_push_if_changed must still finalize the
+    fixer's committed range (pre_fix_sha..HEAD) so the pushed branch carries a
+    fresh fingerprint — not push the commit with a missing one.
+
+    On the unfixed loop, finalization is gated behind working-tree drift, so the
+    fixer commit pushes with no .pdd/meta fingerprint.
+    """
+    import pdd.checkup_review_loop as mod
+
+    repo = _make_repo(tmp_path)
+    pre_fix_sha = _git(repo, "rev-parse", "HEAD")
+
+    # Fixer subprocess commits a code change directly, WITHOUT a fingerprint.
+    (repo / "foo.py").write_text("VALUE = 99\n", encoding="utf-8")
+    _git(repo, "add", "foo.py")
+    _git(repo, "commit", "-m", "Codex Local Autoheal")
+
+    monkeypatch.setattr(mod, "push_with_retry", lambda *args, **kwargs: (True, ""))
+
+    ok, message = mod._commit_and_push_if_changed(
+        repo,
+        {
+            "clone_url": "https://github.com/promptdriven/pdd.git",
+            "head_ref": "feature",
+            "head_owner": "promptdriven",
+            "head_repo": "pdd",
+        },
+        "fix: scoped metadata",
+        pre_fix_sha=pre_fix_sha,
+    )
+
+    assert ok, message
+    assert (repo / ".pdd" / "meta" / "foo_python.json").is_file(), (
+        "fixer-committed change must get a finalized fingerprint"
+    )
+    # The fingerprint must be COMMITTED (not just left in the working tree).
+    head_files = _git(repo, "show", "--name-only", "--pretty=", "HEAD").splitlines()
+    assert ".pdd/meta/foo_python.json" in head_files, head_files

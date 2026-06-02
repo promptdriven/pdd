@@ -564,6 +564,67 @@ def _restore_run_report(path: Path, contents: Optional[bytes]) -> None:
     path.write_bytes(contents)
 
 
+def _restore_file(path: Path, contents: Optional[bytes]) -> None:
+    """Restore ``path`` to its pre-sync snapshot (issue #1317).
+
+    ``run_metadata_sync`` rewrites the prompt (tag block) and ``architecture.json``
+    (entry) as a side effect, but finalization stages ONLY fingerprints. Roll
+    those incidental writes back so a code-only PR never commits — or leaves
+    unstaged — a prompt/arch change that is not part of the PR. ``contents is
+    None`` means the file did not exist before the sync, so remove it if the
+    sync created it; otherwise overwrite only when the bytes actually changed.
+    """
+    if path is None:
+        return
+    if contents is None:
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return
+    try:
+        if not path.exists() or path.read_bytes() != contents:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+    except OSError:
+        pass
+
+
+def _architecture_for_module(
+    prompt_path: Path,
+    arch_candidates: Sequence[Path],
+) -> Optional[Path]:
+    """Pick the architecture.json that actually owns ``prompt_path`` (issue #1317).
+
+    ``find_architecture_for_project`` returns the root first, so blindly using
+    ``arch_candidates[0]`` finalizes a nested subproject against the PARENT's
+    architecture — a same-named prompt then inherits the parent's tags/reason.
+    Choose the candidate whose directory is the *nearest* ancestor of the
+    prompt instead, falling back to the root when none contains it.
+    """
+    try:
+        prompt_resolved = prompt_path.resolve()
+    except OSError:
+        prompt_resolved = prompt_path
+    best: Optional[Path] = None
+    best_depth = -1
+    for arch in arch_candidates:
+        arch_dir = arch.parent
+        try:
+            arch_dir_resolved = arch_dir.resolve()
+        except OSError:
+            arch_dir_resolved = arch_dir
+        if _is_relative_to(prompt_resolved, arch_dir_resolved):
+            depth = len(arch_dir_resolved.parts)
+            if depth > best_depth:
+                best_depth = depth
+                best = arch
+    if best is not None:
+        return best
+    return arch_candidates[0] if arch_candidates else None
+
+
 def _stage_fingerprint(repo_root: Path, relpath: Path) -> Optional[str]:
     result = subprocess.run(
         ["git", "add", "-f", "--", relpath.as_posix()],
@@ -635,11 +696,34 @@ def finalize_pr_metadata(  # pylint: disable=too-many-locals
                 )
 
             arch_candidates = find_architecture_for_project(repo_root)
-            architecture_path = arch_candidates[0] if arch_candidates else None
 
             finalized: List[FinalizedFingerprint] = []
             for module in modules:
                 code_path = _as_abs(module.paths.get("code"), repo_root)
+                # Issue #1317 FM3: finalize each module against the architecture
+                # that owns it (nearest ancestor), not the root — a nested
+                # subproject sharing a prompt filename must not inherit the
+                # parent's tags/reason.
+                architecture_path = _architecture_for_module(
+                    module.prompt_path, arch_candidates
+                )
+                # Issue #1317 FM2: run_metadata_sync rewrites the prompt (tag
+                # block) and architecture.json (entry) as a side effect, yet
+                # finalization stages ONLY fingerprints. Snapshot those files
+                # (and the run report) and restore them after the sync so the
+                # fingerprint hashes the as-committed content and no unstaged
+                # prompt/architecture rewrite leaks into the PR.
+                prompt_abs = (
+                    _as_abs(module.prompt_path, repo_root) or module.prompt_path
+                )
+                prompt_contents = (
+                    prompt_abs.read_bytes() if prompt_abs.exists() else None
+                )
+                arch_contents = (
+                    architecture_path.read_bytes()
+                    if architecture_path is not None and architecture_path.exists()
+                    else None
+                )
                 run_report_path = _run_report_path(module, repo_root)
                 run_report_contents = (
                     run_report_path.read_bytes() if run_report_path.exists() else None
@@ -662,6 +746,9 @@ def finalize_pr_metadata(  # pylint: disable=too-many-locals
                     )
                 finally:
                     _restore_run_report(run_report_path, run_report_contents)
+                    _restore_file(prompt_abs, prompt_contents)
+                    if architecture_path is not None:
+                        _restore_file(architecture_path, arch_contents)
                 if not getattr(result, "ok", False):
                     failing = getattr(result, "failing_stage", None) or "unknown"
                     return PRMetadataFinalizationResult(
