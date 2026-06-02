@@ -84,6 +84,16 @@ def _norm(path: str) -> str:
 
 def _scrub(text: Any) -> str:
     value = "" if text is None else str(text)
+    # Compose the loop's vetted secret-scrubber (broad: AWS/Google/Bearer/
+    # Authorization/URL-creds/PEM) with the local regex (catches bare
+    # ``token=``/``secret=`` forms the vetted one may miss). Lazy import avoids
+    # a load-time cycle; fall back to the local regex if it is unavailable.
+    try:
+        from .checkup_review_loop import _scrub_secrets
+
+        value = _scrub_secrets(value)
+    except Exception:
+        pass
     return _SECRET_RE.sub("[REDACTED]", value)
 
 
@@ -356,6 +366,7 @@ def _run_command(
     worktree: Path,
     timeout: float,
     env: Optional[Dict[str, str]] = None,
+    success_codes: Sequence[int] = (0,),
 ) -> Tuple[bool, str]:
     try:
         result = subprocess.run(
@@ -373,13 +384,42 @@ def _run_command(
     except Exception as exc:
         return False, _scrub(exc)
     output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    return result.returncode == 0, _excerpt(output)
+    return result.returncode in success_codes, _excerpt(output)
+
+
+_SECRET_ENV_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API)", re.IGNORECASE)
+_SECRET_ENV_PREFIXES = (
+    "AWS_", "GOOGLE_", "GCP_", "AZURE_", "ANTHROPIC", "OPENAI", "GEMINI", "GH_", "GITHUB_",
+)
+
+
+def _is_secret_env_key(key: str) -> bool:
+    return key.startswith(_SECRET_ENV_PREFIXES) or bool(_SECRET_ENV_RE.search(key))
 
 
 def _python_import_env(worktree: Path) -> Dict[str, str]:
-    env = os.environ.copy()
-    prior = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(worktree) if not prior else str(worktree) + os.pathsep + prior
+    """Hardened subprocess env for the gate's OWN Python subprocesses (import /
+    route / existence probe / targeted tests).
+
+    The gate executes worktree code (imports modules, runs pytest), so as
+    defence in depth it MUST NOT hand that code the parent's live credentials:
+    drop secret-bearing vars (LLM/cloud/VCS keys + tokens) and sanitize PATH
+    (drop ``.``/relative/worktree-resolving entries via checkup_gates'
+    ``_sanitized_path`` so a PR-shipped shim cannot become a tool). It KEEPS the
+    controlled ``PYTHONPATH=worktree`` the import + existence probes need (the
+    checkup_gates env builder strips PYTHONPATH, which would silently break
+    them) and non-secret vars like ``PDD_PATH`` (PDD unit tests resolve data
+    from it and mock LLM calls, so removing API keys does not break them)."""
+    env = {k: v for k, v in os.environ.items() if not _is_secret_env_key(k)}
+    try:
+        from .checkup_gates import _sanitized_path
+
+        sanitized = _sanitized_path(worktree)
+        if sanitized:
+            env["PATH"] = sanitized
+    except Exception:
+        pass
+    env["PYTHONPATH"] = str(worktree)
     env.setdefault("NO_COLOR", "1")
     env.setdefault("CI", "1")
     return env
@@ -888,19 +928,29 @@ def _run_targeted_tests(
     quarantine = _quarantined_tests()
     gating = [test for test in candidates if test not in quarantine]
     non_gating = [test for test in candidates if test in quarantine]
+    # Exclude slow/networked suites: the gate must never trigger a real LLM
+    # call or an e2e/integration run. Hardened env (no live secrets, sanitized
+    # PATH) is defence in depth. pytest exit 5 = "no tests collected" (e.g.
+    # every candidate filtered out by the marker) is NOT a gate failure.
+    env = _python_import_env(worktree)
+    pytest_markers = ["-m", "not integration and not e2e and not real"]
     if non_gating:
         ok, output = _run_command(
-            [sys.executable, "-m", "pytest", "-q", *non_gating],
+            [sys.executable, "-m", "pytest", "-q", *pytest_markers, *non_gating],
             worktree=worktree,
             timeout=timeout,
+            env=env,
+            success_codes=(0, 5),
         )
         status = "passed" if ok else "failed"
         notes.append(f"targeted-tests quarantine {status}: {', '.join(non_gating)} {output}".strip())
     if gating:
         ok, output = _run_command(
-            [sys.executable, "-m", "pytest", "-q", *gating],
+            [sys.executable, "-m", "pytest", "-q", *pytest_markers, *gating],
             worktree=worktree,
             timeout=timeout,
+            env=env,
+            success_codes=(0, 5),
         )
         if not ok:
             failures.append(f"targeted-tests failed for {', '.join(gating)}: {output}")

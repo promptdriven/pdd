@@ -406,3 +406,42 @@ def test_targeted_tests_note_for_changed_js_ts_test(tmp_path):
 
     assert failures == []
     assert any("JS/TS test" in n and "foo.test.ts" in n for n in notes), notes
+
+
+def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path):
+    """Issue #1293 (security): the gate executes worktree code, so its subprocess
+    env must drop secret-bearing vars (LLM/cloud/VCS keys + tokens) while keeping
+    the controlled PYTHONPATH=worktree the import/existence probes need."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-be-dropped")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_should_be_dropped")
+    monkeypatch.setenv("SOME_SECRET", "nope")
+    monkeypatch.setenv("PDD_PATH", str(tmp_path))  # non-secret -> preserved
+
+    env = pre_checkup_gate._python_import_env(tmp_path)
+
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert "SOME_SECRET" not in env
+    assert env.get("PYTHONPATH") == str(tmp_path)
+    assert env.get("PDD_PATH") == str(tmp_path)  # non-secret vars survive
+    assert env.get("CI") == "1"
+
+
+def test_targeted_tests_exclude_integration_marker_and_handle_no_tests(tmp_path):
+    """Issue #1293 (security/perf): the gate must NOT run integration/e2e/real
+    suites (could trigger real-LLM calls), and pytest exit 5 (no tests left after
+    the marker filter) must be treated as a non-failure, not a hard block."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    # The ONLY test is integration-marked + would fail if run; after the marker
+    # exclusion nothing is collected (exit 5) -> the gate must NOT fail.
+    (tests_dir / "test_flow.py").write_text(
+        "import pytest\n\n@pytest.mark.integration\ndef test_x():\n    assert False\n",
+        encoding="utf-8",
+    )
+
+    failures, _notes = pre_checkup_gate._run_targeted_tests(
+        tmp_path, ["tests/test_flow.py"], timeout=60.0
+    )
+
+    assert failures == [], failures
