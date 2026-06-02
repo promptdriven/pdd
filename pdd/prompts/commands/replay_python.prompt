@@ -1,0 +1,48 @@
+<pdd-reason>Implements the top-level replay command for auditing expanded prompt context snapshots.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "replay", "description": "Reconstruct and audit expanded prompt context from a snapshot run artifact"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/commands/replay.py` module.
+
+% Role & Scope
+Implement the user-facing `pdd replay <run_artifact>` command for reconstructing and auditing expanded prompt context from snapshot/evidence artifacts.
+
+% Requirements
+1. Define a Click command named `replay` with required `run_artifact` argument.
+2. Provide options:
+   - `--output`: optional path to write the reconstructed expanded prompt.
+   - `--verify-only`: verify hashes without writing reconstructed prompt output.
+   - `--print-expanded`: explicitly print the reconstructed expanded prompt to stdout.
+   - `--json`: emit machine-readable replay status for CI/policy layers.
+3. Load the evidence run artifact or snapshot manifest, resolve the linked context snapshot, and call `context_snapshot` replay APIs.
+4. Verify the reconstructed expanded prompt hash against the recorded hash and exit non-zero on mismatch or missing artifacts.
+5. When `--output` is provided and `--verify-only` is false, write the reconstructed expanded prompt to that path.
+6. When `--output` and `--print-expanded` are absent, print only a concise success summary and artifact path, respecting `quiet` from the Click context where available.
+7. Emit machine-readable output when `--json` is used, including success, expanded prompt hash, snapshot manifest path, reconstructed output path if any, and error details on failure.
+8. Provide clear Click usage errors for unsupported artifact versions, artifacts without snapshots, unsafe paths, or replay attempts against static-only manifests without requested verification behavior.
+9. Use existing command error handling conventions and re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit` appropriately.
+
+% Extension Analysis
+- Existing modules considered: `pdd/commands/misc.py`, `pdd/commands/report.py`, `pdd/evidence_manifest.py`, `pdd/core/dump.py`.
+- Why not extend them: `misc.py` currently wraps miscellaneous preprocessing and would become less coherent if it also owned a separate audit command with positional artifact semantics. `report.py` is report viewing, not reconstruction. `evidence_manifest.py` is not a Click command module. `core/dump.py` produces debug rerun artifacts rather than validating snapshot manifests and reconstructed expanded prompts.
+- Capability gap: users and CI need a first-class top-level command with its own validation, output, and exit-code contract for replaying captured expanded prompt context.
+
+% Dependencies
+<context_snapshot_prompt><include>prompts/context_snapshot_python.prompt</include></context_snapshot_prompt>
+
+% Deliverables
+- Code: `pdd/commands/replay.py`
