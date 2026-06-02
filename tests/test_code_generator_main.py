@@ -482,7 +482,8 @@ def test_full_gen_cloud_success(
             "language": "python",
             "strength": mock_ctx.obj['strength'],
             "temperature": mock_ctx.obj['temperature'],
-            "verbose": mock_ctx.obj['verbose']
+            "verbose": mock_ctx.obj['verbose'],
+            "compress": False,
         },
         headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
         timeout=get_cloud_request_timeout()

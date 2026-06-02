@@ -13,6 +13,7 @@ import json
 import re
 import textwrap
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
@@ -370,6 +371,90 @@ def _full_interface(content: str, source_lines: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Compression mode (Python only)
+# ---------------------------------------------------------------------------
+
+_COMPRESSED_MAX_CHARS = 120_000  # ~30k tokens at 4 chars/token
+
+
+def _is_test_file_path(file_path: str | None) -> bool:
+    if not file_path:
+        return False
+    name = Path(file_path).name
+    return name.startswith("test_") or name.endswith("_test.py")
+
+
+class _DocstringStripper(ast.NodeTransformer):
+    """Remove module/class/function docstrings while preserving executable nodes."""
+
+    @staticmethod
+    def _strip_leading_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(getattr(body[0].value, "value", None), str)
+        ):
+            return body[1:]
+        return body
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        node = self.generic_visit(node)
+        node.body = self._strip_leading_docstring(node.body)
+        return node
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+        node = self.generic_visit(node)
+        node.body = self._strip_leading_docstring(node.body)
+        return node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+        node = self.generic_visit(node)
+        node.body = self._strip_leading_docstring(node.body)
+        return node
+
+    def visit_Module(self, node: ast.Module) -> ast.Module:
+        node = self.generic_visit(node)
+        node.body = self._strip_leading_docstring(node.body)
+        return node
+
+
+def _strip_standalone_comment_lines(text: str) -> str:
+    """Drop comment-only lines; keep end-of-line comments on code lines."""
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") and not line.lstrip().startswith("# type:"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _full_compressed(content: str, *, file_path: str | None) -> str:
+    """Deterministic few-shot compression: strip docstrings and comment-only lines."""
+    tree = ast.parse(content)
+    tree = _DocstringStripper().visit(tree)
+    ast.fix_missing_locations(tree)
+    compressed = ast.unparse(tree)
+    compressed = _strip_standalone_comment_lines(compressed)
+    # Test modules keep structure; compression only removes docstrings/comments.
+    if _is_test_file_path(file_path):
+        return compressed
+    return compressed
+
+
+def _compressed_from_spans(
+    content: str,
+    source_lines: list[str],
+    spans: list[_Span],
+    *,
+    file_path: str | None,
+) -> str:
+    """Apply compression to span-selected Python source."""
+    raw = _extract_spans(source_lines, spans)
+    return _full_compressed(raw, file_path=file_path)
+
+
+# ---------------------------------------------------------------------------
 # Markdown section selector
 # ---------------------------------------------------------------------------
 
@@ -604,6 +689,8 @@ class ContentSelector:
             ``"full"`` (default) returns the selected content verbatim.
             ``"interface"`` (Python only) returns signatures, docstrings,
             and type hints with bodies replaced by ``...``.
+            ``"compressed"`` (Python only) strips docstrings and comment-only
+            lines while preserving executable logic.
 
         Returns
         -------
@@ -619,6 +706,15 @@ class ContentSelector:
             source_lines = _splitlines(content)
             try:
                 return _full_interface(content, source_lines)
+            except SyntaxError as exc:
+                _report_error(f"Failed to parse Python source: {exc}", file_path)
+                raise SelectorError(f"Python parse error: {exc}") from exc
+
+        if not selectors and mode == "compressed":
+            if not _is_python(file_path):
+                return content
+            try:
+                return _full_compressed(content, file_path=file_path)
             except SyntaxError as exc:
                 _report_error(f"Failed to parse Python source: {exc}", file_path)
                 raise SelectorError(f"Python parse error: {exc}") from exc
@@ -713,9 +809,15 @@ class ContentSelector:
 
         # Span-based content
         if all_spans:
-            # Interface mode post-processing for AST selectors
+            # Interface/compressed mode post-processing for AST selectors
             if mode == "interface" and is_python and tree is not None:
                 parts.append(_interface_from_spans(content, source_lines, tree, all_spans))
+            elif mode == "compressed" and is_python:
+                parts.append(
+                    _compressed_from_spans(
+                        content, source_lines, all_spans, file_path=file_path
+                    )
+                )
             else:
                 parts.append(_extract_spans(source_lines, all_spans))
 

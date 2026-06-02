@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
-import math
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Optional, Dict, List, Tuple
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from . import get_version
 from .preprocess import (
@@ -19,10 +19,15 @@ from .preprocess import (
     compute_user_intent_paths,
     preprocess,
 )
+from .contract_ir import parse_prompt_contracts
+from .grounding_provenance import grounding_reviewed_for_manifest, normalize_grounding
 from .sync_order import extract_includes_from_file
 
-SCHEMA_VERSION = 1
-_NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
+SCHEMA_VERSION = 2
+_NONDETERMINISTIC_TAG_RE = re.compile(
+    r"<(?:shell|web)\b|<include[^>]*\bquery\s*=",
+    re.IGNORECASE,
+)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
     re.IGNORECASE,
@@ -37,6 +42,15 @@ _INCLUDE_SELF_CLOSING_RE = re.compile(
 )
 _BACKTICK_INCLUDE_RE = re.compile(r"```<([^>]*?)>```", re.DOTALL)
 _CONTRACT_RULES_RE = re.compile(r"<contract_rules\b", re.IGNORECASE)
+
+
+def _has_active_tag(pattern: re.Pattern[str], content: str) -> bool:
+    """Return True only when *pattern* matches outside fenced/inline code spans."""
+    code_spans = _extract_code_spans(content)
+    for m in pattern.finditer(content):
+        if not _intersects_any_span(m.start(), m.end(), code_spans):
+            return True
+    return False
 
 
 @contextmanager
@@ -78,7 +92,7 @@ def _resolve_include_path(raw_include: str, parent_file: Path, project_root: Pat
     return beside_parent
 
 
-def _include_path_literals_in_text(content: str) -> set[str]:
+def _include_path_literals_in_text(content: str) -> set[str]:  # pylint: disable=too-many-branches
     """Paths the preprocessor would treat as user-intent includes (not in code spans)."""
     paths: set[str] = set()
     code_spans = _extract_code_spans(content)
@@ -160,28 +174,72 @@ def _existing_file_records(
     return records
 
 
+def _include_uses_compressed_mode(
+    parent_content: str,
+    include_path: Path,
+    parent_file: Path,
+    project_root: Path,
+) -> bool:
+    """True when *parent_content* includes *include_path* with mode=compressed."""
+    parent_text = parent_content
+    code_spans = _extract_code_spans(parent_text)
+    for match in _INCLUDE_BODY_RE.finditer(parent_text):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs = _parse_attrs(match.group(1) or "")
+        body = (match.group(2) or "").strip()
+        path_value = (attrs.get("path") or body).strip()
+        if not path_value:
+            continue
+        resolved = _resolve_include_path(path_value, parent_file, project_root)
+        if resolved.resolve() != include_path.resolve():
+            continue
+        mode = (attrs.get("mode") or "").strip().lower()
+        if mode == "compressed":
+            return True
+    return False
+
+
 def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, Any]]:
     """Collect hashes for reachable local includes using production include grammar."""
     records: list[dict[str, Any]] = []
     seen: set[Path] = set()
 
     def walk(file_path: Path) -> None:
+        try:
+            parent_content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            parent_content = ""
         for raw_include in sorted(_include_paths_for_file(file_path)):
             include_path = _resolve_include_path(raw_include, file_path, project_root)
             if include_path in seen or not include_path.is_file():
                 continue
             seen.add(include_path)
-            
-            # Deterministic Evidence: handle compressed includes
-            # (Heuristic: check if the include tag in the parent file specified mode="compressed"
-            # or if we are in a context where compress=True was passed. Since we don't have
-            # that state here, we'll just record the basic hash and leave compression fields empty
-            # unless we detect them. In a real PDD run, the preprocessor would provide this.)
-            
-            record = {
+            source_hash = _sha256_file(include_path)
+            record: dict[str, Any] = {
                 "path": _display_path(include_path, project_root),
-                "source_sha256": _sha256_file(include_path),
+                "sha256": source_hash,
             }
+            if _include_uses_compressed_mode(
+                parent_content, include_path, file_path, project_root
+            ):
+                try:
+                    from pdd.content_selector import ContentSelector  # pylint: disable=import-outside-toplevel
+
+                    source_text = include_path.read_text(encoding="utf-8")
+                    compressed_text = ContentSelector.select(
+                        source_text,
+                        [],
+                        file_path=str(include_path),
+                        mode="compressed",
+                    )
+                    record["source_sha256"] = source_hash
+                    record["compressed_sha256"] = _sha256_bytes(
+                        compressed_text.encode("utf-8")
+                    )
+                    record["estimated_tokens"] = math.ceil(len(compressed_text) / 4)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    record["source_sha256"] = source_hash
             records.append(record)
             walk(include_path)
 
@@ -191,7 +249,9 @@ def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[
 
 def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[str]:
     """Hash of prompt text after the same deterministic include expansion as generation."""
-    if _UNSUPPORTED_EXPANSION_RE.search(content) or _NONDETERMINISTIC_TAG_RE.search(content):
+    if _has_active_tag(_UNSUPPORTED_EXPANSION_RE, content) or _has_active_tag(
+        _NONDETERMINISTIC_TAG_RE, content
+    ):
         return None
     try:
         with _project_cwd(project_root):
@@ -220,7 +280,7 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
             "uses_nondeterministic_tags": False,
         }
     content = path.read_text(encoding="utf-8")
-    nondeterministic = bool(_NONDETERMINISTIC_TAG_RE.search(content))
+    nondeterministic = _has_active_tag(_NONDETERMINISTIC_TAG_RE, content)
     return {
         "path": _display_path(path, project_root),
         "sha256": _sha256_bytes(content.encode("utf-8")),
@@ -238,7 +298,7 @@ def _prompt_has_contract_rules(prompt_path: Path) -> bool:
     return bool(_CONTRACT_RULES_RE.search(content))
 
 
-def _contract_statuses(
+def _contract_statuses(  # pylint: disable=too-many-return-statements
     prompt_file: Optional[str | Path],
 ) -> dict[str, Any]:
     if not prompt_file:
@@ -265,9 +325,22 @@ def _contract_statuses(
                 "status": rule.status,
                 "stories": rule.stories,
                 "tests": rule.tests,
+                "waiver": rule.waiver,
+                "waiver_status": getattr(rule, "waiver_status", None),
+                "waiver_expires": getattr(rule, "waiver_expires", None),
             }
             for rule in result.rules
         },
+        "waivers": [
+            {
+                "id": waiver.raw_id,
+                "rule_id": waiver.rule_id,
+                "reason": waiver.reason,
+                "approved_by": waiver.approved_by,
+                "expires": waiver.expires.isoformat() if waiver.expires else None,
+            }
+            for waiver in parse_prompt_contracts(path).waivers
+        ],
     }
 
 
@@ -335,15 +408,62 @@ def _safe_slug(value: str) -> str:
     return slug or "run"
 
 
+def _dynamic_artifact_records(
+    artifacts: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Summarize captured shell, web, and query-include snapshot artifacts."""
+
+    shell_records: list[dict[str, Any]] = []
+    web_records: list[dict[str, Any]] = []
+    query_records: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_type = str(artifact.get("type") or "")
+        path = artifact.get("path")
+        digest = artifact.get("sha256")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            continue
+        record: dict[str, Any] = {"path": path, "sha256": digest}
+        metadata = artifact.get("metadata")
+        if isinstance(metadata, Mapping):
+            record["metadata"] = dict(metadata)
+        if artifact.get("redaction_applied"):
+            record["redaction_applied"] = True
+        if artifact_type == "shell":
+            shell_records.append(record)
+        elif artifact_type == "web":
+            web_records.append(record)
+        elif artifact_type == "query_include":
+            query_records.append(record)
+    return shell_records, web_records, query_records
+
+
+def devunit_slug_for_prompt(prompt_path: str | Path) -> Optional[str]:
+    """Return the devunit evidence filename slug for a prompt (matches latest manifests).
+
+    Uses :func:`infer_module_identity` for path-qualified basenames (e.g.
+    ``frontend/page`` for ``prompts/frontend/page_python.prompt``), then applies
+    the same :func:`_safe_slug` normalization as :func:`write_evidence_manifest`.
+    """
+    path = Path(prompt_path)
+    from .operation_log import infer_module_identity  # pylint: disable=import-outside-toplevel
+
+    basename, _language = infer_module_identity(path)
+    if not basename:
+        basename = path.stem or None
+    if not basename:
+        return None
+    return _safe_slug(basename)
+
+
 def validation_from_sync(
-    sync_result: Dict[str, Any],
+    sync_result: Mapping[str, Any],
     *,
     skip_tests: bool,
     skip_verify: bool,
     dry_run: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, str]:
     """Map ``sync_main`` results to manifest validation fields without inventing outcomes."""
-    validation: Dict[str, Any] = {
+    validation: dict[str, str] = {
         "detect_stories": "not_applicable",
         "unit_tests": "not_applicable" if skip_tests else "not_available",
         "verify": "not_applicable" if skip_verify else "not_available",
@@ -362,14 +482,18 @@ def validation_from_sync(
         for operation in lang_result.get("operations_completed") or []:
             operations.add(str(operation))
 
-    overall_success = sync_result.get("overall_success")
-    if overall_success is None:
-        successes = [
-            bool(lang_result.get("success"))
-            for lang_result in by_language.values()
-            if isinstance(lang_result, dict)
-        ]
-        overall_success = bool(successes) and all(successes)
+    lang_successes = [
+        bool(lang_result.get("success"))
+        for lang_result in by_language.values()
+        if isinstance(lang_result, dict) and "success" in lang_result
+    ]
+    if lang_successes:
+        # Prefer per-language outcomes over a stale top-level overall_success flag.
+        overall_success = all(lang_successes)
+    elif sync_result.get("overall_success") is not None:
+        overall_success = bool(sync_result.get("overall_success"))
+    else:
+        overall_success = False
 
     test_operations = {"test", "crash", "fix", "test_extend"}
     if not skip_tests and operations & test_operations:
@@ -384,32 +508,121 @@ def validation_from_sync(
     return validation
 
 
-def write_evidence_manifest(
+def collect_sync_evidence_paths(
     basename: str,
-    language: str,
-    command: str,
-    validation: Dict[str, Any],
-    pdd_files: Dict[str, str],
+    sync_result: Mapping[str, Any],
     *,
-    output_path: Optional[str] = None,
-) -> None:
-    """Write a versioned evidence manifest following schema v1."""
-    project_root = Path.cwd().resolve()
-    prompt_file = pdd_files.get("prompt")
-    output_files = [p for k, p in pdd_files.items() if k not in ("prompt", "architecture")]
-    
-    prompt = _prompt_record(prompt_file, project_root)
+    project_root: Path | str | None = None,
+) -> tuple[Optional[Path], list[Path]]:
+    """Resolve prompt and generated output paths for a completed ``pdd sync`` run."""
+    from .sync_determine_operation import get_pdd_file_paths  # pylint: disable=import-outside-toplevel
+
+    root = Path(project_root or Path.cwd()).resolve()
+    by_language = sync_result.get("results_by_language")
+    if not isinstance(by_language, dict):
+        by_language = {"python": sync_result}
+
+    languages = [lang for lang in by_language if lang != "_"]
+    language = languages[0] if len(languages) == 1 else "python"
+
+    try:
+        pdd_files = get_pdd_file_paths(basename, language, str(root / "prompts"))
+    except Exception:  # pylint: disable=broad-except
+        return None, []
+
+    prompt = pdd_files.get("prompt")
+    outputs: list[Path] = []
+    for key in ("code", "test", "example"):
+        candidate = pdd_files.get(key)
+        if candidate is not None and candidate.is_file():
+            outputs.append(candidate.resolve())
+    prompt_path = prompt.resolve() if prompt is not None and prompt.is_file() else None
+    return prompt_path, outputs
+
+
+
+def grounding_kwargs_from_ctx(
+    ctx_obj: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build write_evidence_manifest grounding kwargs from a Click ctx.obj mapping."""
+    obj = dict(ctx_obj or {})
+    grounding = obj.get("last_grounding")
+    examples_used = None
+    if isinstance(grounding, Mapping):
+        examples_used = grounding.get("selected_examples")
+    reviewed = grounding_reviewed_for_manifest(obj, examples_used)
+    return {"grounding": grounding, "reviewed": reviewed}
+
+
+
+def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
+    *,
+    command: str,
+    prompt_file: Optional[str | Path] = None,
+    output_files: Iterable[str | Path] = (),
+    model: str = "",
+    cost_usd: float = 0.0,
+    temperature: Optional[float] = None,
+    validation: Optional[Mapping[str, str]] = None,
+    logs: Optional[Mapping[str, Optional[str]]] = None,
+    basename: Optional[str] = None,
+    project_root: Optional[str | Path] = None,
+    context_snapshot: Optional[Mapping[str, Any]] = None,
+    grounding: Optional[Mapping[str, Any]] = None,
+    reviewed: bool = False,
+) -> Path:
+    """Write a versioned evidence manifest and the dev-unit latest copy."""
+    root = Path(project_root or Path.cwd()).resolve()
+    if not prompt_file and basename:
+        prompts_root = root / "prompts"
+        direct = list(prompts_root.glob(f"{basename}_*.prompt"))
+        fallback = list(prompts_root.rglob(f"{Path(basename).name}_*.prompt"))
+        candidates = direct or fallback
+        if len(candidates) == 1:
+            prompt_file = candidates[0]
+    prompt = _prompt_record(prompt_file, root)
     prompt_path = None
     if prompt_file:
         prompt_path = Path(prompt_file)
         if not prompt_path.is_absolute():
-            prompt_path = project_root / prompt_path
+            prompt_path = root / prompt_path
+    resolved_from_prompt = False
+    if basename is None and prompt_path is not None:
+        slug = devunit_slug_for_prompt(prompt_path)
+        if slug:
+            basename = slug
+            resolved_from_prompt = True
+    if basename is None:
+        basename = _safe_slug(command.replace("pdd ", "", 1))
+    elif not resolved_from_prompt:
+        basename = _safe_slug(basename)
 
-    safe_basename = _safe_slug(basename or command.replace("pdd ", "", 1))
     timestamp = datetime.now(timezone.utc)
-    run_id = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{safe_basename}"
+    run_id = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{basename}"
+    log_values: dict[str, Optional[str]] = {
+        "core_dump": None,
+        "verify_results": None,
+        "cost_csv": None,
+    }
+    if logs:
+        log_values.update(logs)
 
-    manifest: Dict[str, Any] = {
+    snapshot_context = dict(context_snapshot or {})
+    snapshot_expanded = snapshot_context.get("expanded_prompt")
+    if isinstance(snapshot_expanded, Mapping) and isinstance(snapshot_expanded.get("sha256"), str):
+        prompt["expanded_sha256"] = snapshot_expanded["sha256"]
+    if snapshot_context.get("uses_nondeterministic_context") is not None:
+        prompt["uses_nondeterministic_tags"] = bool(
+            snapshot_context.get("uses_nondeterministic_context")
+        )
+
+    artifacts = list(snapshot_context.get("artifacts") or [])
+    shell_snapshots, web_snapshots, query_snapshots = _dynamic_artifact_records(artifacts)
+    grounding_block = normalize_grounding(grounding, reviewed=reviewed)
+    snapshot_grounding = list(snapshot_context.get("grounding_examples") or [])
+    grounding_examples = list(grounding_block.get("selected_examples") or []) or snapshot_grounding
+
+    manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
             "id": run_id,
@@ -419,39 +632,62 @@ def write_evidence_manifest(
         },
         "prompt": prompt,
         "context": {
-            "includes": _prompt_include_records(prompt_path, project_root) if prompt_path else [],
-            "web_snapshots": [],
-            "shell_snapshots": [],
+            "includes": _prompt_include_records(prompt_path, root) if prompt_path else [],
+            "web_snapshots": web_snapshots,
+            "shell_snapshots": shell_snapshots,
+            "query_snapshots": query_snapshots,
         },
         "generation": {
-            "model": None,
-            "temperature": None,
-            "cost_usd": 0.0,
-            "grounding_examples": [],
+            "model": model or None,
+            "temperature": temperature,
+            "cost_usd": float(cost_usd),
+            "grounding": grounding_block,
+            "grounding_examples": grounding_examples,
         },
-        "outputs": _existing_file_records(output_files, project_root),
+        "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),
         "validation": {
             "detect_stories": "not_available",
             "unit_tests": "not_available",
             "verify": "not_available",
-            **validation,
+            **dict(validation or {}),
         },
-        "logs": {
-            "core_dump": None,
-            "verify_results": None,
-            "cost_csv": None,
-        },
+        "logs": log_values,
     }
+    if snapshot_context:
+        manifest["context_snapshot"] = {
+            "enabled": True,
+            "manifest_path": snapshot_context.get("manifest_path"),
+            "snapshot_dir": snapshot_context.get("snapshot_dir"),
+            "expanded_prompt": snapshot_expanded,
+            "expanded_prompt_path": (
+                snapshot_expanded.get("path")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "expanded_sha256": (
+                snapshot_expanded.get("sha256")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "uses_nondeterministic_context": bool(
+                snapshot_context.get("uses_nondeterministic_context")
+            ),
+            "dynamic_tags": list(snapshot_context.get("dynamic_tags") or []),
+            "declared_dynamic_tags": list(snapshot_context.get("declared_dynamic_tags") or []),
+            "redaction_applied": bool(snapshot_context.get("redaction_applied")),
+            "redaction": snapshot_context.get("redaction"),
+            "artifacts": artifacts,
+            "run_id": snapshot_context.get("run_id"),
+        }
 
-    evidence_dir = project_root / ".pdd" / "evidence" / "runs"
-    latest_dir = project_root / ".pdd" / "evidence" / "devunits"
-    evidence_dir.mkdir(parents=True, exist_ok=True)
+    runs_dir = root / ".pdd" / "evidence" / "runs"
+    latest_dir = root / ".pdd" / "evidence" / "devunits"
+    runs_dir.mkdir(parents=True, exist_ok=True)
     latest_dir.mkdir(parents=True, exist_ok=True)
-    
-    final_output_path = Path(output_path) if output_path else evidence_dir / f"{run_id}.json"
-    latest_path = latest_dir / f"{safe_basename}.latest.json"
-    
+    run_path = runs_dir / f"{run_id}.json"
+    latest_path = latest_dir / f"{basename}.latest.json"
     payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    final_output_path.write_text(payload, encoding="utf-8")
+    run_path.write_text(payload, encoding="utf-8")
     latest_path.write_text(payload, encoding="utf-8")
+    return run_path

@@ -594,14 +594,31 @@ def process_include_tags(text: str, recursive: bool, compress: bool = False, _se
                             selectors.append(f"lines:{lines_str}")
                         
                         try:
-                            from pdd.content_selector import ContentSelector
+                            from pdd.content_selector import (
+                                ContentSelector,
+                                _COMPRESSED_MAX_CHARS,
+                            )
                             selector = ContentSelector()
+                            raw_include_content = content
                             content = selector.select(
-                                content=content,
+                                content=raw_include_content,
                                 selectors=selectors,
                                 file_path=full_path,
                                 mode=mode,
                             )
+                            if mode == "compressed" and len(content) > _COMPRESSED_MAX_CHARS:
+                                est_tokens = len(content) // 4
+                                console.print(
+                                    f"[yellow]Warning: compressed include for {full_path} "
+                                    f"estimated at {est_tokens} tokens; falling back to "
+                                    f"interface mode[/yellow]"
+                                )
+                                content = selector.select(
+                                    content=raw_include_content,
+                                    selectors=selectors,
+                                    file_path=full_path,
+                                    mode="interface",
+                                )
                         except ImportError:
                             # Fall back to query if originally present, otherwise full file
                             fallback_query = attrs.get('query')
